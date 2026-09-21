@@ -100,6 +100,7 @@ class CredentialBackend(Protocol):
 - **Own grant.** The gateway completes its own browser OAuth login with PKCE, started by an admin CLI command. It prints the authorization URL, the admin completes login in a browser, and pastes the returned code back. The gateway never reads or reuses the Claude Code CLI's stored credentials. Refresh tokens are single-use and rotate, so two holders of one grant break each other.
 - **Sole refresher.** Only this backend refreshes the grant. Refresh runs behind a single-flight async lock: concurrent callers wait for the one in-flight refresh and then use its result.
 - **When to refresh.** Proactively when fewer than five minutes remain before `expires_at`, and reactively once on a 401 from upstream. Access-token lifetime is taken from each token response, never assumed.
+- **Retry only before the first byte.** A refresh-and-retry is allowed only while zero response bytes have been forwarded to the client. Once any byte is on the wire, errors pass through and are recorded, because a restarted stream would end the client's stream without `message_stop` and the client would discard what it already received. A 401 arrives in the status line before any body, so in practice the retry is always safe. The same rule governs any future failover.
 - **Storage.** Tokens are stored in the SQLite `credentials` table, encrypted with a key read from an environment variable or a key file with mode 0600. The refresh token is written before the old one is discarded so a crash cannot lose the grant.
 - **Headers.** Adds `Authorization: Bearer <access token>` and appends `oauth-2025-04-20` to the client's `anthropic-beta` header if absent. The client's own `User-Agent` and other beta flags are forwarded unchanged.
 - **Configuration, not constants.** Client ID, authorize URL, token URL, scopes, required beta flag and usage-endpoint URL are all in the config file with the currently known values as defaults. They are reverse-engineered and have drifted before.
@@ -178,6 +179,7 @@ Each user may have any subset of these limits. All are optional.
 
 - Token limits have a per-user setting choosing raw total tokens or weighted tokens. The default is weighted, since raw totals are dominated by cache reads.
 - If share limits are set but the backend cannot supply utilization, or no snapshot is newer than 30 minutes, share limits are skipped, token limits still apply, and the dashboard shows a warning.
+- Limit evaluation counts only forwarded requests. Rejected requests are recorded with `rejected_by` set but never count toward any limit.
 - Limit changes take effect on the next request.
 - `/v1/messages/count_tokens` requests are never rejected by token or share limits, since they consume no quota.
 
@@ -262,7 +264,7 @@ In bearer-token mode Claude Code does not show the subscription's plan bars, and
 | User over a limit | 429 `rate_limit_error` with `retry-after` | rejection with `rejected_by` |
 | Model not allowed | 403 `permission_error` | rejection |
 | Credential needs re-login | 503 `api_error` | gateway error |
-| Upstream 401 | one refresh and one retry, then pass through | upstream error |
+| Upstream 401 | one refresh and one retry if no bytes were forwarded yet, then pass through | upstream error |
 | Upstream 429 or 5xx | passed through unchanged, headers included | upstream error, classified quota, per-minute or request-scoped |
 | Upstream unreachable | 502 `api_error` | gateway error |
 | Client disconnects mid-stream | upstream request cancelled | request with `complete = false` |
@@ -286,7 +288,7 @@ Upstream 429s are classified for the dashboard: quota exhaustion when a unified 
 These are unknowns the research could not settle. None changes the design, but each needs a check in the smoke test.
 
 1. How Claude Code renders a proxy-originated 429 with an Anthropic-shaped body, and whether it retries automatically.
-2. Whether any request body field, such as the account identifier inside `metadata.user_id`, must match the injected credential for upstream to accept it.
+2. Whether any request body field, such as the account identifier inside `metadata.user_id`, must match the injected credential for upstream to accept it. teamclaude rewrites such a field because it rotates between accounts. Here there is one stable grant and clients run in bearer mode, so the body likely carries no account identifier at all. The smoke test checks the body Claude Code sends in bearer mode and whether upstream accepts it unchanged.
 3. Whether a Claude Code client with `ANTHROPIC_AUTH_TOKEN` set still depends on a valid local login for any feature, per teamclaude issue 395.
 4. The current shape of the usage endpoint's response, which has drifted before.
 5. Which session identifier header Claude Code currently sends.
