@@ -1,339 +1,504 @@
+"""Dashboard listener: static page plus a JSON API (spec section 10).
+
+Access (spec 10.1):
+- admin: username + password (argon2id) -> session cookie (HttpOnly, SameSite=Strict, Secure behind TLS);
+- user: their virtual key, either exchanged for a session cookie or sent as a Bearer token (statusline);
+- cookie sessions must send the session's CSRF token in `x-csrf-token` on every state change;
+- no loopback or IP-based exemptions; failed logins are rate limited per client address.
+Non-admins only ever see their own usage, their own limits and their own estimated share.
+"""
 from __future__ import annotations
+
+import hmac
+import logging
 import time
-import sqlite3
-from fastapi import Request, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse
+from collections import defaultdict, deque
+from pathlib import Path
 
-def _overview(conn: sqlite3.Connection) -> dict:
-    now = int(time.time())
-    day_ago = now - 86400
-    week_ago = now - 86400*7
-    month_ago = now - 86400*30
+from argon2 import PasswordHasher
+from argon2.exceptions import VerificationError, InvalidHashError
+from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from starlette.middleware.base import BaseHTTPMiddleware
 
-    def cnt(since):
-        r = conn.execute("SELECT COUNT(*) FROM requests WHERE started_at>=? AND rejected_by IS NULL", (since,)).fetchone()
-        return r[0] if r else 0
+from . import db, limits, quota, usage
+from .auth import AuthError, authenticate
+from .gateway import Gateway
 
-    def token_sums(since):
-        r = conn.execute(
-            "SELECT COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0), COALESCE(SUM(cache_read_tokens),0), COALESCE(SUM(cache_creation_tokens+cache_creation_5m+cache_creation_1h),0) FROM requests WHERE started_at>=? AND rejected_by IS NULL",
-            (since,),
-        ).fetchone()
-        return {"input": int(r[0] or 0), "output": int(r[1] or 0), "cache_read": int(r[2] or 0), "cache_creation": int(r[3] or 0)}
+logger = logging.getLogger("claude_proxy")
 
-    users = conn.execute("SELECT COUNT(*) FROM users WHERE enabled=1").fetchone()[0]
-    pending = {
-        "requests_today": cnt(day_ago),
-        "requests_7d": cnt(week_ago),
-        "requests_30d": cnt(month_ago),
-        "tokens_today": token_sums(day_ago),
-        "tokens_7d": token_sums(week_ago),
-        "tokens_30d": token_sums(month_ago),
-        "active_users": users,
-        "total_requests": conn.execute("SELECT COUNT(*) FROM requests").fetchone()[0],
-        "meter_errors": conn.execute("SELECT COUNT(*) FROM requests WHERE meter_error=1").fetchone()[0],
-    }
-    return pending
+STATIC = Path(__file__).parent / "static"
+COOKIE = "cp_session"
+RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400}
+GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
+BUCKETS = ("5h", "7d")
+_ph = PasswordHasher()
+# Verified against when the user does not exist, so timing does not reveal valid usernames.
+_DUMMY_HASH = _ph.hash("not-a-real-password")
 
-def _users_leaderboard(conn: sqlite3.Connection) -> list:
-    # Multi-user leaderboard with token sums (weighted approx: use output 5x etc via python helper if needed)
-    rows = conn.execute("""
-        SELECT u.id, u.name, u.role, u.key_prefix, u.enabled,
-               (SELECT COUNT(*) FROM requests r WHERE r.user_id=u.id AND r.started_at>=strftime('%s','now','-1 day') AND r.rejected_by IS NULL) as today,
-               (SELECT COUNT(*) FROM requests r WHERE r.user_id=u.id AND r.started_at>=strftime('%s','now','-7 days') AND r.rejected_by IS NULL) as week,
-               (SELECT COUNT(*) FROM requests r WHERE r.user_id=u.id AND r.started_at>=strftime('%s','now','-30 days') AND r.rejected_by IS NULL) as month,
-               (SELECT COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens+cache_creation_5m+cache_creation_1h),0) FROM requests r WHERE r.user_id=u.id AND r.started_at>=strftime('%s','now','-1 day') AND r.rejected_by IS NULL) as tokens_today,
-               (SELECT COALESCE(SUM(input_tokens+output_tokens+cache_read_tokens+cache_creation_tokens+cache_creation_5m+cache_creation_1h),0) FROM requests r WHERE r.user_id=u.id AND r.started_at>=strftime('%s','now','-7 days') AND r.rejected_by IS NULL) as tokens_week,
-               (SELECT MAX(started_at) FROM requests r WHERE r.user_id=u.id) as last_seen
-        FROM users u ORDER BY today DESC
-    """).fetchall()
-    out=[]
-    for r in rows:
-        limits = conn.execute("SELECT kind, value, unit FROM limits WHERE user_id=?", (r["id"],)).fetchall()
-        lim = [{"kind": x["kind"], "value": x["value"], "unit": x["unit"]} for x in limits]
-        out.append(dict(id=r["id"], name=r["name"], role=r["role"], prefix=r["key_prefix"], enabled=bool(r["enabled"]), today=r["today"], week=r["week"], month=r["month"], tokens_today=int(r["tokens_today"] or 0), tokens_week=int(r["tokens_week"] or 0), last_seen=r["last_seen"], limits=lim))
-    return out
 
-def _auth_user(request: Request):
-    """Authenticate via Bearer virtual key OR session cookie (for password login)."""
-    from .auth import authenticate
-    conn = request.app.state.db_conn
-    auth = request.headers.get("authorization")
-    if auth:
-        try:
-            return authenticate(conn, auth)
-        except HTTPException as e:
-            # If Bearer present but invalid, fall through to cookie, but if both fail, raise Bearer error
-            cookie_tok = request.cookies.get("session")
-            if cookie_tok:
-                from .db import find_user_by_session
-                u = find_user_by_session(conn, cookie_tok)
-                if u:
-                    return u
-            raise e
-    # no Bearer, try cookie
-    cookie_tok = request.cookies.get("session")
-    if cookie_tok:
-        from .db import find_user_by_session
-        u = find_user_by_session(conn, cookie_tok)
-        if u:
-            return u
-    raise HTTPException(status_code=401, detail={"type": "error", "error": {"type": "authentication_error", "message": "Missing authentication: login with password or provide Bearer token"}})
+def fail(status: int, message: str):
+    raise HTTPException(status_code=status, detail=message)
 
-def _require_admin(request: Request):
-    user = _auth_user(request)
-    if user["role"] != "admin":
-        raise HTTPException(status_code=403, detail={"type": "error", "error": {"type": "permission_error", "message": "admin only"}})
-    return user
 
-def register_web(app, cfg):
-    @app.get("/api/overview")
-    async def api_overview(request: Request):
-        conn = request.app.state.db_conn
-        return JSONResponse(_overview(conn))
+class LoginLimiter:
+    def __init__(self, max_failures: int = 5, window_s: int = 300):
+        self.max_failures = max_failures
+        self.window_s = window_s
+        self.failures: dict[str, deque] = defaultdict(deque)
 
-    @app.get("/api/users")
-    async def api_users(request: Request):
-        conn = request.app.state.db_conn
-        return JSONResponse({"users": _users_leaderboard(conn)})
+    def check(self, ip: str) -> None:
+        q = self.failures[ip]
+        now = time.time()
+        while q and now - q[0] > self.window_s:
+            q.popleft()
+        if len(q) >= self.max_failures:
+            fail(429, f"Too many failed logins. Try again in {int(self.window_s - (now - q[0])) + 1}s.")
 
-    @app.get("/api/limits")
-    async def api_limits(request: Request):
-        conn = request.app.state.db_conn
-        user = request.query_params.get("user")
-        if user:
-            row = conn.execute("SELECT id FROM users WHERE name=?", (user,)).fetchone()
-            if not row:
-                return JSONResponse(status_code=404, content={"error": "user not found"})
-            rows = conn.execute("SELECT kind, value, unit, updated_at FROM limits WHERE user_id=?", (row["id"],)).fetchall()
-            return JSONResponse({"user": user, "limits": [dict(r) for r in rows]})
-        rows = conn.execute("SELECT u.name, l.kind, l.value, l.unit, l.updated_at FROM limits l JOIN users u ON u.id=l.user_id ORDER BY u.name, l.kind").fetchall()
-        return JSONResponse({"limits": [dict(r) for r in rows]})
+    def failed(self, ip: str) -> None:
+        self.failures[ip].append(time.time())
 
-    @app.post("/api/login")
-    async def api_login(request: Request):
-        body = await request.json()
-        username = (body.get("username") or body.get("name") or "").strip()
-        password = body.get("password") or ""
-        if not username or not password:
-            return JSONResponse(status_code=400, content={"error": "need username and password"})
-        conn = request.app.state.db_conn
-        row = conn.execute("SELECT * FROM users WHERE name=? AND role='admin'", (username,)).fetchone()
-        if not row or not row["password_hash"]:
-            return JSONResponse(status_code=401, content={"error": "invalid credentials"})
-        try:
-            from argon2 import PasswordHasher
-            ph = PasswordHasher()
-            ph.verify(row["password_hash"], password)
-        except Exception:
-            return JSONResponse(status_code=401, content={"error": "invalid credentials"})
-        # create session
-        from .db import create_session, cleanup_sessions
-        try:
-            cleanup_sessions(conn)
-        except:
-            pass
-        raw = create_session(conn, row["id"], ttl_s=7*86400)
-        resp = JSONResponse({"ok": True, "user": {"id": row["id"], "name": row["name"]}})
-        # HttpOnly cookie; Secure only if request is https, but we set Lax for http
-        resp.set_cookie(key="session", value=raw, max_age=7*86400, httponly=True, samesite="lax", path="/")
+
+class SecurityHeaders(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        resp = await call_next(request)
+        resp.headers["X-Frame-Options"] = "DENY"
+        resp.headers["X-Content-Type-Options"] = "nosniff"
+        resp.headers["Referrer-Policy"] = "no-referrer"
+        resp.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        if request.url.path.startswith("/api/"):
+            resp.headers["Cache-Control"] = "no-store"
         return resp
 
-    @app.post("/api/logout")
-    async def api_logout(request: Request):
-        tok = request.cookies.get("session")
-        if tok:
-            from .db import delete_session
+
+def create_dashboard_app(gw: Gateway) -> FastAPI:
+    app = FastAPI(title="claude-proxy dashboard", docs_url=None, redoc_url=None, openapi_url=None)
+    app.add_middleware(SecurityHeaders)
+    app.state.gw = gw
+    limiter = LoginLimiter()
+    conn, cfg = gw.conn, gw.cfg
+
+    @app.exception_handler(HTTPException)
+    async def _http_error(request, exc: HTTPException):
+        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+
+    # ---------- auth ----------
+
+    def principal(request: Request, write: bool = False):
+        if request.headers.get("authorization") or request.headers.get("x-api-key"):
             try:
-                delete_session(request.app.state.db_conn, tok)
-            except:
-                pass
+                return authenticate(conn, request.headers)
+            except AuthError as e:
+                fail(e.status, e.body["error"]["message"])
+        user = db.find_session(conn, request.cookies.get(COOKIE, ""))
+        if user is None:
+            fail(401, "Not signed in.")
+        if write and not hmac.compare_digest(request.headers.get("x-csrf-token", ""), user["csrf_token"]):
+            fail(403, "Missing or wrong CSRF token.")
+        return user
+
+    def admin(request: Request, write: bool = False):
+        user = principal(request, write)
+        if user["role"] != "admin":
+            fail(403, "Admin only.")
+        return user
+
+    def client_ip(request: Request) -> str:
+        return request.client.host if request.client else "unknown"
+
+    def start_session(user) -> JSONResponse:
+        raw, csrf = db.create_session(conn, user["id"])
+        resp = JSONResponse({"ok": True, "csrf": csrf, "user": _public_user(user)})
+        resp.set_cookie(COOKIE, raw, max_age=7 * 86400, httponly=True, samesite="strict",
+                        secure=cfg.listener.secure_cookies, path="/")
+        return resp
+
+    @app.post("/api/login")
+    async def login(request: Request):
+        ip = client_ip(request)
+        limiter.check(ip)
+        body = await _json(request)
+        user = conn.execute("SELECT * FROM users WHERE name=? AND role='admin' AND enabled=1 AND revoked_at IS NULL",
+                            (str(body.get("username", "")),)).fetchone()
+        try:
+            _ph.verify(user["password_hash"] if user and user["password_hash"] else _DUMMY_HASH, str(body.get("password", "")))
+            ok = user is not None and bool(user["password_hash"])
+        except (VerificationError, InvalidHashError):
+            ok = False
+        if not ok:
+            limiter.failed(ip)
+            fail(401, "Wrong username or password.")
+        db.audit(conn, user["id"], "login", user["name"])
+        return start_session(user)
+
+    @app.post("/api/login/key")
+    async def login_key(request: Request):
+        ip = client_ip(request)
+        limiter.check(ip)
+        body = await _json(request)
+        try:
+            user = authenticate(conn, {"authorization": f"Bearer {body.get('key', '')}"})
+        except AuthError:
+            limiter.failed(ip)
+            fail(401, "Unknown, disabled or revoked key.")
+        return start_session(user)
+
+    @app.post("/api/logout")
+    async def logout(request: Request):
+        db.delete_session(conn, request.cookies.get(COOKIE, ""))
         resp = JSONResponse({"ok": True})
-        resp.delete_cookie(key="session", path="/")
+        resp.delete_cookie(COOKIE, path="/")
         return resp
 
     @app.get("/api/session")
-    async def api_session(request: Request):
-        try:
-            user = _auth_user(request)
-            return JSONResponse({"user": {"id": user["id"], "name": user["name"], "role": user["role"], "prefix": user["key_prefix"]}})
-        except HTTPException as e:
-            return JSONResponse(status_code=401, content={"error": "not authenticated"})
+    async def session(request: Request):
+        user = principal(request)
+        return {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None}
 
-    @app.post("/api/admin/rename")
-    async def api_rename(request: Request):
-        admin = _require_admin(request)
-        body = await request.json()
-        old = (body.get("old") or body.get("old_name") or "").strip()
-        new = (body.get("new") or body.get("new_name") or body.get("name") or "").strip()
-        user_id = body.get("user_id")
-        conn = request.app.state.db_conn
-        if user_id is not None:
-            try:
-                user_id = int(user_id)
-            except:
-                return JSONResponse(status_code=400, content={"error": "invalid user_id"})
-            row = conn.execute("SELECT id, name FROM users WHERE id=?", (user_id,)).fetchone()
-            if not row:
-                return JSONResponse(status_code=404, content={"error": "user not found"})
-            old = row["name"]
-        else:
-            if not old or not new:
-                return JSONResponse(status_code=400, content={"error": "need {old,new} or {user_id,new}"})
-            row = conn.execute("SELECT id FROM users WHERE name=?", (old,)).fetchone()
-            if not row:
-                return JSONResponse(status_code=404, content={"error": f"user '{old}' not found"})
-            user_id = row["id"]
-        if not new or len(new) < 1 or len(new) > 64:
-            return JSONResponse(status_code=400, content={"error": "invalid new name"})
-        if conn.execute("SELECT id FROM users WHERE name=?", (new,)).fetchone():
-            return JSONResponse(status_code=409, content={"error": f"name '{new}' already exists"})
-        if new == old:
-            return JSONResponse(status_code=400, content={"error": "no change"})
-        conn.execute("UPDATE users SET name=? WHERE id=?", (new, user_id))
-        conn.execute("INSERT INTO audit_log(at, actor_user_id, action, target, detail_json) VALUES(?,?,?,?,?)",
-                     (int(time.time()), admin["id"], "rename", f"{old}->{new}", f'{{"user_id":{user_id}}}'))
-        conn.commit()
-        return JSONResponse({"ok": True, "id": user_id, "old": old, "new": new})
+    # ---------- helpers ----------
 
-    @app.post("/api/admin/limit/set")
-    async def api_limit_set(request: Request):
-        admin = _require_admin(request)
-        body = await request.json()
-        # accept user (name or id)
-        user_ref = body.get("user") or body.get("name") or body.get("user_id")
-        kind = (body.get("kind") or "").strip()
-        value = body.get("value")
-        unit = (body.get("unit") or "weighted").strip()
-        if not user_ref or not kind or value is None:
-            return JSONResponse(status_code=400, content={"error": "need {user, kind, value}"})
-        valid_kinds = {"tokens_5h","tokens_daily","tokens_weekly","requests_daily","share_5h","share_7d","allowed_models","enabled"}
-        if kind not in valid_kinds:
-            return JSONResponse(status_code=400, content={"error": f"invalid kind, must be one of {sorted(valid_kinds)}"})
-        valid_units = {"raw","weighted","pct","count","list"}
-        if unit not in valid_units:
-            return JSONResponse(status_code=400, content={"error": f"invalid unit {unit}"})
-        conn = request.app.state.db_conn
-        # resolve user
-        if isinstance(user_ref, int) or (isinstance(user_ref, str) and user_ref.isdigit()):
-            row = conn.execute("SELECT id, name FROM users WHERE id=?", (int(user_ref),)).fetchone()
-        else:
-            row = conn.execute("SELECT id, name FROM users WHERE name=?", (str(user_ref),)).fetchone()
-        if not row:
-            return JSONResponse(status_code=404, content={"error": f"user '{user_ref}' not found"})
-        uid = row["id"]
-        uname = row["name"]
-        # normalize value
-        val_str = str(value).strip()
-        conn.execute("INSERT OR REPLACE INTO limits(user_id, kind, value, unit, updated_at) VALUES(?,?,?,?,?)",
-                     (uid, kind, val_str, unit, int(time.time())))
-        conn.execute("INSERT INTO audit_log(at, actor_user_id, action, target, detail_json) VALUES(?,?,?,?,?)",
-                     (int(time.time()), admin["id"], "limit_set", f"{uname}:{kind}", f'{{"value":"{val_str}","unit":"{unit}"}}'))
-        conn.commit()
-        return JSONResponse({"ok": True, "user": uname, "kind": kind, "value": val_str, "unit": unit})
+    names = lambda: {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM users")}  # noqa: E731
 
-    @app.post("/api/admin/limit/clear")
-    async def api_limit_clear(request: Request):
-        admin = _require_admin(request)
-        body = await request.json()
-        user_ref = body.get("user") or body.get("name") or body.get("user_id")
-        kind = (body.get("kind") or "").strip()
-        if not user_ref or not kind:
-            return JSONResponse(status_code=400, content={"error": "need {user, kind}"})
-        conn = request.app.state.db_conn
-        if isinstance(user_ref, int) or (isinstance(user_ref, str) and user_ref.isdigit()):
-            row = conn.execute("SELECT id, name FROM users WHERE id=?", (int(user_ref),)).fetchone()
-        else:
-            row = conn.execute("SELECT id, name FROM users WHERE name=?", (str(user_ref),)).fetchone()
-        if not row:
-            return JSONResponse(status_code=404, content={"error": f"user '{user_ref}' not found"})
-        uid = row["id"]
-        cur = conn.execute("DELETE FROM limits WHERE user_id=? AND kind=?", (uid, kind))
-        conn.commit()
-        if cur.rowcount == 0:
-            return JSONResponse(status_code=404, content={"error": "limit not found"})
-        conn.execute("INSERT INTO audit_log(at, actor_user_id, action, target) VALUES(?,?,?,?)",
-                     (int(time.time()), admin["id"], "limit_clear", f"{row['name']}:{kind}"))
-        conn.commit()
-        return JSONResponse({"ok": True})
+    def scope_where(user) -> tuple[str, tuple]:
+        return ("1=1", ()) if user["role"] == "admin" else ("user_id=?", (user["id"],))
+
+    def quota_view(user, now: float) -> list[dict]:
+        out = []
+        n = names()
+        for b in sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400))):
+            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+            if att["utilization_pct"] is None and b not in BUCKETS:
+                continue
+            shares = att["shares"]
+            if user["role"] != "admin":
+                shares = {user["name"]: shares.get(user["id"], 0.0)}
+            else:
+                shares = {n.get(uid, f"#{uid}"): v for uid, v in shares.items()}
+            out.append({k: att[k] for k in ("bucket", "utilization_pct", "resets_at", "observed_at", "stale", "unattributed")}
+                       | {"shares": shares})
+        return out
+
+    # ---------- read API ----------
+
+    @app.get("/api/overview")
+    async def overview(request: Request):
+        user = principal(request)
+        now = time.time()
+        where, params = scope_where(user)
+        totals = {k: usage.total(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, now - s)).to_dict()
+                  for k, s in (("24h", 86400), ("7d", 7 * 86400), ("30d", 30 * 86400))}
+        recent = usage.total(conn, cfg.pricing, f"{where} AND started_at>=? AND provider='anthropic'", (*params, now - 900))
+        active = conn.execute(f"SELECT COUNT(DISTINCT user_id) FROM requests WHERE {where} AND started_at>=? AND rejected_by IS NULL",
+                              (*params, now - 86400)).fetchone()[0]
+        be = gw.backend.describe()
+        return {
+            "scope": "account" if user["role"] == "admin" else "self",
+            "totals": totals,
+            "active_users_24h": active,
+            "burn_rate_weighted_per_min": recent.weighted / 15.0,
+            "quota": quota_view(user, now),
+            "exhaustion": _exhaustion(conn, now),
+            "credential": {"healthy": be.healthy, "detail": be.detail if user["role"] == "admin" else None,
+                           "expires_at": be.expires_at},
+            "poll": {"last_status": gw.poller.last_status},
+        }
+
+    @app.get("/api/series")
+    async def series(request: Request, range: str = "7d", granularity: str = "day", split: str = "user",
+                     tz_offset: int = 0, provider: str | None = None):
+        user = principal(request)
+        if range not in RANGES or granularity not in GRANULARITY or split not in ("user", "model", "provider", "none"):
+            fail(400, "bad range, granularity or split")
+        where, params = scope_where(user)
+        if provider:
+            where, params = f"{where} AND provider=?", (*params, provider)
+        pts = usage.series(conn, cfg.pricing, time.time() - RANGES[range], GRANULARITY[granularity],
+                           None if split == "none" else split, where, params, tz_offset_s=tz_offset)
+        if split == "user":
+            n = names()
+            for p in pts:
+                p["key"] = n.get(p["key"], f"#{p['key']}")
+        return {"range": range, "granularity": granularity, "split": split, "points": pts}
+
+    @app.get("/api/models")
+    async def models(request: Request, range: str = "30d", tz_offset: int = 0):
+        user = principal(request)
+        where, params = scope_where(user)
+        since = time.time() - RANGES.get(range, RANGES["30d"])
+        by_model = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="model")
+        by_provider = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="provider")
+        cache = usage.series(conn, cfg.pricing, since, 86400, None, where, params, tz_offset_s=tz_offset)
+        return {
+            "models": sorted(({"model": m, **t.to_dict()} for m, t in by_model.items()), key=lambda r: -r["cost_usd"]),
+            "providers": {p: t.to_dict() for p, t in by_provider.items()},
+            "cache_ratio": [{"t": p["t"], "ratio": p["cache_hit_ratio"]} for p in cache],
+            "formula": "cache_read / (input + cache_creation + cache_read)",
+        }
+
+    @app.get("/api/heatmap")
+    async def heatmap(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None):
+        user = principal(request)
+        where, params = scope_where(user)
+        if user_id is not None and user["role"] == "admin":
+            where, params = "user_id=?", (user_id,)
+        off = int(tz_offset)
+        rows = conn.execute(
+            f"SELECT CAST(strftime('%w', started_at + {off}, 'unixepoch') AS INTEGER) AS dow, "
+            f"CAST(strftime('%H', started_at + {off}, 'unixepoch') AS INTEGER) AS hour, COUNT(*) AS n "
+            f"FROM requests WHERE rejected_by IS NULL AND {where} AND started_at>=? GROUP BY dow, hour",
+            (*params, time.time() - RANGES.get(range, RANGES["30d"]))).fetchall()
+        return {"cells": [[r["hour"], r["dow"], r["n"]] for r in rows]}
+
+    @app.get("/api/sessions")
+    async def sessions(request: Request, range: str = "7d"):
+        user = principal(request)
+        where, params = scope_where(user)
+        since = time.time() - RANGES.get(range, RANGES["7d"])
+        meta = conn.execute(
+            f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
+            f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "
+            f"AND rejected_by IS NULL AND {where} AND started_at>=? GROUP BY session_id ORDER BY last DESC LIMIT 200",
+            (*params, since)).fetchall()
+        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since), group="session_id")
+        n = names()
+        return {"sessions": [{"session_id": r["session_id"], "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
+                              "duration_s": r["last"] - r["first"], "requests": r["n"], "models": (r["models"] or "").split(","),
+                              **{k: v for k, v in tot.get(r["session_id"], usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
+                             for r in meta]}
+
+    @app.get("/api/errors")
+    async def errors(request: Request, range: str = "7d", tz_offset: int = 0):
+        user = principal(request)
+        where, params = scope_where(user)
+        since = time.time() - RANGES.get(range, RANGES["7d"])
+        b = 3600 if range in ("1d", "7d") else 86400
+        off = int(tz_offset)
+        kind = ("CASE WHEN rejected_by IS NOT NULL AND rejected_by != 'auth' THEN 'gateway_limit' "
+                "WHEN rejected_by = 'auth' THEN 'gateway_auth' ELSE COALESCE(error_type, 'http_' || status) END")
+        cond = f"(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL) AND {where} AND started_at>=?"
+        rows = conn.execute(f"SELECT (CAST((started_at + {off}) / {b} AS INTEGER) * {b} - {off}) AS t, {kind} AS k, COUNT(*) AS n "
+                            f"FROM requests WHERE {cond} GROUP BY t, k ORDER BY t", (*params, since)).fetchall()
+        recent = conn.execute(f"SELECT started_at, user_id, path, model, status, {kind} AS k, rejected_by FROM requests "
+                              f"WHERE {cond} ORDER BY started_at DESC LIMIT 50", (*params, since)).fetchall()
+        n = names()
+        return {"bucket_s": b, "points": [dict(r) for r in rows],
+                "recent": [{**dict(r), "user": n.get(r["user_id"])} for r in recent]}
+
+    @app.get("/api/quota/timeline")
+    async def quota_timeline(request: Request, bucket: str = "5h", range: str = "7d"):
+        user = principal(request)
+        now = time.time()
+        snaps = conn.execute("SELECT observed_at, utilization_pct, resets_at, source FROM quota_snapshots WHERE bucket=? "
+                             "AND observed_at>=? ORDER BY observed_at", (bucket, now - RANGES.get(range, RANGES["7d"]))).fetchall()
+        att = quota.attribution(conn, cfg.pricing, bucket, now=now, stale_after_s=cfg.quota.stale_after_s)
+        n = names()
+        history = []
+        for h in att["history"]:
+            shares = h["shares"]
+            if user["role"] != "admin":
+                shares = {user["name"]: shares.get(user["id"], 0.0)}
+            else:
+                shares = {n.get(uid, f"#{uid}"): v for uid, v in shares.items()}
+            history.append({"t": h["t"], "utilization_pct": h["utilization_pct"], "shares": shares})
+        return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history,
+                "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
+
+    @app.get("/api/users")
+    async def users(request: Request):
+        admin(request)
+        now = time.time()
+        periods = {"24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
+        tot = {k: usage.grouped(conn, cfg.pricing, "started_at>=?", (now - s,), group="user_id") for k, s in periods.items()}
+        atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s) for b in BUCKETS}
+        out = []
+        for u in conn.execute("SELECT * FROM users ORDER BY name").fetchall():
+            last = conn.execute("SELECT MAX(started_at) FROM requests WHERE user_id=?", (u["id"],)).fetchone()[0]
+            out.append({**_public_user(u), "enabled": bool(u["enabled"]), "revoked": u["revoked_at"] is not None,
+                        "created_at": u["created_at"], "last_seen": last,
+                        "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
+                        "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
+                        "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)]})
+        return {"users": out}
+
+    @app.get("/api/limits")
+    async def limits_view(request: Request):
+        user = principal(request)
+        ids = [r["id"] for r in conn.execute("SELECT id FROM users")] if user["role"] == "admin" else [user["id"]]
+        n = names()
+        return {"kinds": {k: list(v) for k, v in limits.UNITS.items()},
+                "limits": [{"user": n[i], "user_id": i, **s.to_dict()} for i in ids for s in limits.states(conn, cfg, i)]}
+
+    @app.get("/api/audit")
+    async def audit(request: Request, limit: int = 200):
+        admin(request)
+        n = names()
+        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (min(limit, 1000),)).fetchall()
+        return {"entries": [{**dict(r), "actor": n.get(r["actor_user_id"], "cli" if r["actor_user_id"] is None else None)} for r in rows]}
 
     @app.get("/api/me/status")
-    async def api_me_status(request: Request):
-        try:
-            user = _auth_user(request)
-        except HTTPException as e:
-            raise e
-        conn = request.app.state.db_conn
-        cred = request.app.state.backend.describe() if request.app.state.backend else None
-        # Compute limits with current values for this user
-        try:
-            from .limits import _get_limits, WINDOWS
-            from .meter import weighted_from_row
-            from .config import Config
-            cfg = request.app.state.config
-            lims = _get_limits(conn, user["id"])
-            now = int(time.time())
-            enriched = []
-            for kind, (val, unit) in lims.items():
-                cur = None
-                remaining = None
-                reset_in = None
-                if kind in WINDOWS:
-                    window = WINDOWS[kind]
-                    since = now - window
-                    if kind.startswith("tokens"):
-                        use_weighted = unit == "weighted"
-                        if unit not in ("raw", "weighted"):
-                            use_weighted = True
-                        if use_weighted:
-                            rows = conn.execute("SELECT input_tokens, output_tokens, cache_creation_tokens, cache_creation_5m, cache_creation_1h, cache_read_tokens, model FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL", (user["id"], since)).fetchall()
-                            cur = sum(weighted_from_row(dict(r), cfg.weights) for r in rows)
-                        else:
-                            row = conn.execute("SELECT COALESCE(SUM(input_tokens+output_tokens+cache_creation_tokens+cache_creation_5m+cache_creation_1h+cache_read_tokens),0) FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL", (user["id"], since)).fetchone()
-                            cur = float(row[0] or 0)
-                    elif kind == "requests_daily":
-                        row = conn.execute("SELECT COUNT(*) FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL", (user["id"], since)).fetchone()
-                        cur = float(row[0] or 0)
-                    else:  # share
-                        cur = 0.0
-                    try:
-                        remaining = float(val) - (cur or 0)
-                    except:
-                        remaining = None
-                    oldest = conn.execute("SELECT MIN(started_at) FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL", (user["id"], since)).fetchone()[0]
-                    if oldest:
-                        reset_in = max(0, int(oldest + window - now))
-                enriched.append({"kind": kind, "value": val, "unit": unit, "current": cur, "remaining": remaining, "reset_in": reset_in})
-        except Exception as e:
-            enriched = []
-        # Share staleness warning
-        share_warning = None
-        try:
-            row = conn.execute("SELECT observed_at FROM quota_snapshots ORDER BY observed_at DESC LIMIT 1").fetchone()
-            if not row or (int(time.time()) - int(row["observed_at"]) > 1800):
-                if any(k.startswith("share") for k in lims.keys()):
-                    share_warning = "share limits are skipped — no quota snapshot <30m (need Phase 4 headers/poll)"
-        except:
-            pass
-        return JSONResponse({
-            "user": {"id": user["id"], "name": user["name"], "prefix": user["key_prefix"]},
-            "limits": enriched,
-            "credential": {"healthy": cred.healthy if cred else False, "detail": cred.detail if cred else "no backend"},
-            "share_warning": share_warning,
-        })
+    async def me_status(request: Request):
+        user = principal(request)
+        now = time.time()
+        states = limits.states(conn, cfg, user["id"], now=now)
+        account = {}
+        for b in BUCKETS:
+            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+            account[b] = {"utilization_pct": att["utilization_pct"], "resets_at": att["resets_at"], "stale": att["stale"],
+                          "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
+        return {"user": _public_user(user), "limits": [s.to_dict() for s in states], "account": account,
+                "credential_healthy": gw.backend.describe().healthy, "line": _status_line(user, states, account)}
 
-    @app.get("/dashboard", response_class=HTMLResponse)
-    async def dashboard():
-        # Serve static inline — ECharts via CDN, no build step (spec 10)
-        import pathlib
-        p = pathlib.Path(__file__).parent / ".." / ".." / "static" / "dashboard" / "index.html"
-        # fallback inline if file missing
-        try:
-            html = p.read_text()
-        except:
-            html = "<h1>Dashboard placeholder — static/dashboard/index.html missing</h1>"
-        return HTMLResponse(html)
+    # ---------- admin actions ----------
 
-    @app.get("/dashboard/", response_class=HTMLResponse)
-    async def dashboard_slash():
-        return await dashboard()
+    def target_user(ref) -> dict:
+        u = db.find_user(conn, ref) if ref not in (None, "") else None
+        if u is None:
+            fail(404, f"No user {ref!r}.")
+        return u
+
+    @app.post("/api/admin/users")
+    async def create_user(request: Request):
+        actor = admin(request, write=True)
+        body = await _json(request)
+        name = str(body.get("name", "")).strip()
+        role = body.get("role", "user")
+        if not name or len(name) > 64 or role not in ("user", "admin"):
+            fail(400, "Need a name of 1-64 characters and role user or admin.")
+        if conn.execute("SELECT 1 FROM users WHERE name=?", (name,)).fetchone():
+            fail(409, f"User {name!r} already exists.")
+        uid, key = db.create_user(conn, name, role=role)
+        db.audit(conn, actor["id"], "user_add", name, {"role": role})
+        return {"ok": True, "id": uid, "name": name, "key": key}
+
+    @app.post("/api/admin/users/{uid}/{action}")
+    async def user_action(request: Request, uid: int, action: str):
+        actor = admin(request, write=True)
+        u = target_user(uid)
+        if action in ("revoke", "disable") and u["id"] == actor["id"]:
+            fail(400, "You cannot disable or revoke your own account.")
+        if action == "rotate":
+            return {"ok": True, "key": db.rotate_key(conn, u["id"], actor["id"])}
+        if action == "enable":
+            if u["revoked_at"] is not None:
+                fail(400, "A revoked key cannot be re-enabled; rotate it to issue a new one.")
+            db.set_enabled(conn, u["id"], True, actor["id"])
+        elif action == "disable":
+            db.set_enabled(conn, u["id"], False, actor["id"])
+        elif action == "revoke":
+            db.revoke(conn, u["id"], actor["id"])
+        elif action == "rename":
+            new = str((await _json(request)).get("name", "")).strip()
+            if not new or len(new) > 64:
+                fail(400, "Need a name of 1-64 characters.")
+            if conn.execute("SELECT 1 FROM users WHERE name=? AND id!=?", (new, u["id"])).fetchone():
+                fail(409, f"User {new!r} already exists.")
+            conn.execute("UPDATE users SET name=? WHERE id=?", (new, u["id"]))
+            db.audit(conn, actor["id"], "rename", f"{u['name']}->{new}")
+        else:
+            fail(404, f"Unknown action {action!r}.")
+        return {"ok": True}
+
+    @app.post("/api/admin/limits")
+    async def set_limit(request: Request):
+        actor = admin(request, write=True)
+        body = await _json(request)
+        u = target_user(body.get("user") or body.get("user_id"))
+        try:
+            scope, value, unit = limits.validate(str(body.get("kind", "")), body.get("scope") or "*", body.get("value", ""), body.get("unit"))
+        except ValueError as e:
+            fail(400, str(e))
+        kind = body["kind"]
+        conn.execute("INSERT OR REPLACE INTO limits(user_id, kind, scope, value, unit, updated_at, updated_by) VALUES(?,?,?,?,?,?,?)",
+                     (u["id"], kind, scope, value, unit, int(time.time()), actor["id"]))
+        db.audit(conn, actor["id"], "limit_set", f"{u['name']}:{kind}:{scope}", {"value": value, "unit": unit})
+        return {"ok": True, "user": u["name"], "kind": kind, "scope": scope, "value": value, "unit": unit}
+
+    @app.post("/api/admin/limits/delete")
+    async def delete_limit(request: Request):
+        actor = admin(request, write=True)
+        body = await _json(request)
+        u = target_user(body.get("user") or body.get("user_id"))
+        kind, scope = str(body.get("kind", "")), body.get("scope") or "*"
+        if conn.execute("DELETE FROM limits WHERE user_id=? AND kind=? AND scope=?", (u["id"], kind, scope)).rowcount == 0:
+            fail(404, "No such limit.")
+        db.audit(conn, actor["id"], "limit_clear", f"{u['name']}:{kind}:{scope}")
+        return {"ok": True}
+
+    # ---------- page ----------
+
+    @app.get("/")
+    async def root():
+        return RedirectResponse("/dashboard")
+
+    @app.get("/dashboard")
+    async def page():
+        return FileResponse(STATIC / "index.html", media_type="text/html")
+
+    @app.get("/static/{name}")
+    async def static(name: str):
+        path = (STATIC / name).resolve()
+        if path.parent != STATIC.resolve() or not path.is_file():
+            fail(404, "Not found.")
+        return FileResponse(path)
+
+    return app
+
+
+async def _json(request: Request) -> dict:
+    try:
+        body = await request.json()
+    except ValueError:
+        fail(400, "Expected a JSON body.")
+    if not isinstance(body, dict):
+        fail(400, "Expected a JSON object.")
+    return body
+
+
+def _public_user(u) -> dict:
+    return {"id": u["id"], "name": u["name"], "role": u["role"], "prefix": u["key_prefix"]}
+
+
+def _exhaustion(conn, now: float) -> dict | None:
+    """Projected time until the 5h bucket reaches 100%, from its slope over the last 30 minutes."""
+    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE bucket='5h' AND observed_at>=? "
+                        "ORDER BY observed_at", (now - 1800,)).fetchall()
+    if len(rows) < 2:
+        return None
+    rows = quota._window(rows)
+    if len(rows) < 2:
+        return None
+    dt = rows[-1]["observed_at"] - rows[0]["observed_at"]
+    du = rows[-1]["utilization_pct"] - rows[0]["utilization_pct"]
+    if dt <= 0 or du <= 0:
+        return {"pct_per_hour": 0.0, "eta_s": None}
+    rate = du / dt
+    eta = (100 - rows[-1]["utilization_pct"]) / rate
+    resets = rows[-1]["resets_at"]
+    return {"pct_per_hour": rate * 3600, "eta_s": eta,
+            "before_reset": bool(resets and now + eta < resets)}
+
+
+def _fmt_pct(v) -> str:
+    return "?" if v is None else f"{v:.0f}%"
+
+
+def _status_line(user, states, account) -> str:
+    parts = [user["name"]]
+    for s in states:
+        if s.kind == "allowed_models":
+            continue
+        if s.skipped:
+            parts.append(f"{s.kind} n/a")
+        elif s.pct is not None:
+            parts.append(f"{s.kind.replace('_', ' ')} {s.pct:.0f}%")
+    a5, a7 = account["5h"], account["7d"]
+    acct = f"acct 5h {_fmt_pct(a5['utilization_pct'])}"
+    if a5["your_estimated_share"]:
+        acct += f" (you ~{a5['your_estimated_share']:.0f})"
+    acct += f" · 7d {_fmt_pct(a7['utilization_pct'])}"
+    if a5["stale"] and a5["utilization_pct"] is not None:
+        acct += " (stale)"
+    parts.append(acct)
+    return " · ".join(parts)

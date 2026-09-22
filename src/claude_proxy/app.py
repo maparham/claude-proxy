@@ -1,410 +1,221 @@
+"""The proxy listener (spec section 4). Serves only /health and /v1/*; the dashboard is a separate app."""
 from __future__ import annotations
 
-import time
+import json
 import logging
+import time
 
 import httpx
-from fastapi import FastAPI, Request, Response
-from fastapi.responses import JSONResponse
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from .config import Config
-from .credentials import make_backend
-from .db import get_conn, init_db, insert_request
-from .forwarder import filter_request_headers, filter_response_headers, should_forward
-from .auth import authenticate
+from . import limits, quota
+from .auth import AuthError, authenticate
+from .config import Route
+from .credentials import NeedsLogin
+from .db import insert_request
+from .forwarder import filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward
+from .gateway import Gateway
 from .meter import SSEMeter, parse_non_streaming
 
 logger = logging.getLogger("claude_proxy")
 
-# Global httpx client: HTTP/1.1 only to avoid H2 stall (spec 4)
-_upstream_client: httpx.AsyncClient | None = None
+ROUTED_PATHS = ("/v1/messages", "/v1/messages/count_tokens")
+METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
 
-def get_upstream_client() -> httpx.AsyncClient:
-    global _upstream_client
-    if _upstream_client is None:
-        _upstream_client = httpx.AsyncClient(http1=True, http2=False, timeout=300.0)
-    return _upstream_client
+def api_error(status: int, error_type: str, message: str, headers: dict | None = None) -> JSONResponse:
+    return JSONResponse(status_code=status, content={"type": "error", "error": {"type": error_type, "message": message}},
+                        headers=headers)
 
 
-def _extract_session_id(headers: dict[str, str]) -> str | None:
-    low = {k.lower(): v for k, v in headers.items()}
-    for key in ("x-session-id", "anthropic-session-id", "session-id", "x-stanza-session-id", "x-claude-session-id", "x-session_id"):
-        if key in low and low[key]:
-            return low[key][:128]
-    for k, v in low.items():
-        if "session" in k and v:
-            return v[:128]
-    return None
-
-
-def _extract_client_version(headers: dict[str, str]) -> str | None:
-    low = {k.lower(): v for k, v in headers.items()}
-    for key in ("x-stanza-client-version", "anthropic-version", "x-client-version", "client-version"):
-        if key in low and low[key]:
-            return low[key][:128]
-    ua = low.get("user-agent")
-    if ua and "claude" in ua.lower():
-        return ua[:128]
-    return ua[:128] if ua else None
-
-
-def _extract_upstream_request_id(resp_headers: dict[str, str], meter_id: str | None) -> str | None:
-    if meter_id:
-        return meter_id[:128]
-    low = {k.lower(): v for k, v in resp_headers.items()}
-    for key in ("x-request-id", "request-id", "anthropic-request-id", "x-amz-request-id", "request_id"):
-        if key in low and low[key]:
-            return low[key][:128]
-    return None
-
-
-def create_app(config: Config | None = None, db_conn=None) -> FastAPI:
-    cfg = config or Config.load()
-    app = FastAPI(title="claude-proxy")
-
-    # DB
-    if db_conn is None:
-        db_conn = init_db(cfg.db.path)
-    app.state.db_conn = db_conn
-    app.state.config = cfg
-
-    # Backend — OAuth only (spec 5.1, api_key removed per user request)
+def _model_of(body: bytes) -> tuple[str | None, dict | None]:
     try:
-        backend = make_backend(cfg, cfg.db.path)
-    except Exception as e:
-        backend = None
-        logger.error("backend init failed: %s", e)
-    app.state.backend = backend
+        data = json.loads(body)
+    except (ValueError, UnicodeDecodeError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    model = data.get("model")
+    return (model if isinstance(model, str) else None), data
+
+
+class Upstream:
+    """Where one request goes and with which credential."""
+
+    def __init__(self, gw: Gateway, route: Route | None):
+        self.gw = gw
+        self.route = route
+        self.provider = route.name if route else "anthropic"
+        self.token: str | None = None
+
+    async def headers(self, client_headers: dict[str, str]) -> dict[str, str]:
+        h = filter_request_headers(client_headers)
+        h["accept-encoding"] = "gzip"   # a coding httpx always decodes; the body is re-framed downstream
+        if self.route is None:
+            creds = await self.gw.backend.upstream_headers()
+            self.token = creds["authorization"].split(" ", 1)[1]
+            h["authorization"] = creds["authorization"]
+            h["anthropic-beta"] = merge_beta(h.get("anthropic-beta"), creds["anthropic-beta"])
+            return h
+        for name in self.route.strip_headers:
+            h.pop(name.lower(), None)
+        key = self.route.api_key()
+        if self.route.auth_header == "x-api-key":
+            h["x-api-key"] = key
+        else:
+            h["authorization"] = f"Bearer {key}"
+        return h
+
+    def url(self, path: str, query: str) -> str:
+        base = (self.route.base_url if self.route else self.gw.cfg.upstream.base_url).rstrip("/")
+        return f"{base}{path}{'?' + query if query else ''}"
+
+
+def create_app(gw: Gateway) -> FastAPI:
+    app = FastAPI(title="claude-proxy", docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.gw = gw
 
     @app.get("/health")
     async def health():
         return {"ok": True}
 
-    # Web dashboard + JSON API (Phase 7 MVP, spec 10)
-    try:
-        from .web import register_web
-        register_web(app, cfg)
-    except Exception as e:
-        logger.warning("web register failed: %s", e)
-
-    # Catch-all proxy handler for /v1/* (spec 4) — must run after auth/limits
-    @app.api_route("/v1/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-    async def proxy_v1(request: Request, path: str):
-        return await handle_proxy(request, f"/v1/{path}")
-
-    # Also handle count_tokens and other non-streaming under /v1
-    # Any non-/v1 path on proxy port is 404 and never upstream (spec 4)
-    @app.api_route("/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"])
-    async def catch_all(request: Request, path: str):
-        full = "/" + path
-        if should_forward(full):
-            return await handle_proxy(request, full)
-        return JSONResponse(status_code=404, content={"type": "error", "error": {"type": "not_found_error", "message": f"Not found: {full}"}})
-
-    async def handle_proxy(request: Request, full_path: str):
-        started_at = int(time.time())
-        # 1. Auth — spec 4.2
-        try:
-            user = authenticate(request.app.state.db_conn, request.headers.get("authorization"))
-        except Exception as e:
-            # FastAPI HTTPException handling
-            from fastapi import HTTPException
-
-            if isinstance(e, HTTPException):
-                # Record rejection
-                try:
-                    insert_request(
-                        request.app.state.db_conn,
-                        user_id=None,
-                        started_at=started_at,
-                        ended_at=int(time.time()),
-                        method=request.method,
-                        path=full_path,
-                        status=e.status_code,
-                        stream=0,
-                        complete=1,
-                        error_type="authentication_error",
-                        rejected_by="auth",
-                    )
-                except Exception:
-                    pass
-                detail = e.detail if isinstance(e.detail, dict) else {"type": "error", "error": {"type": "authentication_error", "message": str(e.detail)}}
-                return JSONResponse(status_code=e.status_code, content=detail)
-            raise
-
-        # 2. Limits — Phase 5 (spec 8)
-        # Read body early for limit checks (model extraction, count_tokens bypass)
-        try:
-            from .limits import check_limits
-        except Exception as e:
-            logger.warning("limits import failed: %s", e)
-            check_limits = None
-
-        # Body is needed for limits; read now (also used for upstream)
-        body_for_limits = await request.body()
-        # Use same body for upstream to avoid double read (request.body() is cached after first call)
-        body = body_for_limits
-        # Filter headers first for session extraction but defer upstream send until after limits
-        # Evaluate limits before forwarding
-        if check_limits is not None:
-            allowed, status_code, error_body, retry_after, rejected_by = check_limits(
-                request.app.state.db_conn, cfg, dict(user) if hasattr(user, "keys") else user, body_for_limits, full_path
-            )
-            if not allowed:
-                try:
-                    insert_request(
-                        request.app.state.db_conn,
-                        user_id=user["id"],
-                        started_at=started_at,
-                        ended_at=int(time.time()),
-                        method=request.method,
-                        path=full_path,
-                        status=status_code,
-                        stream=0,
-                        complete=1,
-                        error_type="rate_limit_error" if status_code == 429 else "permission_error",
-                        rejected_by=rejected_by,
-                        input_tokens=0,
-                        output_tokens=0,
-                    )
-                except Exception:
-                    pass
-                headers = {}
-                if retry_after is not None:
-                    headers["retry-after"] = str(retry_after)
-                    headers["Retry-After"] = str(retry_after)
-                return JSONResponse(status_code=status_code, content=error_body, headers=headers)
-        else:
-            # Fallback body already read
-            body = body_for_limits
-        # 3. Build upstream request (spec 4.4)
-        # If body was already read via limits path, reuse; otherwise ensure body exists
-        if 'body' not in locals() or body is None:
-            body = await request.body()
-        backend = request.app.state.backend
-        if backend is None:
-            return JSONResponse(
-                status_code=503,
-                content={"type": "error", "error": {"type": "api_error", "message": "Credential not linked. Admin must run `claude-proxy login`."}},
-            )
-
-        # body already read for limits (cached by Starlette)
-        # Filter headers
-        upstream_headers = filter_request_headers(dict(request.headers))
-        # Inject backend auth — merge anthropic-beta correctly (spec 5.1)
-        try:
-            bh = await backend.upstream_headers()
-        except RuntimeError as e:
-            if "needs_login" in str(e) or "no credential" in str(e):
-                return JSONResponse(
-                    status_code=503,
-                    content={"type": "error", "error": {"type": "api_error", "message": "OAuth needs re-login. Admin must run `claude-proxy login`."}},
-                )
-            logger.error("upstream_headers failed: %s", e)
-            return JSONResponse(status_code=503, content={"type": "error", "error": {"type": "api_error", "message": "Credential backend error"}})
-        except Exception as e:
-            logger.error("upstream_headers failed: %s", e)
-            return JSONResponse(status_code=503, content={"type": "error", "error": {"type": "api_error", "message": "Credential backend error"}})
-        # bh contains Authorization + anthropic-beta; merge beta with client's value
-        beta_flag = bh.pop("anthropic-beta", None)
-        upstream_headers.update(bh)
-        if beta_flag:
-            existing = upstream_headers.get("anthropic-beta") or upstream_headers.get("Anthropic-Beta")
-            # Normalize header name to anthropic-beta
-            upstream_headers.pop("Anthropic-Beta", None)
-            if existing and beta_flag not in existing:
-                upstream_headers["anthropic-beta"] = f"{existing}, {beta_flag}"
-            elif not existing:
-                upstream_headers["anthropic-beta"] = beta_flag
-        # Ensure host is upstream host, not proxy host; httpx sets it from URL
-        upstream_headers.pop("host", None)
-        upstream_headers.pop("Host", None)
-
-        upstream_base = cfg.upstream.base_url.rstrip("/")
-        query = f"?{request.url.query}" if request.url.query else ""
-        upstream_url = f"{upstream_base}{full_path}{query}"
-
-        # Log with prefix only, never raw key
-        logger.info("proxy %s %s user=%s prefix=%s upstream=%s", request.method, full_path, user["name"], user["key_prefix"], upstream_base)
-
-        client = get_upstream_client()
-        # Forward
-        try:
-            upstream_req = client.build_request(
-                method=request.method,
-                url=upstream_url,
-                headers=upstream_headers,
-                content=body,
-            )
-            # Stream response back to client without buffering (spec 4.5)
-            upstream_resp = await client.send(upstream_req, stream=True)
-        except httpx.ConnectError as e:
-            try:
-                insert_request(
-                    request.app.state.db_conn,
-                    user_id=user["id"],
-                    started_at=started_at,
-                    ended_at=int(time.time()),
-                    method=request.method,
-                    path=full_path,
-                    status=502,
-                    stream=0,
-                    complete=0,
-                    error_type="api_error",
-                )
-            except Exception:
-                pass
-            return JSONResponse(status_code=502, content={"type": "error", "error": {"type": "api_error", "message": "Upstream unreachable"}})
-        except Exception as e:
-            logger.error("upstream build/send failed: %s", e)
-            return JSONResponse(status_code=502, content={"type": "error", "error": {"type": "api_error", "message": "Upstream error"}})
-
-        # Handle 401 retry once before first byte — Phase 3 will implement single-flight; for now just pass through if api_key backend
-        if upstream_resp.status_code == 401 and backend is not None:
-            try:
-                should_retry = await backend.on_unauthorized()
-            except Exception:
-                should_retry = False
-            if should_retry:
-                await upstream_resp.aclose()
-                # Retry once — re-inject fresh headers (single-flight already done in on_unauthorized)
-                try:
-                    bh2 = await backend.upstream_headers()
-                except Exception:
-                    bh2 = {}
-                beta2 = bh2.pop("anthropic-beta", None)
-                upstream_headers.update(bh2)
-                if beta2:
-                    existing = upstream_headers.get("anthropic-beta")
-                    if existing and beta2 not in existing:
-                        upstream_headers["anthropic-beta"] = f"{existing}, {beta2}"
-                    elif not existing:
-                        upstream_headers["anthropic-beta"] = beta2
-                upstream_req = client.build_request(method=request.method, url=upstream_url, headers=upstream_headers, content=body)
-                upstream_resp = await client.send(upstream_req, stream=True)
-
-        # Capture headers for quota snapshots (Phase 4 will persist)
-        # Currently just pass through
-
-        # Extract per-request metadata bevor streaming
-        session_id = _extract_session_id(dict(request.headers))
-        client_version = _extract_client_version(dict(request.headers))
-
-        # Stream body to client with metering (spec 6)
-        from fastapi.responses import StreamingResponse
-
-        status = upstream_resp.status_code
-        raw_resp_headers = dict(upstream_resp.headers)
-        resp_headers = filter_response_headers(raw_resp_headers)
-
-        is_stream = "text/event-stream" in resp_headers.get("content-type", "").lower()
-        # count_tokens is never metered for tokens per spec 8 — but we still record path with zeros
-        is_count_tokens = "count_tokens" in full_path
-
-        async def stream_gen():
-            meter = SSEMeter() if is_stream and not is_count_tokens else None
-            non_stream_buf = bytearray() if not is_stream and not is_count_tokens else None
-            stream_complete = True
-            # For non-stream json, we still stream but accumulate for metering
-            try:
-                async for chunk in upstream_resp.aiter_bytes():
-                    # Meter observes copy in parallel, never delays (spec 4.5)
-                    if meter is not None and not meter.result.meter_error:
-                        try:
-                            meter.feed(chunk)
-                        except Exception as e:
-                            logger.warning("meter feed failed: %s", e)
-                            meter.result.meter_error = True
-                            meter.result.meter_error_detail = str(e)[:200]
-                    if non_stream_buf is not None:
-                        # bounded accumulate for non-stream json (typically < 100KB)
-                        if len(non_stream_buf) < 5 * 1024 * 1024:
-                            non_stream_buf.extend(chunk)
-                    yield chunk
-            except Exception as e:
-                stream_complete = False
-                logger.warning("stream interrupted: %s", e)
-            finally:
-                ended = int(time.time())
-                # Build meter result
-                try:
-                    if is_count_tokens:
-                        # spec 6.2: count_tokens -> zero tokens, complete true, stream flag as detected
-                        mr = None
-                        input_t = output_t = cc_t = cc5 = cc1 = cr_t = 0
-                        model = None
-                        up_id = _extract_upstream_request_id(raw_resp_headers, None)
-                        complete_flag = 1 if stream_complete else 0
-                        meter_err = 0
-                    elif meter is not None:
-                        mr = meter.finalize()
-                        input_t = mr.input_tokens
-                        output_t = mr.output_tokens
-                        cc_t = mr.cache_creation_tokens
-                        cc5 = mr.cache_creation_5m
-                        cc1 = mr.cache_creation_1h
-                        cr_t = mr.cache_read_tokens
-                        model = mr.model
-                        up_id = _extract_upstream_request_id(raw_resp_headers, mr.upstream_request_id)
-                        # complete flag: only true if message_stop seen AND stream not interrupted
-                        complete_flag = 1 if (mr.complete and stream_complete) else 0
-                        meter_err = 1 if mr.meter_error else 0
-                        if mr.meter_error:
-                            logger.info("meter_error path=%s detail=%s", full_path, mr.meter_error_detail)
-                    elif non_stream_buf is not None:
-                        mr = parse_non_streaming(bytes(non_stream_buf), full_path)
-                        input_t = mr.input_tokens
-                        output_t = mr.output_tokens
-                        cc_t = mr.cache_creation_tokens
-                        cc5 = mr.cache_creation_5m
-                        cc1 = mr.cache_creation_1h
-                        cr_t = mr.cache_read_tokens
-                        model = mr.model
-                        up_id = _extract_upstream_request_id(raw_resp_headers, mr.upstream_request_id)
-                        complete_flag = 1 if (mr.complete and stream_complete) else 0
-                        meter_err = 1 if mr.meter_error else 0
-                    else:
-                        # fallback (e.g., stream but empty)
-                        input_t = output_t = cc_t = cc5 = cc1 = cr_t = 0
-                        model = None
-                        up_id = _extract_upstream_request_id(raw_resp_headers, None)
-                        complete_flag = 1 if stream_complete else 0
-                        meter_err = 0
-
-                    # For 4xx/5xx responses there is no usage — still record with zeros and error_type
-                    error_type = None if status < 400 else f"upstream_{status}"
-                    # If stream response had error and no metering, still mark complete accordingly
-
-                    insert_request(
-                        request.app.state.db_conn,
-                        user_id=user["id"],
-                        started_at=started_at,
-                        ended_at=ended,
-                        method=request.method,
-                        path=full_path,
-                        model=model,
-                        status=status,
-                        stream=1 if is_stream else 0,
-                        complete=complete_flag,
-                        input_tokens=input_t,
-                        output_tokens=output_t,
-                        cache_creation_tokens=cc_t,
-                        cache_creation_5m=cc5,
-                        cache_creation_1h=cc1,
-                        cache_read_tokens=cr_t,
-                        upstream_request_id=up_id,
-                        session_id=session_id,
-                        client_version=client_version,
-                        error_type=error_type,
-                        meter_error=meter_err,
-                        rejected_by=None,
-                    )
-                except Exception as e:
-                    logger.error("insert_request failed: %s", e)
-                await upstream_resp.aclose()
-
-        # Do not forward content-length/content-encoding (stripped in filter_response_headers); StreamingResponse will use chunked
-        return StreamingResponse(stream_gen(), status_code=status, headers=resp_headers, media_type=resp_headers.get("content-type"))
+    @app.api_route("/{path:path}", methods=METHODS)
+    async def proxy(request: Request, path: str):
+        return await handle(gw, request, "/" + path)
 
     return app
+
+
+async def handle(gw: Gateway, request: Request, path: str) -> Response:
+    conn, cfg = gw.conn, gw.cfg
+    started = time.time()
+    if not should_forward(path):
+        return api_error(404, "not_found_error", f"Not found: {path}")
+
+    base = {"started_at": started, "method": request.method, "path": path}
+
+    def record(**kw) -> None:
+        try:
+            insert_request(conn, **{**base, "ended_at": time.time(), **kw})
+        except Exception:
+            logger.exception("could not record request")
+
+    try:
+        user = authenticate(conn, request.headers)
+    except AuthError as e:
+        record(user_id=None, status=e.status, stream=0, complete=1, error_type=e.body["error"]["type"], rejected_by="auth")
+        return JSONResponse(status_code=e.status, content=e.body)
+    base["user_id"] = user["id"]
+    base["session_id"] = session_id(request.headers)
+    base["client_version"] = (request.headers.get("user-agent") or "")[:128] or None
+
+    body = await request.body()
+    model, data = _model_of(body) if body else (None, None)
+    route = cfg.route_for(model) if request.method == "POST" and path in ROUTED_PATHS else None
+    upstream = Upstream(gw, route)
+    base["provider"] = upstream.provider
+    base["model"] = model
+
+    decision = limits.evaluate(conn, cfg, user["id"], model, path)
+    if decision:
+        record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
+        logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
+        return JSONResponse(status_code=decision.status, content=decision.body,
+                            headers={"retry-after": str(decision.retry_after)} if decision.retry_after else None)
+
+    if route is not None:
+        if not route.api_key():
+            record(status=503, stream=0, complete=1, error_type="gateway_route_unconfigured")
+            return api_error(503, "api_error", f"Model {model!r} is routed to {route.name}, but {route.api_key_env} is not set on the gateway.")
+        if route.upstream_model(model) != model:
+            data["model"] = route.upstream_model(model)
+            body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+
+    client_headers = dict(request.headers)
+    query = request.url.query
+
+    async def send() -> httpx.Response:
+        headers = await upstream.headers(client_headers)
+        req = gw.http.build_request(request.method, upstream.url(path, query), headers=headers, content=body)
+        return await gw.http.send(req, stream=True)
+
+    try:
+        resp = await send()
+        # Refresh-and-retry once on 401. Nothing has been sent to the client yet (spec 5.1).
+        if resp.status_code == 401 and route is None and await gw.backend.on_unauthorized(upstream.token):
+            await resp.aclose()
+            resp = await send()
+    except NeedsLogin as e:
+        record(status=503, stream=0, complete=1, error_type="gateway_needs_login")
+        return api_error(503, "api_error", f"The gateway's Claude subscription login needs renewing: the admin must run `claude-proxy login` ({e}).")
+    except httpx.HTTPError as e:
+        logger.warning("upstream %s unreachable: %s", upstream.provider, e)
+        record(status=502, stream=0, complete=0, error_type="gateway_upstream_unreachable")
+        return api_error(502, "api_error", f"The gateway could not reach {upstream.provider}.")
+
+    if route is None:
+        try:
+            quota.record(conn, quota.parse_headers(resp.headers))
+        except Exception:
+            logger.exception("could not record quota headers")
+
+    status = resp.status_code
+    resp_headers = filter_response_headers(dict(resp.headers))
+    error_type = quota.classify_429(resp.headers) if status == 429 else None
+
+    if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:
+        return await _models_with_routes(gw, resp, resp_headers, record)
+
+    is_stream = "text/event-stream" in resp.headers.get("content-type", "")
+
+    async def relay():
+        meter = SSEMeter() if is_stream else None
+        buf = bytearray() if not is_stream else None
+        finished = False
+        try:
+            async for chunk in resp.aiter_bytes():
+                if meter is not None:
+                    try:
+                        meter.feed(chunk)
+                    except Exception as e:   # metering never affects forwarding
+                        meter.result.meter_error = True
+                        meter.result.meter_error_detail = str(e)[:200]
+                elif len(buf) < 8 * 1024 * 1024:
+                    buf.extend(chunk)
+                yield chunk
+            finished = True
+        finally:
+            await resp.aclose()
+            mr = meter.finalize() if meter is not None else parse_non_streaming(bytes(buf), path)
+            record(
+                model=mr.model or base["model"], status=status, stream=1 if is_stream else 0,
+                complete=1 if finished and (mr.complete or not is_stream) else 0,
+                input_tokens=mr.input_tokens, output_tokens=mr.output_tokens,
+                cache_creation_tokens=mr.cache_creation_tokens, cache_creation_5m=mr.cache_creation_5m,
+                cache_creation_1h=mr.cache_creation_1h, cache_read_tokens=mr.cache_read_tokens,
+                upstream_request_id=mr.upstream_request_id or resp.headers.get("request-id"),
+                error_type=error_type or mr.error_type or (f"upstream_{status}" if status >= 400 else None),
+                meter_error=1 if mr.meter_error else 0,
+            )
+
+    return StreamingResponse(relay(), status_code=status, headers=resp_headers)
+
+
+async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, record) -> Response:
+    raw = await resp.aread()
+    await resp.aclose()
+    try:
+        data = json.loads(raw)
+        ids = {m.get("id") for m in data.get("data", [])}
+        for route in gw.cfg.routes:
+            for name in route.model_map:
+                if name not in ids:
+                    data["data"].append({"type": "model", "id": name, "display_name": f"{name} (via {route.name})",
+                                         "created_at": "2026-01-01T00:00:00Z"})
+        raw = json.dumps(data).encode()
+    except (ValueError, AttributeError, TypeError):
+        pass
+    record(status=200, stream=0, complete=1)
+    headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    return Response(raw, status_code=200, headers=headers, media_type="application/json")

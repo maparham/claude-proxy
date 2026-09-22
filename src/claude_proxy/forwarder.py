@@ -1,57 +1,48 @@
 from __future__ import annotations
 
-import httpx
-from fastapi import Request, Response
+# Hop-by-hop headers (RFC 9110 section 7.6.1) are never forwarded.
+HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
+              "trailers", "transfer-encoding", "upgrade", "proxy-connection"}
 
-# Hop-by-hop headers per RFC 9110 §7.6.1 must not be forwarded
-HOP_BY_HOP = {
-    "connection",
-    "keep-alive",
-    "proxy-authenticate",
-    "proxy-authorization",
-    "te",
-    "trailers",
-    "transfer-encoding",
-    "upgrade",
-    "proxy-connection",
-}
+# Client credentials: removed on every route before the route's own credential is added (spec 17.1).
+CLIENT_CREDENTIALS = {"authorization", "x-api-key"}
+
+# Recomputed by the HTTP client for the outgoing request.
+RECOMPUTED = {"host", "content-length"}
+
+SESSION_HEADERS = ("x-claude-code-session-id", "x-session-id", "anthropic-session-id")
 
 
 def should_forward(path: str) -> bool:
-    # Only /v1/ is forwarded (spec 4, guards teamclaude #420)
+    # Only /v1/ is forwarded, so a mistyped path is never sent upstream with the credential.
     return path.startswith("/v1/")
 
 
+def _connection_tokens(headers: dict[str, str]) -> set[str]:
+    return {t.strip().lower() for k, v in headers.items() if k.lower() == "connection" for t in v.split(",")}
+
+
 def filter_request_headers(headers: dict[str, str]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    # Also handle Connection header tokens
-    connection_tokens = set()
-    if "connection" in {k.lower() for k in headers}:
-        for k, v in headers.items():
-            if k.lower() == "connection":
-                for tok in v.split(","):
-                    connection_tokens.add(tok.strip().lower())
-    for k, v in headers.items():
-        lk = k.lower()
-        if lk in HOP_BY_HOP or lk in connection_tokens:
-            continue
-        # Strip client credential headers — will be replaced by backend (spec 4.4)
-        if lk in ("authorization", "x-api-key"):
-            continue
-        out[k] = v
-    return out
+    drop = HOP_BY_HOP | CLIENT_CREDENTIALS | RECOMPUTED | _connection_tokens(headers)
+    return {k: v for k, v in headers.items() if k.lower() not in drop}
 
 
 def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
-    out: dict[str, str] = {}
-    for k, v in headers.items():
-        lk = k.lower()
-        if lk in HOP_BY_HOP:
-            continue
-        # httpx auto-decompresses upstream gzip (stream=True still decodes), so forwarding
-        # content-encoding/content-length would cause client ZlibError / length mismatch.
-        # Strip them and let StreamingResponse use chunked encoding (spec 4.5).
-        if lk in ("content-encoding", "content-length"):
-            continue
-        out[k] = v
-    return out
+    # httpx decodes compressed bodies, so content-encoding and content-length no longer describe
+    # what we send; the response is re-framed with chunked encoding.
+    drop = HOP_BY_HOP | {"content-encoding", "content-length"} | _connection_tokens(headers)
+    return {k: v for k, v in headers.items() if k.lower() not in drop}
+
+
+def merge_beta(existing: str | None, flag: str) -> str:
+    flags = [f.strip() for f in (existing or "").split(",") if f.strip()]
+    if flag not in flags:
+        flags.append(flag)
+    return ", ".join(flags)
+
+
+def session_id(headers) -> str | None:
+    for name in SESSION_HEADERS:
+        if headers.get(name):
+            return headers[name][:128]
+    return None

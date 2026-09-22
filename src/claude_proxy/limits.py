@@ -1,255 +1,223 @@
+"""Per-user limits, evaluated before forwarding (spec sections 8 and 17.2).
+
+Usage limits count only forwarded requests (never rejections) in a rolling window, optionally
+restricted to models matching a glob `scope`. Share limits compare the user's estimated share of an
+account bucket (quota.attribution) with an allocation in percentage points.
+"""
 from __future__ import annotations
 
 import fnmatch
-import json
-import time
-import logging
 import sqlite3
+import time
+from dataclasses import dataclass
 
-from .meter import weighted_from_row
+from . import quota
 from .config import Config
+from .usage import CW1, CW5, Totals, price_totals
 
-logger = logging.getLogger("claude_proxy")
+MINUTE, HOUR, DAY = 60, 3600, 86400
 
 WINDOWS = {
-    "tokens_5h": 5 * 3600,
-    "share_5h": 5 * 3600,
-    "tokens_daily": 86400,
-    "requests_daily": 86400,
-    "tokens_weekly": 7 * 86400,
-    "share_7d": 7 * 86400,
+    "requests_minute": MINUTE, "tokens_minute": MINUTE,
+    "tokens_5h": 5 * HOUR,
+    "requests_daily": DAY, "tokens_daily": DAY,
+    "tokens_weekly": 7 * DAY,
+    "requests_monthly": 30 * DAY, "tokens_monthly": 30 * DAY, "cost_monthly": 30 * DAY,
 }
+SHARE_BUCKETS = {"share_5h": "5h", "share_7d": "7d"}
+UNITS = {
+    **{k: ("count",) for k in WINDOWS if k.startswith("requests_")},
+    **{k: ("weighted", "raw") for k in WINDOWS if k.startswith("tokens_")},
+    "cost_monthly": ("usd",),
+    "share_5h": ("pct",), "share_7d": ("pct",),
+    "allowed_models": ("list",),
+}
+KINDS = tuple(UNITS)
 
-SHARE_STALE_SEC = 30 * 60  # 30m per spec 181
+
+@dataclass
+class Decision:
+    status: int
+    kind: str
+    body: dict
+    retry_after: int | None = None
 
 
-def _get_limits(conn: sqlite3.Connection, user_id: int) -> dict[str, tuple[str, str]]:
-    rows = conn.execute("SELECT kind, value, unit FROM limits WHERE user_id=?", (user_id,)).fetchall()
-    out: dict[str, tuple[str, str]] = {}
-    for r in rows:
-        out[r["kind"]] = (r["value"], r["unit"])
+@dataclass
+class LimitState:
+    kind: str
+    scope: str
+    value: str
+    unit: str
+    current: float | None = None
+    limit: float | None = None
+    remaining: float | None = None
+    reset_in: int | None = None
+    exceeded: bool = False
+    skipped: str | None = None
+    estimated: bool = False
+
+    @property
+    def pct(self) -> float | None:
+        if self.current is None or not self.limit:
+            return None
+        return 100.0 * self.current / self.limit
+
+    def to_dict(self) -> dict:
+        return {"kind": self.kind, "scope": self.scope, "value": self.value, "unit": self.unit,
+                "current": self.current, "limit": self.limit, "remaining": self.remaining,
+                "reset_in": self.reset_in, "exceeded": self.exceeded, "skipped": self.skipped,
+                "estimated": self.estimated, "pct": self.pct}
+
+
+def validate(kind: str, scope: str, value: str, unit: str | None) -> tuple[str, str, str]:
+    """Normalise and check an admin-supplied limit. Returns (scope, value, unit)."""
+    if kind not in UNITS:
+        raise ValueError(f"unknown limit kind {kind!r}; one of {', '.join(KINDS)}")
+    unit = unit or UNITS[kind][0]
+    if unit not in UNITS[kind]:
+        raise ValueError(f"{kind} takes unit {' or '.join(UNITS[kind])}, not {unit!r}")
+    scope = (scope or "*").strip() or "*"
+    value = str(value).strip()
+    if kind == "allowed_models":
+        pats = [p.strip() for p in value.split(",") if p.strip()]
+        if not pats:
+            raise ValueError("allowed_models needs at least one model pattern")
+        return "*", ",".join(pats), unit
+    try:
+        n = float(value)
+    except ValueError:
+        raise ValueError(f"{kind} needs a number, got {value!r}") from None
+    if n < 0:
+        raise ValueError(f"{kind} cannot be negative")
+    if unit == "pct" and n > 100:
+        raise ValueError("a share is at most 100 percentage points")
+    return scope, value, unit
+
+
+def _rows(conn: sqlite3.Connection, user_id: int) -> list[sqlite3.Row]:
+    return conn.execute("SELECT kind, scope, value, unit FROM limits WHERE user_id=? ORDER BY kind, scope", (user_id,)).fetchall()
+
+
+def _usage_rows(conn, cfg: Config, user_id: int, kind: str, unit: str, scope: str, since: float) -> list[tuple[float, float]]:
+    """(started_at, amount) for each forwarded request in the window that counts toward `kind`."""
+    rs = conn.execute(
+        f"SELECT started_at, model, input_tokens AS i, output_tokens AS o, {CW5} AS c5, {CW1} AS c1, cache_read_tokens AS cr "
+        f"FROM requests WHERE user_id=? AND started_at>? AND rejected_by IS NULL AND path NOT LIKE '%count_tokens%' "
+        f"ORDER BY started_at", (user_id, since)).fetchall()
+    out = []
+    for r in rs:
+        if scope != "*" and not fnmatch.fnmatchcase(r["model"] or "", scope):
+            continue
+        if kind.startswith("requests_"):
+            out.append((r["started_at"], 1.0))
+            continue
+        t = price_totals(cfg.pricing, r["model"], Totals(1, r["i"], r["o"], r["c5"], r["c1"], r["cr"]))
+        amount = t.cost_usd if kind == "cost_monthly" else (float(t.raw) if unit == "raw" else t.weighted)
+        out.append((r["started_at"], amount))
     return out
 
 
-def _extract_model(body: bytes) -> str | None:
-    if not body:
-        return None
-    try:
-        data = json.loads(body.decode("utf-8", errors="replace"))
-        m = data.get("model")
-        if isinstance(m, str):
-            return m
-    except Exception:
-        pass
-    return None
-
-
-def _sum_weighted(conn: sqlite3.Connection, user_id: int, since: int, weights) -> float:
-    rows = conn.execute(
-        "SELECT input_tokens, output_tokens, cache_creation_tokens, cache_creation_5m, cache_creation_1h, cache_read_tokens, model FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL",
-        (user_id, since),
-    ).fetchall()
-    total = 0.0
-    for r in rows:
-        total += weighted_from_row(dict(r), weights)
-    return total
-
-
-def _sum_raw(conn: sqlite3.Connection, user_id: int, since: int) -> int:
-    row = conn.execute(
-        "SELECT COALESCE(SUM(input_tokens + output_tokens + cache_creation_tokens + cache_creation_5m + cache_creation_1h + cache_read_tokens),0) FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL",
-        (user_id, since),
-    ).fetchone()
-    return int(row[0] or 0)
-
-
-def _count_requests(conn: sqlite3.Connection, user_id: int, since: int) -> int:
-    row = conn.execute(
-        "SELECT COUNT(*) FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL",
-        (user_id, since),
-    ).fetchone()
-    return int(row[0] or 0)
-
-
-def _oldest_in_window(conn: sqlite3.Connection, user_id: int, since: int) -> int | None:
-    row = conn.execute(
-        "SELECT MIN(started_at) FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL",
-        (user_id, since),
-    ).fetchone()
-    return row[0] if row and row[0] else None
-
-
-def _share_estimate_placeholder(conn: sqlite3.Connection, bucket: str) -> tuple[float | None, int | None, bool]:
-    """Return (utilization_pct, resets_at, stale) for bucket if snapshot exists, else (None,None,True).
-    Placeholder for full attribution (spec 7.2). Until Phase 4 poll, we return stale."""
-    row = conn.execute(
-        "SELECT utilization_pct, resets_at, observed_at FROM quota_snapshots WHERE bucket=? ORDER BY observed_at DESC LIMIT 1",
-        (bucket,),
-    ).fetchone()
-    if not row:
-        return None, None, True
-    util, resets_at, observed_at = row["utilization_pct"], row["resets_at"], row["observed_at"]
-    stale = (int(time.time()) - int(observed_at)) > SHARE_STALE_SEC
-    return util, resets_at, stale
-
-
-def check_limits(
-    conn: sqlite3.Connection,
-    cfg: Config,
-    user: dict | sqlite3.Row,
-    body: bytes,
-    path: str,
-) -> tuple[bool, int | None, dict | None, int | None, str | None]:
-    """Check all limits pre-request.
-    Returns (allowed, status_code, error_body, retry_after, rejected_by_kind)
-    If allowed True, other values None.
-    """
-    user_id = user["id"] if isinstance(user, dict) else user["id"]
-    # Also need Row access
-    if isinstance(user, sqlite3.Row):
-        user_id = user["id"]
-    else:
-        user_id = user["id"]
-
-    limits = _get_limits(conn, user_id)
-    now = int(time.time())
-
-    # enabled check first
-    if "enabled" in limits:
-        val, unit = limits["enabled"]
-        # value "0","false","off" means disabled
-        if val.lower() in ("0", "false", "off", "no"):
-            return (
-                False,
-                403,
-                {"type": "error", "error": {"type": "permission_error", "message": "Account disabled by admin"}},
-                None,
-                "enabled",
-            )
-
-    # allowed_models check
-    if "allowed_models" in limits:
-        val, unit = limits["allowed_models"]
-        model = _extract_model(body)
-        if model is not None:
-            # value is comma-separated glob patterns or JSON list
-            patterns: list[str] = []
-            v = val.strip()
-            if v.startswith("["):
-                try:
-                    arr = json.loads(v)
-                    if isinstance(arr, list):
-                        patterns = [str(p) for p in arr]
-                except:
-                    patterns = [p.strip() for p in v.strip("[]").split(",")]
-            else:
-                patterns = [p.strip() for p in v.split(",") if p.strip()]
-            if patterns:
-                allowed = any(fnmatch.fnmatch(model, pat) or fnmatch.fnmatch(model.lower(), pat.lower()) for pat in patterns)
-                if not allowed:
-                    return (
-                        False,
-                        403,
-                        {"type": "error", "error": {"type": "permission_error", "message": f"Model '{model}' not allowed by admin"}},
-                        None,
-                        "allowed_models",
-                    )
-
-    # count_tokens never rejected by token/share limits (spec 184)
-    is_count_tokens = "count_tokens" in path
-
-    # Determine if share limits should be skipped due to missing poll capability / staleness
-    # Check backend descriptor presence via config check? We infer from quota_snapshots existence.
-    # For now, skip share if stale per spec 181 — still enforce token limits and show warning.
-    share_skipped_warning = False
-
-    # Token limits
-    for kind in ("tokens_5h", "tokens_daily", "tokens_weekly"):
-        if kind not in limits or is_count_tokens:
-            continue
-        val, unit = limits[kind]
-        try:
-            limit_val = float(val)
-        except:
-            continue
-        window = WINDOWS[kind]
-        since = now - window
-        # unit weighted vs raw
-        use_weighted = unit == "weighted"
-        # default weighted per spec 180
-        if unit not in ("raw", "weighted"):
-            use_weighted = True
-        if use_weighted:
-            current = _sum_weighted(conn, user_id, since, cfg.weights)
+def _window_state(conn, cfg, user_id, row, now) -> LimitState:
+    kind, scope, unit = row["kind"], row["scope"], row["unit"]
+    window = WINDOWS[kind]
+    limit = float(row["value"])
+    usage = _usage_rows(conn, cfg, user_id, kind, unit, scope, now - window)
+    current = sum(a for _, a in usage)
+    exceeded = current >= limit
+    reset_in = None
+    if usage:
+        if exceeded:
+            left = current
+            for started, amount in usage:
+                left -= amount
+                if left < limit:
+                    reset_in = started + window - now
+                    break
         else:
-            current = float(_sum_raw(conn, user_id, since))
-        if current >= limit_val:
-            oldest = _oldest_in_window(conn, user_id, since)
-            retry_after = (oldest + window - now) if oldest else window
-            retry_after = max(1, int(retry_after))
-            msg = f"Token limit '{kind}' exceeded: {current:.0f}/{limit_val:.0f} (resets in {retry_after}s)"
-            logger.info("limit reject user=%s kind=%s current=%s limit=%s", user["name"] if "name" in user.keys() else user_id, kind, current, limit_val)
-            return (
-                False,
-                429,
-                {"type": "error", "error": {"type": "rate_limit_error", "message": msg}},
-                retry_after,
-                kind,
-            )
+            reset_in = usage[0][0] + window - now
+    if reset_in is not None:
+        reset_in = max(1, int(round(reset_in)))
+    return LimitState(kind, scope, row["value"], unit, current=current, limit=limit,
+                      remaining=max(0.0, limit - current), reset_in=reset_in, exceeded=exceeded)
 
-    # Requests daily
-    if "requests_daily" in limits and not is_count_tokens:
-        val, unit = limits["requests_daily"]
-        try:
-            limit_val = int(float(val))
-        except:
-            limit_val = None
-        if limit_val is not None:
-            window = WINDOWS["requests_daily"]
-            since = now - window
-            current = _count_requests(conn, user_id, since)
-            if current >= limit_val:
-                oldest = _oldest_in_window(conn, user_id, since)
-                retry_after = (oldest + window - now) if oldest else window
-                retry_after = max(1, int(retry_after))
-                msg = f"Request limit 'requests_daily' exceeded: {current}/{limit_val} (resets in {retry_after}s)"
-                return (
-                    False,
-                    429,
-                    {"type": "error", "error": {"type": "rate_limit_error", "message": msg}},
-                    retry_after,
-                    "requests_daily",
-                )
 
-    # Share limits — skip if no snapshot <30m or backend poll_usage is None (spec 181)
-    # We check snapshots; if none or stale, skip enforcement and let caller surface warning.
-    for kind, bucket in (("share_5h", "5h"), ("share_7d", "7d")):
-        if kind not in limits or is_count_tokens:
-            continue
-        val, unit = limits[kind]
-        try:
-            limit_pct = float(val)
-        except:
-            continue
-        util, resets_at, stale = _share_estimate_placeholder(conn, bucket)
-        if util is None or stale:
-            # Skip share limit, but token limits already enforced; dashboard should show warning
-            share_skipped_warning = True
-            continue
-        # Placeholder attribution: until full 7.2 implemented, we approximate share as 0
-        # So no enforcement yet — when attribution ready, compare estimated share to limit_pct
-        # For now, do not reject on share if we have util but no per-user estimate
-        # This keeps share limits non-blocking until attribution is implemented
-        estimated_share = 0.0  # TODO Phase 5 full attribution
-        if estimated_share >= limit_pct:
-            retry_after = max(1, int((resets_at - now) if resets_at and resets_at > now else 3600))
-            msg = f"Share limit '{kind}' exceeded: {estimated_share:.1f}%/{limit_pct:.1f}% of account {bucket} (resets in {retry_after}s)"
-            return (
-                False,
-                429,
-                {"type": "error", "error": {"type": "rate_limit_error", "message": msg}},
-                retry_after,
-                kind,
-            )
+def _share_state(conn, cfg, user_id, row, now) -> LimitState:
+    limit = float(row["value"])
+    st = LimitState(row["kind"], row["scope"], row["value"], row["unit"], limit=limit, estimated=True)
+    att = quota.attribution(conn, cfg.pricing, SHARE_BUCKETS[row["kind"]], now=now, stale_after_s=cfg.quota.stale_after_s)
+    if att["utilization_pct"] is None or att["stale"]:
+        st.skipped = f"no account snapshot in the last {cfg.quota.stale_after_s // 60} min"
+        return st
+    st.current = att["shares"].get(user_id, 0.0)
+    st.remaining = max(0.0, limit - st.current)
+    st.exceeded = st.current >= limit
+    if att["resets_at"]:
+        st.reset_in = max(1, int(att["resets_at"] - now))
+    return st
 
-    return True, None, None, None, None
+
+def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | None = None) -> list[LimitState]:
+    now = time.time() if now is None else now
+    out = []
+    for row in _rows(conn, user_id):
+        if row["kind"] in WINDOWS:
+            out.append(_window_state(conn, cfg, user_id, row, now))
+        elif row["kind"] in SHARE_BUCKETS:
+            out.append(_share_state(conn, cfg, user_id, row, now))
+        else:
+            out.append(LimitState(row["kind"], row["scope"], row["value"], row["unit"]))
+    return out
+
+
+def _describe(st: LimitState) -> str:
+    scope = f" for models {st.scope}" if st.scope != "*" else ""
+    if st.unit == "usd":
+        amount = f"${st.current:.2f} of ${st.limit:.2f}"
+    elif st.unit == "pct":
+        amount = f"estimated {st.current:.1f} of {st.limit:.0f} percentage points of the account's {SHARE_BUCKETS[st.kind]} quota"
+    else:
+        amount = f"{st.current:,.0f} of {st.limit:,.0f} {'requests' if st.unit == 'count' else st.unit + ' tokens'}"
+    wait = f"; retry in {_human(st.reset_in)}" if st.reset_in else ""
+    return f"Gateway limit {st.kind}{scope} reached: {amount}{wait}."
+
+
+def _human(s: int) -> str:
+    if s < 120:
+        return f"{s}s"
+    if s < 7200:
+        return f"{s // 60} min"
+    if s < 172800:
+        return f"{s / 3600:.1f} h"
+    return f"{s / 86400:.1f} days"
+
+
+def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | None, path: str,
+             now: float | None = None) -> Decision | None:
+    """None to allow, or the rejection to send."""
+    now = time.time() if now is None else now
+    is_count_tokens = "count_tokens" in path
+    third_party = cfg.route_for(model) is not None
+    for row in _rows(conn, user_id):
+        kind = row["kind"]
+        if kind == "allowed_models":
+            if model and not any(fnmatch.fnmatchcase(model, p.strip()) for p in row["value"].split(",")):
+                return Decision(403, kind, {"type": "error", "error": {"type": "permission_error",
+                                "message": f"Model {model!r} is not allowed for this key by the gateway admin."}})
+            continue
+        if is_count_tokens:
+            continue
+        if row["scope"] != "*" and not fnmatch.fnmatchcase(model or "", row["scope"]):
+            continue
+        if kind in WINDOWS:
+            st = _window_state(conn, cfg, user_id, row, now)
+        elif kind in SHARE_BUCKETS:
+            if third_party:
+                continue
+            st = _share_state(conn, cfg, user_id, row, now)
+        else:
+            continue
+        if st.exceeded:
+            return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
+                            st.reset_in or 60)
+    return None

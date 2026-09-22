@@ -23,6 +23,7 @@ class MeterResult:
     meter_error: bool = False
     meter_error_detail: str | None = None
     stream: bool = False
+    error_type: str | None = None
 
 
 def _safe_int(v, default=0) -> int:
@@ -34,16 +35,15 @@ def _safe_int(v, default=0) -> int:
         return default
 
 
-def _apply_usage_to_result(res: MeterResult, usage: dict, overwrite_only_present: bool = False):
-    """Apply usage dict fields to result. If overwrite_only_present, only overwrite when key exists.
-    Used for message_start (initial) and message_delta (overwrite)."""
+def _apply_usage_to_result(res: MeterResult, usage: dict | None):
+    """Overwrite result fields with every usage field present (message_start, message_delta, JSON body).
+
+    Counts in message_delta are cumulative, so they replace earlier values and are never summed.
+    """
     if not isinstance(usage, dict):
         return
-    # direct fields
     if "input_tokens" in usage:
         res.input_tokens = _safe_int(usage["input_tokens"])
-    elif not overwrite_only_present and "input_tokens" not in usage:
-        pass
 
     if "output_tokens" in usage:
         res.output_tokens = _safe_int(usage["output_tokens"])
@@ -61,12 +61,6 @@ def _apply_usage_to_result(res: MeterResult, usage: dict, overwrite_only_present
             res.cache_creation_5m = _safe_int(cc["ephemeral_5m_input_tokens"])
         if "ephemeral_1h_input_tokens" in cc:
             res.cache_creation_1h = _safe_int(cc["ephemeral_1h_input_tokens"])
-        # Some payloads use cache_creation key directly at top-level already handled; fallback
-    # Some payloads put ephemeral fields at top level directly (defensive)
-    if "ephemeral_5m_input_tokens" in usage:
-        res.cache_creation_5m = _safe_int(usage["ephemeral_5m_input_tokens"])
-    if "ephemeral_1h_input_tokens" in usage:
-        res.cache_creation_1h = _safe_int(usage["ephemeral_1h_input_tokens"])
 
 
 class SSEMeter:
@@ -196,7 +190,7 @@ class SSEMeter:
                 self.result.model = model
             if isinstance(mid, str):
                 self.result.upstream_request_id = mid
-            _apply_usage_to_result(self.result, usage, overwrite_only_present=False)
+            _apply_usage_to_result(self.result, usage)
 
         elif typ == "message_delta":
             usage = data.get("usage", {}) if isinstance(data.get("usage"), dict) else {}
@@ -204,7 +198,7 @@ class SSEMeter:
             if not usage and isinstance(data.get("delta"), dict) and isinstance(data["delta"].get("usage"), dict):
                 usage = data["delta"]["usage"]
             # Per spec: overwrites output_tokens (cumulative, never sum), overwrites input/cache if present
-            _apply_usage_to_result(self.result, usage, overwrite_only_present=True)
+            _apply_usage_to_result(self.result, usage)
             # Also model may appear in delta? ignore
 
         elif typ == "message_stop":
@@ -215,12 +209,8 @@ class SSEMeter:
             # no usage
             pass
         elif typ == "error":
-            # record but not complete
-            pass
-        else:
-            # Unknown event — try fallback: if data contains usage directly (defensive)
-            if isinstance(data, dict) and "usage" in data:
-                _apply_usage_to_result(self.result, data["usage"], overwrite_only_present=True)
+            err = data.get("error") if isinstance(data.get("error"), dict) else {}
+            self.result.error_type = str(err.get("type") or "stream_error")[:64]
 
     def finalize(self) -> MeterResult:
         # If we never saw message_stop, complete remains False per spec
@@ -243,71 +233,13 @@ def parse_non_streaming(body: bytes, path: str) -> MeterResult:
         res.meter_error = True
         res.meter_error_detail = f"json_error:{e}"
         return res
-    usage = data.get("usage") if isinstance(data, dict) else None
-    if isinstance(usage, dict):
-        _apply_usage_to_result(res, usage, overwrite_only_present=False)
-    if isinstance(data, dict):
-        if isinstance(data.get("model"), str):
-            res.model = data["model"]
-        if isinstance(data.get("id"), str):
-            res.upstream_request_id = data["id"]
-        # Some non-streaming may still have error type
+    if not isinstance(data, dict):
+        return res
+    _apply_usage_to_result(res, data.get("usage"))
+    if isinstance(data.get("model"), str):
+        res.model = data["model"]
+    if isinstance(data.get("id"), str):
+        res.upstream_request_id = data["id"]
+    if data.get("type") == "error" and isinstance(data.get("error"), dict):
+        res.error_type = str(data["error"].get("type") or "error")[:64]
     return res
-
-
-def weighted_tokens(result: MeterResult, weights) -> float:
-    """Compute weighted tokens per spec 6.4, applied on read."""
-    # weights is TokenWeights from config
-    base = float(result.input_tokens) * 1.0
-    base += float(result.output_tokens) * float(getattr(weights, "output", 5.0))
-    # cache creation: prefer granular 5m/1h, fallback to generic
-    c5 = float(result.cache_creation_5m)
-    c1 = float(result.cache_creation_1h)
-    cg = float(result.cache_creation_tokens)
-    cw5 = float(getattr(weights, "cache_write_5m", 1.25))
-    cw1 = float(getattr(weights, "cache_write_1h", 2.0))
-    if c5 or c1:
-        base += c5 * cw5
-        base += c1 * cw1
-        # if generic present and granular zero, it would be double counted — handle only if both zero we already covered
-        # If generic non-zero but granular present, ignore generic to avoid double count
-    else:
-        base += cg * cw5
-    base += float(result.cache_read_tokens) * float(getattr(weights, "cache_read", 0.1))
-
-    # model multiplier
-    mult = 1.0
-    try:
-        m = (result.model or "").lower()
-        mm = getattr(weights, "model_multipliers", {})
-        if isinstance(mm, dict):
-            found = False
-            for k, v in mm.items():
-                if k == "default":
-                    continue
-                if k.lower() in m:
-                    mult = float(v)
-                    found = True
-                    break
-            if not found:
-                mult = float(mm.get("default", 1.0))
-    except Exception:
-        mult = 1.0
-    return base * mult
-
-
-def weighted_from_row(row: dict | MeterResult, weights) -> float:
-    """Helper for DB rows (sqlite Row dict)."""
-    if isinstance(row, MeterResult):
-        return weighted_tokens(row, weights)
-    # row is dict-like with token columns
-    mr = MeterResult(
-        input_tokens=int(row.get("input_tokens") or 0),
-        output_tokens=int(row.get("output_tokens") or 0),
-        cache_creation_tokens=int(row.get("cache_creation_tokens") or 0),
-        cache_creation_5m=int(row.get("cache_creation_5m") or 0),
-        cache_creation_1h=int(row.get("cache_creation_1h") or 0),
-        cache_read_tokens=int(row.get("cache_read_tokens") or 0),
-        model=row.get("model"),
-    )
-    return weighted_tokens(mr, weights)

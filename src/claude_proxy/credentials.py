@@ -4,255 +4,269 @@ import asyncio
 import base64
 import hashlib
 import json
+import logging
 import os
 import secrets
-import time
-from typing import Protocol
 import sqlite3
+import time
+from dataclasses import dataclass
+from typing import Protocol
+from urllib.parse import urlencode
 
 import httpx
+from cryptography.fernet import Fernet
 
-from .db import get_conn
+logger = logging.getLogger("claude_proxy")
 
 
+@dataclass
 class BackendStatus:
-    def __init__(self, backend: str, healthy: bool, detail: str = ""):
-        self.backend = backend
-        self.healthy = healthy
-        self.detail = detail
+    backend: str
+    healthy: bool
+    detail: str = ""
+    expires_at: int | None = None
 
 
 class CredentialBackend(Protocol):
     async def upstream_headers(self) -> dict[str, str]: ...
-    async def on_unauthorized(self) -> bool: ...
-    async def poll_usage(self) -> dict | None: ...
+    async def on_unauthorized(self, failed_token: str | None) -> bool: ...
+    async def poll_usage(self) -> tuple[int, dict | None]: ...
     def describe(self) -> BackendStatus: ...
 
 
-# --- Encryption helpers (Fernet, key from env or file 0600, spec 5.1 Storage) ---
+class NeedsLogin(Exception):
+    """The backend has no usable credential; the admin must run `claude-proxy login`."""
 
-def _get_fernet():
-    # Key priority: env CLAUDE_PROXY_CREDENTIAL_KEY (base64 urlsafe 32 bytes) or file
-    key_b64 = os.environ.get("CLAUDE_PROXY_CREDENTIAL_KEY")
+
+# --- Encryption of the stored grant (spec 5.1 Storage) ---
+
+class CredentialKeyMissing(Exception):
+    pass
+
+
+KEY_HELP = ("No credential encryption key. Generate one with `claude-proxy keygen > key && chmod 600 key` "
+            "and set CLAUDE_PROXY_CREDENTIAL_KEY_FILE=key (or CLAUDE_PROXY_CREDENTIAL_KEY to its contents).")
+
+
+def generate_key() -> str:
+    return Fernet.generate_key().decode()
+
+
+def _fernet() -> Fernet:
+    key = os.environ.get("CLAUDE_PROXY_CREDENTIAL_KEY")
     key_file = os.environ.get("CLAUDE_PROXY_CREDENTIAL_KEY_FILE")
-    raw_key: bytes | None = None
-    if key_b64:
-        raw_key = base64.urlsafe_b64decode(key_b64.encode())
-    elif key_file and os.path.exists(key_file):
-        with open(key_file, "rb") as f:
-            raw_key = base64.urlsafe_b64decode(f.read().strip())
-    else:
-        # Ephemeral — warn, not persisted. For dev/test.
-        # Generate deterministic for tests if needed: use env to override in tests
-        raw_key = hashlib.sha256(b"claude-proxy-dev-key").digest()
-    # Fernet expects 32 urlsafe base64-encoded
-    fernet_key = base64.urlsafe_b64encode(raw_key[:32])
-    from cryptography.fernet import Fernet
+    if not key and key_file:
+        if not os.path.exists(key_file):
+            raise CredentialKeyMissing(f"CLAUDE_PROXY_CREDENTIAL_KEY_FILE={key_file} does not exist")
+        if os.stat(key_file).st_mode & 0o077:
+            raise CredentialKeyMissing(f"{key_file} must not be readable by group or others (chmod 600)")
+        with open(key_file) as f:
+            key = f.read().strip()
+    if not key:
+        raise CredentialKeyMissing(KEY_HELP)
+    try:
+        return Fernet(key.encode())
+    except ValueError as e:
+        raise CredentialKeyMissing(f"credential key is not a valid Fernet key: {e}") from e
 
-    return Fernet(fernet_key)
+
+def check_key() -> None:
+    _fernet()
 
 
 def encrypt_blob(data: dict) -> str:
-    f = _get_fernet()
-    return f.encrypt(json.dumps(data).encode()).decode()
+    return _fernet().encrypt(json.dumps(data).encode()).decode()
 
 
 def decrypt_blob(token: str) -> dict:
-    f = _get_fernet()
-    return json.loads(f.decrypt(token.encode()).decode())
+    return json.loads(_fernet().decrypt(token.encode()).decode())
 
 
-# --- PKCE helpers ---
+# --- PKCE (spec 5.1 Own grant) ---
 
 def generate_pkce() -> tuple[str, str, str]:
     """Returns (verifier, challenge, state)."""
     verifier = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
     challenge = base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).rstrip(b"=").decode()
-    state = base64.urlsafe_b64encode(secrets.token_bytes(16)).rstrip(b"=").decode()
+    state = base64.urlsafe_b64encode(secrets.token_bytes(32)).rstrip(b"=").decode()
     return verifier, challenge, state
 
 
-def build_authorize_url(cfg, verifier_challenge: str, state: str) -> str:
-    # Spec 5.1: prints authorization URL, admin completes in browser, pastes code
-    from urllib.parse import urlencode
-
+def build_authorize_url(cfg, challenge: str, state: str) -> str:
     params = {
-        "response_type": "code",
+        "code": "true",
         "client_id": cfg.credential.client_id,
+        "response_type": "code",
         "redirect_uri": cfg.credential.redirect_uri,
         "scope": cfg.credential.scopes,
-        "state": state,
-        "code_challenge": verifier_challenge,
+        "code_challenge": challenge,
         "code_challenge_method": "S256",
+        "state": state,
     }
     return f"{cfg.credential.authorize_url}?{urlencode(params)}"
+
+
+def parse_pasted_code(pasted: str, expected_state: str) -> str:
+    """Accept a bare code, `code#state`, or the full callback URL; verify state when present."""
+    from urllib.parse import parse_qs, urlparse
+    pasted = pasted.strip()
+    state = None
+    if pasted.startswith("http"):
+        u = urlparse(pasted)
+        qs = parse_qs(u.query)
+        code = qs.get("code", [""])[0]
+        state = qs.get("state", [None])[0] or (u.fragment or None)
+    else:
+        code = pasted
+    if "#" in code:
+        code, state = code.split("#", 1)
+    if state is not None and state != expected_state:
+        raise ValueError("state mismatch — start `claude-proxy login` again")
+    if not code:
+        raise ValueError("no authorization code found")
+    return code
+
+
+def token_record(tok: dict, previous_refresh: str | None = None) -> dict:
+    return {
+        "access_token": tok["access_token"],
+        "refresh_token": tok.get("refresh_token") or previous_refresh,
+        "expires_at": int(time.time()) + int(tok.get("expires_in", 3600)),
+        "scope": tok.get("scope"),
+        "account": (tok.get("account") or {}).get("email_address"),
+    }
 
 
 # --- OAuth backend ---
 
 class OAuthBackend:
-    """sole refresher, single-flight, proactive <5m, reactive 401, encrypted storage (spec 5.1)."""
+    """Holds the gateway's own grant. Sole refresher, single-flight (spec 5.1)."""
 
-    def __init__(self, cfg, db_path: str):
+    def __init__(self, cfg, conn: sqlite3.Connection, http: httpx.AsyncClient):
         self.cfg = cfg
-        self.db_path = db_path
+        self.conn = conn
+        self.http = http
         self._lock = asyncio.Lock()
-        self._needs_login = False
+        self._cache: dict | None = None
+        self._state: str | None = None
+        self.last_error: str | None = None
 
-    def _conn(self) -> sqlite3.Connection:
-        conn = get_conn(self.db_path)
-        conn.row_factory = sqlite3.Row
-        return conn
-
-    def _load_row(self) -> tuple[dict | None, int | None, str | None]:
-        conn = self._conn()
+    def _load(self) -> tuple[dict | None, str | None]:
+        if self._cache is not None:
+            return self._cache, self._state
+        row = self.conn.execute("SELECT encrypted_blob, state FROM credentials WHERE backend='oauth'").fetchone()
+        if not row or not row["encrypted_blob"]:
+            return None, None
         try:
-            row = conn.execute("SELECT encrypted_blob, expires_at, state FROM credentials WHERE backend='oauth'").fetchone()
-            if not row or not row["encrypted_blob"]:
-                return None, None, None
-            try:
-                data = decrypt_blob(row["encrypted_blob"])
-            except Exception:
-                return None, None, "decrypt_failed"
-            return data, row["expires_at"], row["state"]
-        finally:
-            conn.close()
+            data = decrypt_blob(row["encrypted_blob"])
+        except CredentialKeyMissing:
+            raise
+        except Exception:
+            return None, "decrypt_failed"
+        self._cache, self._state = data, row["state"]
+        return data, row["state"]
 
-    def _save_tokens(self, data: dict, expires_at: int, state: str = "active"):
-        # Write new refresh before discarding old — crash-safe: INSERT OR REPLACE
-        blob = encrypt_blob(data)
-        conn = self._conn()
-        try:
-            conn.execute(
-                "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,?)",
-                (blob, expires_at, int(time.time()), state),
-            )
-            conn.commit()
-        finally:
-            conn.close()
+    def store(self, data: dict, state: str = "active") -> None:
+        # One statement replaces the row atomically, so the new refresh token is durable
+        # before the old one is gone.
+        self.conn.execute(
+            "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,?)",
+            (encrypt_blob(data), data["expires_at"], int(time.time()), state),
+        )
+        self._cache, self._state = data, state
 
-    def _is_expiring(self, expires_at: int | None) -> bool:
-        if not expires_at:
-            return True
-        return (expires_at - int(time.time())) < 300  # 5m (spec 5.1)
+    def _mark_needs_login(self, reason: str) -> None:
+        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (int(time.time()),))
+        self._state = "needs_login"
+        self.last_error = reason
+        logger.error("oauth grant needs login: %s", reason)
 
-    async def _refresh(self) -> bool:
+    async def _refresh(self, failed_token: str | None, force: bool) -> bool:
         async with self._lock:
-            data, expires_at, state = self._load_row()
-            if data is None:
-                self._needs_login = True
+            data, state = self._load()
+            if data is None or state == "needs_login":
                 return False
-            # If another coroutine already refreshed while we waited, check again
-            if not self._is_expiring(expires_at) and state == "active":
+            # Another caller refreshed while we waited for the lock.
+            if failed_token is not None and data["access_token"] != failed_token:
                 return True
-            refresh_token = data.get("refresh_token") or data.get("refreshToken")
+            if not force and data["expires_at"] - time.time() >= 300:
+                return True
+            refresh_token = data.get("refresh_token")
             if not refresh_token:
-                self._needs_login = True
+                self._mark_needs_login("no refresh token stored")
                 return False
-            # Exchange refresh_token
-            async with httpx.AsyncClient(timeout=20) as client:
-                resp = await client.post(
+            try:
+                resp = await self.http.post(
                     self.cfg.credential.token_url,
-                    data={
-                        "grant_type": "refresh_token",
-                        "refresh_token": refresh_token,
-                        "client_id": self.cfg.credential.client_id,
-                    },
-                    headers={"Content-Type": "application/x-www-form-urlencoded"},
+                    data={"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": self.cfg.credential.client_id},
+                    headers={"User-Agent": self.cfg.credential.user_agent},
+                    timeout=30,
                 )
-                if resp.status_code != 200:
-                    # invalid_grant -> needs_login (spec 5.1 Failure)
-                    try:
-                        body = resp.json()
-                        err = body.get("error") or body.get("error_description", "")
-                    except Exception:
-                        err = resp.text
-                    if "invalid_grant" in err or resp.status_code in (400, 401):
-                        conn = self._conn()
-                        try:
-                            conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (int(time.time()),))
-                            conn.commit()
-                        finally:
-                            conn.close()
-                        self._needs_login = True
-                    return False
-                tok = resp.json()
-                new_data = {
-                    "access_token": tok["access_token"],
-                    "refresh_token": tok.get("refresh_token", refresh_token),
-                    "expires_at": int(time.time()) + int(tok.get("expires_in", 28800)),
-                    "scope": tok.get("scope"),
-                    "raw": tok,
-                }
-                # Write new before discarding old — already done via save
-                self._save_tokens(new_data, new_data["expires_at"], "active")
-                self._needs_login = False
-                return True
+            except httpx.HTTPError as e:
+                self.last_error = f"refresh transport error: {e}"
+                logger.warning(self.last_error)
+                return False
+            if resp.status_code != 200:
+                body = resp.text[:300]
+                if resp.status_code in (400, 401) or "invalid_grant" in body:
+                    self._mark_needs_login(f"refresh rejected {resp.status_code}: {body}")
+                else:
+                    self.last_error = f"refresh failed {resp.status_code}: {body}"
+                    logger.warning(self.last_error)
+                return False
+            self.store(token_record(resp.json(), refresh_token))
+            self.last_error = None
+            logger.info("oauth access token refreshed")
+            return True
 
     async def upstream_headers(self) -> dict[str, str]:
-        data, expires_at, state = self._load_row()
-        if state == "needs_login" or self._needs_login:
-            raise RuntimeError("needs_login")
-        if data is None:
-            raise RuntimeError("no credential — run `claude-proxy login`")
-        if self._is_expiring(expires_at):
-            ok = await self._refresh()
-            if not ok:
-                raise RuntimeError("needs_login")
-            data, _, _ = self._load_row()
-            if data is None:
-                raise RuntimeError("needs_login")
-        access = data.get("access_token") or data.get("accessToken")
-        if not access:
-            raise RuntimeError("no access_token")
-        headers = {"Authorization": f"Bearer {access}"}
-        # Spec 5.1: append oauth-2025-04-20 to anthropic-beta if absent — forwarder will merge
-        # We return it separately; app merges with client's beta
-        headers["anthropic-beta"] = self.cfg.credential.beta_flag
-        return headers
+        data, state = self._load()
+        if data is None or state in ("needs_login", "decrypt_failed"):
+            raise NeedsLogin(state or "no credential")
+        if data["expires_at"] - time.time() < 300:
+            if not await self._refresh(None, force=False):
+                data, state = self._load()
+                if state == "needs_login" or data["expires_at"] <= time.time():
+                    raise NeedsLogin(self.last_error or "refresh failed")
+            data, _ = self._load()
+        return {"authorization": f"Bearer {data['access_token']}", "anthropic-beta": self.cfg.credential.beta_flag}
 
-    async def on_unauthorized(self) -> bool:
-        # Reactive once on 401 (spec 5.1 When to refresh)
-        # Single-flight lock ensures concurrent callers wait
-        return await self._refresh()
+    async def on_unauthorized(self, failed_token: str | None) -> bool:
+        return await self._refresh(failed_token, force=True)
 
-    async def poll_usage(self) -> dict | None:
-        # Call usage endpoint with same bearer + beta + User-Agent claude-cli
-        data, _, state = self._load_row()
-        if not data or state == "needs_login":
-            return None
-        access = data.get("access_token") or data.get("accessToken")
-        if not access:
-            return None
-        async with httpx.AsyncClient(timeout=15) as client:
-            try:
-                resp = await client.get(
-                    self.cfg.credential.usage_url,
-                    headers={
-                        "Authorization": f"Bearer {access}",
-                        "anthropic-beta": self.cfg.credential.beta_flag,
-                        "User-Agent": "claude-cli/1.0.60 (external, cli)",
-                    },
-                )
-                if resp.status_code == 429:
-                    return None  # backoff handled by quota module
-                if resp.status_code != 200:
-                    return None
-                return resp.json()
-            except Exception:
-                return None
+    def current_token(self) -> str | None:
+        data, _ = self._load()
+        return data["access_token"] if data else None
+
+    async def poll_usage(self) -> tuple[int, dict | None]:
+        """Returns (http_status, body). Status 0 means no request was made."""
+        try:
+            headers = await self.upstream_headers()
+        except NeedsLogin:
+            return 0, None
+        headers["user-agent"] = self.cfg.credential.user_agent
+        headers["content-type"] = "application/json"
+        try:
+            resp = await self.http.get(self.cfg.credential.usage_url, headers=headers, timeout=20)
+        except httpx.HTTPError:
+            return 0, None
+        if resp.status_code != 200:
+            return resp.status_code, None
+        try:
+            return 200, resp.json()
+        except ValueError:
+            return 200, None
 
     def describe(self) -> BackendStatus:
-        _, _, state = self._load_row()
-        if state == "needs_login" or self._needs_login:
-            return BackendStatus("oauth", False, "needs_login — run `claude-proxy login`")
-        data, expires_at, _ = self._load_row()
-        if not data:
-            return BackendStatus("oauth", False, "no credential")
-        return BackendStatus("oauth", True, f"expires_at={expires_at}")
-
-
-def make_backend(cfg, db_path: str | None = None) -> CredentialBackend:
-    # OAuth-only per user request
-    path = db_path or cfg.db.path
-    return OAuthBackend(cfg, path)
+        try:
+            data, state = self._load()
+        except CredentialKeyMissing as e:
+            return BackendStatus("oauth", False, str(e))
+        if data is None:
+            return BackendStatus("oauth", False, "not linked — run `claude-proxy login`")
+        if state in ("needs_login", "decrypt_failed"):
+            return BackendStatus("oauth", False, f"{state} — run `claude-proxy login`. {self.last_error or ''}".strip(), data.get("expires_at"))
+        detail = f"linked{' as ' + data['account'] if data.get('account') else ''}"
+        if self.last_error:
+            detail += f"; last error: {self.last_error}"
+        return BackendStatus("oauth", True, detail, data.get("expires_at"))
