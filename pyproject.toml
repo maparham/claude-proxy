@@ -24,6 +24,7 @@ packages = ["src/claude_proxy"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
 asyncio_mode = "auto"
 
 [dependency-groups]

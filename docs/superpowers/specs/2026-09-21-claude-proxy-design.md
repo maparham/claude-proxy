@@ -303,3 +303,32 @@ These are unknowns the research could not settle. None changes the design, but e
 6. JSON API and admin CLI.
 7. Dashboard views, admin first, then the user view.
 8. Statusline script, Dockerfile, Caddy example, README.
+
+## 17. Amendment 2026-09-22: third-party model routes and extra limit kinds
+
+Added at the user's request after reviewing a second brief. The deployment model is unchanged: several people, each in their own environment, share one subscription that only the owner logs into. The gateway holds that grant (section 5.1).
+
+### 17.1 Model routes
+
+The non-goal "protocol translation" still holds. Meta's Model API serves an Anthropic Messages-compatible endpoint (`POST https://api.meta.ai/v1/messages`, `Authorization: Bearer` or `x-api-key`, optional `anthropic-version`, streaming, tools, `thinking`), so a Muse request is forwarded in Anthropic wire format with no translation layer and no LiteLLM.
+
+- **Config.** `[[routes]]` entries, each with `name`, `models` (glob patterns matched against the request body's `model`), `base_url`, `api_key_env` (the env var holding that provider's key), `model_map` (logical name to provider model ID, for example `muse-spark = "muse-spark-1.3"`), and `strip_headers` (default `["anthropic-beta"]`, since Claude Code's beta flags are Anthropic-specific).
+- **Selection.** Only `POST /v1/messages` and `POST /v1/messages/count_tokens` are routed by model. A request whose `model` matches no route goes to Anthropic with the subscription credential. Every other `/v1/` path goes to Anthropic.
+- **Credential isolation.** The client's `Authorization` and `x-api-key` are removed on every route. The subscription credential backend is consulted only for the Anthropic route; a third-party route receives only its own provider key. This is enforced in one function and covered by a test that fails if the OAuth token appears in any header sent to a third-party upstream.
+- **Body.** On a third-party route the body is parsed and re-serialised with the `model` field replaced per `model_map`; nothing else is changed. The Anthropic route still forwards bytes unchanged.
+- **Model discovery.** `GET /v1/models` responses from Anthropic are extended with one entry per logical route model, so a client that lists models sees them.
+- **Metering.** The same meter runs on third-party responses, since they use Anthropic's usage fields. Each `requests` row records its `provider`. Account quota attribution (section 7.2) uses Anthropic-route requests only.
+- **Claude Code usage.** A subagent file sets `model: muse-spark` and a restricted `tools:` list. Claude Code accepts full model IDs in subagent frontmatter and only substitutes when an `availableModels` allowlist blocks the value; that is verified in the smoke test.
+
+### 17.2 Additional limit kinds
+
+| Limit | Unit | Window |
+|---|---|---|
+| `requests_minute` | request count | rolling 60 seconds |
+| `tokens_minute` | weighted or raw tokens | rolling 60 seconds |
+| `tokens_monthly` | weighted or raw tokens | rolling 30 days |
+| `requests_monthly` | request count | rolling 30 days |
+| `cost_monthly` | USD, estimated | rolling 30 days |
+
+- **Model scope.** Every token, request and cost limit takes an optional model scope, a glob matched against the recorded model. The default scope `*` counts all requests. A scoped limit is only evaluated for requests whose model matches its scope. `limits` gains a `scope` column and its key becomes `(user_id, kind, scope)`.
+- **Estimated cost.** Computed on read from a per-model price table in config (USD per million input, output, cache-write and cache-read tokens). For the subscription route this is an API-equivalent estimate, since the subscription is not billed per token; for a third-party route it approximates the real charge. Models without a price are counted as zero and flagged on the dashboard.
