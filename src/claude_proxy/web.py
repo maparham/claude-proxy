@@ -385,6 +385,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(400, "You cannot disable or revoke your own account.")
         if action == "rotate":
             return {"ok": True, "key": db.rotate_key(conn, u["id"], actor["id"])}
+        if action == "delete":
+            try:
+                return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
+            except ValueError as e:
+                fail(400, str(e))
         if action == "enable":
             if u["revoked_at"] is not None:
                 fail(400, "A revoked key cannot be re-enabled; rotate it to issue a new one.")

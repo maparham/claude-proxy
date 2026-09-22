@@ -182,3 +182,19 @@ async def test_me_status_plain_text_for_statusline_script(env):
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
     assert r.headers["content-type"].startswith("text/plain")
     assert r.text.startswith("bob · acct 5h 14%")
+
+
+async def test_delete_only_revoked_users_and_their_history(env):
+    gw, conn, ids, keys = env
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "requests_daily", "*", "5", "count"))
+    async with admin_client(gw) as c:
+        assert (await c.post(f"/api/admin/users/{ids['bob']}/delete")).status_code == 400   # not revoked yet
+        assert (await c.post(f"/api/admin/users/{ids['bob']}/revoke")).status_code == 200
+        r = await c.post(f"/api/admin/users/{ids['bob']}/delete")
+        assert r.status_code == 200 and r.json()["deleted_requests"] == 1
+        names = [u["name"] for u in (await c.get("/api/users")).json()["users"]]
+    assert "bob" not in names
+    for table in ("users", "requests", "limits", "sessions"):
+        col = "id" if table == "users" else "user_id"
+        assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (ids["bob"],)).fetchone()[0] == 0
+    assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC").fetchone()[:] == ("delete_user", "bob")

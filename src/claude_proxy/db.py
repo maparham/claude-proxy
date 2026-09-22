@@ -201,6 +201,17 @@ def revoke(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> 
     audit(conn, actor, "revoke", str(user_id))
 
 
+def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> int:
+    """Remove a revoked user and their usage history. Returns the number of requests deleted."""
+    u = conn.execute("SELECT name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
+    if u is None or u["revoked_at"] is None:
+        raise ValueError("Only a revoked user can be deleted; revoke them first.")
+    n = conn.execute("DELETE FROM requests WHERE user_id=?", (user_id,)).rowcount
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits and sessions cascade
+    audit(conn, actor, "delete_user", u["name"], {"deleted_requests": n})
+    return n
+
+
 def insert_request(conn: sqlite3.Connection, **kw) -> int:
     cols = ",".join(kw.keys())
     placeholders = ",".join(["?"] * len(kw))

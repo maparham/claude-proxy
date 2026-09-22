@@ -120,6 +120,9 @@ claude-proxy limit list
   the new login without a restart.
 - Prompts and responses are never stored, only metadata and token counts. Requests and quota
   reports older than `retention_days` (default 180) are deleted.
+- To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
+  history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
+  removes their recorded usage from totals and charts.
 - Admin actions from the dashboard and the CLI go to the audit log.
 - `python scripts/demo_data.py demo.db` fills a database with synthetic traffic, for trying the dashboard.
 

@@ -326,7 +326,7 @@ function userRow(u) {
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
     <td class="muted">${fmtAgo(u.last_seen)}</td>
-    <td><div class="row-actions">${u.revoked ? "" : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}">Limits</button>` : `
+    <td><div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}">Limits</button>` : `
       <button class="btn small" data-act="limits" data-id="${u.id}">Limits</button>
       <button class="btn small" data-act="rotate" data-id="${u.id}">Rotate key</button>
       <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}">${u.enabled ? "Disable" : "Enable"}</button>
@@ -361,6 +361,7 @@ function addUserDialog() {
 async function userAction(act, id, u) {
   if (act === "limits") return limitsDialog(u);
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
+  if (act === "delete" && !confirmInline(`Delete ${u.name} permanently? Their recorded usage is deleted too and disappears from account totals and charts. This cannot be undone.`)) return;
   try {
     const r = await api(`/api/admin/users/${id}/${act}`, { method: "POST", body: {} });
     if (act === "rotate") return keyDialog(`New key for ${u.name}`, r.key);
