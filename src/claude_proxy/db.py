@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import json
 import secrets
 import sqlite3
@@ -128,8 +129,17 @@ def get_conn(db_path: str | Path) -> sqlite3.Connection:
 
 
 def init_db(db_path: str | Path) -> sqlite3.Connection:
-    conn = get_conn(db_path)
-    conn.execute("PRAGMA journal_mode=WAL")
+    # The database holds the encrypted grant and key hashes: owner-only, including the WAL files.
+    old_umask = os.umask(0o077)
+    try:
+        conn = get_conn(db_path)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT)")
+    finally:
+        os.umask(old_umask)
+    for suffix in ("", "-wal", "-shm"):
+        if os.path.exists(f"{db_path}{suffix}"):
+            os.chmod(f"{db_path}{suffix}", 0o600)
     for stmt in SCHEMA:
         conn.execute(stmt)
     _migrate(conn)

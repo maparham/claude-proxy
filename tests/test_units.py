@@ -143,3 +143,13 @@ def test_unknown_config_key_is_an_error(tmp_path):
     p.write_text("[listener]\nprot = 1\n")
     with pytest.raises(ConfigError):
         Config.load(str(p))
+
+
+def test_database_files_are_private(tmp_path):
+    import os, stat
+    from claude_proxy.db import init_db
+    p = tmp_path / "x.db"
+    c = init_db(str(p))
+    c.execute("CREATE TABLE IF NOT EXISTS t(x)")
+    for f in tmp_path.iterdir():
+        assert stat.S_IMODE(os.stat(f).st_mode) & 0o077 == 0, f.name
