@@ -174,3 +174,11 @@ async def test_dashboard_page_served_with_security_headers(env):
         r = await c.get("/dashboard")
     assert r.status_code == 200 and "<html" in r.text.lower()
     assert r.headers["x-frame-options"] == "DENY"
+
+
+async def test_me_status_plain_text_for_statusline_script(env):
+    gw, conn, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
+    assert r.headers["content-type"].startswith("text/plain")
+    assert r.text.startswith("bob · acct 5h 14%")

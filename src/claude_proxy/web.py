@@ -18,7 +18,7 @@ from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, RedirectResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import db, limits, quota, usage
@@ -155,7 +155,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/session")
     async def session(request: Request):
         user = principal(request)
-        return {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None}
+        be = gw.backend.describe()
+        return {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
+                "credential": {"healthy": be.healthy, "detail": be.detail if user["role"] == "admin" else None}}
 
     # ---------- helpers ----------
 
@@ -338,7 +340,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"entries": [{**dict(r), "actor": n.get(r["actor_user_id"], "cli" if r["actor_user_id"] is None else None)} for r in rows]}
 
     @app.get("/api/me/status")
-    async def me_status(request: Request):
+    async def me_status(request: Request, format: str = "json"):
         user = principal(request)
         now = time.time()
         states = limits.states(conn, cfg, user["id"], now=now)
@@ -347,8 +349,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
             account[b] = {"utilization_pct": att["utilization_pct"], "resets_at": att["resets_at"], "stale": att["stale"],
                           "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
+        line = _status_line(user, states, account)
+        if format == "text":
+            return PlainTextResponse(line + "\n")
         return {"user": _public_user(user), "limits": [s.to_dict() for s in states], "account": account,
-                "credential_healthy": gw.backend.describe().healthy, "line": _status_line(user, states, account)}
+                "credential_healthy": gw.backend.describe().healthy, "line": line}
 
     # ---------- admin actions ----------
 

@@ -1,25 +1,50 @@
+# claude-proxy configuration. Every key is optional; values shown are the defaults.
+# Point the gateway at it with --config or CLAUDE_PROXY_CONFIG.
+
+retention_days = 180        # requests and quota snapshots older than this are deleted
+
 [listener]
-host = "127.0.0.1"
+host = "127.0.0.1"          # proxy: what users put in ANTHROPIC_BASE_URL
 port = 8080
+dashboard_host = "127.0.0.1"
 dashboard_port = 8081
+secure_cookies = false      # true when the dashboard is served over HTTPS (e.g. behind Caddy)
 
 [upstream]
 base_url = "https://api.anthropic.com"
 
 [credential]
-# OAuth-only (Pro/Max subscription) — api_key removed
+# Reverse-engineered Claude Code OAuth values. They have changed before; override here if they do.
 client_id = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
 authorize_url = "https://claude.ai/oauth/authorize"
 token_url = "https://platform.claude.com/v1/oauth/token"
-scopes = "user:inference user:profile user:sessions:claude_code user:mcp_servers user:file_upload"
+redirect_uri = "https://platform.claude.com/oauth/code/callback"
+scopes = "user:inference user:profile user:sessions:claude_code user:mcp_servers"
 beta_flag = "oauth-2025-04-20"
 usage_url = "https://api.anthropic.com/api/oauth/usage"
-redirect_uri = "https://platform.claude.com/oauth/code/callback"
+user_agent = "claude-code/2.1.280"
+
+[quota]
+poll_idle_s = 600           # poll the usage endpoint only when no response headers arrived for this long
+poll_min_interval_s = 180
+poll_max_backoff_s = 1800
+stale_after_s = 1800        # share limits are skipped when account figures are older than this
 
 [db]
 path = "claude_proxy.db"
 
-retention_days = 180
+# Third-party models that speak the Anthropic Messages format. The Claude credential is never sent here.
+[[routes]]
+name = "meta"
+base_url = "https://api.meta.ai"
+api_key_env = "META_API_KEY"
+models = ["muse-spark*"]
+model_map = { "muse-spark" = "muse-spark-1.3" }
+strip_headers = ["anthropic-beta"]
 
-# Encryption for stored OAuth tokens:
-# set CLAUDE_PROXY_CREDENTIAL_KEY (base64 urlsafe 32B) or CLAUDE_PROXY_CREDENTIAL_KEY_FILE (0600)
+# Prices in USD per million tokens, first match wins; these are prepended to the built-in table.
+# [pricing]
+# reference_model = "claude-sonnet-5"
+# [pricing.models."my-model*"]
+# input = 1.0
+# output = 5.0

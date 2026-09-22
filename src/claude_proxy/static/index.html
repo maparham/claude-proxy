@@ -1,238 +1,45 @@
 <!doctype html>
-<html><head><meta charset="utf-8"><title>Claude Proxy — Admin</title>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5/dist/echarts.min.js"></script>
-<style>
-body{font-family:system-ui,-apple-system,Segoe UI,Roboto;margin:20px;max-width:1100px}
-h1{margin:0 0 8px} .muted{color:#666;font-size:13px}
-.kpi{display:flex;gap:12px;flex-wrap:wrap;margin:16px 0}
-.card{border:1px solid #ddd;padding:12px;border-radius:8px;min-width:140px;background:#fafafa}
-table{border-collapse:collapse;width:100%;margin-top:12px} th,td{border:1px solid #ddd;padding:6px;text-align:left;font-size:13px;vertical-align:top}
-th{background:#f0f0f0}
-input,select{padding:4px 6px;font-size:13px}
-button{padding:4px 8px;font-size:13px;cursor:pointer}
-.badge{display:inline-block;padding:2px 6px;border-radius:4px;font-size:11px;background:#eee}
-.badge.admin{background:#dbeafe} .badge.user{background:#e5e7eb}
-.limits{font-size:12px;margin-top:4px}
-.row-actions{display:flex;gap:4px;flex-wrap:wrap}
-.preset{font-size:11px;color:#555}
-#adminBox{border:1px solid #f59e0b;background:#fffbeb;padding:10px;border-radius:8px;margin:12px 0}
-.ok{color:#065f46} .err{color:#b91c1c}
-</style>
-</head><body>
-<h1>Claude Proxy — Dashboard</h1>
-<div class="muted">Metered by <code>src/claude_proxy/meter.py</code> • Limits by <code>src/claude_proxy/limits.py</code> • Auth via <code>POST /api/login</code> session cookie</div>
-
-<div id="adminBox">
-  <b>Admin login</b> <span class="preset">use username/password from <code>claude-proxy init</code> — sets HttpOnly <code>session</code> cookie (7d).</span><br>
-  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:6px">
-    <input id="loginUser" value="admin" style="width:120px" placeholder="username">
-    <input id="loginPass" type="password" placeholder="password" style="width:160px">
-    <button onclick="doLogin()">Login</button>
-    <button onclick="doLogout()">Logout</button>
-    <span id="loginStatus" class="muted"></span>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Claude Gateway</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.6.0/dist/echarts.min.js" defer></script>
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<div id="login" class="login hidden">
+  <div class="card">
+    <h2>Claude Gateway</h2>
+    <p class="muted" id="login-hint">Sign in as the admin, or with your own gateway key to see your usage.</p>
+    <form id="form-admin">
+      <input type="text" name="username" placeholder="Admin username" autocomplete="username" value="admin" required>
+      <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
+      <button class="btn primary" type="submit">Sign in</button>
+    </form>
+    <form id="form-key" class="hidden">
+      <input type="password" name="key" placeholder="sk-proxy-…" autocomplete="off" required>
+      <button class="btn primary" type="submit">Sign in with key</button>
+    </form>
+    <div class="error" id="login-error" role="alert"></div>
+    <div class="switch"><a href="#" id="login-switch">Use my gateway key instead</a></div>
   </div>
-  <details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px">Or use virtual key (legacy)</summary>
-    <div style="margin-top:6px">
-      <input id="adminToken" type="password" placeholder="sk-proxy-..." style="width:360px">
-      <button onclick="saveToken()">Save key</button>
-      <button onclick="clearToken()">Clear</button>
-      <span id="tokenStatus" class="muted"></span>
-    </div>
-  </details>
-  <div id="adminMsg" style="margin-top:6px;font-size:12px"></div>
 </div>
 
-<div class="kpi" id="kpis"></div>
-<div id="chart" style="height:280px;margin-top:10px;border:1px solid #eee;border-radius:8px;padding:8px"></div>
+<div id="app" class="hidden">
+  <header class="top">
+    <h1>Claude Gateway</h1>
+    <span class="pill" id="cred-pill"><span class="dot"></span><span>credential</span></span>
+    <span class="spacer"></span>
+    <span class="pill" id="who"></span>
+    <button class="btn small" id="theme-toggle" title="Switch theme">Theme</button>
+    <button class="btn small" id="logout">Sign out</button>
+  </header>
+  <nav class="tabs" id="tabs" role="tablist"></nav>
+  <main id="main"></main>
+</div>
 
-<h2 style="margin-top:18px">Users — click name to edit, set limits per user</h2>
-<table id="users"><thead><tr><th>name ↕ edit</th><th>role</th><th>prefix</th><th>usage (1d / 7d)</th><th>limits</th><th>actions</th></tr></thead><tbody></tbody></table>
-
-<script>
-const KINDS = [
-  {k:'tokens_5h', label:'5h tokens', units:['weighted','raw'], placeholder:'e.g. 50000'},
-  {k:'tokens_daily', label:'Daily tokens', units:['weighted','raw'], placeholder:'e.g. 200000'},
-  {k:'tokens_weekly', label:'Weekly tokens', units:['weighted','raw'], placeholder:'e.g. 1000000'},
-  {k:'requests_daily', label:'Daily requests', units:['count'], placeholder:'e.g. 100'},
-  {k:'share_5h', label:'Share 5h %', units:['pct'], placeholder:'e.g. 40'},
-  {k:'share_7d', label:'Share 7d %', units:['pct'], placeholder:'e.g. 40'},
-  {k:'allowed_models', label:'Allowed models', units:['list'], placeholder:'claude-sonnet-4-*,claude-haiku-*'},
-  {k:'enabled', label:'Enabled', units:['count'], placeholder:'1 or 0'},
-];
-function esc(s){ return String(s).replace(/[&<>"']/g, m=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[m])); }
-function normalizeToken(s){
-  let t=(s||'').trim().replace(/^["']|["']$/g,'');
-  if(t.toLowerCase().startsWith('bearer ')) t=t.slice(7).trim().replace(/^["']|["']$/g,'');
-  return t;
-}
-function getCookieToken(){
-  try{ const m=document.cookie.match(/(?:^|; )adminToken=([^;]*)/); return m ? normalizeToken(decodeURIComponent(m[1])) : ''; }catch(e){ return ''; }
-}
-function getToken(){
-  const stored = normalizeToken(localStorage.getItem('adminToken')||'');
-  if(stored) return stored;
-  const c=getCookieToken();
-  if(c) return c;
-  const inp=document.getElementById('adminToken');
-  if(inp && inp.value.trim()) return normalizeToken(inp.value);
-  if(window._adminToken) return normalizeToken(window._adminToken);
-  return '';
-}
-function saveToken(){
-  const v=normalizeToken(document.getElementById('adminToken').value);
-  window._adminToken=v;
-  try{ if(v) localStorage.setItem('adminToken', v); else localStorage.removeItem('adminToken'); }catch(e){}
-  try{ document.cookie='adminToken='+encodeURIComponent(v)+'; path=/; max-age=31536000; SameSite=Lax'; }catch(e){}
-  document.getElementById('adminToken').value=v;
-  updateTokenStatus(); testToken(); load();
-}
-function clearToken(){
-  window._adminToken='';
-  try{ localStorage.removeItem('adminToken'); }catch(e){}
-  try{ document.cookie='adminToken=; path=/; max-age=0'; }catch(e){}
-  document.getElementById('adminToken').value='';
-  updateTokenStatus();
-}
-function updateTokenStatus(){
-  const t=getToken();
-  const el=document.getElementById('tokenStatus');
-  const inp=document.getElementById('adminToken');
-  if(t) inp.value=t;
-  let src='';
-  try{ if(normalizeToken(localStorage.getItem('adminToken')||'')) src='localStorage'; else if(getCookieToken()) src='cookie'; else if(inp.value.trim()) src='input'; }catch(e){}
-  if(t) { el.innerHTML='<span class="ok">● key active ('+t.slice(0,12)+'…)</span> <span class="muted">via '+src+'</span> <a href="#" onclick="testToken();return false" style="font-size:11px">test</a>'; } else { el.textContent='no key — use login above'; }
-}
-async function testToken(){
-  const el=document.getElementById('adminMsg');
-  const t=getToken();
-  if(!t){ el.innerHTML='<span class="err">no token</span>'; return; }
-  const r=await api('/api/me/status');
-  if(r.ok && r.json.user) el.innerHTML='<span class="ok">✓ token ok: '+esc(r.json.user.name)+' ('+esc(r.json.user.prefix)+') '+(r.json.user.name==='admin'?'admin':'NOT admin')+'</span>';
-  else { const e=r.json.error||r.json.detail?.error?.message||JSON.stringify(r.json); el.innerHTML='<span class="err">✗ token invalid ('+r.status+'): '+esc(e)+'</span>'; }
-}
-function authHeaders(){
-  const t=getToken();
-  return t ? {'Authorization':'Bearer '+t, 'Content-Type':'application/json'} : {'Content-Type':'application/json'};
-}
-async function api(path, opts={}){
-  const h=Object.assign({}, authHeaders(), opts.headers||{});
-  const r=await fetch(path, Object.assign({credentials:'same-origin'}, opts, {headers:h}));
-  let j; try{ j=await r.json(); }catch(e){ j={error:r.statusText}; }
-  return {status:r.status, ok:r.ok, json:j, headers:r.headers};
-}
-async function checkSession(){
-  const r=await api('/api/session');
-  const el=document.getElementById('loginStatus');
-  if(r.ok && r.json.user){
-    el.innerHTML='<span class="ok">● logged in as '+r.json.user.name+' ('+r.json.user.role+')</span>';
-  } else {
-    el.textContent='not logged in';
-  }
-}
-async function doLogin(){
-  const u=document.getElementById('loginUser').value.trim()||'admin';
-  const p=document.getElementById('loginPass').value;
-  if(!p){ alert('password required'); return; }
-  const r=await fetch('/api/login',{method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin', body:JSON.stringify({username:u,password:p})});
-  const j=await r.json().catch(()=>({}));
-  const msg=document.getElementById('adminMsg');
-  if(r.ok){ msg.innerHTML='<span class="ok">✓ logged in as '+u+'</span>'; checkSession(); load(); }
-  else { msg.innerHTML='<span class="err">✗ login failed ('+r.status+'): '+(j.error||JSON.stringify(j))+'</span>'; }
-}
-async function doLogout(){
-  await fetch('/api/logout',{method:'POST', credentials:'same-origin'});
-  document.getElementById('loginStatus').textContent='logged out';
-  document.getElementById('adminMsg').innerHTML='<span class="muted">logged out</span>';
-  checkSession(); load();
-}
-async function load(){
-  updateTokenStatus(); checkSession();
-  const o = await api('/api/overview');
-  if(o.ok){
-    const d=o.json;
-    document.getElementById('kpis').innerHTML = `
-      <div class="card"><b>Today</b><br>${d.requests_today} req<br><span class="muted">in:${d.tokens_today.input} out:${d.tokens_today.output} cache:${d.tokens_today.cache_read+d.tokens_today.cache_creation}</span></div>
-      <div class="card"><b>7d</b><br>${d.requests_7d} req<br><span class="muted">in:${d.tokens_7d.input} out:${d.tokens_7d.output}</span></div>
-      <div class="card"><b>30d</b><br>${d.requests_30d} req</div>
-      <div class="card"><b>Users</b><br>${d.active_users} active / ${d.total_requests} total<br><span class="muted">meter errors: ${d.meter_errors}</span></div>`;
-    const chart = echarts.init(document.getElementById('chart'));
-    chart.setOption({
-      title:{text:'Requests + weighted tokens', left:'center', textStyle:{fontSize:13}},
-      tooltip:{trigger:'axis'},
-      legend:{data:['requests','input','output'], top:22},
-      xAxis:{type:'category',data:['today','7d','30d']},
-      yAxis:{type:'value'},
-      series:[
-        {name:'requests',type:'bar',data:[d.requests_today,d.requests_7d,d.requests_30d]},
-        {name:'input',type:'bar',data:[d.tokens_today.input,d.tokens_7d.input,d.tokens_30d.input]},
-        {name:'output',type:'bar',data:[d.tokens_today.output,d.tokens_7d.output,d.tokens_30d.output]},
-      ]
-    });
-  }
-  const u = await api('/api/users');
-  if(!u.ok){ document.querySelector('#users tbody').innerHTML='<tr><td colspan=6>failed: '+JSON.stringify(u.json)+'</td></tr>'; return; }
-  const tbody=document.querySelector('#users tbody');
-  tbody.innerHTML='';
-  for(const usr of u.json.users){
-    const tr=document.createElement('tr');
-    const last = usr.last_seen? new Date(usr.last_seen*1000).toLocaleString(): '-';
-    const limitsHtml = usr.limits.length? usr.limits.map(l=>`<span class="badge">${esc(l.kind)}=${esc(l.value)} <span class="muted">${esc(l.unit)}</span> <a href="#" onclick="clearLimit(${usr.id},'${esc(l.kind)}');return false" style="color:#b91c1c;text-decoration:none">×</a></span>`).join(' ') : '<span class="muted">none</span>';
-    tr.innerHTML = `
-      <td>
-        <span style="cursor:pointer;border-bottom:1px dashed #888" onclick="startRename(${usr.id})">${esc(usr.name)}</span>
-        <div id="rename-${usr.id}" style="display:none;margin-top:4px"><input id="rn-${usr.id}" value="${esc(usr.name)}" style="width:110px"> <button onclick="doRename(${usr.id})">Save</button> <button onclick="cancelRename(${usr.id})">Cancel</button></div>
-      </td>
-      <td><span class="badge ${esc(usr.role)}">${esc(usr.role)}</span> ${usr.enabled?'':'<span class="badge" style="background:#fee">disabled</span>'}</td>
-      <td><code>${esc(usr.prefix)}</code></td>
-      <td>${esc(usr.today)} / ${esc(usr.week)}<br><span class="muted">${esc(usr.tokens_today)} / ${esc(usr.tokens_week)} tok</span><br><span class="muted">seen ${esc(last)}</span></td>
-      <td><div class="limits">${limitsHtml}</div></td>
-      <td>
-        <div class="row-actions">
-          <select id="kind-${usr.id}">${KINDS.map(k=>`<option value="${k.k}">${esc(k.label)}</option>`).join('')}</select>
-          <input id="val-${usr.id}" placeholder="value" style="width:90px">
-          <select id="unit-${usr.id}"><option>weighted</option><option>raw</option><option>count</option><option>pct</option><option>list</option></select>
-          <button onclick="setLimit(${usr.id})">Set</button>
-        </div>
-        <div class="preset">units: weighted/raw tokens, count requests, pct share, list models</div>
-      </td>`;
-    tbody.appendChild(tr);
-    const sel=document.getElementById('kind-'+usr.id);
-    const unitSel=document.getElementById('unit-'+usr.id);
-    sel.addEventListener('change', ()=>{
-      const def=KINDS.find(k=>k.k===sel.value);
-      unitSel.innerHTML = def.units.map(u=>`<option>${u}</option>`).join('');
-      document.getElementById('val-'+usr.id).placeholder = def.placeholder;
-    });
-    sel.dispatchEvent(new Event('change'));
-  }
-}
-function startRename(id){
-  document.getElementById('rename-'+id).style.display='block';
-  document.getElementById('rn-'+id).focus();
-}
-function cancelRename(id){ document.getElementById('rename-'+id).style.display='none'; }
-async function doRename(id){
-  const newName=document.getElementById('rn-'+id).value.trim();
-  if(!newName){ alert('name required'); return; }
-  const r=await api('/api/admin/rename',{method:'POST', body: JSON.stringify({user_id:id, new:newName})});
-  const msg=document.getElementById('adminMsg');
-  if(r.ok){ msg.innerHTML='<span class="ok">✓ renamed → '+esc(newName)+'</span>'; load(); } else { const e=r.json.error||r.json.detail?.error?.message||JSON.stringify(r.json); msg.innerHTML='<span class="err">✗ '+esc(e)+' ('+r.status+')</span>'; }
-}
-async function setLimit(uid){
-  const kind=document.getElementById('kind-'+uid).value;
-  const val=document.getElementById('val-'+uid).value.trim();
-  const unit=document.getElementById('unit-'+uid).value;
-  if(!val){ alert('value required'); return; }
-  const r=await api('/api/admin/limit/set',{method:'POST', body: JSON.stringify({user_id:uid, kind, value:val, unit})});
-  const msg=document.getElementById('adminMsg');
-  if(r.ok){ msg.innerHTML='<span class="ok">✓ id '+uid+' '+esc(kind)+'='+esc(val)+' ('+esc(unit)+')</span>'; load(); } else { const e=r.json.error||r.json.detail?.error?.message||JSON.stringify(r.json); msg.innerHTML='<span class="err">✗ '+esc(e)+' ('+r.status+')</span>'; }
-}
-async function clearLimit(uid, kind){
-  if(!confirm('Clear '+esc(kind)+' for id '+uid+' ?')) return;
-  const r=await api('/api/admin/limit/clear',{method:'POST', body: JSON.stringify({user_id:uid, kind})});
-  const msg=document.getElementById('adminMsg');
-  if(r.ok){ msg.innerHTML='<span class="ok">✓ cleared id '+uid+' '+esc(kind)+'</span>'; load(); } else { const e=r.json.error||r.json.detail?.error?.message||JSON.stringify(r.json); msg.innerHTML='<span class="err">✗ '+esc(e)+' ('+r.status+')</span>'; }
-}
-load(); setInterval(load, 15000);
-</script>
-</body></html>
+<dialog id="dialog"></dialog>
+</body>
+</html>

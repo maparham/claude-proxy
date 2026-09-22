@@ -1,260 +1,265 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import getpass
+import logging
 import os
 import sys
 import time
 
 import httpx
 
-from .config import Config
-from .db import init_db, create_user
-from .credentials import generate_pkce, build_authorize_url, encrypt_blob
+from . import db, limits
+from .config import Config, ConfigError
+from .credentials import (CredentialKeyMissing, OAuthBackend, build_authorize_url, check_key, generate_key,
+                          generate_pkce, parse_pasted_code, token_record, token_request)
+
+logger = logging.getLogger("claude_proxy")
 
 
-def _get_conn(cfg: Config):
-    return init_db(cfg.db.path)
+def _conn(cfg: Config):
+    return db.init_db(cfg.db.path)
 
 
-def cmd_init(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    cur = conn.execute("SELECT id FROM users WHERE name=?", (args.admin_name,))
-    if cur.fetchone():
-        print(f"User {args.admin_name} already exists")
-        return
+def _user(conn, ref):
+    u = db.find_user(conn, ref)
+    if u is None:
+        sys.exit(f"No user {ref!r}.")
+    return u
+
+
+def cmd_keygen(args, cfg):
+    print(generate_key())
+
+
+def cmd_init(args, cfg):
+    check_key()
+    conn = _conn(cfg)
+    if conn.execute("SELECT 1 FROM users WHERE name=?", (args.admin_name,)).fetchone():
+        sys.exit(f"User {args.admin_name!r} already exists.")
+    password = os.environ.get("CLAUDE_PROXY_ADMIN_PASSWORD") or getpass.getpass("Admin dashboard password: ")
+    if len(password) < 10:
+        sys.exit("Use a password of at least 10 characters.")
+    if not os.environ.get("CLAUDE_PROXY_ADMIN_PASSWORD") and getpass.getpass("Repeat: ") != password:
+        sys.exit("Passwords differ.")
     from argon2 import PasswordHasher
-
-    ph = PasswordHasher()
-    phash = ph.hash(args.admin_password)
-    from .db import generate_virtual_key
-
-    raw, h, prefix = generate_virtual_key()
-    now = int(time.time())
-    conn.execute(
-        "INSERT INTO users(name, role, key_hash, key_prefix, enabled, created_at, password_hash) VALUES(?,?,?,?,?,?,?)",
-        (args.admin_name, "admin", h, prefix, 1, now, phash),
-    )
-    conn.commit()
-    print(f"Admin {args.admin_name} created. Virtual key: {raw} (prefix {prefix}) — store once!")
-    print(f"DB: {cfg.db.path}")
-    print("Next: run `claude-proxy login` to link your Pro Max subscription (OAuth).")
+    uid, key = db.create_user(conn, args.admin_name, role="admin", password_hash=PasswordHasher().hash(password))
+    db.audit(conn, None, "init", args.admin_name)
+    print(f"Admin {args.admin_name!r} created. Database: {cfg.db.path}")
+    print(f"Admin's own gateway key (shown once): {key}")
+    print("Next: `claude-proxy login` to link the Claude subscription.")
 
 
-def cmd_user_add(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    uid, raw = create_user(conn, args.name, role="user")
-    conn.commit()
-    print(f"User {args.name} id={uid} key={raw}")
-
-
-def cmd_user_list(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    rows = conn.execute("SELECT id, name, role, key_prefix, enabled, created_at FROM users ORDER BY id").fetchall()
-    for r in rows:
-        print(f"{r['id']:3} {r['name']:15} {r['role']:6} {r['key_prefix']:12} enabled={r['enabled']}")
-
-
-def cmd_login(args):
-    """Own grant PKCE: print URL, admin pastes code, exchange and store encrypted tokens (spec 5.1)."""
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
+def cmd_login(args, cfg):
+    """The gateway's own OAuth grant (spec 5.1). Never reads Claude Code's stored credentials."""
+    check_key()
+    conn = _conn(cfg)
     verifier, challenge, state = generate_pkce()
-    url = build_authorize_url(cfg, challenge, state)
-    print("1. Open this URL in your browser (logged into claude.ai):\n")
-    print(f"   {url}\n")
-    print("2. After login you will be redirected to:")
-    print(f"   {cfg.credential.redirect_uri}?code=...&state={state}")
-    print("   Copy the `code` value from the URL.\n")
-    code = input("Paste code: ").strip()
-    if not code:
-        # also accept full redirect URL
-        print("No code pasted.")
-        sys.exit(1)
-    # If user pasted full URL, extract code
-    if "code=" in code:
-        from urllib.parse import urlparse, parse_qs
-
-        qs = parse_qs(urlparse(code).query)
-        code = qs.get("code", [code])[0]
-
-    # Exchange
-    data = {
-        "grant_type": "authorization_code",
-        "code": code,
-        "redirect_uri": cfg.credential.redirect_uri,
-        "client_id": cfg.credential.client_id,
-        "code_verifier": verifier,
-        "state": state,
-    }
-    print(f"\nExchanging code at {cfg.credential.token_url} ...")
+    print("1. Open this URL in a browser signed in to the Claude account that owns the subscription:\n")
+    print(f"   {build_authorize_url(cfg, challenge, state)}\n")
+    print("2. Approve access, then copy the code the page shows (or the whole URL you land on).\n")
+    pasted = args.code or input("Paste code: ")
     try:
-        resp = httpx.post(cfg.credential.token_url, data=data, headers={"Content-Type": "application/x-www-form-urlencoded"}, timeout=20)
-    except Exception as e:
-        print(f"Token request failed: {e}")
-        sys.exit(1)
+        code = parse_pasted_code(pasted, state)
+    except ValueError as e:
+        sys.exit(str(e))
+    async def exchange():
+        async with httpx.AsyncClient() as http:
+            return await token_request(http, cfg, {
+                "grant_type": "authorization_code", "code": code, "redirect_uri": cfg.credential.redirect_uri,
+                "code_verifier": verifier, "state": state})
+    resp = asyncio.run(exchange())
     if resp.status_code != 200:
-        print(f"Token exchange failed: {resp.status_code} {resp.text}")
-        sys.exit(1)
-    tok = resp.json()
-    expires_at = int(time.time()) + int(tok.get("expires_in", 28800))
-    blob_data = {
-        "access_token": tok["access_token"],
-        "refresh_token": tok.get("refresh_token"),
-        "expires_at": expires_at,
-        "scope": tok.get("scope"),
-        "raw": tok,
-    }
-    blob = encrypt_blob(blob_data)
-    conn.execute(
-        "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,?)",
-        (blob, expires_at, int(time.time()), "active"),
-    )
-    conn.commit()
-    print(f"\n✓ OAuth linked. Access token expires at {time.ctime(expires_at)} (in {tok.get('expires_in')}s).")
-    print("Refresh token stored encrypted — this gateway is now the sole refresher (spec 5.1).")
+        sys.exit(f"Token exchange failed: HTTP {resp.status_code} {resp.text[:500]}")
+    record = token_record(resp.json())
+    OAuthBackend(cfg, conn, httpx.AsyncClient()).store(record)
+    db.audit(conn, None, "login", record.get("account") or "oauth")
+    print(f"Linked{' ' + record['account'] if record.get('account') else ''}. Access token valid until "
+          f"{time.ctime(record['expires_at'])}; the gateway refreshes it from now on.")
+    print("Do not also run `/login` with this grant elsewhere: refresh tokens are single-use.")
 
 
-def cmd_limit_set(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    u = conn.execute("SELECT id FROM users WHERE name=?", (args.user,)).fetchone()
-    if not u:
-        print(f"User {args.user} not found")
-        sys.exit(1)
-    uid = u["id"]
-    conn.execute(
-        "INSERT OR REPLACE INTO limits(user_id, kind, value, unit, updated_at) VALUES(?,?,?,?,?)",
-        (uid, args.kind, str(args.value), args.unit, int(time.time())),
-    )
-    conn.execute("INSERT INTO audit_log(at, action, target, detail_json) VALUES(?,?,?,?)", (int(time.time()), "limit_set", f"{args.user}:{args.kind}", f'{{"value":"{args.value}","unit":"{args.unit}"}}'))
-    conn.commit()
-    print(f"Set {args.user} {args.kind}={args.value} ({args.unit})")
-
-
-def cmd_limit_clear(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    u = conn.execute("SELECT id FROM users WHERE name=?", (args.user,)).fetchone()
-    if not u:
-        print(f"User {args.user} not found")
-        sys.exit(1)
-    conn.execute("DELETE FROM limits WHERE user_id=? AND kind=?", (u["id"], args.kind))
-    conn.commit()
-    print(f"Cleared {args.user} {args.kind}")
-
-
-def cmd_limit_list(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    q = args.user
-    if q:
-        u = conn.execute("SELECT id FROM users WHERE name=?", (q,)).fetchone()
-        if not u:
-            print(f"User {q} not found")
-            sys.exit(1)
-        rows = conn.execute("SELECT kind, value, unit, updated_at FROM limits WHERE user_id=? ORDER BY kind", (u["id"],)).fetchall()
-        print(f"Limits for {q} (user_id={u['id']}):")
-    else:
-        rows = conn.execute("SELECT u.name, l.kind, l.value, l.unit FROM limits l JOIN users u ON u.id=l.user_id ORDER BY u.name, l.kind").fetchall()
-        for r in rows:
-            print(f"{r['name']:15} {r['kind']:20} {r['value']:15} {r['unit']}")
-        return
-    for r in rows:
-        print(f"  {r['kind']:20} {r['value']:15} {r['unit']:10} updated={time.ctime(r['updated_at'])}")
-    if not rows:
-        print("  (no limits)")
-
-
-def cmd_user_rename(args):
-    cfg = Config.load(args.config)
-    conn = _get_conn(cfg)
-    u = conn.execute("SELECT id FROM users WHERE name=?", (args.old,)).fetchone()
-    if not u:
-        print(f"User {args.old} not found")
-        sys.exit(1)
-    if conn.execute("SELECT id FROM users WHERE name=?", (args.new,)).fetchone():
-        print(f"User {args.new} already exists")
-        sys.exit(1)
-    conn.execute("UPDATE users SET name=? WHERE id=?", (args.new, u["id"]))
-    conn.commit()
-    print(f"Renamed {args.old} -> {args.new}")
-
-
-def cmd_status(args):
-    cfg = Config.load(args.config)
-    from .credentials import OAuthBackend
-
-    be = OAuthBackend(cfg, cfg.db.path)
+def cmd_status(args, cfg):
+    conn = _conn(cfg)
+    be = OAuthBackend(cfg, conn, httpx.AsyncClient())
     st = be.describe()
-    print(f"backend={st.backend} healthy={st.healthy} detail={st.detail}")
-    conn = _get_conn(cfg)
-    row = conn.execute("SELECT expires_at, state, updated_at FROM credentials WHERE backend='oauth'").fetchone()
-    if row:
-        print(f"expires_at={row['expires_at']} ({time.ctime(row['expires_at']) if row['expires_at'] else 'unknown'}) state={row['state']}")
+    print(f"credential: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
+    if st.expires_at:
+        print(f"access token expires: {time.ctime(st.expires_at)}")
+    for r in conn.execute("SELECT bucket, utilization_pct, resets_at, observed_at, source FROM quota_snapshots q "
+                          "WHERE observed_at = (SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket=q.bucket) ORDER BY bucket"):
+        age = int(time.time() - r["observed_at"])
+        print(f"account {r['bucket']}: {r['utilization_pct']:.0f}% (resets {time.ctime(r['resets_at']) if r['resets_at'] else '?'}; "
+              f"{r['source']} {age}s ago)")
+    for route in cfg.routes:
+        print(f"route {route.name}: models {', '.join(route.models)} -> {route.base_url} "
+              f"({route.api_key_env} {'set' if route.api_key() else 'NOT SET'})")
+    n = conn.execute("SELECT COUNT(*) FROM users WHERE enabled=1 AND revoked_at IS NULL").fetchone()[0]
+    print(f"active users: {n}")
 
 
-def cmd_serve(args):
+def cmd_user_add(args, cfg):
+    conn = _conn(cfg)
+    if conn.execute("SELECT 1 FROM users WHERE name=?", (args.name,)).fetchone():
+        sys.exit(f"User {args.name!r} already exists.")
+    uid, key = db.create_user(conn, args.name, role=args.role)
+    db.audit(conn, None, "user_add", args.name, {"role": args.role})
+    print(f"User {args.name!r} (id {uid}). Gateway key, shown once:\n{key}")
+
+
+def cmd_user_list(args, cfg):
+    conn = _conn(cfg)
+    for r in conn.execute("SELECT * FROM users ORDER BY id"):
+        state = "revoked" if r["revoked_at"] else ("enabled" if r["enabled"] else "disabled")
+        print(f"{r['id']:>3}  {r['name']:<16} {r['role']:<5} {r['key_prefix']}…  {state}")
+
+
+def cmd_user_rotate(args, cfg):
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    print(f"New gateway key for {u['name']}, shown once:\n{db.rotate_key(conn, u['id'])}")
+
+
+def cmd_user_state(args, cfg):
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    if args.action == "revoke":
+        db.revoke(conn, u["id"])
+    else:
+        db.set_enabled(conn, u["id"], args.action == "enable")
+    print(f"{u['name']}: {args.action}d")
+
+
+def cmd_user_rename(args, cfg):
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    if conn.execute("SELECT 1 FROM users WHERE name=?", (args.new,)).fetchone():
+        sys.exit(f"User {args.new!r} already exists.")
+    conn.execute("UPDATE users SET name=? WHERE id=?", (args.new, u["id"]))
+    db.audit(conn, None, "rename", f"{u['name']}->{args.new}")
+    print(f"Renamed {u['name']} -> {args.new}")
+
+
+def cmd_limit_set(args, cfg):
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    try:
+        scope, value, unit = limits.validate(args.kind, args.scope, args.value, args.unit)
+    except ValueError as e:
+        sys.exit(str(e))
+    conn.execute("INSERT OR REPLACE INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)",
+                 (u["id"], args.kind, scope, value, unit, int(time.time())))
+    db.audit(conn, None, "limit_set", f"{u['name']}:{args.kind}:{scope}", {"value": value, "unit": unit})
+    print(f"{u['name']}: {args.kind}{'' if scope == '*' else ' [' + scope + ']'} = {value} {unit}")
+
+
+def cmd_limit_clear(args, cfg):
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    n = conn.execute("DELETE FROM limits WHERE user_id=? AND kind=? AND scope=?", (u["id"], args.kind, args.scope)).rowcount
+    db.audit(conn, None, "limit_clear", f"{u['name']}:{args.kind}:{args.scope}")
+    print("cleared" if n else "no such limit")
+
+
+def cmd_limit_list(args, cfg):
+    conn = _conn(cfg)
+    users = [_user(conn, args.user)] if args.user else conn.execute("SELECT * FROM users ORDER BY name").fetchall()
+    for u in users:
+        for s in limits.states(conn, cfg, u["id"]):
+            cur = "skipped: " + s.skipped if s.skipped else ("" if s.current is None else f"{s.current:,.1f} used")
+            scope = "" if s.scope == "*" else f" [{s.scope}]"
+            print(f"{u['name']:<16} {s.kind}{scope:<18} {s.value:>12} {s.unit:<8} {cur}")
+
+
+def cmd_serve(args, cfg):
+    try:
+        check_key()
+    except CredentialKeyMissing as e:
+        sys.exit(str(e))
+    asyncio.run(_serve(cfg))
+
+
+async def _serve(cfg: Config):
     import uvicorn
-
-    cfg = Config.load(args.config)
     from .app import create_app
+    from .gateway import Gateway
+    from .web import create_dashboard_app
 
-    app = create_app(cfg)
-    uvicorn.run(app, host=cfg.listener.host, port=cfg.listener.port, log_level="info")
+    conn = _conn(cfg)
+    gw = Gateway(cfg, conn)
+    servers = [
+        uvicorn.Server(uvicorn.Config(create_app(gw), host=cfg.listener.host, port=cfg.listener.port, log_level="info")),
+        uvicorn.Server(uvicorn.Config(create_dashboard_app(gw), host=cfg.listener.dashboard_host,
+                                      port=cfg.listener.dashboard_port, log_level="info")),
+    ]
+    print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
+    print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
+    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_retention(conn, cfg))]
+    running = [asyncio.create_task(s.serve()) for s in servers]
+    try:
+        await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for s in servers:
+            s.should_exit = True
+        await asyncio.gather(*running, return_exceptions=True)
+        for t in background:
+            t.cancel()
+        await gw.aclose()
 
 
-def main():
-    p = argparse.ArgumentParser(prog="claude-proxy")
-    p.add_argument("--config", default=None, help="TOML config file")
+async def _retention(conn, cfg: Config):
+    while True:
+        try:
+            removed = db.cleanup(conn, cfg.retention_days)
+            if any(removed.values()):
+                logger.info("retention cleanup: %s", removed)
+        except Exception:
+            logger.exception("retention cleanup failed")
+        await asyncio.sleep(6 * 3600)
+
+
+def main(argv=None):
+    p = argparse.ArgumentParser(prog="claude-proxy", description="Shared-subscription gateway for Claude Code")
+    p.add_argument("--config", help="TOML config file (or CLAUDE_PROXY_CONFIG)")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s_init = sub.add_parser("init")
-    s_init.add_argument("--admin-name", default="admin")
-    s_init.add_argument("--admin-password", required=True)
-    s_init.set_defaults(func=cmd_init)
+    sub.add_parser("keygen", help="print a new credential encryption key").set_defaults(func=cmd_keygen)
+    s = sub.add_parser("init", help="create the database and the admin account")
+    s.add_argument("--admin-name", default="admin")
+    s.set_defaults(func=cmd_init)
+    s = sub.add_parser("login", help="link the Claude subscription (OAuth, PKCE)")
+    s.add_argument("--code", help="the pasted code, for non-interactive use")
+    s.set_defaults(func=cmd_login)
+    sub.add_parser("status", help="credential, quota and route health").set_defaults(func=cmd_status)
+    sub.add_parser("serve", help="run the proxy and dashboard listeners").set_defaults(func=cmd_serve)
 
-    s_login = sub.add_parser("login", help="Link Pro Max subscription via OAuth PKCE")
-    s_login.set_defaults(func=cmd_login)
+    u = sub.add_parser("user").add_subparsers(dest="sub", required=True)
+    s = u.add_parser("add"); s.add_argument("name"); s.add_argument("--role", choices=["user", "admin"], default="user"); s.set_defaults(func=cmd_user_add)
+    u.add_parser("list").set_defaults(func=cmd_user_list)
+    s = u.add_parser("rotate"); s.add_argument("user"); s.set_defaults(func=cmd_user_rotate)
+    for action in ("enable", "disable", "revoke"):
+        s = u.add_parser(action); s.add_argument("user"); s.set_defaults(func=cmd_user_state, action=action)
+    s = u.add_parser("rename"); s.add_argument("user"); s.add_argument("new"); s.set_defaults(func=cmd_user_rename)
 
-    s_status = sub.add_parser("status", help="Show credential health")
-    s_status.set_defaults(func=cmd_status)
+    lm = sub.add_parser("limit").add_subparsers(dest="sub", required=True)
+    s = lm.add_parser("set")
+    s.add_argument("user"); s.add_argument("kind", choices=limits.KINDS); s.add_argument("value")
+    s.add_argument("--unit"); s.add_argument("--scope", default="*", help="model glob, e.g. 'claude-opus-*'")
+    s.set_defaults(func=cmd_limit_set)
+    s = lm.add_parser("clear"); s.add_argument("user"); s.add_argument("kind"); s.add_argument("--scope", default="*"); s.set_defaults(func=cmd_limit_clear)
+    s = lm.add_parser("list"); s.add_argument("user", nargs="?"); s.set_defaults(func=cmd_limit_list)
 
-    s_add = sub.add_parser("user")
-    s_add_sub = s_add.add_subparsers(dest="sub", required=True)
-    s_a = s_add_sub.add_parser("add")
-    s_a.add_argument("name")
-    s_a.set_defaults(func=cmd_user_add)
-    s_l = s_add_sub.add_parser("list")
-    s_l.set_defaults(func=cmd_user_list)
-    s_r = s_add_sub.add_parser("rename")
-    s_r.add_argument("old")
-    s_r.add_argument("new")
-    s_r.set_defaults(func=cmd_user_rename)
-
-    s_lim = sub.add_parser("limit")
-    s_lim_sub = s_lim.add_subparsers(dest="sub", required=True)
-    s_ls = s_lim_sub.add_parser("set")
-    s_ls.add_argument("--user", required=True)
-    s_ls.add_argument("--kind", required=True, choices=["tokens_5h","tokens_daily","tokens_weekly","requests_daily","share_5h","share_7d","allowed_models","enabled"])
-    s_ls.add_argument("--value", required=True, help="e.g. 100000 or 'claude-sonnet-4-*,claude-haiku-*' or 0/1 for enabled")
-    s_ls.add_argument("--unit", default="weighted", choices=["raw","weighted","pct","count","list"])
-    s_ls.set_defaults(func=cmd_limit_set)
-    s_lc = s_lim_sub.add_parser("clear")
-    s_lc.add_argument("--user", required=True)
-    s_lc.add_argument("--kind", required=True)
-    s_lc.set_defaults(func=cmd_limit_clear)
-    s_ll = s_lim_sub.add_parser("list")
-    s_ll.add_argument("--user", default=None, help="filter by user name")
-    s_ll.set_defaults(func=cmd_limit_list)
-
-    s_serve = sub.add_parser("serve")
-    s_serve.set_defaults(func=cmd_serve)
-
-    args = p.parse_args()
-    args.func(args)
+    args = p.parse_args(argv)
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+    try:
+        cfg = Config.load(args.config)
+    except ConfigError as e:
+        sys.exit(str(e))
+    try:
+        args.func(args, cfg)
+    except CredentialKeyMissing as e:
+        sys.exit(str(e))
 
 
 if __name__ == "__main__":

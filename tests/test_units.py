@@ -75,3 +75,66 @@ async def test_unlinked_credential_is_503(cfg, db, anthropic):
         r = await c.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 503 and "claude-proxy login" in r.json()["error"]["message"]
     assert anthropic.calls == []
+
+
+async def test_token_request_falls_back_to_json_on_format_rejection(cfg):
+    import httpx
+    from claude_proxy.credentials import token_request
+    seen = []
+
+    def handler(request):
+        seen.append(request.headers["content-type"])
+        if request.headers["content-type"].startswith("application/x-www-form-urlencoded"):
+            return httpx.Response(415, json={"error": "unsupported_media_type"})
+        return httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 60})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        r = await token_request(http, cfg, {"grant_type": "refresh_token", "refresh_token": "x"})
+    assert r.status_code == 200
+    assert seen == ["application/x-www-form-urlencoded", "application/json"]
+
+
+async def test_token_request_does_not_retry_invalid_grant(cfg):
+    import httpx
+    from claude_proxy.credentials import token_request
+    calls = []
+
+    def handler(request):
+        calls.append(1)
+        return httpx.Response(400, json={"error": "invalid_grant"})
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        r = await token_request(http, cfg, {"grant_type": "refresh_token", "refresh_token": "x"})
+    assert r.status_code == 400 and len(calls) == 1
+
+
+async def test_backend_picks_up_login_done_by_cli_while_running(cfg, db):
+    import time as _t
+    from claude_proxy.credentials import NeedsLogin
+    from tests.conftest import seed_oauth
+    gw = make_gateway(cfg, db[1])
+    with pytest.raises(NeedsLogin):
+        await gw.backend.upstream_headers()
+    seed_oauth(db[1], access="new-token")
+    assert (await gw.backend.upstream_headers())["authorization"] == "Bearer new-token"
+    db[1].execute("UPDATE credentials SET encrypted_blob=?, updated_at=? WHERE backend='oauth'",
+                  (__import__("claude_proxy.credentials", fromlist=["x"]).encrypt_blob(
+                      {"access_token": "newer", "refresh_token": "r", "expires_at": int(_t.time()) + 3600}), int(_t.time()) + 5))
+    assert (await gw.backend.upstream_headers())["authorization"] == "Bearer newer"
+
+
+def test_example_config_loads():
+    from pathlib import Path
+    from claude_proxy.config import Config
+    cfg = Config.load(str(Path(__file__).parent.parent / "config.example.toml"))
+    assert cfg.retention_days == 180
+    assert cfg.route_for("muse-spark").upstream_model("muse-spark") == "muse-spark-1.3"
+    assert cfg.route_for("claude-opus-5") is None
+
+
+def test_unknown_config_key_is_an_error(tmp_path):
+    from claude_proxy.config import Config, ConfigError
+    p = tmp_path / "c.toml"
+    p.write_text("[listener]\nprot = 1\n")
+    with pytest.raises(ConfigError):
+        Config.load(str(p))

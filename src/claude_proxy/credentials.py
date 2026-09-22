@@ -127,6 +127,22 @@ def parse_pasted_code(pasted: str, expected_state: str) -> str:
     return code
 
 
+async def token_request(http: httpx.AsyncClient, cfg, payload: dict) -> httpx.Response:
+    """POST to the OAuth token endpoint.
+
+    The research notes record a form-encoded body; some clients send JSON. Send form first and retry as
+    JSON only when the endpoint rejects the format, never on invalid_grant, which would burn a
+    single-use refresh token or authorization code.
+    """
+    payload = {**payload, "client_id": cfg.credential.client_id}
+    headers = {"User-Agent": cfg.credential.user_agent}
+    resp = await http.post(cfg.credential.token_url, data=payload, headers=headers, timeout=30)
+    if resp.status_code in (400, 415, 422) and "invalid_grant" not in resp.text:
+        logger.info("token endpoint rejected a form body (%s); retrying as JSON", resp.status_code)
+        resp = await http.post(cfg.credential.token_url, json=payload, headers=headers, timeout=30)
+    return resp
+
+
 def token_record(tok: dict, previous_refresh: str | None = None) -> dict:
     return {
         "access_token": tok["access_token"],
@@ -149,14 +165,18 @@ class OAuthBackend:
         self._lock = asyncio.Lock()
         self._cache: dict | None = None
         self._state: str | None = None
+        self._updated_at: int | None = None
         self.last_error: str | None = None
 
     def _load(self) -> tuple[dict | None, str | None]:
-        if self._cache is not None:
-            return self._cache, self._state
-        row = self.conn.execute("SELECT encrypted_blob, state FROM credentials WHERE backend='oauth'").fetchone()
+        # The decrypted grant is cached; `updated_at` shows when `claude-proxy login` replaced it meanwhile.
+        row = self.conn.execute("SELECT encrypted_blob, state, updated_at FROM credentials WHERE backend='oauth'").fetchone()
         if not row or not row["encrypted_blob"]:
+            self._cache = None
             return None, None
+        if self._cache is not None and row["updated_at"] == self._updated_at:
+            return self._cache, self._state
+        self._updated_at = row["updated_at"]
         try:
             data = decrypt_blob(row["encrypted_blob"])
         except CredentialKeyMissing:
@@ -169,15 +189,17 @@ class OAuthBackend:
     def store(self, data: dict, state: str = "active") -> None:
         # One statement replaces the row atomically, so the new refresh token is durable
         # before the old one is gone.
+        now = int(time.time())
         self.conn.execute(
             "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,?)",
-            (encrypt_blob(data), data["expires_at"], int(time.time()), state),
+            (encrypt_blob(data), data["expires_at"], now, state),
         )
-        self._cache, self._state = data, state
+        self._cache, self._state, self._updated_at = data, state, now
 
     def _mark_needs_login(self, reason: str) -> None:
-        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (int(time.time()),))
-        self._state = "needs_login"
+        now = int(time.time())
+        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (now,))
+        self._state, self._updated_at = "needs_login", now
         self.last_error = reason
         logger.error("oauth grant needs login: %s", reason)
 
@@ -196,12 +218,7 @@ class OAuthBackend:
                 self._mark_needs_login("no refresh token stored")
                 return False
             try:
-                resp = await self.http.post(
-                    self.cfg.credential.token_url,
-                    data={"grant_type": "refresh_token", "refresh_token": refresh_token, "client_id": self.cfg.credential.client_id},
-                    headers={"User-Agent": self.cfg.credential.user_agent},
-                    timeout=30,
-                )
+                resp = await token_request(self.http, self.cfg, {"grant_type": "refresh_token", "refresh_token": refresh_token})
             except httpx.HTTPError as e:
                 self.last_error = f"refresh transport error: {e}"
                 logger.warning(self.last_error)
