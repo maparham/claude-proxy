@@ -87,7 +87,8 @@ def _poll_bucket_name(key: str) -> str:
 def parse_poll(body: dict) -> list[Snapshot]:
     out = []
     for key, val in (body or {}).items():
-        if not isinstance(val, dict):
+        # Only the rolling-window buckets; the endpoint also returns unrelated code-named entries.
+        if not isinstance(val, dict) or not key.startswith(("five_hour", "seven_day")):
             continue
         util = val.get("utilization", val.get("used_percentage"))
         if util is None:

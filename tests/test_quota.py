@@ -36,13 +36,14 @@ def test_poll_body_is_percent_with_iso_resets():
         "seven_day_opus": None,
         "seven_day_sonnet": {"used_percentage": 12.5, "reset_at": "2026-09-25T00:00:00Z"},
         "extra_usage": {"is_enabled": False},
+        "nimbus_quill": {"utilization": 0.0, "resets_at": None},   # live responses carry code-named entries
     })
     by = {s.bucket: s for s in snaps}
     assert by["5h"].utilization_pct == pytest.approx(1.0)
     assert by["5h"].resets_at == 1790089200
     assert by["7d"].utilization_pct == 38
     assert by["7d_sonnet"].utilization_pct == 12.5
-    assert "7d_opus" not in by and "extra_usage" not in by
+    assert "7d_opus" not in by and "extra_usage" not in by and "nimbus_quill" not in by
 
 
 def test_reset_in_milliseconds_is_normalised():
