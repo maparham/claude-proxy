@@ -124,12 +124,18 @@ def classify_429(headers) -> str:
 
 
 def _window(rows: list) -> list:
-    """The snapshots of the current window: everything after the last reset."""
+    """The snapshots of the current window: everything after the last reset.
+
+    A reset is the reset time moving forward. Headers and the usage endpoint round differently, so a
+    small dip with an unchanged reset time is noise; a drop only means a reset when reset times are unknown.
+    """
     start = 0
     for i in range(1, len(rows)):
         prev, cur = rows[i - 1], rows[i]
-        advanced = cur["resets_at"] and prev["resets_at"] and cur["resets_at"] - prev["resets_at"] > RESET_TOLERANCE_S
-        if advanced or cur["utilization_pct"] < prev["utilization_pct"]:
+        if cur["resets_at"] and prev["resets_at"]:
+            if cur["resets_at"] - prev["resets_at"] > RESET_TOLERANCE_S:
+                start = i
+        elif cur["utilization_pct"] < prev["utilization_pct"]:
             start = i
     return rows[start:]
 
@@ -155,14 +161,16 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
         weighted.append((r["user_id"], r["ended_at"], t.weighted or float(t.raw)))  # unpriced model: raw tokens
     shares: dict[int, float] = {}
     history = [{"t": win[0]["observed_at"], "utilization_pct": win[0]["utilization_pct"], "shares": {}}]
+    high = win[0]["utilization_pct"]   # only rises above the high-water mark are new usage
     j = 0
-    for prev, cur in zip(win, win[1:]):
+    for cur in win[1:]:
         by_user: dict[int, float] = {}
         while j < len(weighted) and weighted[j][1] <= cur["observed_at"]:
             uid, _, w = weighted[j]
             by_user[uid] = by_user.get(uid, 0.0) + w
             j += 1
-        delta = cur["utilization_pct"] - prev["utilization_pct"]
+        delta = cur["utilization_pct"] - high
+        high = max(high, cur["utilization_pct"])
         total_w = sum(by_user.values())
         if delta > 0 and total_w > 0:
             for uid, w in by_user.items():

@@ -176,3 +176,29 @@ async def test_poller_only_polls_when_idle_and_backs_off_on_429(db):
     assert be.calls == 3
     row = conn.execute("SELECT source, utilization_pct FROM quota_snapshots ORDER BY id DESC LIMIT 1").fetchone()
     assert tuple(row) == ("poll", 3)
+
+
+def test_rounding_dip_between_sources_is_not_a_reset(db):
+    # Live data: the usage endpoint said 2% while headers said 1% for the same 7d window.
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    _snap(conn, 100, 10, resets=5000)
+    _req(conn, a, 150, 10)
+    _snap(conn, 200, 30, resets=5000)
+    _snap(conn, 250, 29, resets=5000)   # other source, rounded down
+    _req(conn, a, 300, 10)
+    _snap(conn, 350, 35, resets=5000)
+    res = quota.attribution(conn, Pricing(), "5h", now=360)
+    assert res["shares"][a] == pytest.approx(25)       # +20, then +5 above the 30 high-water mark
+    assert res["window_start"] == 100
+
+
+def test_drop_without_reset_times_still_starts_a_window(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    _snap(conn, 100, 40, resets=None)
+    _snap(conn, 200, 2, resets=None)
+    _req(conn, a, 250, 10)
+    _snap(conn, 300, 5, resets=None)
+    res = quota.attribution(conn, Pricing(), "5h", now=310)
+    assert res["shares"][a] == pytest.approx(3)
