@@ -128,19 +128,13 @@ def parse_pasted_code(pasted: str, expected_state: str) -> str:
 
 
 async def token_request(http: httpx.AsyncClient, cfg, payload: dict) -> httpx.Response:
-    """POST to the OAuth token endpoint.
+    """POST to the OAuth token endpoint with a JSON body, as Claude Code 2.1.280 does.
 
-    The research notes record a form-encoded body; some clients send JSON. Send form first and retry as
-    JSON only when the endpoint rejects the format, never on invalid_grant, which would burn a
-    single-use refresh token or authorization code.
+    Never retried here: a code or refresh token may be single-use.
     """
     payload = {**payload, "client_id": cfg.credential.client_id}
-    headers = {"User-Agent": cfg.credential.user_agent}
-    resp = await http.post(cfg.credential.token_url, data=payload, headers=headers, timeout=30)
-    if resp.status_code in (400, 415, 422) and "invalid_grant" not in resp.text:
-        logger.info("token endpoint rejected a form body (%s); retrying as JSON", resp.status_code)
-        resp = await http.post(cfg.credential.token_url, json=payload, headers=headers, timeout=30)
-    return resp
+    return await http.post(cfg.credential.token_url, json=payload, timeout=30,
+                           headers={"Content-Type": "application/json", "Accept": "application/json"})
 
 
 def token_record(tok: dict, previous_refresh: str | None = None) -> dict:
@@ -218,14 +212,15 @@ class OAuthBackend:
                 self._mark_needs_login("no refresh token stored")
                 return False
             try:
-                resp = await token_request(self.http, self.cfg, {"grant_type": "refresh_token", "refresh_token": refresh_token})
+                resp = await token_request(self.http, self.cfg, {"grant_type": "refresh_token", "refresh_token": refresh_token,
+                                                                 "scope": self.cfg.credential.refresh_scopes})
             except httpx.HTTPError as e:
                 self.last_error = f"refresh transport error: {e}"
                 logger.warning(self.last_error)
                 return False
             if resp.status_code != 200:
                 body = resp.text[:300]
-                if resp.status_code in (400, 401) or "invalid_grant" in body:
+                if resp.status_code in (400, 401) and "rate_limit" not in body or "invalid_grant" in body:
                     self._mark_needs_login(f"refresh rejected {resp.status_code}: {body}")
                 else:
                     self.last_error = f"refresh failed {resp.status_code}: {body}"

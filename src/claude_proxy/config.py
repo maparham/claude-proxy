@@ -33,9 +33,13 @@ class UpstreamConfig:
 @dataclass
 class CredentialConfig:
     client_id: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_CLIENT_ID", "9d1c250a-e61b-44d9-88ed-5944d1962f5e"))
-    authorize_url: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_AUTHORIZE_URL", "https://claude.ai/oauth/authorize"))
+    # Values as used by Claude Code 2.1.280 for a claude.ai (subscription) login.
+    authorize_url: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_AUTHORIZE_URL", "https://claude.com/cai/oauth/authorize"))
     token_url: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_TOKEN_URL", "https://platform.claude.com/v1/oauth/token"))
-    scopes: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_SCOPES", "user:inference user:profile user:sessions:claude_code user:mcp_servers"))
+    scopes: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_SCOPES",
+        "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"))
+    refresh_scopes: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_REFRESH_SCOPES",
+        "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"))
     beta_flag: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_BETA", "oauth-2025-04-20"))
     usage_url: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_USAGE_URL", "https://api.anthropic.com/api/oauth/usage"))
     redirect_uri: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_REDIRECT_URI", "https://platform.claude.com/oauth/code/callback"))

@@ -14,12 +14,13 @@ secure_cookies = false      # true when the dashboard is served over HTTPS (e.g.
 base_url = "https://api.anthropic.com"
 
 [credential]
-# Reverse-engineered Claude Code OAuth values. They have changed before; override here if they do.
+# Claude Code 2.1.280 OAuth values (read from its binary). They have changed before; override here if they do.
 client_id = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-authorize_url = "https://claude.ai/oauth/authorize"
+authorize_url = "https://claude.com/cai/oauth/authorize"
 token_url = "https://platform.claude.com/v1/oauth/token"
 redirect_uri = "https://platform.claude.com/oauth/code/callback"
-scopes = "user:inference user:profile user:sessions:claude_code user:mcp_servers"
+scopes = "org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"
+refresh_scopes = "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"
 beta_flag = "oauth-2025-04-20"
 usage_url = "https://api.anthropic.com/api/oauth/usage"
 user_agent = "claude-code/2.1.280"

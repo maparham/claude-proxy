@@ -33,7 +33,7 @@ def test_encrypt_roundtrip():
 def test_pkce_and_authorize_url(cfg):
     verifier, challenge, state = generate_pkce()
     url = build_authorize_url(cfg, challenge, state)
-    assert url.startswith("https://claude.ai/oauth/authorize?")
+    assert url.startswith("https://claude.com/cai/oauth/authorize?code=true&")
     assert f"code_challenge={challenge}" in url and "code_challenge_method=S256" in url and f"state={state}" in url
 
 
@@ -77,35 +77,40 @@ async def test_unlinked_credential_is_503(cfg, db, anthropic):
     assert anthropic.calls == []
 
 
-async def test_token_request_falls_back_to_json_on_format_rejection(cfg):
+async def test_token_request_sends_json_like_claude_code(cfg):
+    import json as _json
     import httpx
     from claude_proxy.credentials import token_request
     seen = []
 
     def handler(request):
-        seen.append(request.headers["content-type"])
-        if request.headers["content-type"].startswith("application/x-www-form-urlencoded"):
-            return httpx.Response(415, json={"error": "unsupported_media_type"})
+        seen.append((request.headers["content-type"], _json.loads(request.content)))
         return httpx.Response(200, json={"access_token": "a", "refresh_token": "r", "expires_in": 60})
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
         r = await token_request(http, cfg, {"grant_type": "refresh_token", "refresh_token": "x"})
-    assert r.status_code == 200
-    assert seen == ["application/x-www-form-urlencoded", "application/json"]
+    assert r.status_code == 200 and len(seen) == 1
+    ctype, body = seen[0]
+    assert ctype == "application/json"
+    assert body == {"grant_type": "refresh_token", "refresh_token": "x", "client_id": cfg.credential.client_id}
 
 
-async def test_token_request_does_not_retry_invalid_grant(cfg):
+async def test_refresh_sends_refresh_scopes(cfg, db):
+    import json as _json
     import httpx
-    from claude_proxy.credentials import token_request
-    calls = []
+    from claude_proxy.gateway import Gateway
+    from tests.conftest import seed_oauth
+    seed_oauth(db[1], access="old", refresh="r1")
+    bodies = []
 
     def handler(request):
-        calls.append(1)
-        return httpx.Response(400, json={"error": "invalid_grant"})
+        bodies.append(_json.loads(request.content))
+        return httpx.Response(200, json={"access_token": "new", "refresh_token": "r2", "expires_in": 28800})
 
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        r = await token_request(http, cfg, {"grant_type": "refresh_token", "refresh_token": "x"})
-    assert r.status_code == 400 and len(calls) == 1
+    gw = Gateway(cfg, db[1], http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+    assert await gw.backend.on_unauthorized("old")
+    assert bodies[0]["scope"] == cfg.credential.refresh_scopes
+    assert bodies[0]["grant_type"] == "refresh_token" and bodies[0]["refresh_token"] == "r1"
 
 
 async def test_backend_picks_up_login_done_by_cli_while_running(cfg, db):

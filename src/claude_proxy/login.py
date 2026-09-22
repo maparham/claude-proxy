@@ -46,11 +46,14 @@ async def finish(conn: sqlite3.Connection, cfg, http: httpx.AsyncClient, pasted:
         code = parse_pasted_code(pasted, pending["state"])
     except ValueError as e:
         raise LoginError(str(e)) from None
-    # The verifier is single-use whatever the outcome.
-    conn.execute("DELETE FROM settings WHERE key=?", (PENDING_KEY,))
     resp = await token_request(http, cfg, {"grant_type": "authorization_code", "code": code,
                                            "redirect_uri": cfg.credential.redirect_uri,
                                            "code_verifier": pending["verifier"], "state": pending["state"]})
+    if resp.status_code == 429 or resp.status_code >= 500:
+        # Nothing was exchanged; keep the attempt so the same code can be retried.
+        raise LoginError(f"The token endpoint answered HTTP {resp.status_code}; wait a minute and try again "
+                         f"with the same code. {resp.text[:300]}")
+    conn.execute("DELETE FROM settings WHERE key=?", (PENDING_KEY,))
     if resp.status_code != 200:
         raise LoginError(f"Token exchange failed: HTTP {resp.status_code} {resp.text[:500]}")
     record = token_record(resp.json())

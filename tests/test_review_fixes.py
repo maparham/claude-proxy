@@ -61,7 +61,7 @@ async def test_upstream_401_refreshes_and_retries(cfg, db):
                          headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 200
     assert len(auth.calls) == 1
-    assert auth.calls[0]["body"].decode().count("refresh_token=r1") == 1
+    assert auth.calls[0]["json"]["refresh_token"] == "r1"
     assert anthropic.calls[1]["headers"]["authorization"] == "Bearer fresh"
 
 
