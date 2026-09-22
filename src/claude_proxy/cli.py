@@ -12,8 +12,7 @@ import httpx
 
 from . import db, limits
 from .config import Config, ConfigError
-from .credentials import (CredentialKeyMissing, OAuthBackend, build_authorize_url, check_key, generate_key,
-                          generate_pkce, parse_pasted_code, token_record, token_request)
+from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
 logger = logging.getLogger("claude_proxy")
 
@@ -52,32 +51,35 @@ def cmd_init(args, cfg):
 
 
 def cmd_login(args, cfg):
-    """The gateway's own OAuth grant (spec 5.1). Never reads Claude Code's stored credentials."""
+    """The gateway's own OAuth grant (spec 5.1). Never reads Claude Code's stored credentials.
+
+    Interactive by default; `--print-url` then `--code` splits it across two commands.
+    """
+    from . import login
     check_key()
     conn = _conn(cfg)
-    verifier, challenge, state = generate_pkce()
-    print("1. Open this URL in a browser signed in to the Claude account that owns the subscription:\n")
-    print(f"   {build_authorize_url(cfg, challenge, state)}\n")
-    print("2. Approve access, then copy the code the page shows (or the whole URL you land on).\n")
-    pasted = args.code or input("Paste code: ")
-    try:
-        code = parse_pasted_code(pasted, state)
-    except ValueError as e:
-        sys.exit(str(e))
-    async def exchange():
+    if not args.code:
+        url = login.start(conn, cfg)
+        print("1. Open this URL in a browser signed in to the Claude account that owns the subscription:\n")
+        print(f"   {url}\n")
+        print("2. Approve access, then copy the code the page shows (or the whole URL you land on).")
+        if args.print_url:
+            print("3. Run: claude-proxy login --code '<code>'   (within 15 minutes)")
+            return
+        pasted = input("\nPaste code: ")
+    else:
+        pasted = args.code
+
+    async def run():
         async with httpx.AsyncClient() as http:
-            return await token_request(http, cfg, {
-                "grant_type": "authorization_code", "code": code, "redirect_uri": cfg.credential.redirect_uri,
-                "code_verifier": verifier, "state": state})
-    resp = asyncio.run(exchange())
-    if resp.status_code != 200:
-        sys.exit(f"Token exchange failed: HTTP {resp.status_code} {resp.text[:500]}")
-    record = token_record(resp.json())
-    OAuthBackend(cfg, conn, httpx.AsyncClient()).store(record)
-    db.audit(conn, None, "login", record.get("account") or "oauth")
+            return await login.finish(conn, cfg, http, pasted)
+    try:
+        record = asyncio.run(run())
+    except login.LoginError as e:
+        sys.exit(str(e))
     print(f"Linked{' ' + record['account'] if record.get('account') else ''}. Access token valid until "
           f"{time.ctime(record['expires_at'])}; the gateway refreshes it from now on.")
-    print("Do not also run `/login` with this grant elsewhere: refresh tokens are single-use.")
+    print("Do not reuse this grant anywhere else: refresh tokens are single-use.")
 
 
 def cmd_status(args, cfg):
@@ -229,7 +231,8 @@ def main(argv=None):
     s.add_argument("--admin-name", default="admin")
     s.set_defaults(func=cmd_init)
     s = sub.add_parser("login", help="link the Claude subscription (OAuth, PKCE)")
-    s.add_argument("--code", help="the pasted code, for non-interactive use")
+    s.add_argument("--print-url", action="store_true", help="print the URL and exit; finish with --code")
+    s.add_argument("--code", help="finish a login started with --print-url")
     s.set_defaults(func=cmd_login)
     sub.add_parser("status", help="credential, quota and route health").set_defaults(func=cmd_status)
     sub.add_parser("serve", help="run the proxy and dashboard listeners").set_defaults(func=cmd_serve)

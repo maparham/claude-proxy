@@ -178,3 +178,21 @@ async def test_session_and_version_recorded(setup):
     row = last_request(conn)
     assert row["session_id"] == "sess-1"
     assert row["client_version"] == "claude-cli/2.1.280 (external, cli)"
+
+
+async def test_requested_model_is_recorded(setup, meta):
+    gw, conn, uid, h = setup
+    async with asgi_client(create_app(gw)) as c:
+        await c.post("/v1/messages", json={**MSG, "model": "muse-spark"}, headers=h)
+    row = last_request(conn)
+    assert (row["requested_model"], row["model"]) == ("muse-spark", "muse-spark-1.3")
+
+
+async def test_route_can_drop_body_fields(setup, meta):
+    gw, conn, uid, h = setup
+    gw.cfg.routes[0].drop_body_fields = ["context_management", "output_config"]
+    async with asgi_client(create_app(gw)) as c:
+        await c.post("/v1/messages", json={**MSG, "model": "muse-spark", "context_management": {"edits": []}, "output_config": {"effort": "high"}}, headers=h)
+    sent = meta.calls[0]["json"]
+    assert "context_management" not in sent and "output_config" not in sent
+    assert sent["model"] == "muse-spark-1.3" and sent["messages"] == MSG["messages"]

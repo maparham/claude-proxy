@@ -38,6 +38,7 @@ SCHEMA = [
         path TEXT NOT NULL,
         provider TEXT NOT NULL DEFAULT 'anthropic',
         model TEXT,
+        requested_model TEXT,
         status INTEGER,
         stream INTEGER,
         complete INTEGER,
@@ -112,6 +113,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE limits_old")
     if "provider" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'")
+    if "requested_model" not in _columns(conn, "requests"):
+        conn.execute("ALTER TABLE requests ADD COLUMN requested_model TEXT")
     if "csrf_token" not in _columns(conn, "sessions"):
         conn.execute("ALTER TABLE sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''")
 

@@ -116,6 +116,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     upstream = Upstream(gw, route)
     base["provider"] = upstream.provider
     base["model"] = model
+    base["requested_model"] = model
 
     decision = limits.evaluate(conn, cfg, user["id"], model, path)
     if decision:
@@ -128,8 +129,11 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         if not route.api_key():
             record(status=503, stream=0, complete=1, error_type="gateway_route_unconfigured")
             return api_error(503, "api_error", f"Model {model!r} is routed to {route.name}, but {route.api_key_env} is not set on the gateway.")
-        if route.upstream_model(model) != model:
+        dropped = [f for f in route.drop_body_fields if f in data]
+        if route.upstream_model(model) != model or dropped:
             data["model"] = route.upstream_model(model)
+            for f in dropped:
+                del data[f]
             body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
 
     client_headers = dict(request.headers)

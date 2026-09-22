@@ -119,6 +119,8 @@ class Route:
     models: list[str]
     model_map: dict[str, str] = field(default_factory=dict)
     strip_headers: list[str] = field(default_factory=lambda: ["anthropic-beta"])
+    # Top-level request fields the provider rejects (e.g. Anthropic-only "context_management").
+    drop_body_fields: list[str] = field(default_factory=list)
     auth_header: str = "authorization"  # "authorization" (Bearer) or "x-api-key"
 
     def matches(self, model: str | None) -> bool:

@@ -182,3 +182,11 @@ def test_validate(kind, value, unit, ok):
     else:
         with pytest.raises(ValueError):
             limits.validate(kind, "*", value, unit)
+
+
+def test_exact_scope_matches_requested_model_even_if_upstream_renames_it(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "requests_daily", 1, "count", scope="muse-spark")
+    conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, requested_model) "
+                 "VALUES(?,?,?,?,?,?,?,?)", (uid, NOW - 10, NOW - 9, "POST", "/v1/messages", "meta", "muse-spark-1.3", "muse-spark"))
+    assert check(conn, cfg, uid, model="muse-spark").kind == "requests_daily"

@@ -102,12 +102,13 @@ def _rows(conn: sqlite3.Connection, user_id: int) -> list[sqlite3.Row]:
 def _usage_rows(conn, cfg: Config, user_id: int, kind: str, unit: str, scope: str, since: float) -> list[tuple[float, float]]:
     """(started_at, amount) for each forwarded request in the window that counts toward `kind`."""
     rs = conn.execute(
-        f"SELECT started_at, model, input_tokens AS i, output_tokens AS o, {CW5} AS c5, {CW1} AS c1, cache_read_tokens AS cr "
+        f"SELECT started_at, model, requested_model, input_tokens AS i, output_tokens AS o, {CW5} AS c5, {CW1} AS c1, cache_read_tokens AS cr "
         f"FROM requests WHERE user_id=? AND started_at>? AND rejected_by IS NULL AND path NOT LIKE '%count_tokens%' "
         f"ORDER BY started_at", (user_id, since)).fetchall()
     out = []
     for r in rs:
-        if scope != "*" and not fnmatch.fnmatchcase(r["model"] or "", scope):
+        # A scope names what clients ask for; providers may answer with a longer model id.
+        if scope != "*" and not (fnmatch.fnmatchcase(r["requested_model"] or "", scope) or fnmatch.fnmatchcase(r["model"] or "", scope)):
             continue
         if kind.startswith("requests_"):
             out.append((r["started_at"], 1.0))
