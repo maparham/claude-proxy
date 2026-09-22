@@ -1,0 +1,10 @@
+# TLS termination for gateway beyond LAN (spec 2. Assumptions)
+# Replace example.com, proxy to gateway on 127.0.0.1:8080
+
+example.com {
+    reverse_proxy 127.0.0.1:8080
+    # Dashboard on separate port (spec 10)
+    # handle /dashboard* {
+    #     reverse_proxy 127.0.0.1:8081
+    # }
+}
