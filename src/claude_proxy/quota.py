@@ -212,7 +212,10 @@ class Poller:
             return
         if now < self.next_allowed:
             return
-        status, body = await self.backend.poll_usage()
+        try:
+            status, body = await self.backend.poll_usage()
+        except Exception:   # e.g. RefreshUnavailable: the request path reports it
+            status, body = 0, None
         self.last_status = status
         if status == 429:
             self.backoff = min(self.qc.poll_max_backoff_s, max(self.backoff * 2, self.qc.poll_min_interval_s * 2))

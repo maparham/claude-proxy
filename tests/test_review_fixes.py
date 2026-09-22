@@ -139,3 +139,44 @@ async def test_single_retry_after_header(cfg, db):
         r = await c.post("/v1/messages", json={"model": "claude-sonnet-4-6", "messages": []}, headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 429
     assert len(r.headers.get_list("retry-after")) == 1
+
+
+def _expired_grant(conn):
+    import time as _t
+    from claude_proxy.credentials import encrypt_blob
+    exp = int(_t.time()) - 10
+    conn.execute("INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,'active')",
+                 (encrypt_blob({"access_token": "old", "refresh_token": "r1", "expires_at": exp}), exp, int(_t.time())))
+
+
+async def test_rate_limited_refresh_backs_off_and_says_so(cfg, db):
+    conn = db[1]
+    _, key = create_user(conn, "alice")
+    _expired_grant(conn)
+    auth = FakeUpstream("auth.fake")
+    cfg.credential.token_url = "http://auth.fake/v1/oauth/token"
+    auth.default = lambda req: JSONResponse({"error": {"type": "rate_limit_error", "message": "Rate limited."}}, status_code=429)
+    gw = make_gateway(cfg, conn, FakeUpstream("anthropic.fake"), auth)
+    from claude_proxy.app import create_app
+    async with asgi_client(create_app(gw)) as c:
+        r1 = await c.post("/v1/messages", json={"model": "claude-sonnet-5", "messages": []}, headers={"Authorization": f"Bearer {key}"})
+        r2 = await c.post("/v1/messages", json={"model": "claude-sonnet-5", "messages": []}, headers={"Authorization": f"Bearer {key}"})
+    assert len(auth.calls) == 1                     # the second request waits out the back-off
+    assert r1.status_code == r2.status_code == 503
+    msg = r1.json()["error"]["message"]
+    assert "temporar" in msg.lower() and "claude-proxy login" not in msg
+    assert gw.backend.describe().healthy is False
+
+
+async def test_invalid_grant_still_asks_for_login(cfg, db):
+    conn = db[1]
+    _, key = create_user(conn, "alice")
+    _expired_grant(conn)
+    auth = FakeUpstream("auth.fake")
+    cfg.credential.token_url = "http://auth.fake/v1/oauth/token"
+    auth.default = lambda req: JSONResponse({"error": "invalid_grant"}, status_code=400)
+    gw = make_gateway(cfg, conn, FakeUpstream("anthropic.fake"), auth)
+    from claude_proxy.app import create_app
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={"model": "claude-sonnet-5", "messages": []}, headers={"Authorization": f"Bearer {key}"})
+    assert r.status_code == 503 and "claude-proxy login" in r.json()["error"]["message"]

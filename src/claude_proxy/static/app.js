@@ -530,6 +530,7 @@ async function renderErrors(main) {
                    upstream_throttle: "Per-minute throttle (429)", upstream_request_scoped: "Request refused (429)",
                    gateway_needs_login: "Subscription login needed", gateway_upstream_unreachable: "Upstream unreachable",
                    gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
+                   gateway_refresh_unavailable: "Token refresh temporarily failing",
                    api_error: "Upstream server error" };
   main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">Gateway rejections and upstream errors. Upstream 429s are split into an exhausted account quota, a per-minute throttle, and a refusal of one request.</p>
     <div class="controls">${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], range)}</div>

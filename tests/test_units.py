@@ -151,5 +151,21 @@ def test_database_files_are_private(tmp_path):
     p = tmp_path / "x.db"
     c = init_db(str(p))
     c.execute("CREATE TABLE IF NOT EXISTS t(x)")
-    for f in tmp_path.iterdir():
+    for f in tmp_path.glob("x.db*"):
         assert stat.S_IMODE(os.stat(f).st_mode) & 0o077 == 0, f.name
+
+
+def test_defaults_to_home_gateway_dir_when_present(tmp_path, monkeypatch):
+    import importlib
+    from claude_proxy import config, credentials
+    home = tmp_path / "home"
+    (home / ".claude-gateway").mkdir(parents=True)
+    keyfile = home / ".claude-gateway" / "gateway.key"
+    keyfile.write_text(credentials.generate_key())
+    keyfile.chmod(0o600)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_PROXY_DB", raising=False)
+    monkeypatch.delenv("CLAUDE_PROXY_CREDENTIAL_KEY", raising=False)
+    monkeypatch.delenv("CLAUDE_PROXY_CREDENTIAL_KEY_FILE", raising=False)
+    assert config.Config().db.path == str(home / ".claude-gateway" / "claude_proxy.db")
+    assert credentials.decrypt_blob(credentials.encrypt_blob({"a": 1})) == {"a": 1}

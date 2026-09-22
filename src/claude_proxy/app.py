@@ -12,7 +12,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from . import limits, quota
 from .auth import AuthError, authenticate
 from .config import Route
-from .credentials import NeedsLogin
+from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request
 from .forwarder import filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward
 from .gateway import Gateway
@@ -150,6 +150,10 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         if resp.status_code == 401 and route is None and await gw.backend.on_unauthorized(upstream.token):
             await resp.aclose()
             resp = await send()
+    except RefreshUnavailable:
+        record(status=503, stream=0, complete=1, error_type="gateway_refresh_unavailable")
+        return api_error(503, "api_error", "The gateway could not renew its Claude subscription token just now "
+                         "(a temporary error at Anthropic's sign-in service). It retries automatically; try again in a minute.")
     except NeedsLogin as e:
         record(status=503, stream=0, complete=1, error_type="gateway_needs_login")
         return api_error(503, "api_error", f"The gateway's Claude subscription login needs renewing: the admin must run `claude-proxy login` ({e}).")

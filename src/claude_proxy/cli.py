@@ -134,6 +134,23 @@ def cmd_user_state(args, cfg):
     print(f"{u['name']}: {args.action}d")
 
 
+def cmd_user_passwd(args, cfg):
+    from argon2 import PasswordHasher
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    if u["role"] != "admin":
+        sys.exit("Only admins have a dashboard password; users sign in with their gateway key.")
+    password = getpass.getpass(f"New dashboard password for {u['name']}: ")
+    if len(password) < 10:
+        sys.exit("Use a password of at least 10 characters.")
+    if getpass.getpass("Repeat: ") != password:
+        sys.exit("Passwords differ.")
+    conn.execute("UPDATE users SET password_hash=? WHERE id=?", (PasswordHasher().hash(password), u["id"]))
+    conn.execute("DELETE FROM sessions WHERE user_id=?", (u["id"],))
+    db.audit(conn, None, "passwd", u["name"])
+    print(f"Password changed for {u['name']}; existing dashboard sessions signed out.")
+
+
 def cmd_user_rename(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
@@ -245,6 +262,7 @@ def main(argv=None):
     for action in ("enable", "disable", "revoke"):
         s = u.add_parser(action); s.add_argument("user"); s.set_defaults(func=cmd_user_state, action=action)
     s = u.add_parser("rename"); s.add_argument("user"); s.add_argument("new"); s.set_defaults(func=cmd_user_rename)
+    s = u.add_parser("passwd", help="change an admin's dashboard password"); s.add_argument("user"); s.set_defaults(func=cmd_user_passwd)
 
     lm = sub.add_parser("limit").add_subparsers(dest="sub", required=True)
     s = lm.add_parser("set")

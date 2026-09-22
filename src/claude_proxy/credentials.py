@@ -38,6 +38,13 @@ class NeedsLogin(Exception):
     """The backend has no usable credential; the admin must run `claude-proxy login`."""
 
 
+class RefreshUnavailable(Exception):
+    """The access token expired and refreshing it failed for a temporary reason; it is being retried."""
+
+
+REFRESH_BACKOFF_S = 60
+
+
 # --- Encryption of the stored grant (spec 5.1 Storage) ---
 
 class CredentialKeyMissing(Exception):
@@ -55,6 +62,11 @@ def generate_key() -> str:
 def _fernet() -> Fernet:
     key = os.environ.get("CLAUDE_PROXY_CREDENTIAL_KEY")
     key_file = os.environ.get("CLAUDE_PROXY_CREDENTIAL_KEY_FILE")
+    if not key and not key_file:
+        from .config import gateway_home
+        home = gateway_home()
+        if home and os.path.exists(os.path.join(home, "gateway.key")):
+            key_file = os.path.join(home, "gateway.key")
     if not key and key_file:
         if not os.path.exists(key_file):
             raise CredentialKeyMissing(f"CLAUDE_PROXY_CREDENTIAL_KEY_FILE={key_file} does not exist")
@@ -161,6 +173,7 @@ class OAuthBackend:
         self._state: str | None = None
         self._updated_at: int | None = None
         self.last_error: str | None = None
+        self._retry_at = 0.0   # after a temporary refresh failure, don't hammer the token endpoint
 
     def _load(self) -> tuple[dict | None, str | None]:
         # The decrypted grant is cached; `updated_at` shows when `claude-proxy login` replaced it meanwhile.
@@ -207,6 +220,8 @@ class OAuthBackend:
                 return True
             if not force and data["expires_at"] - time.time() >= 300:
                 return True
+            if time.time() < self._retry_at:
+                return False
             refresh_token = data.get("refresh_token")
             if not refresh_token:
                 self._mark_needs_login("no refresh token stored")
@@ -216,6 +231,7 @@ class OAuthBackend:
                                                                  "scope": self.cfg.credential.refresh_scopes})
             except httpx.HTTPError as e:
                 self.last_error = f"refresh transport error: {e}"
+                self._retry_at = time.time() + REFRESH_BACKOFF_S
                 logger.warning(self.last_error)
                 return False
             if resp.status_code != 200:
@@ -224,6 +240,7 @@ class OAuthBackend:
                     self._mark_needs_login(f"refresh rejected {resp.status_code}: {body}")
                 else:
                     self.last_error = f"refresh failed {resp.status_code}: {body}"
+                    self._retry_at = time.time() + REFRESH_BACKOFF_S
                     logger.warning(self.last_error)
                 return False
             self.store(token_record(resp.json(), refresh_token))
@@ -238,8 +255,10 @@ class OAuthBackend:
         if data["expires_at"] - time.time() < 300:
             if not await self._refresh(None, force=False):
                 data, state = self._load()
-                if state == "needs_login" or data["expires_at"] <= time.time():
-                    raise NeedsLogin(self.last_error or "refresh failed")
+                if state == "needs_login":
+                    raise NeedsLogin(self.last_error or "refresh rejected")
+                if data["expires_at"] <= time.time():
+                    raise RefreshUnavailable(self.last_error or "refresh failed")
             data, _ = self._load()
         return {"authorization": f"Bearer {data['access_token']}", "anthropic-beta": self.cfg.credential.beta_flag}
 
@@ -278,6 +297,9 @@ class OAuthBackend:
             return BackendStatus("oauth", False, "not linked — run `claude-proxy login`")
         if state in ("needs_login", "decrypt_failed"):
             return BackendStatus("oauth", False, f"{state} — run `claude-proxy login`. {self.last_error or ''}".strip(), data.get("expires_at"))
+        if data.get("expires_at", 0) <= time.time():
+            return BackendStatus("oauth", False, f"access token expired; refresh retrying ({self.last_error or 'pending'})",
+                                 data.get("expires_at"))
         detail = f"linked{' as ' + data['account'] if data.get('account') else ''}"
         if self.last_error:
             detail += f"; last error: {self.last_error}"

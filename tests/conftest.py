@@ -13,7 +13,17 @@ from claude_proxy.db import init_db
 
 
 @pytest.fixture(autouse=True)
-def credential_key(monkeypatch):
+def isolated_home(tmp_path, monkeypatch):
+    # Never let a test find the real ~/.claude-gateway (its key or its database).
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.delenv("CLAUDE_PROXY_DB", raising=False)
+    monkeypatch.delenv("CLAUDE_PROXY_CREDENTIAL_KEY_FILE", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def credential_key(monkeypatch, isolated_home):
     monkeypatch.setenv("CLAUDE_PROXY_CREDENTIAL_KEY", base64.urlsafe_b64encode(os.urandom(32)).decode())
     monkeypatch.delenv("CLAUDE_PROXY_DEV_INSECURE_KEY", raising=False)
 

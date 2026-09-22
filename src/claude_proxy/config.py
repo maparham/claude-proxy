@@ -10,6 +10,19 @@ def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
 
 
+def gateway_home() -> str | None:
+    """`~/.claude-gateway` if it exists: the default home of the database and the credential key."""
+    path = os.path.join(os.path.expanduser("~"), ".claude-gateway")
+    return path if os.path.isdir(path) else None
+
+
+def _default_db() -> str:
+    if os.environ.get("CLAUDE_PROXY_DB"):
+        return os.environ["CLAUDE_PROXY_DB"]
+    home = gateway_home()
+    return os.path.join(home, "claude_proxy.db") if home else "claude_proxy.db"
+
+
 class ConfigError(Exception):
     pass
 
@@ -57,7 +70,7 @@ class QuotaConfig:
 
 @dataclass
 class DBConfig:
-    path: str = field(default_factory=lambda: _env("CLAUDE_PROXY_DB", "claude_proxy.db"))
+    path: str = field(default_factory=_default_db)
 
 
 @dataclass
