@@ -25,8 +25,8 @@ Claude Code (person C) ──┘   key → person        └─► api.meta.ai  
 
 ```sh
 pip install .                                   # Python 3.12+
-claude-proxy keygen > gateway.key && chmod 600 gateway.key
-export CLAUDE_PROXY_CREDENTIAL_KEY_FILE=$PWD/gateway.key   # encrypts the stored grant; required
+mkdir -m 700 ~/.claude-gateway
+(umask 077; claude-proxy keygen > ~/.claude-gateway/gateway.key)   # encrypts the stored grant; required
 export META_API_KEY=...                         # optional: enables the muse-spark route
 
 claude-proxy init                               # database + admin dashboard password
@@ -34,6 +34,10 @@ claude-proxy login                              # link the subscription (see bel
 claude-proxy user add maya                      # prints maya's gateway key once
 claude-proxy serve                              # proxy on :8080, dashboard on :8081
 ```
+
+When `~/.claude-gateway` exists, the gateway keeps its database there and reads `gateway.key` from
+it, so no variables are needed. Elsewhere, set `CLAUDE_PROXY_DB` and `CLAUDE_PROXY_CREDENTIAL_KEY_FILE`
+(or `CLAUDE_PROXY_CREDENTIAL_KEY`). `claude-proxy user passwd admin` changes the dashboard password.
 
 `claude-proxy login` prints a claude.ai authorization URL. Open it in a browser signed in to the
 account that owns the subscription, approve, and paste back the code the page shows (or the URL
