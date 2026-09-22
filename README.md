@@ -37,7 +37,8 @@ claude-proxy serve                              # proxy on :8080, dashboard on :
 
 `claude-proxy login` prints a claude.ai authorization URL. Open it in a browser signed in to the
 account that owns the subscription, approve, and paste back the code the page shows (or the URL
-you land on). The gateway then holds **its own** grant and is its only refresher. It never reads
+you land on). To split this across two commands, run `claude-proxy login --print-url`, then
+`claude-proxy login --code '<code>'` within 15 minutes. The gateway then holds **its own** grant and is its only refresher. It never reads
 Claude Code's stored login. Refresh tokens are single-use, so don't reuse this grant anywhere
 else.
 
