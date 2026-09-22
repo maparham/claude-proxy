@@ -332,3 +332,20 @@ The non-goal "protocol translation" still holds. Meta's Model API serves an Anth
 
 - **Model scope.** Every token, request and cost limit takes an optional model scope, a glob matched against the recorded model. The default scope `*` counts all requests. A scoped limit is only evaluated for requests whose model matches its scope. `limits` gains a `scope` column and its key becomes `(user_id, kind, scope)`.
 - **Estimated cost.** Computed on read from a per-model price table in config (USD per million input, output, cache-write and cache-read tokens). For the subscription route this is an API-equivalent estimate, since the subscription is not billed per token; for a third-party route it approximates the real charge. Models without a price are counted as zero and flagged on the dashboard.
+
+## 18. Verification results, 2026-09-22
+
+Against the live Anthropic API with the gateway's own grant, Claude Code 2.1.280, one Max account.
+
+| Item | Result |
+|---|---|
+| OAuth login (§5.1) | Works with the values Claude Code 2.1.280 uses, read from its binary: authorize at `https://claude.com/cai/oauth/authorize?code=true&…`, scopes `org:create_api_key user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins`, JSON token bodies. A form-encoded exchange got HTTP 429. The pasted code has the form `code#state`. |
+| Refresh (§5.1) | Works: JSON body with `scope`, access and refresh tokens both rotate, `expires_in` 28800. |
+| Open item 1: 429 rendering | Claude Code shows `API Error: Request rejected (429) · <gateway message>` and does not retry a long `retry-after`. |
+| Open item 2: body account identifier | In bearer mode `metadata.user_id` carries `"account_uuid":""`; Anthropic accepts the request unchanged. No rewrite needed. |
+| Open item 3: local login needed? | No. `-p` and interactive sessions work with only `ANTHROPIC_BASE_URL` and `ANTHROPIC_AUTH_TOKEN`. |
+| Open item 4: usage endpoint | `GET /api/oauth/usage` answers 200 to the gateway's token; `five_hour`/`seven_day` carry `utilization` in percent and ISO `resets_at`; the body also has many unrelated code-named entries, which are ignored. |
+| Open item 5: session header | `x-claude-code-session-id`. |
+| Unified headers (§7.1) | Present on every response: `-5h-utilization`/`-7d-utilization` as fractions with two decimals, `-reset` as epoch seconds, `-status`, `-representative-claim`. Headers and the usage endpoint round the same bucket differently (1% vs 2%), so a dip with an unchanged reset time is not a reset (§7.2 amended in code). |
+| `count_tokens`, `/v1/models` | Both work; `/v1/models` returns Anthropic's list with `muse-spark` appended. |
+| Muse subagent (§17.1) | Verified against a recording upstream only (no `META_API_KEY`): Claude Code sends the subagent's `model: muse-spark` unchanged, the gateway routes it with the Meta key and no Claude credential, and the subagent's `tools:` list is applied. Not yet verified against Meta. |

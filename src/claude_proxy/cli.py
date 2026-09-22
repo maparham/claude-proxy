@@ -47,7 +47,8 @@ def cmd_init(args, cfg):
     db.audit(conn, None, "init", args.admin_name)
     print(f"Admin {args.admin_name!r} created. Database: {cfg.db.path}")
     print(f"Admin's own gateway key (shown once): {key}")
-    print("Next: `claude-proxy login` to link the Claude subscription.")
+    if not OAuthBackend(cfg, conn, httpx.AsyncClient()).describe().healthy:
+        print("Next: `claude-proxy login` to link the Claude subscription.")
 
 
 def cmd_login(args, cfg):

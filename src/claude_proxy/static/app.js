@@ -246,7 +246,7 @@ async function renderOverview(main) {
         <div class="card"><h3>Account quota (reported by Anthropic)</h3>
           <p class="sub">Bar length is the account's utilization. Segments are each user's <b>estimated share</b>; grey is usage not attributed to any gateway user.</p>
           <div id="quota-bars"></div>
-          ${ex ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.</p>` : ""}
+          ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.</p>` : ""}
         </div>
         <div class="card"><h3>${isAdmin() ? "Requests by user, last 7 days" : "Your limits"}</h3>
           <p class="sub">${isAdmin() ? "Daily, weighted tokens." : "Rolling windows; the request that crosses a limit is still served."}</p>
