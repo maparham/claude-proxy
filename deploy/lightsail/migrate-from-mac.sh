@@ -23,7 +23,7 @@ echo "3/6 syncing source and copying data to $HOST"
 rsync -az --delete --exclude .git --exclude .venv --exclude '__pycache__' --exclude '*.db*' --exclude '*.env' \
   --exclude reports --exclude research_notes --exclude docs --exclude tests ./ "$HOST:claude-gateway/"
 scp -q "$TMP/migrate.db" "$HOST:$REMOTE/migrate.db"
-{ printf 'CLAUDE_PROXY_CREDENTIAL_KEY='; cat "$SRC/gateway.key"; [ -n "${META_API_KEY:-}" ] && printf 'META_API_KEY=%s\n' "$META_API_KEY"; } \
+{ printf 'CLAUDE_PROXY_CREDENTIAL_KEY='; cat "$SRC/gateway.key"; if [ -n "${META_API_KEY:-}" ]; then printf 'META_API_KEY=%s\n' "$META_API_KEY"; fi; } \
   | ssh "$HOST" "umask 077; cat > $REMOTE/gateway.env"
 
 echo "4/6 building and starting the container"
