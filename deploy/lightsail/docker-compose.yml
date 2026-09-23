@@ -1,5 +1,6 @@
 # Gateway on a shared host, behind an existing Cloudflare tunnel.
 # Host networking so cloudflared reaches it on 127.0.0.1; the config binds only to 127.0.0.1.
+name: claude-gateway
 services:
   gateway:
     build: ../..
