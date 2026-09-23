@@ -4,10 +4,22 @@ From the repo root on the Mac that currently runs the gateway:
 
 ```sh
 deploy/lightsail/migrate-from-mac.sh ec2-user@3.139.146.5     # moves grant + data, starts the container
-deploy/lightsail/apply-tunnel.sh ec2-user@3.139.146.5 rahkar.pro
 ```
 
-Then add two proxied CNAMEs in Cloudflare (`claude`, `claude-dash` -> `<tunnel-id>.cfargotunnel.com`).
+Then publish the two listeners through the tunnel. The `aws-vps` tunnel on this box is **managed from
+the Cloudflare dashboard**, so its local `config.yml` ingress is ignored: add them under Networking →
+Tunnels → aws-vps → Routes → Add route → Published application:
+
+| Hostname | Service URL |
+|---|---|
+| `claude.rahkar.pro` | `http://127.0.0.1:18480` |
+| `claude-dash.rahkar.pro` | `http://127.0.0.1:18481` |
+
+(`apply-tunnel.sh` is for a tunnel run from a local config file.)
+
+Live since 2026-09-23: `ANTHROPIC_BASE_URL=https://claude.rahkar.pro`, dashboard at
+`https://claude-dash.rahkar.pro/dashboard`. Streams of over 90 s pass through Cloudflare intact, and the
+dashboard sees real client IPs.
 
 Details:
 
