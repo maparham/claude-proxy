@@ -1,0 +1,17 @@
+# Deploying on a shared Lightsail host behind a Cloudflare tunnel
+
+- `docker compose up -d --build` from this directory, with `gateway.env` (mode 600) holding
+  `CLAUDE_PROXY_CREDENTIAL_KEY` and optionally `META_API_KEY`. `config.toml` is copied into the `data`
+  volume as `/data/config.toml`.
+- cloudflared ingress (above the catch-all `http_status:404` rule):
+  ```yaml
+  - hostname: claude.<domain>
+    service: http://127.0.0.1:18480
+  - hostname: claude-dash.<domain>
+    service: http://127.0.0.1:18481
+  ```
+  plus a proxied CNAME for each hostname to `<tunnel-id>.cfargotunnel.com`.
+- Admin commands run in the container: `docker compose exec gateway claude-proxy status`,
+  `... user add <name>`, `... limit set ...`.
+- Only one process may hold the subscription grant. When moving it from another host, stop that
+  gateway first, copy the database with `sqlite3 <db> ".backup <copy>"`, and retire the old copy.

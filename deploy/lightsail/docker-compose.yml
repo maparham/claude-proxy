@@ -1,0 +1,21 @@
+# Gateway on a shared host, behind an existing Cloudflare tunnel.
+# Host networking so cloudflared reaches it on 127.0.0.1; the config binds only to 127.0.0.1.
+services:
+  gateway:
+    build: ../..
+    image: claude-proxy:latest
+    network_mode: host
+    restart: unless-stopped
+    mem_limit: 256m
+    env_file: gateway.env            # CLAUDE_PROXY_CREDENTIAL_KEY=..., optional META_API_KEY=... (chmod 600)
+    environment:
+      CLAUDE_PROXY_CONFIG: /data/config.toml
+      CLAUDE_PROXY_HOST: 127.0.0.1
+      CLAUDE_PROXY_DASHBOARD_HOST: 127.0.0.1
+    volumes:
+      - data:/data
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+volumes:
+  data:

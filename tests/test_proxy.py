@@ -196,3 +196,20 @@ async def test_route_can_drop_body_fields(setup, meta):
     sent = meta.calls[0]["json"]
     assert "context_management" not in sent and "output_config" not in sent
     assert sent["model"] == "muse-spark-1.3" and sent["messages"] == MSG["messages"]
+
+
+CDN_HEADERS = {"cf-connecting-ip": "203.0.113.9", "cf-ray": "8abc-FRA", "cf-ipcountry": "DE", "cf-visitor": '{"scheme":"https"}',
+               "cdn-loop": "cloudflare", "true-client-ip": "203.0.113.9", "x-forwarded-for": "203.0.113.9",
+               "x-forwarded-proto": "https", "x-forwarded-host": "claude.example", "x-real-ip": "203.0.113.9", "forwarded": "for=203.0.113.9"}
+
+
+@pytest.mark.parametrize("model,upstream_name", [("claude-sonnet-5", "anthropic"), ("muse-spark", "meta")])
+async def test_reverse_proxy_headers_never_reach_upstream(setup, anthropic, meta, model, upstream_name):
+    gw, conn, uid, h = setup
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**MSG, "model": model}, headers={**h, **CDN_HEADERS})
+    assert r.status_code == 200
+    sent = (anthropic if upstream_name == "anthropic" else meta).calls[0]["headers"]
+    leaked = [k for k in sent if k in CDN_HEADERS]
+    assert leaked == []
+    assert "203.0.113.9" not in str(sent)

@@ -1,0 +1,9 @@
+[listener]
+host = "127.0.0.1"
+port = 18480
+dashboard_host = "127.0.0.1"
+dashboard_port = 18481
+secure_cookies = true
+
+[db]
+path = "/data/claude_proxy.db"

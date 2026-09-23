@@ -10,6 +10,11 @@ CLIENT_CREDENTIALS = {"authorization", "x-api-key"}
 # Recomputed by the HTTP client for the outgoing request.
 RECOMPUTED = {"host", "content-length"}
 
+# Added by a reverse proxy or CDN in front of the gateway (Cloudflare, nginx). Forwarding them would
+# leak each user's IP to the provider and make requests look unlike Claude Code's.
+REVERSE_PROXY = {"cdn-loop", "true-client-ip", "x-real-ip", "forwarded", "via"}
+REVERSE_PROXY_PREFIXES = ("cf-", "x-forwarded-")
+
 SESSION_HEADERS = ("x-claude-code-session-id", "x-session-id", "anthropic-session-id")
 
 
@@ -23,8 +28,9 @@ def _connection_tokens(headers: dict[str, str]) -> set[str]:
 
 
 def filter_request_headers(headers: dict[str, str]) -> dict[str, str]:
-    drop = HOP_BY_HOP | CLIENT_CREDENTIALS | RECOMPUTED | _connection_tokens(headers)
-    return {k: v for k, v in headers.items() if k.lower() not in drop}
+    drop = HOP_BY_HOP | CLIENT_CREDENTIALS | RECOMPUTED | REVERSE_PROXY | _connection_tokens(headers)
+    return {k: v for k, v in headers.items()
+            if k.lower() not in drop and not k.lower().startswith(REVERSE_PROXY_PREFIXES)}
 
 
 def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
