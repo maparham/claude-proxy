@@ -196,3 +196,135 @@ def test_off_leaves_a_malformed_user_prompt_submit_alone(stub, home, malformed):
     r = cg(home, "off")
     assert r.returncode == 0, r.stderr
     assert json.loads(settings.read_text())["hooks"]["UserPromptSubmit"] == malformed
+
+
+# ---------- claude-gateway --opencode (spec 4, tests 14-15) ----------
+
+MODELS = {"data": [{"type": "model", "id": "muse-spark", "display_name": "Muse Spark 1.3", "created_at": "2026-01-01T00:00:00Z",
+                    "max_input_tokens": 1048576, "max_tokens": 32000},
+                   {"type": "model", "id": "other-model", "display_name": "other-model (via x)", "created_at": "2026-01-01T00:00:00Z"}],
+          "has_more": False, "first_id": "muse-spark", "last_id": "other-model"}
+
+
+def oc_paths(home):
+    return (home / ".config" / "opencode" / "opencode.json", home / ".config" / "claude-gateway" / "routes.key",
+            home / ".config" / "opencode" / "agents" / "muse.md")
+
+
+def test_opencode_on_writes_provider_key_file_and_agent(stub, home):
+    stub.models = MODELS
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-abc")
+    assert r.returncode == 0, r.stderr
+    conf, key_file, agent = oc_paths(home)
+    assert json.loads(conf.read_text()) == {
+        "$schema": "https://opencode.ai/config.json",
+        "provider": {"gateway": {
+            "npm": "@ai-sdk/anthropic", "name": "Claude gateway",
+            "options": {"baseURL": stub.url + "/v1", "apiKey": "{file:%s}" % key_file},
+            "models": {"muse-spark": {"name": "Muse Spark 1.3", "limit": {"context": 1048576, "output": 32000}},
+                       "other-model": {"name": "other-model (via x)"}}}}}
+    assert key_file.read_text() == "sk-proxy-r-abc"
+    assert key_file.stat().st_mode & 0o777 == 0o600
+    assert "model: gateway/muse-spark" in agent.read_text()
+    path, headers = stub.requests[-1]
+    assert path == "/v1/models" and headers["x-api-key"] == "sk-proxy-r-abc"
+    assert "opencode: gateway provider installed" in cg(home, "status").stdout
+
+
+def test_opencode_off_restores_config_and_keeps_later_edits(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    original = {"$schema": "https://opencode.ai/config.json", "theme": "dark", "provider": {"mine": {"npm": "x"}}}
+    text = json.dumps(original, indent=2) + "\n"
+    conf.write_text(text)
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert conf.read_text() == text
+    assert not key_file.exists() and not agent.exists()
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    edited = json.loads(conf.read_text())
+    edited["theme"] = "light"
+    edited["provider"]["theirs"] = {"npm": "y"}
+    conf.write_text(json.dumps(edited, indent=2) + "\n")
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert json.loads(conf.read_text()) == {**original, "theme": "light", "provider": {"mine": {"npm": "x"}, "theirs": {"npm": "y"}}}
+
+
+def test_opencode_off_deletes_a_config_it_created(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "off", "--opencode").returncode == 0
+    conf, key_file, agent = oc_paths(home)
+    assert not conf.exists() and not key_file.exists() and not agent.exists()
+    assert "opencode: not set up" in cg(home, "status").stdout
+
+
+def test_opencode_rerun_refreshes_models_and_spares_an_edited_agent(stub, home):
+    stub.models = {"data": [MODELS["data"][0]], "has_more": False}
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    conf, key_file, agent = oc_paths(home)
+    agent.write_text(agent.read_text() + "\nMy own note.\n")
+    stub.models = MODELS
+    r = cg(home, "on", "--opencode")                  # reuses the saved URL and key
+    assert r.returncode == 0, r.stderr
+    assert set(json.loads(conf.read_text())["provider"]["gateway"]["models"]) == {"muse-spark", "other-model"}
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert agent.read_text().endswith("My own note.\n")
+
+
+def test_opencode_on_changes_nothing_when_the_gateway_refuses_the_key(stub, home):
+    stub.models_status = 403
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "bad")
+    assert r.returncode == 1 and "did not accept the OpenCode key (HTTP 403)" in r.stderr
+    conf, key_file, agent = oc_paths(home)
+    assert not conf.exists() and not key_file.exists() and not agent.exists()
+
+
+def test_opencode_on_leaves_a_non_json_config_alone(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    conf.write_text('{\n  // a comment\n  "theme": "dark"\n}\n')
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    assert r.returncode == 1 and "not plain JSON" in r.stderr
+    assert conf.read_text() == '{\n  // a comment\n  "theme": "dark"\n}\n'
+    assert not key_file.exists()
+
+
+def test_opencode_on_refuses_a_gateway_provider_it_did_not_add(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    conf.write_text(json.dumps({"provider": {"gateway": {"npm": "mine"}}}, indent=2) + "\n")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    assert r.returncode == 1 and "did not add" in r.stderr
+    assert json.loads(conf.read_text()) == {"provider": {"gateway": {"npm": "mine"}}}
+
+
+def test_opencode_on_never_touches_opencode_jsonc(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    jsonc = conf.parent / "opencode.jsonc"
+    jsonc.write_text('{\n  // mine\n  "theme": "dark"\n}\n')
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert jsonc.read_text() == '{\n  // mine\n  "theme": "dark"\n}\n'
+    assert "gateway" in json.loads(conf.read_text())["provider"]
+
+
+def test_routes_key_without_opencode_is_refused(stub, home):
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full", "--routes-key", "k")
+    assert r.returncode == 1 and "--routes-key goes with --opencode" in r.stderr
+
+
+def test_opencode_on_refuses_a_provider_field_that_is_not_an_object(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    conf.write_text(json.dumps({"provider": ["not", "an", "object"]}, indent=2) + "\n")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    assert r.returncode == 1 and "not a JSON object" in r.stderr
+    assert json.loads(conf.read_text()) == {"provider": ["not", "an", "object"]}
+    assert not key_file.exists() and not agent.exists()
+    assert not (home / ".config" / "claude-gateway" / "client.json").exists()
