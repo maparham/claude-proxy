@@ -151,7 +151,7 @@ def _expired_grant(conn):
 
 async def test_rate_limited_refresh_backs_off_and_says_so(cfg, db):
     conn = db[1]
-    _, key = create_user(conn, "alice")
+    _, key = create_user(conn, "alice", role="admin")
     _expired_grant(conn)
     auth = FakeUpstream("auth.fake")
     cfg.credential.token_url = "http://auth.fake/v1/oauth/token"
@@ -170,7 +170,7 @@ async def test_rate_limited_refresh_backs_off_and_says_so(cfg, db):
 
 async def test_invalid_grant_still_asks_for_login(cfg, db):
     conn = db[1]
-    _, key = create_user(conn, "alice")
+    _, key = create_user(conn, "alice", role="admin")
     _expired_grant(conn)
     auth = FakeUpstream("auth.fake")
     cfg.credential.token_url = "http://auth.fake/v1/oauth/token"

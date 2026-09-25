@@ -219,3 +219,4 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 @media (forced-colors: active) {
   .meter > span, .stack > span { forced-color-adjust: none; }
 }
+.pill[hidden] { display: none; }

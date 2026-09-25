@@ -164,6 +164,7 @@ async def test_truncated_stream_recorded_incomplete(setup, anthropic):
 
 async def test_needs_login_returns_503(setup):
     gw, conn, uid, h = setup
+    conn.execute("UPDATE users SET role='admin' WHERE id=?", (uid,))   # only an admin is told about the login
     conn.execute("UPDATE credentials SET state='needs_login'")
     gw.backend._cache = None
     async with asgi_client(create_app(gw)) as c:

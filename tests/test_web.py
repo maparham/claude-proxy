@@ -155,8 +155,11 @@ async def test_me_status_for_statusline(env):
     d = r.json()
     assert d["user"]["name"] == "alice"
     assert d["limits"][0]["kind"] == "requests_daily" and d["limits"][0]["current"] == 2
-    assert d["account"]["5h"]["utilization_pct"] == 14
-    assert d["line"].startswith("alice · daily 2/10 req · plan 5h 14%")
+    assert "account" not in d and "credential_healthy" not in d
+    assert d["line"] == "alice · daily 2/10 req"
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        d = (await c.get("/api/me/status", headers=bearer(keys["admin"]))).json()
+    assert d["account"]["5h"]["utilization_pct"] == 14 and d["line"].startswith("admin · plan 5h 14%")
 
 
 @pytest.mark.parametrize("path", ["/api/series?range=7d&granularity=day&split=model", "/api/models", "/api/heatmap",
@@ -195,7 +198,7 @@ async def test_me_status_plain_text_for_statusline_script(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
     assert r.headers["content-type"].startswith("text/plain")
-    assert r.text.startswith("bob · plan 5h 14%")
+    assert r.text == "bob\n"
 
 
 async def test_delete_only_revoked_users_and_their_history(env):

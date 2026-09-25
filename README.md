@@ -78,11 +78,16 @@ one; then it says how to add them to it). Setting it up by hand instead:
 "statusLine": { "type": "command", "command": "/path/to/scripts/statusline.sh", "refreshInterval": 30 }
 ```
 
-It prints e.g. `maya · daily $61/$100 · plan 5h 61% (yours 20%) · week 38%`: each of their limits as
-used/limit, then how much of the shared subscription's 5-hour and weekly quota is used, and roughly how
-much of the 5-hour part came from their own requests. It is cyan with a leading `◆`; a figure turns
-yellow at 80% and red at 100%. They can also sign in
-to the dashboard with their key and see only their own data.
+It prints each of their limits, e.g. `maya · daily $61/$100 · 5h 30%`, in cyan with a leading `◆`; a
+figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
+see only their own data.
+
+**Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
+dashboard, the statusline and the proxy's responses carry no account quota, no credential state and
+no Anthropic rate-limit headers. A share limit (`share_5h 20`) shows to them as their own "5h limit",
+0-100% used; an upstream quota 429 reads "Usage limit reached"; a missing or expired login is a plain
+503 "the gateway can't serve Claude requests right now". Admins see all of it, including
+`plan 5h 61% (yours 20%) · week 38%` on their statusline.
 
 ### Muse as a subagent
 
@@ -128,8 +133,9 @@ claude-proxy limit list
 ## Operations
 
 - `claude-proxy status` shows credential health, the latest account figures and the route keys.
-- If the grant is revoked or expires, Claude requests get a 503 telling the person the admin must
-  run `claude-proxy login`, and the dashboard shows a red banner. A running server picks up
+- If the grant is revoked or expires, Claude requests get a 503 (an admin's says to run
+  `claude-proxy login`; a user's says only that the gateway can't serve Claude right now), and the
+  admin's dashboard shows a red banner. A running server picks up
   the new login without a restart.
 - Prompts and responses are never stored, only metadata and token counts. The one exception is the
   short title Claude Code generates for each session, kept so the Sessions tab can show sessions by

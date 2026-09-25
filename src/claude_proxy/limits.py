@@ -180,19 +180,36 @@ def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | Non
     return out
 
 
+SHARE_LABELS = {"share_5h": "5-hour limit", "share_7d": "weekly limit"}
+USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit"}   # what a non-admin calls a share limit
+
+
 def _describe(st: LimitState) -> str:
+    # Sent to the user, who never learns about the account behind the gateway: a share limit reads as
+    # their own allowance, used up.
     scope = f" for models {st.scope}" if st.scope != "*" else ""
+    wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
+    if st.kind in SHARE_LABELS:
+        return f"Gateway {SHARE_LABELS[st.kind]}{scope} reached: {st.pct or 0:.0f}% used{wait}."
     if st.unit == "usd":
         amount = f"${st.current:.2f} of ${st.limit:.2f}"
-    elif st.unit == "pct":
-        amount = f"estimated {st.current:.1f} of {st.limit:.0f} percentage points of the account's {SHARE_BUCKETS[st.kind]} quota"
     else:
         amount = f"{st.current:,.0f} of {st.limit:,.0f} {'requests' if st.unit == 'count' else st.unit + ' tokens'}"
-    wait = f"; retry in {_human(st.reset_in)}" if st.reset_in else ""
     return f"Gateway limit {st.kind}{scope} reached: {amount}{wait}."
 
 
-def _human(s: int) -> str:
+def user_view(st: LimitState) -> dict:
+    """A limit as a non-admin sees it. Share limits become the user's own allowance (0-100% of it used),
+    with nothing about the account they are a share of."""
+    d = st.to_dict()
+    if st.kind not in SHARE_LABELS:
+        return d
+    used = None if st.skipped or st.current is None else st.pct
+    return d | {"kind": USER_KINDS[st.kind], "value": "100", "current": used, "limit": 100.0, "remaining": None if used is None else max(0.0, 100.0 - used),
+                "pct": used, "estimated": False, "skipped": "not measured right now" if st.skipped else None}
+
+
+def human(s: int) -> str:
     if s < 120:
         return f"{s}s"
     if s < 7200:

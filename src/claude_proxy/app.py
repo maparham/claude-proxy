@@ -14,7 +14,8 @@ from .auth import AuthError, authenticate, client_status
 from .config import Route
 from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request, set_session_title
-from .forwarder import filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward
+from .forwarder import (filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward,
+                        strip_account_headers)
 from .gateway import Gateway
 from .meter import SSEMeter, parse_non_streaming
 
@@ -22,6 +23,10 @@ logger = logging.getLogger("claude_proxy")
 
 ROUTED_PATHS = ("/v1/messages", "/v1/messages/count_tokens")
 METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+
+
+# A non-admin never hears about the subscription behind the gateway; these replace what would tell them.
+UNAVAILABLE = "The gateway can't serve Claude requests right now. Try again later, or ask the gateway admin."
 
 
 def api_error(status: int, error_type: str, message: str, headers: dict | None = None) -> JSONResponse:
@@ -107,6 +112,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         record(user_id=None, status=e.status, stream=0, complete=1, error_type=e.body["error"]["type"], rejected_by="auth")
         return JSONResponse(status_code=e.status, content=e.body)
     base["user_id"] = user["id"]
+    is_admin = user["role"] == "admin"
     base["session_id"] = session_id(request.headers)
     base["client_version"] = (request.headers.get("user-agent") or "")[:128] or None
 
@@ -158,10 +164,14 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             resp = await send()
     except RefreshUnavailable:
         record(status=503, stream=0, complete=1, error_type="gateway_refresh_unavailable")
+        if not is_admin:
+            return api_error(503, "api_error", UNAVAILABLE)
         return api_error(503, "api_error", "The gateway could not renew its Claude subscription token just now "
                          "(a temporary error at Anthropic's sign-in service). It retries automatically; try again in a minute.")
     except NeedsLogin as e:
         record(status=503, stream=0, complete=1, error_type="gateway_needs_login")
+        if not is_admin:
+            return api_error(503, "api_error", UNAVAILABLE)
         return api_error(503, "api_error", f"The gateway's Claude subscription login needs renewing: the admin must run `claude-proxy login` ({e}).")
     except httpx.HTTPError as e:
         logger.warning("upstream %s unreachable: %s", upstream.provider, e)
@@ -177,6 +187,19 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     status = client_status(request.headers, resp.status_code)
     resp_headers = filter_response_headers(dict(resp.headers))
     error_type = quota.classify_429(resp.headers) if status == 429 else None
+
+    if not is_admin:
+        resp_headers = strip_account_headers(resp_headers)
+        # Anthropic's own 429/401/403 bodies speak of the account and its login; say it the gateway's way.
+        if route is None and resp.status_code in (401, 403, 429):
+            await resp.aclose()
+            record(status=resp.status_code, stream=0, complete=1, upstream_request_id=resp.headers.get("request-id"),
+                   error_type=error_type or f"upstream_{resp.status_code}")
+            if resp.status_code != 429:
+                return api_error(503, "api_error", UNAVAILABLE)
+            retry = resp.headers.get("retry-after")
+            wait = f" Try again in {limits.human(int(retry))}." if retry and retry.isdigit() else " Try again later."
+            return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers={"retry-after": retry} if retry else None)
 
     if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:
         return await _models_with_routes(gw, resp, resp_headers, record)

@@ -69,7 +69,7 @@ async def test_unknown_path_is_404_and_never_forwarded(cfg, db, anthropic):
 
 
 async def test_unlinked_credential_is_503(cfg, db, anthropic):
-    _, key = create_user(db[1], "alice")
+    _, key = create_user(db[1], "alice", role="admin")
     gw = make_gateway(cfg, db[1], anthropic)
     async with asgi_client(create_app(gw)) as c:
         r = await c.get("/v1/models", headers={"Authorization": f"Bearer {key}"})

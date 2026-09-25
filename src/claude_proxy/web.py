@@ -168,15 +168,25 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/session")
     async def session(request: Request):
         user = principal(request)
-        be = gw.backend.describe()
-        return {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
-                "credential": {"healthy": be.healthy, "detail": be.detail if user["role"] == "admin" else None},
-                # Configurable values the dashboard's explanations quote.
-                "settings": {"reference_model": cfg.pricing.reference_model, "stale_after_s": cfg.quota.stale_after_s}}
+        out = {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
+               # Configurable values the dashboard's explanations quote.
+               "settings": {"reference_model": cfg.pricing.reference_model}}
+        if is_admin(user):
+            be = gw.backend.describe()
+            out["credential"] = {"healthy": be.healthy, "detail": be.detail}
+            out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
+        return out
 
     # ---------- helpers ----------
 
     names = lambda: {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM users")}  # noqa: E731
+
+    # Non-admins never learn about the subscription behind the gateway: no account quota, credential state
+    # or Anthropic rate-limit detail. Their own limits are all they have.
+    is_admin = lambda user: user["role"] == "admin"  # noqa: E731
+
+    def limit_views(user, states) -> list[dict]:
+        return [s.to_dict() if is_admin(user) else limits.user_view(s) for s in states]
 
     def scope_where(user, user_id: int | None = None) -> tuple[str, tuple]:
         """Non-admins always see only themselves; an admin sees everyone, or one user when `user_id` is given."""
@@ -188,18 +198,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(404, "No such user.")
         return "user_id=?", (user_id,)
 
-    def quota_view(user, now: float) -> list[dict]:
+    def quota_view(now: float) -> list[dict]:
         out = []
         n = names()
         for b in sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400))):
             att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
             if att["utilization_pct"] is None and b not in BUCKETS:
                 continue
-            shares = att["shares"]
-            if user["role"] != "admin":
-                shares = {user["name"]: shares.get(user["id"], 0.0)}
-            else:
-                shares = {n.get(uid, f"#{uid}"): v for uid, v in shares.items()}
+            shares = {n.get(uid, f"#{uid}"): v for uid, v in att["shares"].items()}
             out.append({k: att[k] for k in ("bucket", "utilization_pct", "resets_at", "observed_at", "stale", "unattributed")}
                        | {"shares": shares})
         return out
@@ -216,16 +222,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         recent = usage.total(conn, cfg.pricing, f"{where} AND started_at>=? AND provider='anthropic'", (*params, now - 900))
         active = conn.execute(f"SELECT COUNT(DISTINCT user_id) FROM requests WHERE {where} AND started_at>=? AND rejected_by IS NULL",
                               (*params, now - 86400)).fetchone()[0]
+        out = {"scope": "self" if not is_admin(user) else "account" if user_id is None else "user",
+               "totals": totals, "burn_rate_weighted_per_min": recent.weighted / 15.0}
+        if not is_admin(user):
+            return out
         be = gw.backend.describe()
-        return {
-            "scope": "self" if user["role"] != "admin" else "account" if user_id is None else "user",
-            "totals": totals,
+        return out | {
             "active_users_24h": active,
-            "burn_rate_weighted_per_min": recent.weighted / 15.0,
-            "quota": quota_view(user, now),
+            "quota": quota_view(now),
             "exhaustion": _exhaustion(conn, now),
-            "credential": {"healthy": be.healthy, "detail": be.detail if user["role"] == "admin" else None,
-                           "expires_at": be.expires_at},
+            "credential": {"healthy": be.healthy, "detail": be.detail, "expires_at": be.expires_at},
             "poll": {"last_status": gw.poller.last_status},
         }
 
@@ -311,12 +317,20 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         recent = conn.execute(f"SELECT started_at, user_id, path, model, status, {kind} AS k, rejected_by FROM requests "
                               f"WHERE {cond} ORDER BY started_at DESC LIMIT 50", (*params, since)).fetchall()
         n = names()
-        return {"bucket_s": b, "points": [dict(r) for r in rows],
-                "recent": [{**dict(r), "user": n.get(r["user_id"])} for r in recent]}
+        points = [dict(r) for r in rows]
+        recent = [{**dict(r), "user": n.get(r["user_id"])} for r in recent]
+        if not is_admin(user):
+            merged: dict = {}
+            for p in points:
+                key = (p["t"], _user_error_kind(p["k"]))
+                merged[key] = merged.get(key, 0) + p["n"]
+            points = [{"t": t, "k": k, "n": v} for (t, k), v in merged.items()]
+            recent = [r | {"k": _user_error_kind(r["k"]), "rejected_by": _user_rejected_by(r["rejected_by"])} for r in recent]
+        return {"bucket_s": b, "points": points, "recent": recent}
 
     @app.get("/api/quota/timeline")
     async def quota_timeline(request: Request, bucket: str = "5h", range: str = "7d"):
-        user = principal(request)
+        admin(request)
         now = time.time()
         snaps = conn.execute("SELECT observed_at, utilization_pct, resets_at, source FROM quota_snapshots WHERE bucket=? "
                              "AND observed_at>=? ORDER BY observed_at", (bucket, now - RANGES.get(range, RANGES["7d"]))).fetchall()
@@ -324,11 +338,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         n = names()
         history = []
         for h in att["history"]:
-            shares = h["shares"]
-            if user["role"] != "admin":
-                shares = {user["name"]: shares.get(user["id"], 0.0)}
-            else:
-                shares = {n.get(uid, f"#{uid}"): v for uid, v in shares.items()}
+            shares = {n.get(uid, f"#{uid}"): v for uid, v in h["shares"].items()}
             history.append({"t": h["t"], "utilization_pct": h["utilization_pct"], "shares": shares})
         return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history,
                 "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
@@ -355,7 +365,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out.append({"id": r["id"], "user": n.get(r["user_id"]), "started_at": r["started_at"],
                         "duration_s": r["ended_at"] - r["started_at"] if r["ended_at"] else None,
                         "provider": r["provider"], "model": r["model"], "status": r["status"], "stream": bool(r["stream"]),
-                        "kind": r["kind"], "rejected_by": r["rejected_by"], "session_id": r["session_id"],
+                        "kind": r["kind"] if is_admin(user) else _user_error_kind(r["kind"]),
+                        "rejected_by": r["rejected_by"] if is_admin(user) else _user_rejected_by(r["rejected_by"]),
+                        "session_id": r["session_id"],
                         "title": titled.get((r["user_id"], r["session_id"])),
                         **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")}})
         return {"requests": out}
@@ -380,10 +392,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/limits")
     async def limits_view(request: Request):
         user = principal(request)
-        ids = [r["id"] for r in conn.execute("SELECT id FROM users")] if user["role"] == "admin" else [user["id"]]
+        ids = [r["id"] for r in conn.execute("SELECT id FROM users")] if is_admin(user) else [user["id"]]
         n = names()
-        return {"kinds": {k: list(v) for k, v in limits.UNITS.items()},
-                "limits": [{"user": n[i], "user_id": i, **s.to_dict()} for i in ids for s in limits.states(conn, cfg, i)]}
+        out = {"limits": [{"user": n[i], "user_id": i, **d} for i in ids for d in limit_views(user, limits.states(conn, cfg, i))]}
+        return out | {"kinds": {k: list(v) for k, v in limits.UNITS.items()}} if is_admin(user) else out
 
     @app.get("/api/audit")
     async def audit(request: Request, limit: int = 200):
@@ -402,16 +414,20 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = principal(request)
         now = time.time()
         states = limits.states(conn, cfg, user["id"], now=now)
-        account = {}
-        for b in BUCKETS:
-            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
-            account[b] = {"utilization_pct": att["utilization_pct"], "resets_at": att["resets_at"], "stale": att["stale"],
-                          "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
+        account = None
+        if is_admin(user):
+            account = {}
+            for b in BUCKETS:
+                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+                account[b] = {"utilization_pct": att["utilization_pct"], "resets_at": att["resets_at"], "stale": att["stale"],
+                              "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
         line = _status_line(user, states, account)
         if format == "text":
             return PlainTextResponse(line + "\n")
-        return {"user": _public_user(user), "limits": [s.to_dict() for s in states], "account": account,
-                "credential_healthy": gw.backend.describe().healthy, "line": line}
+        out = {"user": _public_user(user), "limits": limit_views(user, states), "line": line}
+        if account is not None:
+            out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
+        return out
 
     # ---------- admin actions ----------
 
@@ -568,14 +584,32 @@ def _amount(v: float, unit: str) -> str:
     return f"{v / 1e6:.1f}M" if v >= 1e6 else f"{v / 1e3:.0f}K"
 
 
+# What a non-admin sees instead of error kinds and limit names that describe the account.
+_USER_ERROR_KINDS = {"upstream_quota": "usage_limit", "upstream_throttle": "usage_limit",
+                     "gateway_needs_login": "gateway_unavailable", "gateway_refresh_unavailable": "gateway_unavailable"}
+
+
+def _user_error_kind(k):
+    return _USER_ERROR_KINDS.get(k, k)
+
+
+def _user_rejected_by(r):
+    return limits.USER_KINDS.get(r, r)
+
+
 def _status_line(user, states, account) -> str:
-    """e.g. `maya · daily $61/$100 · plan 5h 8% (yours 6%) · week 10%`: the user's limits as used/limit,
-    then the shared subscription's quota and the estimated part of it this user's requests used."""
+    """e.g. `maya · daily $61/$100 · plan 5h 8% (yours 6%) · week 10%`: the user's limits as used/limit, then,
+    for an admin (`account` given), the shared subscription's quota and the estimated part their requests used.
+    A non-admin's share limits read as their own allowance: `5h 30%`."""
     parts = [user["name"]]
     for s in states:
         if s.kind == "allowed_models":
             continue
         base, _, period = s.kind.partition("_")
+        if base == "share" and account is None:
+            label = "5h" if period == "5h" else "week"
+            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%")
+            continue
         if base == "share":
             label, used = f"{'5h' if period == '5h' else 'week'} share", lambda v: f"{v:.0f}"
         else:
@@ -585,6 +619,8 @@ def _status_line(user, states, account) -> str:
             continue
         suffix = {"requests": " req", "tokens": " tok", "share": "%"}.get(base, "")
         parts.append(f"{label} {used(s.current)}/{used(s.limit)}{suffix}")
+    if account is None:
+        return " · ".join(parts)
     a5, a7 = account["5h"], account["7d"]
     plan = f"plan 5h {_fmt_pct(a5['utilization_pct'])}"
     if a5["your_estimated_share"]:

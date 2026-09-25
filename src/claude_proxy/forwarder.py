@@ -49,6 +49,15 @@ def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in drop}
 
 
+# What the subscription tells about itself in responses: account quota, reset times, the organization.
+# Only admins get these; to anyone else the gateway is all there is.
+ACCOUNT_HEADER_PREFIXES = ("anthropic-ratelimit-", "anthropic-organization")
+
+
+def strip_account_headers(headers: dict[str, str]) -> dict[str, str]:
+    return {k: v for k, v in headers.items() if not k.lower().startswith(ACCOUNT_HEADER_PREFIXES)}
+
+
 def merge_beta(existing: str | None, flag: str) -> str:
     flags = [f.strip() for f in (existing or "").split(",") if f.strip()]
     if flag not in flags:

@@ -82,6 +82,7 @@ async def test_bad_key_in_header_is_403_not_401(setup, anthropic):
 
 async def test_upstream_401_after_refresh_reaches_key_header_client_as_403(setup, anthropic):
     gw, conn, uid, key, h = setup
+    conn.execute("UPDATE users SET role='admin' WHERE id=?", (uid,))   # a non-admin gets a 503 instead (test_privacy)
     unauthorized = lambda req: JSONResponse({"type": "error", "error": {"type": "authentication_error", "message": "x"}},
                                             status_code=401)
     anthropic.default = unauthorized

@@ -190,6 +190,33 @@ const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gatewa
                        gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
                        gateway_refresh_unavailable: "Token refresh temporarily failing",
                        api_error: "Upstream server error" };
+ERROR_LABELS.usage_limit = "Usage limit reached (429)";
+ERROR_LABELS.gateway_unavailable = "Gateway unavailable";
+
+// A non-admin is never told about the subscription behind the gateway; the server sends them nothing about
+// it (no account quota, no share limits, no credential state). These replace every tip that would mention it.
+const USER_TIPS = {
+  weighted: `<span class="th">Weighted tokens</span><p>Every token priced at API list rates and expressed in <b>{ref} input tokens</b>: an Opus output token counts for many, a cache read for a tenth of an input token of the same model.</p>`,
+  cost: `<span class="th">API-equivalent cost</span><p>What these requests would cost at API list prices. A yardstick, not a bill.</p><p class="tm">Models missing from the price table count as $0 and are listed as unpriced.</p>`,
+  burn_rate: `Weighted tokens per minute over the last 15 minutes, Claude models only.`,
+  "split:provider": `Which service answered: <b>anthropic</b> for Claude models, others (such as Muse on Meta) for theirs.`,
+  "metric:weighted": `Tokens priced by type and model, in {ref} input tokens.`,
+  "metric:cost_usd": `Estimated cost at API list prices. Not a bill.`,
+  provider_sub: `What these requests would cost at API list prices. Not a bill.`,
+  cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper.</p>`,
+  sess_weighted: `Tokens adjusted by type and model, in {ref} input tokens.`,
+  sess_cost: `What it would cost at API prices. Not a bill.`,
+  "kind:tokens_5h": `<span class="th">tokens 5h</span><p>Tokens in the last 5 hours.</p><p class="tm">${KIND_NOTE.window}</p>`,
+  "kind:5h_limit": `<span class="th">5-hour limit</span><p>How much of your 5-hour allowance you have used. At 100%, Claude requests are refused until it resets.</p>`,
+  "kind:weekly_limit": `<span class="th">Weekly limit</span><p>How much of your weekly allowance you have used. At 100%, Claude requests are refused until it resets.</p>`,
+  "err:usage_limit": "A usage limit was reached. Requests work again once it resets.",
+  "err:gateway_unavailable": "The gateway couldn't serve Claude requests at that moment. Try again later, or ask the admin.",
+  "err:upstream_request_scoped": "The provider refused this one request (429).",
+  "err:overloaded_error": "The provider is temporarily overloaded. Retry shortly.",
+};
+const ADMIN_TIPS = { ...TIPS };
+const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
+
 const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
 
 // "claude-sonnet-5" -> "Sonnet 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as is.
@@ -394,6 +421,10 @@ function limitLabel(l) {
 }
 function limitValue(l) {
   if (l.kind === "allowed_models") return l.value;
+  if (USER_LIMIT_KINDS.includes(l.kind)) {
+    if (l.skipped || l.current == null) return "not measured right now";
+    return `${l.current.toFixed(0)}% used${l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : ""}`;
+  }
   if (l.skipped) return `skipped · ${l.skipped}`;
   const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => `${v.toFixed(1)} pts` : fmtNum;
   const reset = l.reset_in ? ` · ${l.estimated ? "resets" : "frees"} in ${fmtDur(l.reset_in)}` : "";
@@ -401,6 +432,7 @@ function limitValue(l) {
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";
+  if (USER_LIMIT_KINDS.includes(l.kind)) return l.skipped ? "Not enforced for now. Your other limits still apply." : "";
   if (l.skipped) return "Not enforced right now: without a fresh report from Anthropic the share can't be estimated. Token and request limits still apply.";
   if (l.estimated) return "<b>est.</b> means estimated, not measured. <b>Resets</b> is when Anthropic resets the account bucket.";
   if (!l.reset_in) return "";
@@ -419,7 +451,7 @@ const VIEWS = {
   overview: { label: "Overview", render: renderOverview },
   usage: { label: "Usage over time", render: renderUsage },
   users: { label: "Users & limits", render: renderUsers, admin: true },
-  quota: { label: "Account quota", render: renderQuota },
+  quota: { label: "Account quota", render: renderQuota, admin: true },
   models: { label: "Models & cache", render: renderModels },
   activity: { label: "Activity", render: renderActivity },
   sessions: { label: "Sessions", render: renderSessions },
@@ -463,34 +495,34 @@ function credentialPill(c) {
 
 async function renderOverview(main) {
   const [ov, me] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status")]);
-  credentialPill(ov.credential);
+  if (ov.credential) credentialPill(ov.credential);
   const t = ov.totals[S.prefs.period] || ov.totals["24h"];
   const banners = [];
-  if (!ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span><b>Claude requests will fail:</b> the gateway has no working Claude subscription login. ${isAdmin() ? `Run <code>claude-proxy login</code> on the gateway host.${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : "Ask the admin to re-link it."}</span></div>`);
-  const stale = ov.quota.filter((q) => q.utilization_pct != null && q.stale);
+  if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span><b>Claude requests will fail:</b> the gateway has no working Claude subscription login. ${isAdmin() ? `Run <code>claude-proxy login</code> on the gateway host.${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : "Ask the admin to re-link it."}</span></div>`);
+  const stale = (ov.quota || []).filter((q) => q.utilization_pct != null && q.stale);
   if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>No fresh account figures from Anthropic for ${stale.map((q) => q.bucket).join(", ")}. Share limits are skipped until one arrives; token limits still apply.</span></div>`);
   const unpriced = t.unpriced_models || [];
   const ex = ov.exhaustion;
   main.innerHTML = `
     <section class="view">
       <h2>${isAdmin() ? "Account overview" : `Your usage, ${esc(S.user.name)}`}</h2>
-      <p class="lede">${isAdmin() ? "Everything that went through the gateway, all users." : "Only your own requests. Account figures are for the whole shared subscription."}</p>
+      <p class="lede">${isAdmin() ? "Everything that went through the gateway, all users." : "Only your own requests."}</p>
       ${banners.join("")}
       <div class="controls">${seg("period", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], S.prefs.period)}</div>
       <div class="tiles">
         <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${t.requests >= 1000 ? `${esc(nfFull.format(t.requests))} forwarded` : "forwarded to a provider"}</div></div>
         <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
         <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
-        <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : "not billed on the subscription"}</div></div>
+        <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : isAdmin() ? "not billed on the subscription" : "at API list prices"}</div></div>
         ${isAdmin() ? `<div class="card tile"><div class="label">Active users${tipI("active_users")}</div><div class="value">${ov.active_users_24h}</div><div class="foot">in the last 24 h</div></div>` : ""}
         <div class="card tile"><div class="label">Burn rate${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">weighted tokens / min, last 15 min</div></div>
       </div>
-      <div class="grid cols-2">
-        <div class="card"><h3>Account quota (reported by Anthropic)${tipI("quota")}</h3>
+      <div class="grid${isAdmin() ? " cols-2" : ""}">
+        ${isAdmin() ? `<div class="card"><h3>Account quota (reported by Anthropic)${tipI("quota")}</h3>
           <p class="sub">Bar length is the account's utilization. Segments are each user's ${tipT("<b>estimated share</b>", "share")}; grey is usage ${tipT("not attributed", "unattributed")} to any gateway user.</p>
           <div id="quota-bars"></div>
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.${tipI("exhaustion")}</p>` : ""}
-        </div>
+        </div>` : ""}
         <div class="card"><h3>${isAdmin() ? "Usage by user, last 7 days" : "Your limits"}</h3>
           <p class="sub">${isAdmin() ? "Daily, weighted tokens." : `Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
           ${isAdmin() ? `<div class="chart short" id="ov-users"></div>` : limitsBlock(me.limits)}
@@ -498,7 +530,7 @@ async function renderOverview(main) {
       </div>
     </section>`;
   wireSegs(main, render);
-  $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">No account figures yet. They arrive with the first response through the gateway.</p>`;
+  if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">No account figures yet. They arrive with the first response through the gateway.</p>`;
   if (isAdmin()) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
     stackedTime($("#ov-users"), s.points, "weighted", "user", "day");
@@ -528,7 +560,7 @@ async function renderUsage(main) {
   if (!isAdmin() && p.split === "user") p.split = "model";
   const d = await api(`/api/series?range=${p.range}&granularity=${p.granularity}&split=${p.split}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>Usage over time</h2>
-    <p class="lede">${tipT("Weighted tokens", "weighted")} price each token type and model at API list-price ratios, in units of one ${esc(refModel())} input token, so they approximate what a request costs against the quota. ${tipT("Raw tokens", "raw")} are dominated by cache reads.</p>
+    <p class="lede">${tipT("Weighted tokens", "weighted")} price each token type and model at API list-price ratios, in units of one ${esc(refModel())} input token, so they approximate what a request costs${isAdmin() ? " against the quota" : ""}. ${tipT("Raw tokens", "raw")} are dominated by cache reads.</p>
     <div class="controls">
       ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range)}
       ${seg("granularity", [["hour", "Hourly"], ["day", "Daily"], ["week", "Weekly"]], p.granularity)}
@@ -877,9 +909,9 @@ async function renderModels(main) {
   const d = await api(`/api/models?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
   const mm = p.modelMetric;
   main.innerHTML = `<section class="view"><h2>Models & cache</h2>
-    <p class="lede">Claude models run on the shared subscription; other providers (such as Muse on Meta) are billed to their own API key.</p>
+    <p class="lede">${isAdmin() ? "Claude models run on the shared subscription; other providers (such as Muse on Meta) are billed to their own API key." : "What each model's requests would cost at API list prices, and how much of your prompts the cache served."}</p>
     <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", "Est. cost", "metric:cost_usd"], ["weighted", "Weighted", "metric:weighted"], ["raw", "Raw tokens", "metric:raw"], ["requests", "Requests", "metric:requests"]], mm)}</div>
-    <div class="tiles">${Object.entries(d.providers).map(([k, t]) => `<div class="card tile"><div class="label">${k === "anthropic" ? `Claude (subscription, API-equivalent)${tipI("provider_sub")}` : `${esc(k)} (own API key)${tipI("provider_own")}`}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${fmtNum(t.requests)} requests · ${fmtNum(t.raw)} tokens</div></div>`).join("")}</div>
+    <div class="tiles">${Object.entries(d.providers).map(([k, t]) => `<div class="card tile"><div class="label">${!isAdmin() ? `${k === "anthropic" ? "Claude" : esc(k)} (API-equivalent)${tipI("provider_sub")}` : k === "anthropic" ? `Claude (subscription, API-equivalent)${tipI("provider_sub")}` : `${esc(k)} (own API key)${tipI("provider_own")}`}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${fmtNum(t.requests)} requests · ${fmtNum(t.raw)} tokens</div></div>`).join("")}</div>
     <div class="grid cols-2">
       <div class="card"><h3>${esc(METRICS[mm])} by model</h3><p class="sub">Largest first.</p><div class="chart" id="m-bars"></div></div>
       <div class="card"><h3>Cache hit ratio${tipI("cache_ratio")}</h3><p class="sub">Daily <code>${esc(d.formula)}</code></p><div class="chart" id="m-cache"></div></div>
@@ -951,7 +983,7 @@ async function renderErrors(main) {
   const p = S.prefs;
   const range = p.range === "90d" ? "30d" : p.range;
   const d = await api(`/api/errors?range=${range}&tz_offset=${tzOffset()}`);
-  main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">Gateway rejections and upstream errors. Upstream 429s are split into an ${tipT("exhausted account quota", "err:upstream_quota")}, a ${tipT("per-minute throttle", "err:upstream_throttle")}, and a ${tipT("refusal of one request", "err:upstream_request_scoped")}. Hover a kind below for what it means.</p>
+  main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">${!isAdmin() ? "Requests the gateway or a provider refused. Hover a kind below for what it means." : `Gateway rejections and upstream errors. Upstream 429s are split into an ${tipT("exhausted account quota", "err:upstream_quota")}, a ${tipT("per-minute throttle", "err:upstream_throttle")}, and a ${tipT("refusal of one request", "err:upstream_request_scoped")}. Hover a kind below for what it means.`}</p>
     <div class="controls">${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
     <div class="card table-wrap" style="margin-top:16px"><h3>Most recent</h3>${d.recent.length ? `<table class="data"><thead><tr><th>When</th>${isAdmin() ? "<th>User</th>" : ""}<th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
@@ -988,8 +1020,10 @@ async function boot() {
   try {
     const s = await api("/api/session");
     S.user = s.user; S.csrf = s.csrf;
-    if (s.settings) S.settings = s.settings;
-    credentialPill(s.credential);
+    if (s.settings) S.settings = { ...S.settings, ...s.settings };
+    Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
+    $("#cred-pill").hidden = !s.credential;
+    if (s.credential) credentialPill(s.credential);
   } catch { return; }
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
