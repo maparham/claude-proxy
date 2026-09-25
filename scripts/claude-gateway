@@ -14,14 +14,18 @@
 # Own-login mode is for a machine that is itself signed in to a Claude subscription (the owner's): it sets
 # ANTHROPIC_BASE_URL and sends the gateway key in ANTHROPIC_CUSTOM_HEADERS, so Claude Code keeps its own
 # login for Claude in Chrome and connectors while requests still go through, and are metered by, the gateway.
-# `off` removes exactly what `on` added and leaves every other setting alone. The URL, key and mode are kept
-# in ~/.config/claude-gateway/client.json (mode 600). Start a new Claude Code session after switching.
+# `on` also installs a statusline showing the user's gateway limits, unless one is already set; then it prints
+# how to add them to that one instead. `off` removes exactly what `on` added and leaves every other setting
+# alone. The URL, key, mode and a copy of statusline.sh are kept in ~/.config/claude-gateway/ (client.json is
+# mode 600). Start a new Claude Code session after switching.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
 CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
 
-usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+STATUSLINE=$(dirname "$CLIENT")/statusline.sh
+
+usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 save_client() {   # url key [dashboard]
   mkdir -p "$(dirname "$CLIENT")"
@@ -43,13 +47,19 @@ set_mode() {
   python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mode"]=sys.argv[2]; json.dump(c, open(p,"w"), indent=2)' "$CLIENT" "$1"
 }
 
+install_statusline() {   # copy statusline.sh from beside this script (through any symlink) next to client.json
+  local src
+  src=$(dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/statusline.sh
+  if [ -f "$src" ]; then cp "$src" "$STATUSLINE" && chmod 755 "$STATUSLINE"; fi
+}
+
 edit_settings() {   # on|off
   mkdir -p "$(dirname "$SETTINGS")"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp -p "$SETTINGS" "$SETTINGS.bak-claude-gateway"
-  python3 - "$1" "$SETTINGS" "$CLIENT" <<'EOF'
-import json, os, sys, tempfile
-mode, settings, client = sys.argv[1:]
+  python3 - "$1" "$SETTINGS" "$CLIENT" "$STATUSLINE" <<'EOF'
+import json, os, shlex, sys, tempfile
+mode, settings, client, statusline = sys.argv[1:]
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
@@ -64,6 +74,10 @@ if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
 if c.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
+line_cmd = shlex.quote(statusline)
+ours_line = lambda v: isinstance(v, dict) and v.get("command") == line_cmd
+if c.pop("added_statusline", False) and ours_line(s.get("statusLine")):
+    del s["statusLine"]
 
 if mode == "on":
     env.update({"ANTHROPIC_BASE_URL": c["url"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
@@ -74,6 +88,13 @@ if mode == "on":
         if "disableClaudeAiConnectors" not in s:
             s["disableClaudeAiConnectors"] = True
             c["added_disable_connectors"] = True
+    if os.path.exists(statusline):
+        if "statusLine" not in s:
+            s["statusLine"] = {"type": "command", "command": line_cmd, "refreshInterval": 30}
+            c["added_statusline"] = True
+        elif not ours_line(s["statusLine"]):
+            print("You already have a statusline, so it was left as it is. To show your gateway limits in it too,\n"
+                  "add the output of this command to it: " + line_cmd)
 if not env:
     del s["env"]
 
@@ -140,6 +161,7 @@ case "$cmd" in
     fi
     preflight "$mode"
     set_mode "$mode"
+    install_statusline
     edit_settings on
     echo "Claude Code now uses the gateway at $(field url) ($(field mode key-only) mode). Start a new session to pick it up."
     ;;

@@ -70,7 +70,8 @@ scripts/claude-gateway status     # on/off, reachability, current usage
 ```
 
 That's all. They don't need a local `/login`. Plan bars and `/usage` aren't available in this
-mode, so for their allowance they can install the statusline:
+mode, so `claude-gateway on` also installs a statusline with their limits (unless they already have
+one; then it says how to add them to it). Setting it up by hand instead:
 
 ```json
 "env": { "CLAUDE_GATEWAY_DASHBOARD": "http://gateway.lan:8081" },
