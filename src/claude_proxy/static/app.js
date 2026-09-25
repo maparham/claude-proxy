@@ -47,10 +47,12 @@ function fmtPct(v, d = 0) { return v == null ? "—" : `${v.toFixed(d)}%`; }
 function fmtDur(s) {
   if (s == null) return "—";
   s = Math.max(0, Math.round(s));
-  if (s < 90) return `${s}s`;
-  if (s < 5400) return `${Math.round(s / 60)} min`;
-  if (s < 172800) return `${(s / 3600).toFixed(1)} h`;
-  return `${(s / 86400).toFixed(1)} d`;
+  if (s < 60) return `${s}s`;
+  // Two largest units, e.g. "2h 30m"; the second is dropped when it is zero.
+  const [big, bigU, small, smallU] = s < 3600 ? [Math.floor(s / 60), "m", s % 60, "s"]
+    : s < 86400 ? [Math.floor(s / 3600), "h", Math.floor(s % 3600 / 60), "m"]
+    : [Math.floor(s / 86400), "d", Math.floor(s % 86400 / 3600), "h"];
+  return small ? `${big}${bigU} ${small}${smallU}` : `${big}${bigU}`;
 }
 function fmtAgo(t) { return t ? `${fmtDur(Date.now() / 1000 - t)} ago` : "never"; }
 function fmtTime(t) { return t ? new Date(t * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
