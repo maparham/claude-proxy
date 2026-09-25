@@ -132,6 +132,7 @@ details.tableview summary { cursor: pointer; color: var(--ink-2); font-size: 12p
 .btn.small { padding: 3px 8px; font-size: 12px; }
 input[type=text], input[type=password], input[type=number], select {
   border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px; min-width: 0; }
+input:disabled, select:disabled { color: var(--muted); background: var(--wash); opacity: 1; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); outline-offset: 1px; }
 
 .banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 16px; display: flex; gap: 10px; align-items: flex-start;

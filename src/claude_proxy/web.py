@@ -9,6 +9,7 @@ Non-admins only ever see their own usage, their own limits and their own estimat
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
 import logging
 import time
@@ -18,7 +19,7 @@ from pathlib import Path
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from . import db, limits, quota, usage
@@ -449,16 +450,21 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def root():
         return RedirectResponse("/dashboard")
 
+    # Asset URLs carry a content hash, so a CDN or browser that caches them still picks up a deploy.
     @app.get("/dashboard")
     async def page():
-        return FileResponse(STATIC / "index.html", media_type="text/html")
+        html = (STATIC / "index.html").read_text()
+        for name in ("app.js", "app.css"):
+            v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
+            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
     @app.get("/static/{name}")
-    async def static(name: str):
+    async def static(name: str, v: str | None = None):
         path = (STATIC / name).resolve()
         if path.parent != STATIC.resolve() or not path.is_file():
             fail(404, "Not found.")
-        return FileResponse(path)
+        return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable" if v else "no-cache"})
 
     return app
 

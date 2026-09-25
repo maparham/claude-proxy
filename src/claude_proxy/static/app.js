@@ -579,11 +579,12 @@ function limitsDialog(u) {
     d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(unit)}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
     f.value.placeholder = LIMIT_PLACEHOLDER[unit] || "";
     $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(k)}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
-      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}` : ""));
+      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}${f.unit.disabled ? " The only unit for this kind." : ""}` : ""));
   };
   const syncUnits = () => {
     const k = f.kind.value;
     f.unit.innerHTML = (kinds[k] || []).map((x) => `<option>${esc(x)}</option>`).join("");
+    f.unit.disabled = f.unit.options.length < 2;   // requests_* only take count, share_* only pct: nothing to pick
     f.scope.disabled = k === "allowed_models";
     syncHint();
   };

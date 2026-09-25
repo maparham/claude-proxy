@@ -176,6 +176,20 @@ async def test_dashboard_page_served_with_security_headers(env):
     assert r.headers["x-frame-options"] == "DENY"
 
 
+async def test_dashboard_assets_are_versioned_so_caches_pick_up_deploys(env):
+    import re
+    gw, *_ = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        page = await c.get("/dashboard")
+        assert page.headers["cache-control"] == "no-cache"
+        urls = re.findall(r'"(/static/app\.(?:js|css)\?v=[0-9a-f]{12})"', page.text)
+        assert len(urls) == 2
+        for u in urls:
+            r = await c.get(u)
+            assert r.status_code == 200 and "immutable" in r.headers["cache-control"]
+        assert (await c.get("/static/app.js")).headers["cache-control"] == "no-cache"
+
+
 async def test_me_status_plain_text_for_statusline_script(env):
     gw, conn, ids, keys = env
     async with asgi_client(create_dashboard_app(gw)) as c:
