@@ -98,7 +98,7 @@ name = "meta"
 model_info = { "muse-spark" = { context = 1000000, output = 64000, display_name = "Muse Spark" } }
 ```
 
-`context` and `output` are token counts, supplied by the admin; the gateway does not discover them. The numbers above only show the format. The shipped default for `muse-spark` is taken from Meta's model documentation during implementation, and left out if Meta does not publish one.
+`context` and `output` are token counts, supplied by the admin; the gateway does not discover them. Give both or neither (OpenCode's `limit` needs both); `display_name` is optional. The shipped default for `muse-spark` is `context = 1048576`, the 1M window listed for `muse-spark-1.3` in Promptfoo's Meta provider docs and on OpenRouter, and `output = 32000`, a conservative cap: Meta has not published an output limit for 1.3.
 
 ### 3.2 `GET /v1/models`
 
@@ -116,28 +116,29 @@ claude-gateway on --opencode                              # later
 claude-gateway off --opencode
 ```
 
-`--opencode` can be combined with the existing Claude Code set-up or used on its own. `on --opencode`:
+`--opencode` makes `on` and `off` act on OpenCode only; the Claude Code set-up is a separate `claude-gateway on`. A person using both runs both. `on --opencode`:
 
-1. Saves the routes-only key in `~/.config/claude-gateway/routes.key` (mode 600) and records `opencode` in `client.json`.
-2. Preflights `GET <url>/v1/models` with the routes-only key and fails without changing anything unless it returns 200.
-3. Adds a `gateway` provider to `~/.config/opencode/opencode.json` (created if missing), taking models and limits from that response:
+1. Preflights `GET <url>/v1/models` with the routes-only key in `x-api-key` (as OpenCode sends it) and fails without changing anything unless it returns 200.
+2. Reads `~/.config/opencode/opencode.json` and fails without changing anything if it is not plain JSON. It never edits `opencode.jsonc`: when only that file exists, it creates `opencode.json` beside it, and OpenCode merges the two (verified in plan task 1).
+3. Saves the routes-only key in `~/.config/claude-gateway/routes.key` (mode 600, no trailing newline) and records `opencode` in `client.json`.
+4. Adds a `gateway` provider to `opencode.json`, taking models and limits from the preflight response:
 
    ```json
    "provider": {
      "gateway": {
        "npm": "@ai-sdk/anthropic",
        "name": "Claude gateway",
-       "options": { "baseURL": "<url>/v1", "apiKey": "{file:~/.config/claude-gateway/routes.key}" },
+       "options": { "baseURL": "<url>/v1", "apiKey": "{file:/Users/maya/.config/claude-gateway/routes.key}" },
        "models": { "muse-spark": { "name": "Muse Spark", "limit": { "context": 1000000, "output": 64000 } } }
      }
    }
    ```
 
-   The key is referenced, not copied, so `opencode.json` holds no secret. A route model without `model_info` gets no `limit` entry (OpenCode then uses its own default) rather than zeros. `@ai-sdk/anthropic` is the package OpenCode's built-in Anthropic provider uses; OpenCode's custom-provider docs only show OpenAI-format packages, so plan task 1 verifies it (section 8).
-4. Installs `examples/opencode/muse.md` as `~/.config/opencode/agents/muse.md`, unless a file of that name exists. This is a new file written in OpenCode's agent format, not a copy of `examples/muse-worker.md`: frontmatter with `description`, `mode: subagent`, `model: gateway/muse-spark` and a `tools:` map of booleans, and no `name:` field (OpenCode takes the name from the file name). The body is the same instructions as the Claude Code agent.
-5. Records in `client.json` exactly what it added.
+   The key is referenced by absolute path, not copied, so `opencode.json` holds no secret and no `~` expansion is needed. A route model without `model_info` gets no `limit` entry (OpenCode then uses its own default) rather than zeros. `@ai-sdk/anthropic` is the package OpenCode's built-in Anthropic provider uses; OpenCode's custom-provider docs only show OpenAI-format packages, so plan task 1 verifies it (section 8).
+5. Installs `examples/opencode/muse.md` as `~/.config/opencode/agents/muse.md`, unless a file of that name exists. This is a new file written in OpenCode's agent format, not a copy of `examples/muse-worker.md`: frontmatter with `description`, `mode: subagent`, `model: gateway/muse-spark` and a `tools:` map of booleans, and no `name:` field (OpenCode takes the name from the file name). The body is the same instructions as the Claude Code agent.
+6. Records in `client.json` exactly what it added. If `opencode.json` already has a `gateway` provider that it did not add, it stops without changing anything.
 
-`off --opencode` removes the `gateway` provider and the agent file only if `on` added them (and the agent file is unchanged since), deletes `routes.key`, and removes the `opencode` record from `client.json`. It leaves the rest of `opencode.json` alone, the same way `off` already treats `settings.json`.
+`off --opencode` removes the `gateway` provider and the agent file only if `on` added them (and the agent file is unchanged since), deletes `routes.key`, and removes the `opencode` record from `client.json`. It leaves the rest of `opencode.json` alone, the same way `off` already treats `settings.json`, and deletes `opencode.json` only if `on` created it and nothing else was added since. The file is rewritten as 2-space JSON, so a file already in that format comes back byte-identical and any other file comes back with the same content.
 
 Re-running `on --opencode` refreshes the model list, so a new route appears after one command.
 
@@ -196,7 +197,7 @@ Unit and app tests (pytest, existing fixtures):
 
 Script tests (bash, against a temporary `HOME` and a stub gateway):
 
-14. `on --opencode` then `off --opencode` leaves a pre-existing `opencode.json` byte-identical and removes `routes.key`.
+14. `on --opencode` then `off --opencode` leaves a pre-existing 2-space `opencode.json` byte-identical, keeps edits made in between, and removes `routes.key`.
 15. A route model without `model_info` produces a model entry with no `limit`.
 16. `statusline.sh --warn`: a `systemMessage` at 80%; nothing at 79%; nothing within 15 minutes of a warning at the same band; a new warning on crossing to 100%; nothing on stdout and exit 0 when the gateway is down or `CLAUDE_GATEWAY_DASHBOARD` is unset.
 
