@@ -64,6 +64,166 @@ async function api(path, opts = {}) {
   return data;
 }
 
+// ---------- tooltips ----------
+
+// Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
+const TIPS = {
+  login_key: `Your <b>gateway key</b> (<code>sk-proxy-…</code>) from the admin, the same one Claude Code uses as <code>ANTHROPIC_AUTH_TOKEN</code>. It shows only your own usage.`,
+  requests: `Requests the gateway forwarded to a provider. Requests it refused (bad key, limit reached) are not counted.`,
+  weighted: `<span class="th">Weighted tokens</span><p>Every token priced at API list rates and expressed in <b>Sonnet 5 input tokens</b>: an Opus output token counts for many, a cache read for a tenth of an input token of the same model.</p><p class="tm">The closest match to what a request costs against the subscription quota.</p>`,
+  raw: `<span class="th">Raw tokens</span><p>Input, output, cache-write and cache-read tokens, each counted as 1. Cache reads are cheap but plentiful, so they usually dominate.</p>`,
+  cost: `<span class="th">API-equivalent cost</span><p>What these requests would cost at Anthropic's API list prices. Claude usage is covered by the subscription, so this is a yardstick, not a bill.</p><p class="tm">Models missing from the price table count as $0 and are listed as unpriced.</p>`,
+  active_users: `Users with at least one forwarded request in the last 24 hours.`,
+  burn_rate: `Weighted tokens per minute over the last 15 minutes, Claude models only. How hard the account is being pushed right now.`,
+  quota: `<span class="th">Account quota</span><p>Anthropic reports how full each of the subscription's usage buckets is. At 100%, Claude requests fail with 429 until the bucket resets.</p>`,
+  "bucket:5h": `<span class="th">5-hour bucket</span><p>Short-term usage allowance. Anthropic resets it about 5 hours after its window opened.</p>`,
+  "bucket:7d": `<span class="th">7-day bucket</span><p>Weekly usage allowance. Anthropic resets it 7 days after its window opened.</p>`,
+  share: `<span class="th">Estimated share</span><p>Anthropic reports only the account total. Each rise between two reports is split across the users whose requests finished in between, by weighted tokens.</p><p class="tm">Reports are whole percents, so small shares are rough.</p>`,
+  unattributed: `<span class="th">Not attributed</span><p>Usage the gateway can't pin on a user: the account used outside the gateway (claude.ai, another login), or usage from before this window's first report.</p>`,
+  stale: `No report from Anthropic recently (30 min by default). Reports arrive with each Claude response; the gateway polls when it's quiet. Share limits are skipped meanwhile.`,
+  exhaustion: `How fast the 5-hour bucket rose over the last 30 minutes, projected to 100%. If that lands <b>before the reset</b>, Claude requests will start failing unless usage slows.`,
+  served: `Limits are checked before each request against usage already recorded, so the request that crosses the line goes through and the next one is refused.`,
+  share_col: `Each user's estimated share of the account's 5-hour and 7-day buckets, in percentage points.`,
+  limits_col: `Per-user caps, checked before every request. The bar turns amber at 80% and red at 100%.`,
+  key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
+  act_limits: `View or change this user's limits.`,
+  act_rotate: `Issue a new key and stop the old one immediately. Usage history is kept.`,
+  act_disable: `Block the key until re-enabled. Nothing is deleted.`,
+  act_enable: `Let the key work again.`,
+  act_revoke: `Stop the key for good. Usage stays in the totals; a revoked user can only be deleted.`,
+  act_delete: `Remove the user and all their recorded usage. Account totals and charts change.`,
+  role: `<b>admin</b>: sees all users, manages keys and limits. <b>user</b>: sees only their own usage.`,
+  scope: `Count and limit only requests for matching models. <code>*</code> matches anything, so <code>claude-opus-*</code> covers every Opus version. Leave <code>*</code> for all models.`,
+  kind: `What the limit counts and over which window.`,
+  unit: `What the value is measured in.`,
+  value: `The cap, in the chosen unit. For <code>allowed_models</code>, the list of model globs.`,
+  "split:provider": `<b>anthropic</b> is the shared Claude subscription; other providers (such as Muse on Meta) use their own API key.`,
+  "metric:weighted": `Tokens priced by type and model, in Sonnet 5 input tokens. Best proxy for quota cost.`,
+  "metric:raw": `Every token counts 1, cache reads included.`,
+  "metric:cost_usd": `Estimated cost at Anthropic API list prices. Not billed on the subscription.`,
+  "metric:requests": `Forwarded requests, regardless of size.`,
+  reported: `Anthropic's own figure for the whole account, read from response headers or the usage endpoint. The line steps because it only changes when a new report arrives.`,
+  provider_sub: `Claude models run on the shared subscription. The figure is what they would cost on the API, not a bill.`,
+  provider_own: `This provider is billed to its own API key, at roughly this cost.`,
+  cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper against the quota.</p>`,
+  session: `Claude Code sends a session id with each request; one row per id. Duration runs from the first to the last request.`,
+};
+const KIND_TIPS = {
+  requests_minute: "Requests in the last 60 seconds.",
+  tokens_minute: "Tokens in the last 60 seconds.",
+  tokens_5h: "Tokens in the last 5 hours. Separate from the account's 5-hour bucket.",
+  requests_daily: "Requests in the last 24 hours.",
+  tokens_daily: "Tokens in the last 24 hours.",
+  tokens_weekly: "Tokens in the last 7 days.",
+  requests_monthly: "Requests in the last 30 days.",
+  tokens_monthly: "Tokens in the last 30 days.",
+  cost_monthly: "Estimated API-equivalent cost in the last 30 days, in USD.",
+  share_5h: "The user's <b>estimated share</b> of the account's 5-hour bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
+  share_7d: "The user's <b>estimated share</b> of the account's 7-day bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
+  allowed_models: "Only these models may be requested; anything else is refused. Comma-separated globs, e.g. <code>claude-sonnet-*,muse-spark</code>.",
+};
+const KIND_NOTE = {
+  window: "Rolling window: a request stops counting one window-length after it started. Only forwarded requests count; token-counting calls are free.",
+  share: "Skipped while there is no fresh report from Anthropic.",
+};
+const UNIT_TIPS = {
+  count: "Number of requests.",
+  weighted: "Tokens priced by type and model, in Sonnet 5 input-token equivalents. The best proxy for quota cost.",
+  raw: "Every token counts 1, cache reads included, so long cached sessions add up fast.",
+  usd: "US dollars at API list prices.",
+  pct: "Percentage points of the account bucket, 0 to 100.",
+  list: "Comma-separated model globs.",
+};
+const LIMIT_PLACEHOLDER = { count: "e.g. 200", weighted: "e.g. 5000000", raw: "e.g. 20000000", usd: "e.g. 50", pct: "e.g. 25", list: "claude-sonnet-*,muse-spark" };
+const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : KIND_NOTE.window);
+Object.entries(KIND_TIPS).forEach(([k, v]) => {
+  TIPS[`kind:${k}`] = `<span class="th">${k}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
+});
+const ERROR_TIPS = {
+  gateway_limit: "A gateway limit refused the request (named in brackets). It never reached the provider and isn't counted as usage.",
+  gateway_auth: "Missing, wrong, disabled or revoked gateway key.",
+  upstream_quota: "Anthropic refused it because an account bucket (5-hour or weekly) is full. Clears when that bucket resets.",
+  upstream_throttle: "Anthropic's short-term rate limit (per-minute requests or tokens). Usually clears within a minute.",
+  upstream_request_scoped: "A 429 without rate-limit headers: Anthropic refused this one request, not the account.",
+  gateway_needs_login: "The gateway's Claude login expired or was revoked. The admin runs <code>claude-proxy login</code>.",
+  gateway_refresh_unavailable: "Anthropic's sign-in service failed while the gateway renewed its token. It retries by itself.",
+  gateway_upstream_unreachable: "Network error: the gateway couldn't reach the provider.",
+  gateway_route_unconfigured: "The model is routed to another provider whose API key isn't set on the gateway.",
+  overloaded_error: "Anthropic is temporarily overloaded. Not a quota problem; retry shortly.",
+  api_error: "The provider returned a server error (5xx).",
+};
+Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
+
+// Info dot, dotted term, or an attribute for any element. Unknown keys render nothing extra.
+const tipI = (key, label = "What is this?") => (TIPS[key]
+  ? `<span class="tip-i" tabindex="0" role="button" aria-label="${esc(label)}" data-tip="${esc(key)}">?</span>` : "");
+const tipT = (html, key) => (TIPS[key] ? `<span class="tip-t" tabindex="0" data-tip="${esc(key)}">${html}</span>` : html);
+const tipAttr = (html) => (html ? ` data-tip-html="${esc(html)}"` : "");
+const tipH = (html, tip) => (tip ? `<span class="tip-t" tabindex="0"${tipAttr(tip)}>${html}</span>` : html);
+
+// One shared #tip. It is a manual popover so it enters the top layer above the modal dialog.
+const TIP = { for: null, pinned: false, timer: 0 };
+function showTip(el, pinned = false) {
+  const html = el.dataset.tipHtml || TIPS[el.dataset.tip];
+  if (!html) return;
+  clearTimeout(TIP.timer);
+  if (TIP.for !== el) hideTip();
+  const tip = $("#tip");
+  tip.innerHTML = html;
+  if (tip.showPopover && !tip.matches(":popover-open")) tip.showPopover();
+  tip.classList.add("open");
+  TIP.for = el; TIP.pinned = pinned;
+  el.classList.add("tip-on");
+  el.setAttribute("aria-describedby", "tip");
+  const r = el.getBoundingClientRect(), w = tip.offsetWidth, h = tip.offsetHeight;
+  const gutter = 16, gap = 8, vw = document.documentElement.clientWidth, vh = window.innerHeight;
+  const cx = r.left + r.width / 2;
+  const left = Math.min(Math.max(gutter, cx - w / 2), vw - gutter - w);
+  const above = r.top - gap - h >= gutter || (r.bottom + gap + h > vh - gutter && r.top > vh - r.bottom);
+  tip.dataset.side = above ? "top" : "bottom";
+  tip.style.left = `${left}px`;
+  tip.style.top = `${above ? r.top - gap - h : r.bottom + gap}px`;
+  tip.style.setProperty("--ax", `${Math.min(Math.max(12, cx - left), w - 12)}px`);
+  tip.style.setProperty("--dy", above ? "3px" : "-3px");
+}
+function hideTip() {
+  clearTimeout(TIP.timer);
+  const tip = $("#tip");
+  if (!tip.classList.contains("open")) return;
+  tip.classList.remove("open");
+  if (tip.hidePopover && tip.matches(":popover-open")) tip.hidePopover();
+  if (TIP.for) { TIP.for.classList.remove("tip-on"); TIP.for.removeAttribute("aria-describedby"); }
+  TIP.for = null; TIP.pinned = false;
+}
+const tipTarget = (e) => (e.target instanceof Element ? e.target.closest("[data-tip],[data-tip-html]") : null);
+document.addEventListener("pointerover", (e) => {
+  if (e.pointerType === "touch") return;
+  const el = tipTarget(e);
+  if (!el) return;
+  clearTimeout(TIP.timer);
+  if (el !== TIP.for) TIP.timer = setTimeout(() => showTip(el), TIP.for ? 0 : 150);
+});
+document.addEventListener("pointerout", (e) => {
+  if (e.pointerType === "touch") return;
+  const el = tipTarget(e);
+  if (!el || el.contains(e.relatedTarget)) return;
+  clearTimeout(TIP.timer);
+  if (el === TIP.for && !TIP.pinned) TIP.timer = setTimeout(hideTip, 80);
+});
+document.addEventListener("focusin", (e) => { const el = tipTarget(e); if (el && e.target === el) showTip(el); });
+document.addEventListener("focusout", (e) => { if (e.target === TIP.for && !TIP.pinned) hideTip(); });
+// Taps and clicks pin a tip open on info dots and terms; controls (seg buttons, row actions) keep their own click.
+document.addEventListener("click", (e) => {
+  const el = tipTarget(e);
+  if (el && !el.matches("button, a, input, select")) {
+    e.preventDefault();   // an info dot inside a <label> must not open the labelled control
+    if (el === TIP.for && TIP.pinned) hideTip(); else showTip(el, true);
+  } else hideTip();
+});
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
+window.addEventListener("scroll", hideTip, true);
+window.addEventListener("resize", hideTip);
+
 // ---------- charts ----------
 
 function disposeCharts() { S.charts.forEach((c) => c.dispose()); S.charts = []; }
@@ -144,13 +304,14 @@ function tableView(title, head, rows) {
     <tbody>${rows.map((r) => `<tr>${r.map((v, i) => `<td class="${i ? "r" : ""}">${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
 }
 
+// options: [value, label, tip key?]
 function seg(name, options, value) {
-  return `<span class="seg" data-pref="${name}">${options.map(([v, label]) =>
-    `<button type="button" data-v="${v}" aria-pressed="${v === value}">${esc(label)}</button>`).join("")}</span>`;
+  return `<span class="seg" data-pref="${name}">${options.map(([v, label, tip]) =>
+    `<button type="button" data-v="${v}" aria-pressed="${v === value}"${TIPS[tip] ? ` data-tip="${esc(tip)}"` : ""}>${esc(label)}</button>`).join("")}</span>`;
 }
 function wireSegs(root, rerender) {
   root.querySelectorAll(".seg[data-pref]").forEach((s) => s.addEventListener("click", (e) => {
-    const b = e.target.closest("button"); if (!b) return;
+    const b = e.target.closest("button[data-v]"); if (!b) return;
     S.prefs[s.dataset.pref] = b.dataset.v; savePrefs(); rerender();
   }));
 }
@@ -170,9 +331,17 @@ function limitValue(l) {
   const reset = l.reset_in ? ` · ${l.estimated ? "resets" : "frees"} in ${fmtDur(l.reset_in)}` : "";
   return `${l.estimated ? "est. " : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
 }
+function limitValueTip(l) {
+  if (l.kind === "allowed_models") return "";
+  if (l.skipped) return "Not enforced right now: without a fresh report from Anthropic the share can't be estimated. Token and request limits still apply.";
+  if (l.estimated) return "<b>est.</b> means estimated, not measured. <b>Resets</b> is when Anthropic resets the account bucket.";
+  if (!l.reset_in) return "";
+  return l.exceeded ? "<b>Frees</b> is when enough usage has left the rolling window to get back under the limit."
+    : "<b>Frees</b> is when the oldest counted request leaves the rolling window.";
+}
 function limitsBlock(ls) {
   if (!ls.length) return `<span class="muted">No limits</span>`;
-  return ls.map((l) => `<div class="limit-row"><span>${esc(limitLabel(l))}</span><span class="muted num">${esc(limitValue(l))}</span>
+  return ls.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l)), limitValueTip(l))}</span>
     <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div></div>`).join("");
 }
 
@@ -202,6 +371,7 @@ $("#tabs").addEventListener("click", (e) => {
 
 async function render() {
   renderTabs();
+  hideTip();
   disposeCharts();
   const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
@@ -215,7 +385,10 @@ function credentialPill(c) {
   const pill = $("#cred-pill");
   pill.querySelector(".dot").style.background = c.healthy ? css("--good") : css("--critical");
   pill.querySelector("span:last-child").textContent = c.healthy ? "Subscription linked" : "Subscription login needed";
-  pill.title = c.detail || "";
+  pill.dataset.tipHtml = (c.healthy
+    ? `<span class="th">Subscription linked</span><p>The gateway holds a working Claude subscription login; everyone's Claude requests go out on it.</p>`
+    : `<span class="th">Subscription login needed</span><p>The gateway's Claude login is missing or expired, so Claude requests fail. The admin runs <code>claude-proxy login</code> on the gateway host.</p>`)
+    + (c.detail ? `<p class="tm">${esc(c.detail)}</p>` : "");
 }
 
 async function renderOverview(main) {
@@ -235,21 +408,21 @@ async function renderOverview(main) {
       ${banners.join("")}
       <div class="controls">${seg("period", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], S.prefs.period)}</div>
       <div class="tiles">
-        <div class="card tile"><div class="label">Requests</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${esc(nfFull.format(t.requests))} forwarded</div></div>
-        <div class="card tile"><div class="label">Weighted tokens</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">Sonnet-input-equivalent</div></div>
-        <div class="card tile"><div class="label">Raw tokens</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
-        <div class="card tile"><div class="label">Est. API-equivalent cost</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : "not billed on the subscription"}</div></div>
-        ${isAdmin() ? `<div class="card tile"><div class="label">Active users</div><div class="value">${ov.active_users_24h}</div><div class="foot">in the last 24 h</div></div>` : ""}
-        <div class="card tile"><div class="label">Burn rate</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">weighted tokens / min, last 15 min</div></div>
+        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${esc(nfFull.format(t.requests))} forwarded</div></div>
+        <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">Sonnet-input-equivalent</div></div>
+        <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
+        <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : "not billed on the subscription"}</div></div>
+        ${isAdmin() ? `<div class="card tile"><div class="label">Active users${tipI("active_users")}</div><div class="value">${ov.active_users_24h}</div><div class="foot">in the last 24 h</div></div>` : ""}
+        <div class="card tile"><div class="label">Burn rate${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">weighted tokens / min, last 15 min</div></div>
       </div>
       <div class="grid cols-2">
-        <div class="card"><h3>Account quota (reported by Anthropic)</h3>
-          <p class="sub">Bar length is the account's utilization. Segments are each user's <b>estimated share</b>; grey is usage not attributed to any gateway user.</p>
+        <div class="card"><h3>Account quota (reported by Anthropic)${tipI("quota")}</h3>
+          <p class="sub">Bar length is the account's utilization. Segments are each user's ${tipT("<b>estimated share</b>", "share")}; grey is usage ${tipT("not attributed", "unattributed")} to any gateway user.</p>
           <div id="quota-bars"></div>
-          ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.</p>` : ""}
+          ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>
         <div class="card"><h3>${isAdmin() ? "Requests by user, last 7 days" : "Your limits"}</h3>
-          <p class="sub">${isAdmin() ? "Daily, weighted tokens." : "Rolling windows; the request that crosses a limit is still served."}</p>
+          <p class="sub">${isAdmin() ? "Daily, weighted tokens." : `Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
           ${isAdmin() ? `<div class="chart short" id="ov-users"></div>` : limitsBlock(me.limits)}
         </div>
       </div>
@@ -268,28 +441,29 @@ function quotaBar(q) {
   const segs = shares.map(([k, v]) => [k, v]).concat([["unattributed", q.unattributed || 0]]).filter(([, v]) => v > 0.05);
   const resets = q.resets_at ? `resets in ${fmtDur(q.resets_at - Date.now() / 1000)}` : "";
   return `<div style="margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:baseline"><span><b>${q.bucket === "5h" ? "5-hour" : q.bucket === "7d" ? "7-day" : esc(q.bucket)}</b>
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><span><b>${tipT(q.bucket === "5h" ? "5-hour" : q.bucket === "7d" ? "7-day" : esc(q.bucket), `bucket:${q.bucket}`)}</b>
       <span style="font-size:22px;font-weight:650;margin-left:8px">${fmtPct(q.utilization_pct)}</span></span>
-      <span class="muted">${esc(resets)}${q.stale ? " · stale" : ""}</span></div>
+      <span class="muted">${esc(resets)}${q.stale ? ` · ${tipT("stale", "stale")}` : ""}</span></div>
     <div class="stack" role="img" aria-label="${esc(q.bucket)} utilization ${fmtPct(q.utilization_pct)}">
-      ${segs.map(([k, v]) => `<span title="${esc(k)}: ${v.toFixed(1)} pts" style="width:${v}%;background:${colorFor("user", k)}"></span>`).join("")}
+      ${segs.map(([k, v]) => `<span${tipAttr(k === "unattributed" ? `<b>Not attributed</b> · ${v.toFixed(1)} pts<p class="tm">Account usage the gateway can't pin on a user.</p>`
+        : `<b>${esc(k)}</b> · ${v.toFixed(1)} pts, estimated`)} style="width:${v}%;background:${colorFor("user", k)}"></span>`).join("")}
     </div>
-    <div class="legend">${segs.map(([k, v]) => `<span><i style="background:${colorFor("user", k)}"></i>${esc(k === "unattributed" ? "not attributed" : k)} ${v.toFixed(1)}</span>`).join("")}</div>
+    <div class="legend">${segs.map(([k, v]) => `<span><i style="background:${colorFor("user", k)}"></i>${k === "unattributed" ? tipT("not attributed", "unattributed") : esc(k)} ${v.toFixed(1)}</span>`).join("")}</div>
   </div>`;
 }
 
 async function renderUsage(main) {
   const p = S.prefs;
-  const splits = isAdmin() ? [["user", "By user"], ["model", "By model"], ["provider", "By provider"]] : [["model", "By model"], ["provider", "By provider"]];
+  const splits = isAdmin() ? [["user", "By user"], ["model", "By model"], ["provider", "By provider", "split:provider"]] : [["model", "By model"], ["provider", "By provider", "split:provider"]];
   if (!isAdmin() && p.split === "user") p.split = "model";
   const d = await api(`/api/series?range=${p.range}&granularity=${p.granularity}&split=${p.split}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>Usage over time</h2>
-    <p class="lede">Weighted tokens price each token type and model at API list-price ratios, in units of a Claude Sonnet 5 input token, so they approximate what a request costs against the quota. Raw tokens are dominated by cache reads.</p>
+    <p class="lede">${tipT("Weighted tokens", "weighted")} price each token type and model at API list-price ratios, in units of a Claude Sonnet 5 input token, so they approximate what a request costs against the quota. ${tipT("Raw tokens", "raw")} are dominated by cache reads.</p>
     <div class="controls">
       ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range)}
       ${seg("granularity", [["hour", "Hourly"], ["day", "Daily"], ["week", "Weekly"]], p.granularity)}
       ${seg("split", splits, p.split)}
-      ${seg("metric", Object.entries(METRICS), p.metric)}
+      ${seg("metric", Object.entries(METRICS).map(([k, v]) => [k, v, `metric:${k}`]), p.metric)}
     </div>
     <div class="card"><h3>${esc(METRICS[p.metric])} per ${p.granularity}</h3><p class="sub">Scroll or pinch to zoom; click a legend item to hide it.</p>
       <div class="chart tall" id="usage-chart"></div><div id="usage-table"></div></div></section>`;
@@ -304,10 +478,10 @@ async function renderUsers(main) {
   const [{ users }, lim] = await Promise.all([api("/api/users"), api("/api/limits")]);
   S.kinds = lim.kinds;
   main.innerHTML = `<section class="view"><h2>Users & limits</h2>
-    <p class="lede">Each person has their own gateway key. Limits are checked before every request against that person's recorded usage; share limits compare an estimated share of the account's quota.</p>
+    <p class="lede">Each person has their own gateway key. Limits are checked before every request against that person's recorded usage; share limits compare an ${tipT("estimated share", "share")} of the account's quota.</p>
     <div class="controls"><button class="btn primary" id="add-user">Add user</button></div>
     <div class="card table-wrap"><table class="data"><thead><tr>
-      <th>User</th><th class="r">24 h</th><th class="r">7 d</th><th class="r">30 d</th><th class="r">Est. share 5 h / 7 d</th><th>Limits</th><th>Last seen</th><th></th></tr></thead>
+      <th>User${tipI("key_prefix", "About the key prefix")}</th><th class="r">24 h</th><th class="r">7 d</th><th class="r">30 d</th><th class="r">Est. share 5 h / 7 d${tipI("share_col")}</th><th>Limits${tipI("limits_col")}</th><th>Last seen</th><th></th></tr></thead>
       <tbody>${users.map(userRow).join("")}</tbody></table></div>
     <p class="muted" style="font-size:12px;margin-top:8px">Usage columns are weighted tokens, with estimated cost underneath. Concurrent requests from one user can each pass a check before either is recorded, so a limit can be overshot by about one request per open session.</p>
   </section>`;
@@ -326,11 +500,11 @@ function userRow(u) {
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
     <td class="muted">${fmtAgo(u.last_seen)}</td>
-    <td><div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}">Limits</button>` : `
-      <button class="btn small" data-act="limits" data-id="${u.id}">Limits</button>
-      <button class="btn small" data-act="rotate" data-id="${u.id}">Rotate key</button>
-      <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}">${u.enabled ? "Disable" : "Enable"}</button>
-      <button class="btn small danger" data-act="revoke" data-id="${u.id}">Revoke</button>`}</div></td></tr>`;
+    <td><div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>` : `
+      <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
+      <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
+      <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? "Disable" : "Enable"}</button>
+      <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">Revoke</button>`}</div></td></tr>`;
 }
 
 function openDialog(html) {
@@ -348,7 +522,7 @@ function keyDialog(title, key) {
 function addUserDialog() {
   const d = openDialog(`<h3>Add user</h3><form id="f-add" class="form-grid">
     <label>Name<input type="text" name="name" required maxlength="64"></label>
-    <label>Role<select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
+    <label><span>Role${tipI("role")}</span><select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
     <button class="btn primary" type="submit">Create</button></form><div class="error" id="add-err"></div>
     <p><button class="btn" data-close>Cancel</button></p>`);
   $("#f-add", d).onsubmit = async (e) => {
@@ -375,25 +549,35 @@ function alertInline(msg) { openDialog(`<h3>Could not do that</h3><p>${esc(msg)}
 function limitsDialog(u) {
   const kinds = S.kinds || {};
   const d = openDialog(`<h3>Limits for ${esc(u.name)}</h3>
-    <div id="lim-list">${u.limits.length ? u.limits.map((l) => `<div class="limit-row"><span>${esc(limitLabel(l))} = <b>${esc(l.value)}</b> <span class="muted">${esc(l.unit)}</span></span>
+    <div id="lim-list">${u.limits.length ? u.limits.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)} = <b>${esc(l.value)}</b> <span class="muted">${esc(l.unit)}</span></span>
       <button class="btn small danger" data-del="${esc(l.kind)}" data-scope="${esc(l.scope)}">Remove</button></div>`).join("") : `<p class="muted">No limits yet.</p>`}</div>
     <h3 style="margin-top:16px">Set a limit</h3>
     <form id="f-lim" class="form-grid">
-      <label>Kind<select name="kind">${Object.keys(kinds).map((k) => `<option>${esc(k)}</option>`).join("")}</select></label>
-      <label>Value<input type="text" name="value" required placeholder="e.g. 500000"></label>
-      <label>Unit<select name="unit"></select></label>
-      <label>Models (glob)<input type="text" name="scope" value="*" title="Only count and limit requests for matching models, e.g. claude-opus-*"></label>
+      <label><span>Kind${tipI("kind", "About the selected kind")}</span><select name="kind">${Object.keys(kinds).map((k) => `<option>${esc(k)}</option>`).join("")}</select></label>
+      <label><span>Value${tipI("value")}</span><input type="text" name="value" required placeholder="e.g. 500000"></label>
+      <label><span>Unit${tipI("unit", "About the selected unit")}</span><select name="unit"></select></label>
+      <label><span>Models (glob)${tipI("scope")}</span><input type="text" name="scope" value="*"></label>
       <button class="btn primary" type="submit">Save</button>
     </form>
-    <p class="muted" style="font-size:12px">Windows are rolling. <b>share_5h / share_7d</b> are percentage points of the account's reported bucket, compared with the user's <i>estimated</i> share. <b>allowed_models</b> takes comma-separated globs such as <code>claude-sonnet-*,muse-spark</code>.</p>
+    <div class="hint" id="lim-hint" aria-live="polite"></div>
     <div class="error" id="lim-err"></div><p><button class="btn" data-close>Close</button></p>`);
   const f = $("#f-lim", d);
+  // The Kind and Unit dots and the hint line describe whatever is selected; native <option>s can't carry tips.
+  const syncHint = () => {
+    const k = f.kind.value, unit = f.unit.value;
+    d.querySelector('[data-tip="kind"]').dataset.tipHtml = TIPS[`kind:${k}`] || `<b>${esc(k)}</b>`;
+    d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(unit)}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
+    f.value.placeholder = LIMIT_PLACEHOLDER[unit] || "";
+    $("#lim-hint", d).innerHTML = `<b>${esc(k)}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
+      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}` : "");
+  };
   const syncUnits = () => {
     const k = f.kind.value;
     f.unit.innerHTML = (kinds[k] || []).map((x) => `<option>${esc(x)}</option>`).join("");
     f.scope.disabled = k === "allowed_models";
+    syncHint();
   };
-  f.kind.onchange = syncUnits; syncUnits();
+  f.kind.onchange = syncUnits; f.unit.onchange = syncHint; syncUnits();
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -411,11 +595,11 @@ async function renderQuota(main) {
   const p = S.prefs;
   const d = await api(`/api/quota/timeline?bucket=${encodeURIComponent(p.bucket)}&range=${p.range === "1d" ? "1d" : p.range}`);
   main.innerHTML = `<section class="view"><h2>Account quota</h2>
-    <p class="lede">Utilization is <b>reported by Anthropic</b> for the whole subscription. Per-user figures are <b>estimated</b>: each rise between two reports is split across the users whose requests finished in between, by weighted tokens. Reports come in whole percents.</p>
-    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, b]), p.bucket)} ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], p.range)}</div>
+    <p class="lede">Utilization is <b>reported by Anthropic</b> for the whole subscription. Per-user figures are ${tipT("<b>estimated</b>", "share")}: each rise between two reports is split across the users whose requests finished in between, by weighted tokens. Reports come in whole percents.</p>
+    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, b, `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], p.range)}</div>
     <div class="grid cols-2">
-      <div class="card"><h3>Reported utilization</h3><p class="sub">Each point is a report from response headers or the usage endpoint.</p><div class="chart" id="q-line"></div></div>
-      <div class="card"><h3>Estimated share, current window</h3><p class="sub">Cumulative since the bucket last reset; grey is not attributed.</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
+      <div class="card"><h3>Reported utilization${tipI("reported")}</h3><p class="sub">Each point is a report from response headers or the usage endpoint.</p><div class="chart" id="q-line"></div></div>
+      <div class="card"><h3>Estimated share, current window${tipI("share")}</h3><p class="sub">Cumulative since the bucket last reset; grey is ${tipT("not attributed", "unattributed")}.</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
     </div></section>`;
   wireSegs(main, render);
   const o = baseOption();
@@ -463,11 +647,11 @@ async function renderModels(main) {
   const mm = p.modelMetric;
   main.innerHTML = `<section class="view"><h2>Models & cache</h2>
     <p class="lede">Claude models run on the shared subscription; other providers (such as Muse on Meta) are billed to their own API key.</p>
-    <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", "Est. cost"], ["weighted", "Weighted"], ["raw", "Raw tokens"], ["requests", "Requests"]], mm)}</div>
-    <div class="tiles">${Object.entries(d.providers).map(([k, t]) => `<div class="card tile"><div class="label">${k === "anthropic" ? "Claude (subscription, API-equivalent)" : `${esc(k)} (own API key)`}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${fmtNum(t.requests)} requests · ${fmtNum(t.raw)} tokens</div></div>`).join("")}</div>
+    <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", "Est. cost", "metric:cost_usd"], ["weighted", "Weighted", "metric:weighted"], ["raw", "Raw tokens", "metric:raw"], ["requests", "Requests", "metric:requests"]], mm)}</div>
+    <div class="tiles">${Object.entries(d.providers).map(([k, t]) => `<div class="card tile"><div class="label">${k === "anthropic" ? `Claude (subscription, API-equivalent)${tipI("provider_sub")}` : `${esc(k)} (own API key)${tipI("provider_own")}`}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${fmtNum(t.requests)} requests · ${fmtNum(t.raw)} tokens</div></div>`).join("")}</div>
     <div class="grid cols-2">
       <div class="card"><h3>${esc(METRICS[mm])} by model</h3><p class="sub">Largest first.</p><div class="chart" id="m-bars"></div></div>
-      <div class="card"><h3>Cache hit ratio</h3><p class="sub">Daily <code>${esc(d.formula)}</code></p><div class="chart" id="m-cache"></div></div>
+      <div class="card"><h3>Cache hit ratio${tipI("cache_ratio")}</h3><p class="sub">Daily <code>${esc(d.formula)}</code></p><div class="chart" id="m-cache"></div></div>
     </div></section>`;
   wireSegs(main, render);
   const o = baseOption();
@@ -517,7 +701,7 @@ async function renderActivity(main) {
 async function renderSessions(main) {
   const d = await api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}`);
   main.innerHTML = `<section class="view"><h2>Sessions</h2><p class="lede">Claude Code sessions seen in the last ${S.prefs.range === "1d" ? "24 hours" : "7 days"}, newest first.</p>
-    <div class="card table-wrap">${d.sessions.length ? `<table class="data"><thead><tr><th>Session</th>${isAdmin() ? "<th>User</th>" : ""}<th>Started</th><th class="r">Duration</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th>Models</th></tr></thead><tbody>
+    <div class="card table-wrap">${d.sessions.length ? `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${isAdmin() ? "<th>User</th>" : ""}<th>Started</th><th class="r">Duration</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th>Models</th></tr></thead><tbody>
       ${d.sessions.map((s) => `<tr><td class="muted">${esc(s.session_id.slice(0, 8))}</td>${isAdmin() ? `<td>${esc(s.user)}</td>` : ""}<td>${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${s.requests}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${esc(s.models.join(", "))}</td></tr>`).join("")}
     </tbody></table>` : `<p class="muted">No sessions recorded. Claude Code sends a session header on each request; if this stays empty, the header name has changed.</p>`}</div></section>`;
@@ -533,11 +717,11 @@ async function renderErrors(main) {
                    gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
                    gateway_refresh_unavailable: "Token refresh temporarily failing",
                    api_error: "Upstream server error" };
-  main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">Gateway rejections and upstream errors. Upstream 429s are split into an exhausted account quota, a per-minute throttle, and a refusal of one request.</p>
+  main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">Gateway rejections and upstream errors. Upstream 429s are split into an ${tipT("exhausted account quota", "err:upstream_quota")}, a ${tipT("per-minute throttle", "err:upstream_throttle")}, and a ${tipT("refusal of one request", "err:upstream_request_scoped")}. Hover a kind below for what it means.</p>
     <div class="controls">${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
     <div class="card table-wrap" style="margin-top:16px"><h3>Most recent</h3>${d.recent.length ? `<table class="data"><thead><tr><th>When</th>${isAdmin() ? "<th>User</th>" : ""}<th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
-      ${d.recent.map((r) => `<tr><td>${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${esc(LABELS[r.k] || r.k)}${r.rejected_by && r.rejected_by !== "auth" ? ` <span class="muted">(${esc(r.rejected_by)})</span>` : ""}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+      ${d.recent.map((r) => `<tr><td>${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${tipT(esc(LABELS[r.k] || r.k), `err:${r.k}`)}${r.rejected_by && r.rejected_by !== "auth" ? ` <span class="muted">(${esc(r.rejected_by)})</span>` : ""}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
     </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div></section>`;
   wireSegs(main, render);
   if (!d.points.length) { $("#err-chart").outerHTML = `<p class="muted">Nothing to plot.</p>`; return; }
@@ -552,6 +736,8 @@ async function renderAudit(main) {
       ${d.entries.map((e) => `<tr><td>${fmtTime(e.at)}</td><td>${esc(e.actor ?? "—")}</td><td>${esc(e.action)}</td><td>${esc(e.target ?? "")}</td><td class="muted">${esc(e.detail_json ?? "")}</td></tr>`).join("")}
     </tbody></table></div></section>`;
 }
+
+$("#dialog").addEventListener("close", hideTip);
 
 // ---------- session ----------
 

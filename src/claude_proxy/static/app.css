@@ -17,6 +17,7 @@
   --good: #0ca30c; --warning: #fab219; --serious: #ec835a; --critical: #d03b3b;
   --good-text: #006300; --critical-text: #b42323;
   --radius: 10px;
+  --tip-bg: #1f1f1e; --tip-ink: #f4f3ef; --tip-muted: #b5b3ab; --tip-line: rgba(255, 255, 255, 0.10); --tip-code: rgba(255, 255, 255, 0.10);
 }
 @media (prefers-color-scheme: dark) {
   :root:where(:not([data-theme="light"])) {
@@ -28,6 +29,7 @@
     --other: #5c5b57; --unattributed: #383835;
     --seq-0: #232322; --seq-1: #104281; --seq-2: #1c5cab; --seq-3: #2a78d6; --seq-4: #6da7ec; --seq-5: #cde2fb;
     --good-text: #0ca30c; --critical-text: #e66767;
+    --tip-bg: #2c2c2a; --tip-ink: #ffffff; --tip-muted: #b5b3ab; --tip-line: rgba(255, 255, 255, 0.14); --tip-code: rgba(255, 255, 255, 0.10);
   }
 }
 :root[data-theme="dark"] {
@@ -39,6 +41,7 @@
   --other: #5c5b57; --unattributed: #383835;
   --seq-0: #232322; --seq-1: #104281; --seq-2: #1c5cab; --seq-3: #2a78d6; --seq-4: #6da7ec; --seq-5: #cde2fb;
   --good-text: #0ca30c; --critical-text: #e66767;
+  --tip-bg: #2c2c2a; --tip-ink: #ffffff; --tip-muted: #b5b3ab; --tip-line: rgba(255, 255, 255, 0.14); --tip-code: rgba(255, 255, 255, 0.10);
 }
 
 * { box-sizing: border-box; }
@@ -152,6 +155,35 @@ dialog h3 { margin: 0 0 8px; }
 code.key { display: block; padding: 10px; background: var(--wash); border-radius: 8px; word-break: break-all; font-size: 13px; }
 .row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); }
+
+/* Tooltips: an info dot (.tip-i) or a dotted term (.tip-t) carries data-tip / data-tip-html; one shared #tip shows it. */
+.tip-i { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 5px;
+         border-radius: 50%; border: 1px solid var(--axis); color: var(--muted); font-size: 10px; font-weight: 700;
+         line-height: 1; vertical-align: 1px; cursor: help; user-select: none; flex: none; }
+.tip-i:hover, .tip-i.tip-on { color: var(--ink); border-color: var(--ink-2); background: var(--wash); }
+.tip-t { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: help; }
+#tip { position: fixed; inset: auto; margin: 0; z-index: 100; max-width: min(320px, calc(100vw - 32px)); width: max-content;
+       padding: 9px 12px; border: 1px solid var(--tip-line); border-radius: 10px; overflow: visible;
+       background: var(--tip-bg); color: var(--tip-ink); font-size: 12.5px; line-height: 1.5; font-weight: 400; text-align: left;
+       box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12); pointer-events: none;
+       animation: tip-in 120ms ease-out; }
+#tip:not(.open) { display: none; }
+#tip::after { content: ""; position: absolute; left: var(--ax, 50%); width: 9px; height: 9px; background: var(--tip-bg);
+              border: 1px solid var(--tip-line); transform: translateX(-50%) rotate(45deg); }
+#tip[data-side="top"]::after { bottom: -5px; border-top: 0; border-left: 0; }
+#tip[data-side="bottom"]::after { top: -5px; border-bottom: 0; border-right: 0; }
+#tip p { margin: 0; }
+#tip p + p, #tip p + ul, #tip ul + p { margin-top: 6px; }
+#tip ul { margin: 4px 0 0; padding-left: 16px; }
+#tip li + li { margin-top: 2px; }
+#tip b { font-weight: 650; }
+#tip .th { font-weight: 650; display: block; margin-bottom: 2px; }
+#tip .tm { color: var(--tip-muted); }
+#tip code { font: 11.5px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; background: var(--tip-code); padding: 1px 5px; border-radius: 4px; white-space: nowrap; }
+@keyframes tip-in { from { opacity: 0; transform: translateY(var(--dy, 3px)); } }
+@media (prefers-reduced-motion: reduce) { #tip { animation: none; } }
+.hint { font-size: 12px; color: var(--ink-2); background: var(--wash); border-radius: 8px; padding: 8px 10px; margin-top: 10px; }
+.hint code { font-size: 11.5px; }
 
 @media (max-width: 640px) {
   header.top, nav.tabs { padding-left: 16px; padding-right: 16px; }
