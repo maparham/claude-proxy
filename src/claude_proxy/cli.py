@@ -115,13 +115,28 @@ def cmd_user_list(args, cfg):
     conn = _conn(cfg)
     for r in conn.execute("SELECT * FROM users ORDER BY id"):
         state = "revoked" if r["revoked_at"] else ("enabled" if r["enabled"] else "disabled")
-        print(f"{r['id']:>3}  {r['name']:<16} {r['role']:<5} {r['key_prefix']}…  {state}")
+        opencode = f"  opencode {r['routes_key_prefix']}…" if r["routes_key_prefix"] else ""
+        print(f"{r['id']:>3}  {r['name']:<16} {r['role']:<5} {r['key_prefix']}…  {state}{opencode}")
 
 
 def cmd_user_rotate(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
     print(f"New gateway key for {u['name']}, shown once:\n{db.rotate_key(conn, u['id'])}")
+
+
+def cmd_user_routes_key(args, cfg):
+    conn = _conn(cfg)
+    u = _user(conn, args.user)
+    if args.remove:
+        removed = db.remove_routes_key(conn, u["id"])
+        print(f"{u['name']}: OpenCode key removed" if removed else f"{u['name']} has no OpenCode key.")
+        return
+    try:
+        key = db.set_routes_key(conn, u["id"])
+    except ValueError as e:
+        sys.exit(str(e))
+    print(f"OpenCode key for {u['name']} (third-party models only, never Claude), shown once:\n{key}")
 
 
 def cmd_user_state(args, cfg):
@@ -269,6 +284,8 @@ def main(argv=None):
     s = u.add_parser("add"); s.add_argument("name"); s.add_argument("--role", choices=["user", "admin"], default="user"); s.set_defaults(func=cmd_user_add)
     u.add_parser("list").set_defaults(func=cmd_user_list)
     s = u.add_parser("rotate"); s.add_argument("user"); s.set_defaults(func=cmd_user_rotate)
+    s = u.add_parser("routes-key", help="issue, replace or --remove a user's OpenCode key (third-party models only)")
+    s.add_argument("user"); s.add_argument("--remove", action="store_true"); s.set_defaults(func=cmd_user_routes_key)
     for action in ("enable", "disable", "revoke"):
         s = u.add_parser(action); s.add_argument("user"); s.set_defaults(func=cmd_user_state, action=action)
     s = u.add_parser("rename"); s.add_argument("user"); s.add_argument("new"); s.set_defaults(func=cmd_user_rename)
