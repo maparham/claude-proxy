@@ -1,0 +1,89 @@
+#!/usr/bin/env bash
+# Forced command for the GitHub Actions deploy key (installed by install-deploy-key.sh as
+# /usr/local/bin/claude-gateway-deploy). The key can run only `deploy <commit sha>`, with a tar on stdin
+# holding image.tar.gz (`docker save` of claude-proxy:<sha>) and config.toml.
+#
+# Stop-then-start, since only one process may hold the subscription grant. Before the swap the database
+# and config are backed up inside the data volume. If the new container doesn't come up with a working
+# credential, the previous image and config are put back. The database is never restored automatically:
+# the new container may already have rotated the grant's refresh token, and an older copy would break
+# the login. Backups are in /data/backups for a manual restore.
+set -euo pipefail
+DIR=${CLAUDE_GATEWAY_DIR:-$HOME/claude-gateway/deploy/lightsail}
+VOLUME=claude-gateway_data
+KEEP_IMAGES=3
+KEEP_BACKUPS=5
+
+read -r CMD SHA EXTRA <<<"${SSH_ORIGINAL_COMMAND:-}"
+[[ ${CMD:-} == deploy && ${SHA:-} =~ ^[0-9a-f]{40}$ && -z ${EXTRA:-} ]] \
+  || { echo "usage: deploy <40-hex commit sha>, with the payload tar on stdin" >&2; exit 2; }
+cd "$DIR"
+exec 9>.deploy.lock
+flock -n 9 || { echo "another deploy is running" >&2; exit 1; }
+
+WORK=$(mktemp -d -p "$HOME" .claude-gateway-deploy.XXXXXX)   # /tmp is RAM-backed
+trap 'rm -rf "$WORK"' EXIT
+tar -x -C "$WORK" --no-same-owner --no-same-permissions -f - image.tar.gz config.toml
+for f in image.tar.gz config.toml; do [[ -f $WORK/$f && ! -L $WORK/$f ]] || { echo "bad payload: $f" >&2; exit 1; }; done
+
+# The image may carry only the claude-proxy:<sha> tag, so a load can't replace other services' images.
+python3 - "$WORK/image.tar.gz" "claude-proxy:$SHA" <<'PY'
+import json, sys, tarfile
+path, want = sys.argv[1], sys.argv[2]
+with tarfile.open(path, "r:gz") as t:
+    tags = [tag for m in json.load(t.extractfile("manifest.json")) for tag in (m.get("RepoTags") or [])]
+    try:
+        index = json.load(t.extractfile("index.json"))
+    except KeyError:
+        index = {}
+names = [d.get("annotations", {}).get("io.containerd.image.name") for d in index.get("manifests", [])]
+if tags != [want] or any(n not in (None, "docker.io/library/" + want) for n in names):
+    sys.exit(f"image must be tagged exactly {want}, found {tags} {names}")
+PY
+echo "loading claude-proxy:$SHA"
+docker load -q <"$WORK/image.tar.gz"
+
+PREV=$(sed -n 's/^GATEWAY_TAG=//p' .env 2>/dev/null || true)
+PREV=${PREV:-latest}
+STAMP=$(date -u +%Y%m%dT%H%M%SZ)
+in_volume() { docker run --rm -i --network none -v "$VOLUME:/data" "claude-proxy:$PREV" "$@"; }
+
+echo "backing up database and config to /data/backups/$STAMP.*"
+in_volume python - "$STAMP" "$KEEP_BACKUPS" <<'PY'
+import glob, os, shutil, sqlite3, sys
+stamp, keep = sys.argv[1], int(sys.argv[2])
+os.makedirs("/data/backups", mode=0o700, exist_ok=True)
+db = f"/data/backups/{stamp}.db"
+dst = sqlite3.connect(db)
+sqlite3.connect("/data/claude_proxy.db").backup(dst)
+dst.close()
+os.chmod(db, 0o600)
+shutil.copy2("/data/config.toml", f"/data/backups/{stamp}.config.toml")
+for old in sorted(glob.glob("/data/backups/*.db"))[:-keep]:
+    os.remove(old)
+    os.remove(old[:-3] + ".config.toml")
+PY
+in_volume sh -c 'cat >/data/config.toml.new && mv /data/config.toml.new /data/config.toml' <"$WORK/config.toml"
+
+switch_to() { printf 'GATEWAY_TAG=%s\n' "$1" >.env; docker compose up -d --no-build; }
+healthy() {
+  local i
+  for i in $(seq 30); do curl -fsS -o /dev/null http://127.0.0.1:18480/health && break; sleep 1; done
+  docker compose exec -T gateway claude-proxy status 2>&1 | grep -v "HTTP Request" | tee "$WORK/status" >&2
+  grep -q '^credential: OK' "$WORK/status"
+}
+
+echo "switching $PREV -> $SHA"
+if ! { switch_to "$SHA" && healthy; }; then
+  echo "claude-proxy:$SHA is unhealthy; rolling back to $PREV" >&2
+  docker compose logs --tail 40 gateway >&2 || true
+  in_volume cp "/data/backups/$STAMP.config.toml" /data/config.toml || true
+  { switch_to "$PREV" && healthy; } || echo "ROLLBACK TO $PREV IS ALSO UNHEALTHY; the gateway needs attention" >&2
+  exit 1
+fi
+
+# Keep the newest few images (always including the live one and the one it replaced) for rollback.
+docker image ls claude-proxy --format '{{.Tag}}' | tail -n +$((KEEP_IMAGES + 1)) | while read -r t; do
+  [[ $t == "$SHA" || $t == "$PREV" ]] || docker image rm "claude-proxy:$t" >/dev/null || true
+done
+echo "deployed claude-proxy:$SHA"

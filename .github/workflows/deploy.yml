@@ -1,0 +1,50 @@
+# Tests on every push and pull request. A green push to master deploys to the Lightsail box: the image is
+# built here, streamed over SSH and swapped in by deploy/lightsail/claude-gateway-deploy, which rolls back
+# on a failed health check. "Run workflow" redeploys master. Setup: deploy/lightsail/install-deploy-key.sh.
+name: test and deploy
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+# One run per branch at a time, in push order (a newer queued run replaces an older queued one), so an
+# older commit can't deploy over a newer one and deploys never overlap.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v6
+      - run: uv run --python 3.12 pytest -q
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build image
+        run: docker build -t "claude-proxy:$GITHUB_SHA" .
+      - name: Package image and config
+        run: |
+          mkdir payload
+          docker save "claude-proxy:$GITHUB_SHA" | gzip >payload/image.tar.gz
+          cp deploy/lightsail/config.toml payload/
+          ls -l payload
+      - name: Deploy
+        env:
+          SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          HOST: ${{ secrets.DEPLOY_HOST }}
+        run: |
+          install -m 700 -d ~/.ssh
+          (umask 077; printf '%s\n' "$SSH_KEY" >~/.ssh/deploy_key)
+          printf '%s\n' "$KNOWN_HOSTS" >~/.ssh/known_hosts
+          tar -C payload -cf - image.tar.gz config.toml |
+            ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes "$HOST" "deploy $GITHUB_SHA"

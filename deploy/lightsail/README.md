@@ -21,6 +21,36 @@ Live since 2026-09-23: `ANTHROPIC_BASE_URL=https://claude.rahkar.pro`, dashboard
 `https://claude-dash.rahkar.pro/dashboard`. Streams of over 90 s pass through Cloudflare intact, and the
 dashboard sees real client IPs.
 
+## Automatic deploys
+
+Every push to `master` whose tests pass goes live (`.github/workflows/deploy.yml`). "Run workflow" on
+that workflow redeploys `master`. Actions builds the image, streams it with `config.toml` over SSH, and
+`claude-gateway-deploy` on the box does the rest:
+
+1. accepts the image only if it is tagged exactly `claude-proxy:<commit sha>`
+2. backs up the database and config to `/data/backups/<time>.*` (the last 5 are kept)
+3. copies `config.toml` from the repo into the volume, so the repo is the source of truth for config
+4. stops the old container (10 s for in-flight streams) and starts the new one
+5. requires `/health` and `credential: OK` from `claude-proxy status`, otherwise puts the previous image
+   and config back and fails the workflow run
+6. keeps the 3 newest images for rollback
+
+A deploy never touches `gateway.env`, the grant or the rest of the data volume. The database is never
+restored automatically, because a copy from before the deploy may hold a refresh token that has since
+rotated. The deploy key in `authorized_keys` can run only `claude-gateway-deploy`.
+
+One-time setup, and again after changing `claude-gateway-deploy` or `docker-compose.yml`, or to rotate
+the key:
+
+```sh
+deploy/lightsail/install-deploy-key.sh ec2-user@3.139.146.5
+```
+
+Roll back by hand: `ssh ec2-user@3.139.146.5`, `cd claude-gateway/deploy/lightsail`, list tags with
+`docker image ls claude-proxy`, write the one you want to `.env` as `GATEWAY_TAG=<tag>`, then run
+`docker compose up -d --no-build`. `update.sh` still ships the local checkout, built on the box as
+`claude-proxy:manual-<time>`.
+
 Details:
 
 - `docker compose up -d --build` from this directory, with `gateway.env` (mode 600) holding

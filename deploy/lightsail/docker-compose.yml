@@ -4,9 +4,10 @@ name: claude-gateway
 services:
   gateway:
     build: ../..
-    image: claude-proxy:latest
+    image: claude-proxy:${GATEWAY_TAG:-latest}   # .env, written by claude-gateway-deploy and update.sh
     network_mode: host
     restart: unless-stopped
+    stop_grace_period: 10s           # in-flight streams get this long to finish on a deploy
     mem_limit: 256m
     env_file: gateway.env            # CLAUDE_PROXY_CREDENTIAL_KEY=..., optional META_API_KEY=... (chmod 600)
     environment:

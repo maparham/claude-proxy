@@ -11,6 +11,7 @@ rsync -az --delete --exclude .git --exclude .venv --exclude '__pycache__' --excl
 ssh "$HOST" bash -s <<REMOTE_SCRIPT
 set -euo pipefail
 cd $REMOTE
+printf 'GATEWAY_TAG=manual-%s\n' "\$(date -u +%Y%m%dT%H%M%SZ)" > .env   # keep CI's per-commit tags honest
 sudo docker compose build -q
 sudo docker compose up -d
 for i in \$(seq 30); do curl -fsS http://127.0.0.1:18480/health >/dev/null 2>&1 && break; sleep 1; done
