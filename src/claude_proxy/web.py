@@ -105,7 +105,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             except AuthError as e:
                 fail(e.status, e.body["error"]["message"])
             # A routes-only key (OpenCode) may read its own status and nothing else, and never acts as an admin.
-            if user["key_scope"] == "routes" and not routes_ok:
+            if user["key_scope"] != "full" and not (routes_ok and user["key_scope"] == "routes"):
                 fail(403, "This key only works for third-party models; use your Claude Code key for the dashboard.")
             return user
         user = db.find_session(conn, request.cookies.get(COOKIE, ""))
@@ -161,7 +161,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         except AuthError:
             limiter.failed(ip)
             fail(401, "Unknown, disabled or revoked key.")
-        if user["key_scope"] == "routes":   # a valid key, so not counted as a failed attempt
+        if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
         return start_session(user)
 

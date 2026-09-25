@@ -49,6 +49,9 @@ def forbid_credential(gw, monkeypatch):
     ("routes", "GET", "/v1/messages", False, False),
     ("routes", "GET", "/v1/foo", False, False),
     ("routes", "POST", "/v1/foo", True, False),
+    ("bogus", "POST", "/v1/messages", True, True),     # unknown scope: fail closed, treated like "routes"
+    ("bogus", "POST", "/v1/messages", False, False),
+    ("bogus", "GET", "/v1/models", False, True),
 ])
 def test_scope_allows(scope, method, path, routed, allowed):
     assert scope_allows(scope, method, path, ROUTE if routed else None) is allowed

@@ -88,3 +88,18 @@ def test_migration_adds_the_columns_and_index_to_an_old_database(tmp_path):
     assert {"routes_key_hash", "routes_key_prefix"} <= {r[1] for r in conn.execute("PRAGMA table_info(users)")}
     assert "idx_users_routes_key" in {r[1] for r in conn.execute("PRAGMA index_list(users)")}
     assert find_user_by_key(conn, set_routes_key(conn, 1))["name"] == "alice"
+
+
+def test_migration_adds_the_prefix_column_when_only_the_hash_column_is_missing_it(tmp_path):
+    # A crash between the two ALTER TABLE statements of an earlier version would leave routes_key_hash
+    # present but routes_key_prefix missing forever unless each column is guarded on its own.
+    path = tmp_path / "half.db"
+    old = sqlite3.connect(path)
+    old.execute(OLD_USERS.replace(
+        "password_hash TEXT)", "password_hash TEXT, routes_key_hash TEXT)"))
+    old.execute("INSERT INTO users(name, role, key_hash, key_prefix, created_at) VALUES('alice','user','h','sk-proxy-abc',0)")
+    old.commit()
+    old.close()
+    conn = init_db(path)
+    assert {"routes_key_hash", "routes_key_prefix"} <= {r[1] for r in conn.execute("PRAGMA table_info(users)")}
+    assert find_user_by_key(conn, set_routes_key(conn, 1))["name"] == "alice"

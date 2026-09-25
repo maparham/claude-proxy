@@ -40,7 +40,7 @@ def scope_allows(key_scope: str, method: str, path: str, route: Route | None) ->
     """Whether a key of this scope may make this request (spec 2.3). A routes-only key (OpenCode) gets exactly two
     things: messages and token counts for a routed model, and the model list, which the gateway answers itself.
     Everything else is refused, so it can never reach the subscription credential."""
-    if key_scope != "routes":
+    if key_scope == "full":
         return True
     if method == "GET" and path == "/v1/models":
         return True
@@ -160,7 +160,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
         return api_error(403, "permission_error", f"This key is for third-party models only ({_route_patterns(cfg)}). "
                          "Claude models need your Claude Code key.")
-    if user["key_scope"] == "routes" and path == "/v1/models":
+    if user["key_scope"] != "full" and path == "/v1/models":
         base["provider"] = "gateway"
         record(status=200, stream=0, complete=1)
         entries = route_model_entries(cfg)

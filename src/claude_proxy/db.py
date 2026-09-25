@@ -131,6 +131,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''")
     if "routes_key_hash" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN routes_key_hash TEXT")
+    if "routes_key_prefix" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN routes_key_prefix TEXT")
     # SQLite can't ADD COLUMN ... UNIQUE; a unique index gives the same guarantee, and NULLs never collide in it.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_routes_key ON users(routes_key_hash)")

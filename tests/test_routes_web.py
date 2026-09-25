@@ -1,6 +1,7 @@
 """Routes-only keys on the dashboard (spec 2.4)."""
 import time
 
+from claude_proxy import auth as auth_module
 from claude_proxy.db import set_routes_key
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
@@ -18,6 +19,21 @@ async def test_routes_key_reads_its_own_status_and_nothing_else(env):  # noqa: F
         r = await c.get("/api/overview", headers=bearer(rk))
         assert r.status_code == 403
         assert r.json()["error"] == "This key only works for third-party models; use your Claude Code key for the dashboard."
+
+
+async def test_an_unknown_key_scope_is_refused_like_routes_and_not_let_into_me_status(env, monkeypatch):  # noqa: F811
+    gw, conn, ids, keys = env
+    real = auth_module.find_user_by_key
+
+    def bogus(conn_, raw):
+        u = real(conn_, raw)
+        return {**u, "key_scope": "bogus"} if u else None
+    monkeypatch.setattr(auth_module, "find_user_by_key", bogus)
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/overview", headers=bearer(keys["alice"]))
+        assert r.status_code == 403
+        r = await c.get("/api/me/status", headers=bearer(keys["alice"]))
+        assert r.status_code == 403   # routes_ok only ever admits key_scope == "routes"
 
 
 async def test_an_admins_routes_key_cannot_do_admin_actions(env):  # noqa: F811
