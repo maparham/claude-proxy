@@ -184,3 +184,15 @@ def test_off_removes_the_hooks_block_it_created(stub, home):
     assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     assert cg(home, "off").returncode == 0
     assert "hooks" not in json.loads((home / ".claude" / "settings.json").read_text())
+
+
+@pytest.mark.parametrize("malformed", [None, "nope"])
+def test_off_leaves_a_malformed_user_prompt_submit_alone(stub, home, malformed):
+    settings = home / ".claude" / "settings.json"
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    s = json.loads(settings.read_text())
+    s["hooks"]["UserPromptSubmit"] = malformed
+    settings.write_text(json.dumps(s, indent=2) + "\n")
+    r = cg(home, "off")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(settings.read_text())["hooks"]["UserPromptSubmit"] == malformed

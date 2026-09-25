@@ -84,11 +84,13 @@ if c.pop("added_statusline", False) and ours_line(s.get("statusLine")):
 warn_cmd = line_cmd + " --warn"
 ours_hook = lambda g: isinstance(g, dict) and any(isinstance(h, dict) and h.get("command") == warn_cmd for h in g.get("hooks", []))
 if c.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
-    groups = [g for g in s["hooks"].get("UserPromptSubmit", []) if not ours_hook(g)]
-    if groups:
-        s["hooks"]["UserPromptSubmit"] = groups
-    else:
-        s["hooks"].pop("UserPromptSubmit", None)
+    submit = s["hooks"].get("UserPromptSubmit")
+    if isinstance(submit, list):
+        groups = [g for g in submit if not ours_hook(g)]
+        if groups:
+            s["hooks"]["UserPromptSubmit"] = groups
+        else:
+            s["hooks"].pop("UserPromptSubmit", None)
     if not s["hooks"]:
         del s["hooks"]
 
