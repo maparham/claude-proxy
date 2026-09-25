@@ -141,6 +141,22 @@ const UNIT_TIPS = {
   pct: "Percentage points of the account bucket, 0 to 100.",
   list: "Comma-separated model globs.",
 };
+// One plain sentence per kind, shown beside each item of the Kind dropdown.
+const KIND_SHORT = {
+  requests_minute: "How many requests they can send in any 1 minute.",
+  requests_daily: "How many requests they can send in any 24 hours.",
+  requests_monthly: "How many requests they can send in any 30 days.",
+  tokens_minute: "How many tokens (pieces of text) they can use in any 1 minute.",
+  tokens_5h: "How many tokens they can use in any 5 hours.",
+  tokens_daily: "How many tokens they can use in any 24 hours.",
+  tokens_weekly: "How many tokens they can use in any 7 days.",
+  tokens_monthly: "How many tokens they can use in any 30 days.",
+  cost_daily: "How many dollars they can spend in any 24 hours, at API prices.",
+  cost_monthly: "How many dollars they can spend in any 30 days, at API prices.",
+  share_5h: "What percent of the shared subscription's 5-hour quota they can use.",
+  share_7d: "What percent of the shared subscription's weekly quota they can use.",
+  allowed_models: "Which models they may use. Any other model is refused.",
+};
 const LIMIT_PLACEHOLDER = { count: "e.g. 200", weighted: "e.g. 5000000", raw: "e.g. 20000000", usd: "e.g. 50", pct: "e.g. 25", list: "claude-sonnet-*,muse-spark" };
 const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : KIND_NOTE.window);
 Object.entries(KIND_TIPS).forEach(([k, v]) => {
@@ -204,6 +220,19 @@ function showTip(el, pinned = false) {
   const gutter = 16, gap = 8, vw = document.documentElement.clientWidth, vh = window.innerHeight;
   const cx = r.left + r.width / 2;
   const left = Math.min(Math.max(gutter, cx - w / 2), vw - gutter - w);
+  // data-tip-side="right" (dropdown items): beside the element, or on its left when the right has no room.
+  const side = el.dataset.tipSide !== "right" ? null
+    : r.right + gap + w <= vw - gutter ? "right" : r.left - gap - w >= gutter ? "left" : null;
+  if (side) {
+    const top = Math.min(Math.max(gutter, r.top + r.height / 2 - h / 2), vh - gutter - h);
+    tip.dataset.side = side;
+    tip.style.left = `${side === "right" ? r.right + gap : r.left - gap - w}px`;
+    tip.style.top = `${top}px`;
+    tip.style.setProperty("--ax", side === "right" ? "0px" : `${w}px`);
+    tip.style.setProperty("--ay", `${Math.min(Math.max(12, r.top + r.height / 2 - top), h - 12)}px`);
+    tip.style.setProperty("--dy", "0px");
+    return;
+  }
   const above = r.top - gap - h >= gutter || (r.bottom + gap + h > vh - gutter && r.top > vh - r.bottom);
   tip.dataset.side = above ? "top" : "bottom";
   tip.style.left = `${left}px`;
@@ -240,13 +269,15 @@ document.addEventListener("focusout", (e) => { if (e.target === TIP.for && !TIP.
 // Taps and clicks pin a tip open on info dots and terms; controls (seg buttons, row actions) keep their own click.
 document.addEventListener("click", (e) => {
   const el = tipTarget(e);
-  if (el && !el.matches("button, a, input, select")) {
+  if (el && !el.matches("button, a, input, select, [role=option]")) {
     e.preventDefault();   // an info dot inside a <label> must not open the labelled control
     if (el === TIP.for && TIP.pinned) hideTip(); else showTip(el, true);
   } else hideTip();
 });
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") hideTip(); });
-window.addEventListener("scroll", hideTip, true);
+// Scrolling a dropdown list keeps its item's tip, moved along with the item.
+window.addEventListener("scroll", (e) => (e.target instanceof Element && e.target.matches(".tsel-list") && e.target.contains(TIP.for)
+  ? showTip(TIP.for) : hideTip()), true);
 window.addEventListener("resize", hideTip);
 
 // ---------- charts ----------
@@ -588,6 +619,89 @@ async function userAction(act, id, u) {
 function confirmInline(msg) { return window.confirm(msg); }
 function alertInline(msg) { openDialog(`<h3>Could not do that</h3><p>${esc(msg)}</p><button class="btn" data-close>OK</button>`); }
 
+// A <select> whose options each carry a tip. A native option popup can't show tips, so this draws its own
+// listbox; the <select> stays in the form, hidden, and remains the source of truth (changes fire "change" on it).
+function tipSelect(sel, tipFor) {
+  const btn = document.createElement("button"), list = document.createElement("ul");
+  btn.type = "button"; btn.className = "tsel";
+  list.className = "tsel-list"; list.id = `tsel-${sel.name}`; list.popover = "manual"; list.setAttribute("role", "listbox");
+  Object.entries({ role: "combobox", "aria-haspopup": "listbox", "aria-expanded": "false", "aria-controls": list.id })
+    .forEach(([k, v]) => btn.setAttribute(k, v));
+  list.innerHTML = [...sel.options].map((o, i) =>
+    `<li role="option" id="${list.id}-${i}" data-tip-side="right"${tipAttr(tipFor(o.value))}>${esc(o.text)}</li>`).join("");
+  sel.hidden = true;
+  sel.before(btn);
+  // Outside the <label>: a click inside a label would re-click the button it labels.
+  (sel.closest("dialog") || document.body).append(list);
+  const items = [...list.children];
+  let active = -1, pointer = "mouse";
+  const isOpen = () => list.matches(":popover-open");
+  const label = () => {
+    btn.textContent = sel.selectedOptions[0]?.text || "";
+    items.forEach((li, i) => li.setAttribute("aria-selected", String(i === sel.selectedIndex)));
+  };
+  const setActive = (i, tip = true) => {
+    active = i;
+    items.forEach((li, j) => li.classList.toggle("active", j === i));
+    if (i < 0) { btn.removeAttribute("aria-activedescendant"); return; }
+    btn.setAttribute("aria-activedescendant", items[i].id);
+    items[i].scrollIntoView({ block: "nearest" });
+    if (tip) showTip(items[i]);
+  };
+  const outside = (e) => {
+    if (!list.isConnected) document.removeEventListener("pointerdown", outside, true);
+    else if (!btn.contains(e.target) && !list.contains(e.target)) close(false);
+  };
+  const open = () => {
+    if (isOpen()) return;
+    list.showPopover();
+    btn.setAttribute("aria-expanded", "true");
+    const r = btn.getBoundingClientRect(), vw = document.documentElement.clientWidth, vh = window.innerHeight, gap = 4, gutter = 8;
+    const below = vh - r.bottom - gap - gutter, above = r.top - gap - gutter;
+    const down = below >= Math.min(list.scrollHeight, 240) || below >= above;
+    Object.assign(list.style, { minWidth: `${r.width}px`, maxHeight: `${down ? below : above}px`,
+      top: down ? `${r.bottom + gap}px` : "auto", bottom: down ? "auto" : `${vh - r.top + gap}px` });
+    list.style.left = `${Math.max(gutter, Math.min(r.left, vw - gutter - list.offsetWidth))}px`;
+    setActive(sel.selectedIndex, pointer !== "touch");
+    document.addEventListener("pointerdown", outside, true);
+  };
+  function close(focus) {
+    if (!isOpen()) return;
+    if (items.includes(TIP.for)) hideTip();
+    list.hidePopover();
+    btn.setAttribute("aria-expanded", "false");
+    setActive(-1);
+    document.removeEventListener("pointerdown", outside, true);
+    if (focus) btn.focus();
+  }
+  const pick = (i) => {
+    if (i >= 0 && i !== sel.selectedIndex) { sel.selectedIndex = i; sel.dispatchEvent(new Event("change")); }
+    label(); close(true);
+  };
+  btn.onpointerdown = (e) => { pointer = e.pointerType; };
+  btn.onclick = () => (isOpen() ? close(false) : open());
+  btn.onkeydown = (e) => {
+    const last = items.length - 1, step = { ArrowDown: 1, ArrowUp: -1 }[e.key];
+    if (step || e.key === "Home" || e.key === "End") {
+      e.preventDefault();
+      pointer = "keyboard";
+      if (!isOpen()) open();
+      else setActive(step ? Math.min(last, Math.max(0, active + step)) : e.key === "Home" ? 0 : last);
+    } else if ((e.key === "Enter" || e.key === " ") && isOpen()) { e.preventDefault(); pick(active); }
+    else if (e.key === "Escape" && isOpen()) { e.preventDefault(); e.stopPropagation(); close(true); }
+    else if (e.key === "Tab") close(false);
+  };
+  list.addEventListener("pointerdown", (e) => e.preventDefault());   // keep focus on the button
+  list.addEventListener("pointermove", (e) => {
+    const i = items.indexOf(e.target.closest("[role=option]"));
+    if (i >= 0 && i !== active) setActive(i, e.pointerType !== "touch");
+  });
+  list.addEventListener("click", (e) => pick(items.indexOf(e.target.closest("[role=option]"))));
+  window.addEventListener("resize", () => close(false), { once: true });
+  sel.addEventListener("change", label);
+  label();
+}
+
 function limitsDialog(u) {
   const kinds = S.kinds || {};
   const d = openDialog(`<h3>Limits for ${esc(u.name)}</h3>
@@ -604,7 +718,8 @@ function limitsDialog(u) {
     <div class="hint" id="lim-hint" aria-live="polite"></div>
     <div class="error" id="lim-err"></div><p><button class="btn" data-close>Close</button></p>`);
   const f = $("#f-lim", d);
-  // The Kind and Unit dots and the hint line describe whatever is selected; native <option>s can't carry tips.
+  tipSelect(f.kind, (k) => `<span class="th">${esc(k.replace(/_/g, " "))}</span><p>${KIND_SHORT[k] || KIND_TIPS[k] || ""}</p>`);
+  // The Kind and Unit dots and the hint line describe whatever is selected; each Kind item also has its own short tip.
   const syncHint = () => {
     const k = f.kind.value, unit = f.unit.value;
     d.querySelector('[data-tip="kind"]').dataset.tipHtml = TIPS[`kind:${k}`] || `<b>${esc(k)}</b>`;

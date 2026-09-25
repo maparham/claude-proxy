@@ -140,6 +140,17 @@ details.tableview summary { cursor: pointer; color: var(--ink-2); font-size: 12p
 .btn.small { padding: 3px 8px; font-size: 12px; }
 input[type=text], input[type=password], input[type=number], select {
   border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px; min-width: 0; }
+/* tipSelect: a <select> drawn as a button and a listbox, so each option can carry a tip. */
+.tsel { border: 1px solid var(--border); background: var(--surface); padding: 6px 26px 6px 8px; border-radius: 8px; min-width: 0;
+        text-align: left; cursor: pointer; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tsel::after { content: ""; position: absolute; right: 10px; top: 50%; width: 6px; height: 6px; border: solid var(--ink-2);
+               border-width: 0 1.5px 1.5px 0; transform: translateY(-70%) rotate(45deg); }
+.tsel-list { position: fixed; inset: auto; margin: 0; padding: 4px; list-style: none; overflow-y: auto; box-sizing: border-box;
+             background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 10px; font-size: 13px;
+             box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12); }
+.tsel-list li { padding: 5px 12px 5px 26px; border-radius: 6px; cursor: default; white-space: nowrap; position: relative; }
+.tsel-list li.active { background: var(--wash); }
+.tsel-list li[aria-selected="true"]::before { content: "\2713"; position: absolute; left: 9px; }
 input:disabled, select:disabled { color: var(--muted); background: var(--wash); opacity: 1; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); outline-offset: 1px; }
 
@@ -183,6 +194,9 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
               border: 1px solid var(--tip-line); transform: translateX(-50%) rotate(45deg); }
 #tip[data-side="top"]::after { bottom: -5px; border-top: 0; border-left: 0; }
 #tip[data-side="bottom"]::after { top: -5px; border-bottom: 0; border-right: 0; }
+#tip[data-side="right"]::after, #tip[data-side="left"]::after { top: var(--ay, 50%); transform: translate(-50%, -50%) rotate(45deg); }
+#tip[data-side="right"]::after { border-top: 0; border-right: 0; }
+#tip[data-side="left"]::after { border-bottom: 0; border-left: 0; }
 #tip p { margin: 0; }
 #tip p + p, #tip p + ul, #tip ul + p { margin-top: 6px; }
 #tip ul { margin: 4px 0 0; padding-left: 16px; }
