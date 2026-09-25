@@ -257,7 +257,7 @@ async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, 
                     data["data"].append({"type": "model", "id": name, "display_name": f"{name} (via {route.name})",
                                          "created_at": "2026-01-01T00:00:00Z"})
         raw = json.dumps(data).encode()
-    except (ValueError, AttributeError, TypeError):
+    except (ValueError, AttributeError, TypeError, KeyError):   # not the usual shape: pass it on as is
         pass
     record(status=200, stream=0, complete=1)
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}

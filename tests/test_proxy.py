@@ -114,6 +114,15 @@ async def test_models_list_includes_route_models(setup, anthropic):
     assert ids == ["claude-sonnet-5", "muse-spark"]
 
 
+@pytest.mark.parametrize("body", [{"object": "list"}, {"data": None}, [], "models"])
+async def test_models_list_in_an_unexpected_shape_passes_through_unchanged(setup, anthropic, body):
+    gw, conn, uid, h = setup
+    anthropic.default = lambda req: JSONResponse(body)
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.get("/v1/models", headers=h)
+    assert r.status_code == 200 and r.json() == body
+
+
 async def test_upstream_quota_429_passed_through_and_classified(setup, anthropic):
     gw, conn, uid, h = setup
     anthropic.default = lambda req: JSONResponse({"type": "error", "error": {"type": "rate_limit_error", "message": "x"}}, status_code=429,

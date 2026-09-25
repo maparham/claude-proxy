@@ -9,3 +9,4 @@ secrets/
 .DS_Store
 *.key
 demo.db*
+uv.lock
