@@ -267,7 +267,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             (*params, since)).fetchall()
         tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since), group="session_id")
         n = names()
-        return {"sessions": [{"session_id": r["session_id"], "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
+        ids = [r["session_id"] for r in meta]
+        titled = {(t["user_id"], t["session_id"]): t["title"] for t in conn.execute(
+            f"SELECT user_id, session_id, title FROM session_titles WHERE {where} "
+            f"AND session_id IN ({','.join('?' * len(ids))})", (*params, *ids))}
+        return {"sessions": [{"session_id": r["session_id"], "title": titled.get((r["user_id"], r["session_id"])),
+                              "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
                               "duration_s": r["last"] - r["first"], "requests": r["n"], "models": (r["models"] or "").split(","),
                               **{k: v for k, v in tot.get(r["session_id"], usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
                              for r in meta]}

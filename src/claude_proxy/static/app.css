@@ -106,6 +106,8 @@ table.data th { text-align: left; font-weight: 600; color: var(--ink-2); font-si
                 border-bottom: 1px solid var(--axis); white-space: nowrap; }
 table.data td { padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
 table.data td.r, table.data th.r { text-align: right; font-variant-numeric: tabular-nums; }
+.sess-title { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-id { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 table.data tr:hover td { background: var(--wash); }
 .table-wrap { overflow-x: auto; }
 details.tableview { margin-top: 8px; }

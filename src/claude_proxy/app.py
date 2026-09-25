@@ -9,11 +9,11 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import limits, quota
+from . import limits, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Route
 from .credentials import NeedsLogin, RefreshUnavailable
-from .db import insert_request
+from .db import insert_request, set_session_title
 from .forwarder import filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward
 from .gateway import Gateway
 from .meter import SSEMeter, parse_non_streaming
@@ -117,6 +117,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["provider"] = upstream.provider
     base["model"] = model
     base["requested_model"] = model
+    wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
 
     decision = limits.evaluate(conn, cfg, user["id"], model, path)
     if decision:
@@ -178,7 +179,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     is_stream = "text/event-stream" in resp.headers.get("content-type", "")
 
     async def relay():
-        meter = SSEMeter() if is_stream else None
+        meter = SSEMeter(collect_text=wants_title) if is_stream else None
         buf = bytearray() if not is_stream else None
         finished = False
         try:
@@ -195,7 +196,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             finished = True
         finally:
             await resp.aclose()
-            mr = meter.finalize() if meter is not None else parse_non_streaming(bytes(buf), path)
+            mr = meter.finalize() if meter is not None else parse_non_streaming(bytes(buf), path, collect_text=wants_title)
             record(
                 model=mr.model or base["model"], status=resp.status_code, stream=1 if is_stream else 0,
                 complete=1 if finished and (mr.complete or not is_stream) else 0,
@@ -206,6 +207,12 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 error_type=error_type or mr.error_type or (f"upstream_{resp.status_code}" if resp.status_code >= 400 else None),
                 meter_error=1 if mr.meter_error else 0,
             )
+            title = titles.parse_title(mr.text) if wants_title and finished and resp.status_code == 200 else None
+            if title:
+                try:
+                    set_session_title(conn, user["id"], base["session_id"], title)
+                except Exception:
+                    logger.exception("could not record session title")
 
     return StreamingResponse(relay(), status_code=status, headers=resp_headers)
 

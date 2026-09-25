@@ -107,7 +107,7 @@ const TIPS = {
   provider_sub: `Claude models run on the shared subscription. The figure is what they would cost on the API, not a bill.`,
   provider_own: `This provider is billed to its own API key, at roughly this cost.`,
   cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper against the quota.</p>`,
-  session: `Claude Code sends a session id with each request; one row per id. Duration runs from the first to the last request.`,
+  session: `<span class="th">Session</span><p>Claude Code sends a session id with each request; one row per id. Duration runs from the first to the last request.</p><p class="tm">The title is the one Claude Code generates for the session. Sessions without one show only their id.</p>`,
 };
 const KIND_TIPS = {
   requests_minute: "Requests in the last 60 seconds.",
@@ -712,7 +712,7 @@ async function renderSessions(main) {
   const d = await api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}`);
   main.innerHTML = `<section class="view"><h2>Sessions</h2><p class="lede">Claude Code sessions seen in the last ${S.prefs.range === "1d" ? "24 hours" : "7 days"}, newest first.</p>
     <div class="card table-wrap">${d.sessions.length ? `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${isAdmin() ? "<th>User</th>" : ""}<th>Started</th><th class="r">Duration</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th>Models</th></tr></thead><tbody>
-      ${d.sessions.map((s) => `<tr><td class="muted">${esc(s.session_id.slice(0, 8))}</td>${isAdmin() ? `<td>${esc(s.user)}</td>` : ""}<td>${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
+      ${d.sessions.map((s) => `<tr><td>${s.title ? `<div class="sess-title" title="${esc(s.title)}">${esc(s.title)}</div><div class="sess-id">${esc(s.session_id.slice(0, 8))}</div>` : `<span class="muted">${esc(s.session_id.slice(0, 8))}</span>`}</td>${isAdmin() ? `<td>${esc(s.user)}</td>` : ""}<td>${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${s.requests}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${esc(s.models.join(", "))}</td></tr>`).join("")}
     </tbody></table>` : `<p class="muted">No sessions recorded. Claude Code sends a session header on each request; if this stays empty, the header name has changed.</p>`}</div></section>`;
 }

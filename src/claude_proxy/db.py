@@ -88,6 +88,14 @@ SCHEMA = [
         key TEXT PRIMARY KEY,
         value TEXT
     )""",
+    # Latest title Claude Code gave each of its sessions (titles.py); the only conversation content kept.
+    """CREATE TABLE IF NOT EXISTS session_titles (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        title TEXT NOT NULL,
+        updated_at REAL NOT NULL,
+        PRIMARY KEY (user_id, session_id)
+    )""",
     """CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -212,6 +220,13 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
     return n
 
 
+def set_session_title(conn: sqlite3.Connection, user_id: int, session_id: str, title: str) -> None:
+    # Keyed by user too: the session id comes from the client, so one user can never rename another's session.
+    conn.execute("INSERT INTO session_titles(user_id, session_id, title, updated_at) VALUES(?,?,?,?) "
+                 "ON CONFLICT(user_id, session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at",
+                 (user_id, session_id, title, time.time()))
+
+
 def insert_request(conn: sqlite3.Connection, **kw) -> int:
     cols = ",".join(kw.keys())
     placeholders = ",".join(["?"] * len(kw))
@@ -250,5 +265,6 @@ def cleanup(conn: sqlite3.Connection, retention_days: int) -> dict[str, int]:
         "sessions": conn.execute("DELETE FROM sessions WHERE expires_at<?", (int(now),)).rowcount,
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
+        "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
     }
     return out

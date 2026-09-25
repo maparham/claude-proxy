@@ -206,8 +206,8 @@ settings(key, value)
 
 - `key_hash` uses SHA-256 of a 32-byte random key. Keys are shown once at creation. `key_prefix` holds the first 8 characters for identification in the UI.
 - `session_id` is taken from Claude Code's session header when present, for per-session statistics.
-- Prompts and responses are never stored. Only metadata and counts.
-- Retention: `requests` and `quota_snapshots` are kept for 180 days by default, configurable.
+- Prompts and responses are never stored. Only metadata and counts. Exception: `session_titles` keeps the latest title Claude Code generates for each session (its side request asking for a JSON `{"title": ...}` answer), keyed by user and session id, visible to the admin and the owner.
+- Retention: `requests`, `quota_snapshots` and `session_titles` are kept for 180 days by default, configurable.
 
 ## 10. Dashboard
 

@@ -207,3 +207,16 @@ async def test_session_reports_settings_the_dashboard_quotes(env, cfg):
     async with admin_client(gw) as c:
         s = (await c.get("/api/session")).json()
     assert s["settings"] == {"reference_model": "claude-opus-5-5", "stale_after_s": 900}
+
+
+async def test_sessions_carry_their_title_only_for_the_owner(env):
+    gw, conn, ids, keys = env
+    from claude_proxy.db import set_session_title
+    set_session_title(conn, ids["alice"], f"s-{ids['alice']}", "Login redirect loop")
+    set_session_title(conn, ids["bob"], f"s-{ids['alice']}", "Spoofed")        # bob reusing alice's id
+    async with admin_client(gw) as c:
+        rows = {s["session_id"]: s["title"] for s in (await c.get("/api/sessions")).json()["sessions"]}
+    assert rows == {f"s-{ids['alice']}": "Login redirect loop", f"s-{ids['bob']}": None}
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        mine = (await c.get("/api/sessions", headers=bearer(keys["bob"]))).json()["sessions"]
+    assert [(s["session_id"], s["title"]) for s in mine] == [(f"s-{ids['bob']}", None)]

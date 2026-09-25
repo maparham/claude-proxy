@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from claude_proxy.app import create_app
 from claude_proxy.db import create_user, revoke, set_enabled
+from claude_proxy.titles import is_title_request, parse_title
 from tests.conftest import asgi_client, make_gateway, message_json, seed_oauth, sse_events, sse_response
 
 MSG = {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]}
@@ -213,3 +214,64 @@ async def test_reverse_proxy_headers_never_reach_upstream(setup, anthropic, meta
     leaked = [k for k in sent if k in CDN_HEADERS]
     assert leaked == []
     assert "203.0.113.9" not in str(sent)
+
+
+TITLE_REQ = {"model": "claude-haiku-4-5", "max_tokens": 64, "system": [{"type": "text", "text": "You are naming a coding session so the user can pick it out."}],
+             "messages": [{"role": "user", "content": "<session>fix the login</session>"}],
+             "output_config": {"format": {"type": "json_schema", "schema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}}}
+
+
+def titles(conn):
+    return {(r["user_id"], r["session_id"]): r["title"] for r in conn.execute("SELECT * FROM session_titles")}
+
+
+def test_title_request_detection():
+    assert is_title_request(TITLE_REQ)
+    assert is_title_request({**TITLE_REQ, "system": "x"})                          # schema alone
+    no_schema = {k: v for k, v in TITLE_REQ.items() if k != "output_config"}
+    assert is_title_request(no_schema)                                              # prompt alone
+    assert is_title_request({**no_schema, "system": "x", "output_format": TITLE_REQ["output_config"]["format"]})
+    assert not is_title_request({**no_schema, "system": "x"})
+    assert not is_title_request(MSG) and not is_title_request(None)
+    other = {"type": "json_schema", "schema": {"properties": {"title": {}, "body": {}}}}
+    assert not is_title_request({**MSG, "output_config": {"format": other}})
+
+
+def test_parse_title():
+    assert parse_title('{"title": "  Login   redirect loop "}') == "Login redirect loop"
+    assert parse_title('```json\n{"title": "Fenced"}\n```') == "Fenced"
+    assert parse_title("not json") is None and parse_title('{"title": ""}') is None and parse_title("[1]") is None
+    assert len(parse_title('{"title": "%s"}' % ("x" * 500))) == 200
+
+
+async def test_streamed_session_title_is_recorded_and_forwarded_unchanged(setup, anthropic):
+    gw, conn, uid, h = setup
+    answer = '{"title": "Login redirect loop"}'
+    anthropic.default = lambda req: sse_response(model="claude-haiku-4-5", text=answer)
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**TITLE_REQ, "stream": True}, headers={**h, "x-claude-code-session-id": "sess-1"})
+    assert r.content == sse_events(model="claude-haiku-4-5", text=answer)
+    assert titles(conn) == {(uid, "sess-1"): "Login redirect loop"}
+    assert last_request(conn)["output_tokens"] == 40
+
+
+async def test_latest_title_wins_and_titles_are_per_user(setup, anthropic):
+    gw, conn, uid, h = setup
+    bob, bob_key = create_user(conn, "bob")
+    async with asgi_client(create_app(gw)) as c:
+        for title, headers in [("First", h), ("Second", h), ("Bob's", {**h, "Authorization": f"Bearer {bob_key}"})]:
+            anthropic.default = lambda req, t=title: JSONResponse(message_json(text=json.dumps({"title": t})))
+            await c.post("/v1/messages", json=TITLE_REQ, headers={**headers, "x-claude-code-session-id": "sess-1"})
+    assert titles(conn) == {(uid, "sess-1"): "Second", (bob, "sess-1"): "Bob's"}
+
+
+async def test_no_title_from_ordinary_requests_errors_or_sessionless_requests(setup, anthropic):
+    gw, conn, uid, h = setup
+    sid = {**h, "x-claude-code-session-id": "sess-1"}
+    async with asgi_client(create_app(gw)) as c:
+        anthropic.default = lambda req: JSONResponse(message_json(text='{"title": "Nope"}'))
+        await c.post("/v1/messages", json=MSG, headers=sid)
+        await c.post("/v1/messages", json=TITLE_REQ, headers=h)
+        anthropic.default = lambda req: JSONResponse(message_json(text='{"title": "Nope"}'), status_code=500)
+        await c.post("/v1/messages", json=TITLE_REQ, headers=sid)
+    assert titles(conn) == {}

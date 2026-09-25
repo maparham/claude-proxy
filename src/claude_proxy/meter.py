@@ -7,6 +7,7 @@ from dataclasses import dataclass
 logger = logging.getLogger("claude_proxy")
 
 MAX_LINE_BYTES = 1_048_576  # 1 MiB per spec 6.3
+MAX_TEXT_CHARS = 4096       # answer text kept when collect_text is on
 
 
 @dataclass
@@ -24,6 +25,7 @@ class MeterResult:
     meter_error_detail: str | None = None
     stream: bool = False
     error_type: str | None = None
+    text: str = ""   # answer text, kept only when asked for (session titles)
 
 
 def _safe_int(v, default=0) -> int:
@@ -72,10 +74,11 @@ class SSEMeter:
     - Missing message_stop -> complete=false
     """
 
-    def __init__(self):
+    def __init__(self, collect_text: bool = False):
         self._buf: str = ""
         self.result = MeterResult(stream=True, complete=False)
         self._seen_stop = False
+        self._collect_text = collect_text
 
     @property
     def meter_error(self) -> bool:
@@ -205,7 +208,11 @@ class SSEMeter:
             self.result.complete = True
             self._seen_stop = True
 
-        elif typ == "content_block_delta" or typ == "content_block_start" or typ == "content_block_stop":
+        elif typ == "content_block_delta":
+            delta = data.get("delta") if isinstance(data.get("delta"), dict) else {}
+            if self._collect_text and delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
+                self.result.text = (self.result.text + delta["text"])[:MAX_TEXT_CHARS]
+        elif typ == "content_block_start" or typ == "content_block_stop":
             # no usage
             pass
         elif typ == "error":
@@ -218,7 +225,7 @@ class SSEMeter:
         return self.result
 
 
-def parse_non_streaming(body: bytes, path: str) -> MeterResult:
+def parse_non_streaming(body: bytes, path: str, collect_text: bool = False) -> MeterResult:
     """Parse non-streaming JSON response per spec 6.2."""
     res = MeterResult(stream=False, complete=True)
     # count_tokens endpoint -> zero tokens
@@ -242,4 +249,7 @@ def parse_non_streaming(body: bytes, path: str) -> MeterResult:
         res.upstream_request_id = data["id"]
     if data.get("type") == "error" and isinstance(data.get("error"), dict):
         res.error_type = str(data["error"].get("type") or "error")[:64]
+    if collect_text and isinstance(data.get("content"), list):
+        res.text = "".join(b["text"] for b in data["content"]
+                           if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))[:MAX_TEXT_CHARS]
     return res

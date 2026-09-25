@@ -127,8 +127,10 @@ claude-proxy limit list
 - If the grant is revoked or expires, Claude requests get a 503 telling the person the admin must
   run `claude-proxy login`, and the dashboard shows a red banner. A running server picks up
   the new login without a restart.
-- Prompts and responses are never stored, only metadata and token counts. Requests and quota
-  reports older than `retention_days` (default 180) are deleted.
+- Prompts and responses are never stored, only metadata and token counts. The one exception is the
+  short title Claude Code generates for each session, kept so the Sessions tab can show sessions by
+  name; the admin and the session's owner can see it. Requests, quota reports and session titles
+  older than `retention_days` (default 180) are deleted.
 - To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
   history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
   removes their recorded usage from totals and charts.

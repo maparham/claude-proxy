@@ -74,21 +74,22 @@ class FakeUpstream:
         return httpx.AsyncClient(transport=httpx.ASGITransport(app=self.app), base_url=f"http://{self.name}")
 
 
-def message_json(model="claude-sonnet-4-6", input_tokens=10, output_tokens=5, cache_creation=0, cache_read=0, cc5=None, cc1=None):
+def message_json(model="claude-sonnet-4-6", input_tokens=10, output_tokens=5, cache_creation=0, cache_read=0, cc5=None, cc1=None, text="hi"):
     usage = {"input_tokens": input_tokens, "output_tokens": output_tokens,
              "cache_creation_input_tokens": cache_creation, "cache_read_input_tokens": cache_read}
     if cc5 is not None or cc1 is not None:
         usage["cache_creation"] = {"ephemeral_5m_input_tokens": cc5 or 0, "ephemeral_1h_input_tokens": cc1 or 0}
     return {"id": "msg_1", "type": "message", "role": "assistant", "model": model,
-            "content": [{"type": "text", "text": "hi"}], "stop_reason": "end_turn", "usage": usage}
+            "content": [{"type": "text", "text": text}], "stop_reason": "end_turn", "usage": usage}
 
 
-def sse_events(model="claude-sonnet-4-6", input_tokens=100, output_tokens=40, cache_creation=0, cache_read=0, stop=True):
+def sse_events(model="claude-sonnet-4-6", input_tokens=100, output_tokens=40, cache_creation=0, cache_read=0, stop=True, text="Hello"):
     events = [
         ("message_start", {"type": "message_start", "message": {"id": "msg_s", "type": "message", "role": "assistant", "model": model, "content": [],
                                                                 "usage": {"input_tokens": input_tokens, "output_tokens": 1, "cache_creation_input_tokens": cache_creation, "cache_read_input_tokens": cache_read}}}),
         ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}}),
+        *(("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": text[i:i + 8]}})
+          for i in range(0, len(text), 8)),
         ("message_delta", {"type": "message_delta", "delta": {"stop_reason": None}, "usage": {"output_tokens": output_tokens // 2}}),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         ("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": output_tokens}}),
