@@ -5,7 +5,7 @@ HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authoriza
               "trailers", "transfer-encoding", "upgrade", "proxy-connection"}
 
 # Client credentials: removed on every route before the route's own credential is added (spec 17.1).
-CLIENT_CREDENTIALS = {"authorization", "x-api-key"}
+CLIENT_CREDENTIALS = {"authorization", "x-api-key", "x-gateway-key"}
 
 # Recomputed by the HTTP client for the outgoing request.
 RECOMPUTED = {"host", "content-length"}

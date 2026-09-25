@@ -10,7 +10,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import limits, quota
-from .auth import AuthError, authenticate
+from .auth import AuthError, authenticate, client_status
 from .config import Route
 from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request
@@ -168,7 +168,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         except Exception:
             logger.exception("could not record quota headers")
 
-    status = resp.status_code
+    status = client_status(request.headers, resp.status_code)
     resp_headers = filter_response_headers(dict(resp.headers))
     error_type = quota.classify_429(resp.headers) if status == 429 else None
 
@@ -197,13 +197,13 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             await resp.aclose()
             mr = meter.finalize() if meter is not None else parse_non_streaming(bytes(buf), path)
             record(
-                model=mr.model or base["model"], status=status, stream=1 if is_stream else 0,
+                model=mr.model or base["model"], status=resp.status_code, stream=1 if is_stream else 0,
                 complete=1 if finished and (mr.complete or not is_stream) else 0,
                 input_tokens=mr.input_tokens, output_tokens=mr.output_tokens,
                 cache_creation_tokens=mr.cache_creation_tokens, cache_creation_5m=mr.cache_creation_5m,
                 cache_creation_1h=mr.cache_creation_1h, cache_read_tokens=mr.cache_read_tokens,
                 upstream_request_id=mr.upstream_request_id or resp.headers.get("request-id"),
-                error_type=error_type or mr.error_type or (f"upstream_{status}" if status >= 400 else None),
+                error_type=error_type or mr.error_type or (f"upstream_{resp.status_code}" if resp.status_code >= 400 else None),
                 meter_error=1 if mr.meter_error else 0,
             )
 

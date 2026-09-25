@@ -3,84 +3,128 @@
 #
 #   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # first time
 #   claude-gateway on                                                        # later
+#   claude-gateway on --own-login    # keep this machine's claude.ai login active (Claude in Chrome, connectors)
+#   claude-gateway on --key-only     # back to sending only the gateway key
 #   claude-gateway off
 #   claude-gateway status
 #
-# `on` adds ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN and CLAUDE_GATEWAY_DASHBOARD to the "env" block of
-# ~/.claude/settings.json (terminal and IDE sessions); `off` removes exactly those three keys and
-# leaves every other setting alone. The URL and key are kept in ~/.config/claude-gateway/client.json
-# (mode 600). Sessions that are already open keep their connection; start a new one after switching.
-# claude.ai connectors need the machine's own claude.ai login, so they cannot load through the gateway;
-# `on` also sets "disableClaudeAiConnectors" (unless it was already set) to silence the startup warning,
-# and `off` removes it again only if `on` added it.
+# Key-only mode (the default) sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the "env" block of
+# ~/.claude/settings.json. Claude Code then has no claude.ai login, so claude.ai connectors and Claude in
+# Chrome are off; the script sets "disableClaudeAiConnectors" (unless already set) to silence the warning.
+# Own-login mode is for a machine that is itself signed in to a Claude subscription (the owner's): it sets
+# ANTHROPIC_BASE_URL and sends the gateway key in ANTHROPIC_CUSTOM_HEADERS, so Claude Code keeps its own
+# login for Claude in Chrome and connectors while requests still go through, and are metered by, the gateway.
+# `off` removes exactly what `on` added and leaves every other setting alone. The URL, key and mode are kept
+# in ~/.config/claude-gateway/client.json (mode 600). Start a new Claude Code session after switching.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
 CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
-KEYS=(ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN CLAUDE_GATEWAY_DASHBOARD)
 
-usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 save_client() {   # url key [dashboard]
   mkdir -p "$(dirname "$CLIENT")"
   ( umask 077; python3 - "$CLIENT" "$@" <<'EOF'
-import json, sys
+import json, os, sys
 path, url, key = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3]
 dash = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else url.replace("://claude.", "://claude-dash.", 1)
-json.dump({"url": url, "key": key, "dashboard": dash.rstrip("/")}, open(path, "w"), indent=2)
+c = json.load(open(path)) if os.path.exists(path) else {}
+c.update({"url": url, "key": key, "dashboard": dash.rstrip("/")})
+json.dump(c, open(path, "w"), indent=2)
 EOF
   )
   chmod 600 "$CLIENT"
+}
+
+field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""))' "$CLIENT" "$@"; }
+
+set_mode() {
+  python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mode"]=sys.argv[2]; json.dump(c, open(p,"w"), indent=2)' "$CLIENT" "$1"
 }
 
 edit_settings() {   # on|off
   mkdir -p "$(dirname "$SETTINGS")"
   [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
   cp -p "$SETTINGS" "$SETTINGS.bak-claude-gateway"
-  python3 - "$1" "$SETTINGS" "$CLIENT" "${KEYS[@]}" <<'EOF'
+  python3 - "$1" "$SETTINGS" "$CLIENT" <<'EOF'
 import json, os, sys, tempfile
-mode, settings, client, *keys = sys.argv[1:]
+mode, settings, client = sys.argv[1:]
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
+ours = lambda v: isinstance(v, str) and v.lower().startswith("x-gateway-key:")
+
+if mode == "on" and "ANTHROPIC_CUSTOM_HEADERS" in env and not ours(env["ANTHROPIC_CUSTOM_HEADERS"]):
+    sys.exit("ANTHROPIC_CUSTOM_HEADERS is already set in %s by something else; leaving everything as it is." % settings)
+
+for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_GATEWAY_DASHBOARD"):
+    env.pop(k, None)
+if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
+    del env["ANTHROPIC_CUSTOM_HEADERS"]
+if c.pop("added_disable_connectors", False):
+    s.pop("disableClaudeAiConnectors", None)
+
 if mode == "on":
-    env.update({"ANTHROPIC_BASE_URL": c["url"], "ANTHROPIC_AUTH_TOKEN": c["key"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
-    if "disableClaudeAiConnectors" not in s:
-        s["disableClaudeAiConnectors"] = True
-        c["added_disable_connectors"] = True
-else:
-    for k in keys:
-        env.pop(k, None)
-    if not env:
-        del s["env"]
-    if c.pop("added_disable_connectors", False):
-        s.pop("disableClaudeAiConnectors", None)
-if c:
-    json.dump(c, open(client, "w"), indent=2)
+    env.update({"ANTHROPIC_BASE_URL": c["url"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
+    if c.get("mode") == "own-login":
+        env["ANTHROPIC_CUSTOM_HEADERS"] = "x-gateway-key: " + c["key"]
+    else:
+        env["ANTHROPIC_AUTH_TOKEN"] = c["key"]
+        if "disableClaudeAiConnectors" not in s:
+            s["disableClaudeAiConnectors"] = True
+            c["added_disable_connectors"] = True
+if not env:
+    del s["env"]
+
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings))
 with os.fdopen(fd, "w") as f:
     json.dump(s, f, indent=2)
     f.write("\n")
 os.chmod(tmp, os.stat(settings).st_mode & 0o777)
 os.replace(tmp, settings)
+if c:
+    json.dump(c, open(client, "w"), indent=2)
 EOF
 }
 
-current() {   # prints the gateway URL in settings, or nothing
-  [ -f "$SETTINGS" ] && python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get("ANTHROPIC_BASE_URL",""))' "$SETTINGS" || true
+current() {   # prints "<url> <mode>" from settings, or nothing
+  [ -f "$SETTINGS" ] && python3 -c '
+import json, sys
+env = json.load(open(sys.argv[1])).get("env", {})
+if env.get("ANTHROPIC_BASE_URL"):
+    print(env["ANTHROPIC_BASE_URL"], "own-login" if "x-gateway-key" in env.get("ANTHROPIC_CUSTOM_HEADERS", "").lower() else "key-only")' "$SETTINGS" || true
 }
 
-field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$CLIENT" "$1"; }
+preflight() {   # mode: the gateway answers and accepts the key the way that mode sends it
+  local url auth code out
+  url=$(field url)
+  if [ "$1" = own-login ]; then auth="x-gateway-key: $(field key)"; else auth="Authorization: Bearer $(field key)"; fi
+  out=$(mktemp)
+  code=$(curl -sS -o "$out" -w '%{http_code}' --max-time 15 -H "$auth" -H "anthropic-version: 2023-06-01" \
+         "$url/v1/models" 2>/dev/null) || code=000
+  if [ "$code" != 200 ]; then
+    echo "The gateway at $url did not accept the key (HTTP $code); leaving Claude Code as it is." >&2
+    head -c 400 "$out" >&2; echo >&2; rm -f "$out"; exit 1
+  fi
+  rm -f "$out"
+}
+
+has_own_login() {   # best effort: a claude.ai login stored by Claude Code on this machine
+  security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1 || [ -s "$HOME/.claude/.credentials.json" ]
+}
 
 cmd=${1:-status}; shift || true
 case "$cmd" in
   on)
-    url="" key="" dash=""
+    url="" key="" dash="" mode=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --url) url=$2; shift 2 ;;
         --key) key=$2; shift 2 ;;
         --dashboard) dash=$2; shift 2 ;;
+        --own-login) mode=own-login; shift ;;
+        --key-only) mode=key-only; shift ;;
         *) usage 1 ;;
       esac
     done
@@ -89,20 +133,24 @@ case "$cmd" in
       save_client "$url" "$key" "$dash"
     fi
     [ -f "$CLIENT" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
-    if ! curl -fsS --max-time 10 "$(field url)/health" >/dev/null; then
-      echo "The gateway at $(field url) is not answering; leaving Claude Code as it is." >&2; exit 1
+    mode=${mode:-$(field mode key-only)}
+    if [ "$mode" = own-login ] && ! has_own_login; then
+      echo "Own-login mode needs this machine signed in to Claude Code with a subscription (run 'claude', then /login)," >&2
+      echo "or use --key-only." >&2; exit 1
     fi
+    preflight "$mode"
+    set_mode "$mode"
     edit_settings on
-    echo "Claude Code now uses the gateway at $(field url). Start a new session to pick it up."
+    echo "Claude Code now uses the gateway at $(field url) ($(field mode key-only) mode). Start a new session to pick it up."
     ;;
   off)
     edit_settings off
     echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
     ;;
   status)
-    url=$(current)
-    if [ -z "$url" ]; then echo "off: Claude Code uses this machine's own login"; exit 0; fi
-    echo "on: $url"
+    read -r url mode <<<"$(current)" || true
+    if [ -z "${url:-}" ]; then echo "off: Claude Code uses this machine's own login"; exit 0; fi
+    echo "on: $url ($mode mode)"
     if curl -fsS --max-time 10 "$url/health" >/dev/null; then echo "gateway: reachable"; else echo "gateway: NOT reachable (Claude Code will fail; 'claude-gateway off' to fall back)"; fi
     if [ -f "$CLIENT" ]; then
       line=$(curl -fsS --max-time 10 -H "Authorization: Bearer $(field key)" "$(field dashboard)/api/me/status?format=text" 2>/dev/null || true)
