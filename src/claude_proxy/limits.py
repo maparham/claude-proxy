@@ -20,7 +20,7 @@ MINUTE, HOUR, DAY = 60, 3600, 86400
 WINDOWS = {
     "requests_minute": MINUTE, "tokens_minute": MINUTE,
     "tokens_5h": 5 * HOUR,
-    "requests_daily": DAY, "tokens_daily": DAY,
+    "requests_daily": DAY, "tokens_daily": DAY, "cost_daily": DAY,
     "tokens_weekly": 7 * DAY,
     "requests_monthly": 30 * DAY, "tokens_monthly": 30 * DAY, "cost_monthly": 30 * DAY,
 }
@@ -28,7 +28,7 @@ SHARE_BUCKETS = {"share_5h": "5h", "share_7d": "7d"}
 UNITS = {
     **{k: ("count",) for k in WINDOWS if k.startswith("requests_")},
     **{k: ("weighted", "raw") for k in WINDOWS if k.startswith("tokens_")},
-    "cost_monthly": ("usd",),
+    "cost_daily": ("usd",), "cost_monthly": ("usd",),
     "share_5h": ("pct",), "share_7d": ("pct",),
     "allowed_models": ("list",),
 }
@@ -114,7 +114,7 @@ def _usage_rows(conn, cfg: Config, user_id: int, kind: str, unit: str, scope: st
             out.append((r["started_at"], 1.0))
             continue
         t = price_totals(cfg.pricing, r["model"], Totals(1, r["i"], r["o"], r["c5"], r["c1"], r["cr"]))
-        amount = t.cost_usd if kind == "cost_monthly" else (float(t.raw) if unit == "raw" else t.weighted)
+        amount = t.cost_usd if kind.startswith("cost_") else (float(t.raw) if unit == "raw" else t.weighted)
         out.append((r["started_at"], amount))
     return out
 

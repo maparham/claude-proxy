@@ -106,7 +106,7 @@ claude-proxy limit list
 |---|---|---|
 | `requests_minute`, `requests_daily`, `requests_monthly` | count | 60 s, 24 h, 30 d rolling |
 | `tokens_minute`, `tokens_5h`, `tokens_daily`, `tokens_weekly`, `tokens_monthly` | `weighted` (default) or `raw` | rolling |
-| `cost_monthly` | USD | 30 d rolling |
+| `cost_daily`, `cost_monthly` | USD | 24 h, 30 d rolling |
 | `share_5h`, `share_7d` | percentage points of the account bucket | Anthropic's current window |
 | `allowed_models` | comma-separated globs | — |
 

@@ -87,6 +87,16 @@ def test_cost_monthly(env):
     assert check(conn, cfg, uid).kind == "cost_monthly"
 
 
+def test_cost_daily(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "cost_daily", 1.0, "usd")
+    req(conn, uid, NOW - 86400 - 60, model="claude-opus-5", i=200_000)   # $1.00, outside the window
+    req(conn, uid, NOW - 3600, model="claude-opus-5", i=100_000)         # $0.50
+    assert check(conn, cfg, uid) is None
+    req(conn, uid, NOW - 60, model="claude-opus-5", o=20_000)            # $0.50
+    assert check(conn, cfg, uid).kind == "cost_daily"
+
+
 def test_model_scoped_limit_applies_only_to_matching_models(env):
     conn, cfg, uid = env
     set_limit(conn, uid, "requests_daily", 1, "count", scope="claude-opus-*")
@@ -173,6 +183,8 @@ def test_states_report_current_and_remaining(env):
     ("requests_minute", "5", "count", True),
     ("share_7d", "150", "pct", False),
     ("cost_monthly", "12.5", "usd", True),
+    ("cost_daily", "100", "usd", True),
+    ("cost_daily", "100", "weighted", False),
     ("allowed_models", "claude-*", "list", True),
     ("bogus", "1", "count", False),
 ])

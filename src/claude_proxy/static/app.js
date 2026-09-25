@@ -123,6 +123,7 @@ const KIND_TIPS = {
   tokens_weekly: "Tokens in the last 7 days.",
   requests_monthly: "Requests in the last 30 days.",
   tokens_monthly: "Tokens in the last 30 days.",
+  cost_daily: "Estimated API-equivalent cost in the last 24 hours, in USD.",
   cost_monthly: "Estimated API-equivalent cost in the last 30 days, in USD.",
   share_5h: "The user's <b>estimated share</b> of the account's 5-hour bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
   share_7d: "The user's <b>estimated share</b> of the account's 7-day bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
