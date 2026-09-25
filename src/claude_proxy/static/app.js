@@ -113,6 +113,13 @@ const TIPS = {
   cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper against the quota.</p>`,
   recent_requests: `Every request this user sent, refused ones included. Tokens, weighted tokens and cost are counted only for requests that reached a provider.`,
   session: `<span class="th">Session</span><p>Claude Code sends a session id with each request; one row per id. Duration runs from the first to the last request.</p><p class="tm">The title is the one Claude Code generates for the session. Sessions without one show only their id.</p>`,
+  sess_user: `Who ran the session.`,
+  sess_started: `Time of the session's first request.`,
+  sess_duration: `Time from the first request to the last.`,
+  sess_requests: `Requests sent to a provider. Refused ones are not counted.`,
+  sess_weighted: `Tokens adjusted by type and model, in {ref} input tokens. Closest to quota cost.`,
+  sess_cost: `What it would cost at API prices. Not billed on the subscription.`,
+  sess_models: `Models the session used.`,
 };
 const KIND_TIPS = {
   requests_minute: "Requests in the last 60 seconds.",
@@ -934,7 +941,7 @@ async function renderSessions(main) {
 const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${esc(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
   : id ? `<span class="muted">${esc(id.slice(0, 8))}</span>` : `<span class="muted">—</span>`);
 function sessionsTable(sessions, showUser) {
-  return `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${showUser ? "<th>User</th>" : ""}<th>Started</th><th class="r">Duration</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th>Models</th></tr></thead><tbody>
+  return `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${showUser ? `<th>User${tipI("sess_user")}</th>` : ""}<th>Started${tipI("sess_started")}</th><th class="r">Duration${tipI("sess_duration")}</th><th class="r">Requests${tipI("sess_requests")}</th><th class="r">Weighted${tipI("sess_weighted")}</th><th class="r">Est. cost${tipI("sess_cost")}</th><th>Models${tipI("sess_models")}</th></tr></thead><tbody>
       ${sessions.map((s) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${esc(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${s.requests}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${esc(s.models.join(", "))}</td></tr>`).join("")}
     </tbody></table>`;
