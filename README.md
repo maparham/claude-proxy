@@ -99,9 +99,15 @@ scripts/claude-gateway off --gclaude
 
 This leaves `~/.claude` alone and installs `~/.local/bin/gclaude`, which runs Claude Code with
 `CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude`. That folder gets the key-only setup above (key, statusline,
-limit warning), and links to `CLAUDE.md`, `agents`, `commands` and `skills` in `~/.claude`. Settings, plugins,
-history and sessions are separate, so both commands can run at once in the same terminal. `off --gclaude`
-removes the command, the links and the gateway settings, and keeps gclaude's history.
+limit warning), and links to `CLAUDE.md`, `agents`, `commands` and `skills` in `~/.claude` (commands one by one,
+refreshed each time gclaude starts). Settings, plugins, history and sessions are separate, so both commands can
+run at once in the same terminal. `off --gclaude` removes the command, the links, `/usage` and the gateway
+settings, and keeps gclaude's history.
+
+Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
+In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
+model and shows a fresh gateway line, e.g. `Gateway: maya · daily $61/$100 · details: https://…/dashboard`,
+so it costs nothing. Plain `claude` keeps the real `/usage`.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and
