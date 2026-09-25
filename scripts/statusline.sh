@@ -10,13 +10,28 @@
 cat >/dev/null   # Claude Code sends session JSON on stdin; this line does not need it.
 : "${CLAUDE_GATEWAY_DASHBOARD:?set CLAUDE_GATEWAY_DASHBOARD}"
 cache="${TMPDIR:-/tmp}/claude-gateway-status.$(id -u)"
+# Cyan with a leading diamond, so it stands apart from Claude Code's own items; a percentage turns
+# yellow at 80% and red at 100%. The cache keeps the plain line.
+show() {
+  printf '%s\n' "$1" | awk '{
+    out = ""; rest = $0
+    while (match(rest, /[0-9]+(\.[0-9]+)?%/)) {
+      tok = substr(rest, RSTART, RLENGTH); v = substr(tok, 1, RLENGTH - 1) + 0
+      c = v >= 100 ? "\033[31m" : v >= 80 ? "\033[33m" : ""
+      out = out substr(rest, 1, RSTART - 1) (c ? c tok "\033[36m" : tok)
+      rest = substr(rest, RSTART + RLENGTH)
+    }
+    printf "\033[36m\342\227\206 %s%s\033[0m\n", out, rest
+  }'
+}
 if [ -f "$cache" ] && [ $(( $(date +%s) - $(stat -c %Y "$cache" 2>/dev/null || stat -f %m "$cache") )) -lt 30 ]; then
-  cat "$cache"; exit 0
+  show "$(cat "$cache")"; exit 0
 fi
 key=${ANTHROPIC_AUTH_TOKEN:-$(printf '%s\n' "${ANTHROPIC_CUSTOM_HEADERS:-}" | sed -n 's/^[Xx]-[Gg]ateway-[Kk]ey: *//p' | head -n 1)}
 if line=$(curl -fsS --max-time 3 -H "Authorization: Bearer ${key}" \
           "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=text" 2>/dev/null); then
-  printf '%s\n' "$line" | tee "$cache"
+  printf '%s\n' "$line" > "$cache"
+  show "$line"
 else
-  echo "gateway status unavailable"
+  show "gateway status unavailable"
 fi
