@@ -10,13 +10,17 @@
 cat >/dev/null   # Claude Code sends session JSON on stdin; this line does not need it.
 : "${CLAUDE_GATEWAY_DASHBOARD:?set CLAUDE_GATEWAY_DASHBOARD}"
 cache="${TMPDIR:-/tmp}/claude-gateway-status.$(id -u)"
-# Cyan with a leading diamond, so it stands apart from Claude Code's own items; a percentage turns
-# yellow at 80% and red at 100%. The cache keeps the plain line.
+# Cyan with a leading diamond, so it stands apart from Claude Code's own items; a percentage or a
+# used/limit pair (`$61/$100`, `4.2M/5.0M`) turns yellow at 80% and red at 100%. The cache keeps the plain line.
 show() {
-  printf '%s\n' "$1" | awk '{
+  printf '%s\n' "$1" | awk '
+  function num(t) { gsub(/[$,%]/, "", t); return t ~ /M$/ ? t * 1e6 : t ~ /K$/ ? t * 1e3 : t + 0 }
+  {
     out = ""; rest = $0
-    while (match(rest, /[0-9]+(\.[0-9]+)?%/)) {
-      tok = substr(rest, RSTART, RLENGTH); v = substr(tok, 1, RLENGTH - 1) + 0
+    while (match(rest, /[$]?[0-9][0-9,.]*[KM]?\/[$]?[0-9][0-9,.]*[KM]?%?|[0-9]+(\.[0-9]+)?%/)) {
+      tok = substr(rest, RSTART, RLENGTH)
+      if (split(tok, ab, "/") == 2) v = num(ab[2]) ? 100 * num(ab[1]) / num(ab[2]) : 0
+      else v = num(tok)
       c = v >= 100 ? "\033[31m" : v >= 80 ? "\033[33m" : ""
       out = out substr(rest, 1, RSTART - 1) (c ? c tok "\033[36m" : tok)
       rest = substr(rest, RSTART + RLENGTH)

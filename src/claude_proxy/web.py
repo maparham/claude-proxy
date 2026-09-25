@@ -557,21 +557,40 @@ def _fmt_pct(v) -> str:
     return "?" if v is None else f"{v:.0f}%"
 
 
+_PERIOD = {"minute": "per min", "5h": "5h", "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
+
+
+def _amount(v: float, unit: str) -> str:
+    if unit == "usd":
+        return f"${v:,.0f}" if v >= 10 else f"${v:.2f}"
+    if unit == "count" or v < 1000:
+        return f"{v:,.0f}"
+    return f"{v / 1e6:.1f}M" if v >= 1e6 else f"{v / 1e3:.0f}K"
+
+
 def _status_line(user, states, account) -> str:
+    """e.g. `maya · daily $61/$100 · plan 5h 8% (yours 6%) · week 10%`: the user's limits as used/limit,
+    then the shared subscription's quota and the estimated part of it this user's requests used."""
     parts = [user["name"]]
     for s in states:
         if s.kind == "allowed_models":
             continue
-        if s.skipped:
-            parts.append(f"{s.kind} n/a")
-        elif s.pct is not None:
-            parts.append(f"{s.kind.replace('_', ' ')} {s.pct:.0f}%")
+        base, _, period = s.kind.partition("_")
+        if base == "share":
+            label, used = f"{'5h' if period == '5h' else 'week'} share", lambda v: f"{v:.0f}"
+        else:
+            label, used = _PERIOD.get(period, period), lambda v, u=s.unit: _amount(v, u)
+        if s.skipped or s.current is None:
+            parts.append(f"{label} n/a")
+            continue
+        suffix = {"requests": " req", "tokens": " tok", "share": "%"}.get(base, "")
+        parts.append(f"{label} {used(s.current)}/{used(s.limit)}{suffix}")
     a5, a7 = account["5h"], account["7d"]
-    acct = f"acct 5h {_fmt_pct(a5['utilization_pct'])}"
+    plan = f"plan 5h {_fmt_pct(a5['utilization_pct'])}"
     if a5["your_estimated_share"]:
-        acct += f" (you ~{a5['your_estimated_share']:.0f})"
-    acct += f" · 7d {_fmt_pct(a7['utilization_pct'])}"
+        plan += f" (yours {a5['your_estimated_share']:.0f}%)"
+    plan += f" · week {_fmt_pct(a7['utilization_pct'])}"
     if a5["stale"] and a5["utilization_pct"] is not None:
-        acct += " (stale)"
-    parts.append(acct)
+        plan += " (stale)"
+    parts.append(plan)
     return " · ".join(parts)

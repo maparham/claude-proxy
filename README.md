@@ -78,7 +78,10 @@ one; then it says how to add them to it). Setting it up by hand instead:
 "statusLine": { "type": "command", "command": "/path/to/scripts/statusline.sh", "refreshInterval": 30 }
 ```
 
-It prints e.g. `maya · tokens daily 42% · acct 5h 61% (you ~20) · 7d 38%`, in cyan with a leading `◆`; a percentage turns yellow at 80% and red at 100%. They can also sign in
+It prints e.g. `maya · daily $61/$100 · plan 5h 61% (yours 20%) · week 38%`: each of their limits as
+used/limit, then how much of the shared subscription's 5-hour and weekly quota is used, and roughly how
+much of the 5-hour part came from their own requests. It is cyan with a leading `◆`; a figure turns
+yellow at 80% and red at 100%. They can also sign in
 to the dashboard with their key and see only their own data.
 
 ### Muse as a subagent
