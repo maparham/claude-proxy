@@ -56,7 +56,10 @@ async def finish(conn: sqlite3.Connection, cfg, http: httpx.AsyncClient, pasted:
     conn.execute("DELETE FROM settings WHERE key=?", (PENDING_KEY,))
     if resp.status_code != 200:
         raise LoginError(f"Token exchange failed: HTTP {resp.status_code} {resp.text[:500]}")
-    record = token_record(resp.json())
+    try:
+        record = token_record(resp.json())
+    except (ValueError, KeyError, TypeError, AttributeError):
+        raise LoginError(f"The token endpoint's answer has no access token: {resp.text[:300]}") from None
     OAuthBackend(cfg, conn, http).store(record)
     db.audit(conn, None, "login", record.get("account") or "oauth", {"scope": record.get("scope")})
     return record

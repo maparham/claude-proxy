@@ -171,42 +171,41 @@ class OAuthBackend:
         self._lock = asyncio.Lock()
         self._cache: dict | None = None
         self._state: str | None = None
-        self._updated_at: int | None = None
+        self._blob: str | None = None
         self.last_error: str | None = None
         self._retry_at = 0.0   # after a temporary refresh failure, don't hammer the token endpoint
 
     def _load(self) -> tuple[dict | None, str | None]:
-        # The decrypted grant is cached; `updated_at` shows when `claude-proxy login` replaced it meanwhile.
-        row = self.conn.execute("SELECT encrypted_blob, state, updated_at FROM credentials WHERE backend='oauth'").fetchone()
+        # The decrypted grant is cached until the stored row changes (`claude-proxy login` from another process).
+        # Compared by content: `updated_at` has one-second resolution and could miss a login in the same second.
+        row = self.conn.execute("SELECT encrypted_blob, state FROM credentials WHERE backend='oauth'").fetchone()
         if not row or not row["encrypted_blob"]:
             self._cache = None
             return None, None
-        if self._cache is not None and row["updated_at"] == self._updated_at:
+        if self._cache is not None and row["encrypted_blob"] == self._blob and row["state"] == self._state:
             return self._cache, self._state
-        self._updated_at = row["updated_at"]
         try:
             data = decrypt_blob(row["encrypted_blob"])
         except CredentialKeyMissing:
             raise
         except Exception:
             return None, "decrypt_failed"
-        self._cache, self._state = data, row["state"]
+        self._cache, self._state, self._blob = data, row["state"], row["encrypted_blob"]
         return data, row["state"]
 
     def store(self, data: dict, state: str = "active") -> None:
         # One statement replaces the row atomically, so the new refresh token is durable
         # before the old one is gone.
-        now = int(time.time())
+        blob = encrypt_blob(data)
         self.conn.execute(
             "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,?)",
-            (encrypt_blob(data), data["expires_at"], now, state),
+            (blob, data["expires_at"], int(time.time()), state),
         )
-        self._cache, self._state, self._updated_at = data, state, now
+        self._cache, self._state, self._blob = data, state, blob
 
     def _mark_needs_login(self, reason: str) -> None:
-        now = int(time.time())
-        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (now,))
-        self._state, self._updated_at = "needs_login", now
+        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (int(time.time()),))
+        self._state = "needs_login"
         self.last_error = reason
         logger.error("oauth grant needs login: %s", reason)
 
@@ -243,7 +242,15 @@ class OAuthBackend:
                     self._retry_at = time.time() + REFRESH_BACKOFF_S
                     logger.warning(self.last_error)
                 return False
-            self.store(token_record(resp.json(), refresh_token))
+            try:
+                record = token_record(resp.json(), refresh_token)
+            except (ValueError, KeyError, TypeError, AttributeError):
+                # A 200 without a usable token; the refresh token may not have been spent, so retry later.
+                self.last_error = f"refresh returned an unreadable token response: {resp.text[:200]}"
+                self._retry_at = time.time() + REFRESH_BACKOFF_S
+                logger.warning(self.last_error)
+                return False
+            self.store(record)
             self.last_error = None
             logger.info("oauth access token refreshed")
             return True

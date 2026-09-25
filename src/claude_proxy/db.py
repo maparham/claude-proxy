@@ -58,6 +58,7 @@ SCHEMA = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_requests_user_time ON requests(user_id, started_at)",
     "CREATE INDEX IF NOT EXISTS idx_requests_time ON requests(started_at)",
+    "CREATE INDEX IF NOT EXISTS idx_requests_ended ON requests(ended_at)",   # quota attribution
     """CREATE TABLE IF NOT EXISTS quota_snapshots (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         observed_at REAL NOT NULL,
@@ -199,6 +200,8 @@ def _user_name(conn: sqlite3.Connection, user_id: int) -> str:
 def rotate_key(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> str:
     raw, h, prefix = generate_virtual_key()
     conn.execute("UPDATE users SET key_hash=?, key_prefix=? WHERE id=?", (h, prefix, user_id))
+    # A dashboard session made from the old key would otherwise outlive it.
+    conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
     audit(conn, actor, "rotate_key", _user_name(conn, user_id))
     return raw
 

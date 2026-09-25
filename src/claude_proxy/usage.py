@@ -73,6 +73,22 @@ def price_totals(pricing: Pricing, model: str | None, t: Totals) -> Totals:
     return t
 
 
+def priced_sql(pricing: Pricing, models, scale: float, unpriced: str = "0.0") -> tuple[str, list]:
+    """SQL for one row's API-list-price cost divided by `scale` (1e6: USD; the reference input price: weighted tokens).
+
+    `models` are the models the rows may have; any other model, or one without a price, gives `unpriced`.
+    """
+    cases, args = [], []
+    for model in models:
+        price = pricing.price_for(model)
+        if model is None or price is None:
+            continue
+        cases.append(f"WHEN ? THEN input_tokens*? + output_tokens*? + {CW5}*? + {CW1}*? + cache_read_tokens*?")
+        args += [model, price.input / scale, price.output / scale, price.cache_write_5m / scale,
+                 price.cache_write_1h / scale, price.cache_read / scale]
+    return (f"(CASE model {' '.join(cases)} ELSE {unpriced} END)" if cases else unpriced), args
+
+
 SUMS = (f"COUNT(*) AS n, COALESCE(SUM(input_tokens),0) AS i, COALESCE(SUM(output_tokens),0) AS o, "
         f"COALESCE(SUM({CW5}),0) AS c5, COALESCE(SUM({CW1}),0) AS c1, COALESCE(SUM(cache_read_tokens),0) AS cr")
 

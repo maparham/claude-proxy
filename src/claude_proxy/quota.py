@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from .config import Pricing, QuotaConfig
-from .usage import CW1, CW5, price_totals, Totals
+from .usage import priced_sql, raw_tokens_sql
 
 logger = logging.getLogger("claude_proxy")
 
@@ -151,15 +151,13 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
                 "stale": True, "shares": {}, "unattributed": None, "window_start": None, "history": []}
     win = _window(rows)
     latest = win[-1]
-    reqs = conn.execute(
-        f"SELECT user_id, ended_at, model, input_tokens AS i, output_tokens AS o, {CW5} AS c5, {CW1} AS c1, "
-        f"cache_read_tokens AS cr FROM requests WHERE provider='anthropic' AND rejected_by IS NULL "
-        f"AND ended_at > ? AND ended_at <= ? ORDER BY ended_at",
-        (win[0]["observed_at"], latest["observed_at"])).fetchall()
-    weighted = []
-    for r in reqs:
-        t = price_totals(pricing, r["model"], Totals(1, r["i"], r["o"], r["c5"], r["c1"], r["cr"]))
-        weighted.append((r["user_id"], r["ended_at"], t.weighted or float(t.raw)))  # unpriced model: raw tokens
+    span = "provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
+    bounds = (win[0]["observed_at"], latest["observed_at"])
+    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
+    # Weighted tokens, priced in SQL (this runs before every request under a share limit); unpriced models count raw tokens.
+    w, args = priced_sql(pricing, models, pricing.reference_input(), unpriced=raw_tokens_sql())
+    weighted = conn.execute(f"SELECT user_id, ended_at, {w} FROM requests WHERE {span} ORDER BY ended_at",
+                            (*args, *bounds)).fetchall()
     shares: dict[int, float] = {}
     history = [{"t": win[0]["observed_at"], "utilization_pct": win[0]["utilization_pct"], "shares": {}}]
     high = win[0]["utilization_pct"]   # only rises above the high-water mark are new usage

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 # Hop-by-hop headers (RFC 9110 section 7.6.1) are never forwarded.
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
               "trailers", "transfer-encoding", "upgrade", "proxy-connection"}
@@ -17,10 +19,17 @@ REVERSE_PROXY_PREFIXES = ("cf-", "x-forwarded-")
 
 SESSION_HEADERS = ("x-claude-code-session-id", "x-session-id", "anthropic-session-id")
 
+COUNT_TOKENS_PATH = "/v1/messages/count_tokens"
+
+# Plain segments only: no `.`/`..` (the HTTP client collapses them, so `/v1/../api` would leave /v1/ and
+# `/v1/messages/count_tokens/../../messages` would dodge limits), no empty segments and no `%`, which an
+# upstream proxy might decode into either.
+_FORWARDABLE = re.compile(r"/v1(?:/[A-Za-z0-9_\-~.]+)+")
+
 
 def should_forward(path: str) -> bool:
     # Only /v1/ is forwarded, so a mistyped path is never sent upstream with the credential.
-    return path.startswith("/v1/")
+    return bool(_FORWARDABLE.fullmatch(path)) and not any(seg in (".", "..") for seg in path.split("/"))
 
 
 def _connection_tokens(headers: dict[str, str]) -> set[str]:

@@ -119,6 +119,11 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
 
+    if request.method == "POST" and path in ROUTED_PATHS and model is None:
+        # Model allow-lists, scoped limits and routing all need the model; never forward a body the gateway can't read.
+        record(status=400, stream=0, complete=1, error_type="gateway_bad_request", rejected_by="request")
+        return api_error(400, "invalid_request_error", "The gateway could not read a string `model` from the JSON request body.")
+
     decision = limits.evaluate(conn, cfg, user["id"], model, path)
     if decision:
         record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)

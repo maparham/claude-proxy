@@ -165,6 +165,7 @@ Object.entries(KIND_TIPS).forEach(([k, v]) => {
 const ERROR_TIPS = {
   gateway_limit: "A gateway limit refused the request (named in brackets). It never reached the provider and isn't counted as usage.",
   gateway_auth: "Missing, wrong, disabled or revoked gateway key.",
+  gateway_bad_request: "The request body wasn't JSON with a <code>model</code>, so the gateway refused it without forwarding.",
   upstream_quota: "Anthropic refused it because an account bucket (5-hour or weekly) is full. Clears when that bucket resets.",
   upstream_throttle: "Anthropic's short-term rate limit (per-minute requests or tokens). Usually clears within a minute.",
   upstream_request_scoped: "A 429 without rate-limit headers: Anthropic refused this one request, not the account.",
@@ -176,13 +177,13 @@ const ERROR_TIPS = {
   api_error: "The provider returned a server error (5xx).",
 };
 Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
-const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", upstream_quota: "Account quota exhausted (429)",
+const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", gateway_bad_request: "Unreadable request", upstream_quota: "Account quota exhausted (429)",
                        upstream_throttle: "Per-minute throttle (429)", upstream_request_scoped: "Request refused (429)",
                        gateway_needs_login: "Subscription login needed", gateway_upstream_unreachable: "Upstream unreachable",
                        gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
                        gateway_refresh_unavailable: "Token refresh temporarily failing",
                        api_error: "Upstream server error" };
-const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
+const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
 
 // "claude-sonnet-5" -> "Sonnet 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as is.
 function modelName(id) {

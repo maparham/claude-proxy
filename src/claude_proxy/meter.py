@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import codecs
 import json
 import logging
+import math
 from dataclasses import dataclass
+
+from .forwarder import COUNT_TOKENS_PATH
 
 logger = logging.getLogger("claude_proxy")
 
 MAX_LINE_BYTES = 1_048_576  # 1 MiB per spec 6.3
 MAX_TEXT_CHARS = 4096       # answer text kept when collect_text is on
+CHARS_PER_TOKEN = 3.5       # for estimating the output of a stream cut short
 
 
 @dataclass
@@ -79,6 +84,8 @@ class SSEMeter:
         self.result = MeterResult(stream=True, complete=False)
         self._seen_stop = False
         self._collect_text = collect_text
+        self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")   # chunks may split a character
+        self._streamed_chars = 0
 
     @property
     def meter_error(self) -> bool:
@@ -87,11 +94,7 @@ class SSEMeter:
     def feed(self, chunk: bytes):
         if self.result.meter_error:
             return
-        try:
-            text = chunk.decode("utf-8", errors="replace")
-        except Exception:
-            text = ""
-        self._buf += text
+        self._buf += self._decoder.decode(chunk)
 
         # Quick cap check: if buffer grows huge without delimiter
         if len(self._buf.encode("utf-8")) > MAX_LINE_BYTES and "\n\n" not in self._buf and "\r\n\r\n" not in self._buf:
@@ -210,6 +213,9 @@ class SSEMeter:
 
         elif typ == "content_block_delta":
             delta = data.get("delta") if isinstance(data.get("delta"), dict) else {}
+            for k in ("text", "thinking", "partial_json"):
+                if isinstance(delta.get(k), str):
+                    self._streamed_chars += len(delta[k])
             if self._collect_text and delta.get("type") == "text_delta" and isinstance(delta.get("text"), str):
                 self.result.text = (self.result.text + delta["text"])[:MAX_TEXT_CHARS]
         elif typ == "content_block_start" or typ == "content_block_stop":
@@ -222,6 +228,11 @@ class SSEMeter:
     def finalize(self) -> MeterResult:
         # If we never saw message_stop, complete remains False per spec
         # If meter_error, we keep counts seen so far
+        if not self.result.complete and self._streamed_chars:
+            # The output count arrives only at the end, so a stream cut short (the user pressed Esc, the
+            # connection dropped) would otherwise record message_start's placeholder of ~1 token.
+            estimate = math.ceil(self._streamed_chars / CHARS_PER_TOKEN)
+            self.result.output_tokens = max(self.result.output_tokens, estimate)
         return self.result
 
 
@@ -229,7 +240,7 @@ def parse_non_streaming(body: bytes, path: str, collect_text: bool = False) -> M
     """Parse non-streaming JSON response per spec 6.2."""
     res = MeterResult(stream=False, complete=True)
     # count_tokens endpoint -> zero tokens
-    if "count_tokens" in path:
+    if path == COUNT_TOKENS_PATH:
         res.complete = True
         return res
     if not body:

@@ -9,6 +9,7 @@ Non-admins only ever see their own usage, their own limits and their own estimat
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import logging
@@ -34,8 +35,8 @@ RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400}
 GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
 BUCKETS = ("5h", "7d")
 IS_ERROR = "(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL)"
-ERROR_KIND = ("CASE WHEN rejected_by IS NOT NULL AND rejected_by != 'auth' THEN 'gateway_limit' "
-              "WHEN rejected_by = 'auth' THEN 'gateway_auth' ELSE COALESCE(error_type, 'http_' || status) END")
+ERROR_KIND = ("CASE WHEN rejected_by = 'auth' THEN 'gateway_auth' WHEN rejected_by = 'request' THEN 'gateway_bad_request' "
+              "WHEN rejected_by IS NOT NULL THEN 'gateway_limit' ELSE COALESCE(error_type, 'http_' || status) END")
 _ph = PasswordHasher()
 # Verified against when the user does not exist, so timing does not reveal valid usernames.
 _DUMMY_HASH = _ph.hash("not-a-real-password")
@@ -52,15 +53,21 @@ class LoginLimiter:
         self.failures: dict[str, deque] = defaultdict(deque)
 
     def check(self, ip: str) -> None:
-        q = self.failures[ip]
         now = time.time()
+        q = self.failures.get(ip)
         while q and now - q[0] > self.window_s:
             q.popleft()
-        if len(q) >= self.max_failures:
+        if q is not None and not q:
+            del self.failures[ip]   # keep the table to addresses with recent failures
+        elif q and len(q) >= self.max_failures:
             fail(429, f"Too many failed logins. Try again in {int(self.window_s - (now - q[0])) + 1}s.")
 
     def failed(self, ip: str) -> None:
-        self.failures[ip].append(time.time())
+        now = time.time()
+        if len(self.failures) > 10_000:
+            for k in [k for k, q in self.failures.items() if not q or now - q[-1] > self.window_s]:
+                del self.failures[k]
+        self.failures[ip].append(now)
 
 
 class SecurityHeaders(BaseHTTPMiddleware):
@@ -70,7 +77,7 @@ class SecurityHeaders(BaseHTTPMiddleware):
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "no-referrer"
         resp.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline'; "
+            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
         if request.url.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
@@ -127,7 +134,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = conn.execute("SELECT * FROM users WHERE name=? AND role='admin' AND enabled=1 AND revoked_at IS NULL",
                             (str(body.get("username", "")),)).fetchone()
         try:
-            _ph.verify(user["password_hash"] if user and user["password_hash"] else _DUMMY_HASH, str(body.get("password", "")))
+            # argon2 takes tens of milliseconds; off the event loop, which also carries every proxied stream.
+            await asyncio.to_thread(_ph.verify, user["password_hash"] if user and user["password_hash"] else _DUMMY_HASH,
+                                    str(body.get("password", "")))
             ok = user is not None and bool(user["password_hash"])
         except (VerificationError, InvalidHashError):
             ok = False
@@ -272,9 +281,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         meta = conn.execute(
             f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
             f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "
-            f"AND rejected_by IS NULL AND {where} AND started_at>=? GROUP BY session_id ORDER BY last DESC LIMIT 200",
+            f"AND rejected_by IS NULL AND {where} AND started_at>=? GROUP BY user_id, session_id ORDER BY last DESC LIMIT 200",
             (*params, since)).fetchall()
-        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since), group="session_id")
+        # Session ids come from clients, so two users' sessions may share one; each stays its own row.
+        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since),
+                            group="user_id || '|' || session_id")
         n = names()
         ids = [r["session_id"] for r in meta]
         titled = {(t["user_id"], t["session_id"]): t["title"] for t in conn.execute(
@@ -283,7 +294,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"sessions": [{"session_id": r["session_id"], "title": titled.get((r["user_id"], r["session_id"])),
                               "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
                               "duration_s": r["last"] - r["first"], "requests": r["n"], "models": (r["models"] or "").split(","),
-                              **{k: v for k, v in tot.get(r["session_id"], usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
+                              **{k: v for k, v in tot.get(f"{r['user_id']}|{r['session_id']}", usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
                              for r in meta]}
 
     @app.get("/api/errors")
@@ -439,7 +450,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 fail(400, str(e))
         if action == "enable":
             if u["revoked_at"] is not None:
-                fail(400, "A revoked key cannot be re-enabled; rotate it to issue a new one.")
+                fail(400, "A revoked user cannot be re-enabled; delete them and add them again for a new key.")
             db.set_enabled(conn, u["id"], True, actor["id"])
         elif action == "disable":
             db.set_enabled(conn, u["id"], False, actor["id"])

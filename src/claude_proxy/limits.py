@@ -13,7 +13,8 @@ from dataclasses import dataclass
 
 from . import quota
 from .config import Config
-from .usage import CW1, CW5, Totals, price_totals
+from .forwarder import COUNT_TOKENS_PATH
+from .usage import SUMS, Totals, price_totals, priced_sql, raw_tokens_sql
 
 MINUTE, HOUR, DAY = 60, 3600, 86400
 
@@ -99,44 +100,52 @@ def _rows(conn: sqlite3.Connection, user_id: int) -> list[sqlite3.Row]:
     return conn.execute("SELECT kind, scope, value, unit FROM limits WHERE user_id=? ORDER BY kind, scope", (user_id,)).fetchall()
 
 
-def _usage_rows(conn, cfg: Config, user_id: int, kind: str, unit: str, scope: str, since: float) -> list[tuple[float, float]]:
-    """(started_at, amount) for each forwarded request in the window that counts toward `kind`."""
-    rs = conn.execute(
-        f"SELECT started_at, model, requested_model, input_tokens AS i, output_tokens AS o, {CW5} AS c5, {CW1} AS c1, cache_read_tokens AS cr "
-        f"FROM requests WHERE user_id=? AND started_at>? AND rejected_by IS NULL AND path NOT LIKE '%count_tokens%' "
-        f"ORDER BY started_at", (user_id, since)).fetchall()
-    out = []
-    for r in rs:
-        # A scope names what clients ask for; providers may answer with a longer model id.
-        if scope != "*" and not (fnmatch.fnmatchcase(r["requested_model"] or "", scope) or fnmatch.fnmatchcase(r["model"] or "", scope)):
-            continue
-        if kind.startswith("requests_"):
-            out.append((r["started_at"], 1.0))
-            continue
-        t = price_totals(cfg.pricing, r["model"], Totals(1, r["i"], r["o"], r["c5"], r["c1"], r["cr"]))
-        amount = t.cost_usd if kind.startswith("cost_") else (float(t.raw) if unit == "raw" else t.weighted)
-        out.append((r["started_at"], amount))
-    return out
+def _amount(kind: str, unit: str, t: Totals) -> float:
+    if kind.startswith("requests_"):
+        return float(t.requests)
+    if unit == "raw":
+        return float(t.raw)
+    return t.cost_usd if kind.startswith("cost_") else t.weighted
+
+
+def _amount_sql(cfg: Config, kind: str, unit: str, models) -> tuple[str, list]:
+    """SQL for what one request adds toward `kind`, as `_amount` computes it."""
+    if kind.startswith("requests_"):
+        return "1.0", []
+    if unit == "raw":
+        return raw_tokens_sql(), []
+    return priced_sql(cfg.pricing, models, 1e6 if kind.startswith("cost_") else cfg.pricing.reference_input())
 
 
 def _window_state(conn, cfg, user_id, row, now) -> LimitState:
+    # Aggregated in SQL: this runs before every request, on the event loop that serves every stream.
     kind, scope, unit = row["kind"], row["scope"], row["unit"]
     window = WINDOWS[kind]
     limit = float(row["value"])
-    usage = _usage_rows(conn, cfg, user_id, kind, unit, scope, now - window)
-    current = sum(a for _, a in usage)
+    where = "user_id=? AND started_at>? AND rejected_by IS NULL AND path!=?"
+    params: list = [user_id, now - window, COUNT_TOKENS_PATH]
+    groups = conn.execute(f"SELECT requested_model AS rm, model, {SUMS}, MIN(started_at) AS first FROM requests "
+                          f"WHERE {where} GROUP BY rm, model", params).fetchall()
+    if scope != "*":
+        # A scope names what clients ask for; providers may answer with a longer model id.
+        groups = [g for g in groups if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
+    current = sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
+                  for g in groups)
     exceeded = current >= limit
     reset_in = None
-    if usage:
-        if exceeded:
-            left = current
-            for started, amount in usage:
-                left -= amount
-                if left < limit:
-                    reset_in = started + window - now
-                    break
-        else:
-            reset_in = usage[0][0] + window - now
+    if groups and not exceeded:
+        reset_in = min(g["first"] for g in groups) + window - now
+    elif groups:
+        # When enough of the oldest requests have left the window for the rest to be under the limit.
+        if scope != "*":
+            pairs = [(g["rm"], g["model"]) for g in groups]
+            where += " AND (" + " OR ".join("(requested_model IS ? AND model IS ?)" for _ in pairs) + ")"
+            params += [v for pair in pairs for v in pair]
+        amount, args = _amount_sql(cfg, kind, unit, {g["model"] for g in groups})
+        r = conn.execute(f"SELECT started_at FROM (SELECT started_at, SUM({amount}) OVER (ORDER BY started_at, id) AS cum "
+                         f"FROM requests WHERE {where}) WHERE ? - cum < ? ORDER BY started_at LIMIT 1",
+                         (*args, *params, current, limit)).fetchone()
+        reset_in = r[0] + window - now if r else None
     if reset_in is not None:
         reset_in = max(1, int(round(reset_in)))
     return LimitState(kind, scope, row["value"], unit, current=current, limit=limit,
@@ -197,7 +206,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
              now: float | None = None) -> Decision | None:
     """None to allow, or the rejection to send."""
     now = time.time() if now is None else now
-    is_count_tokens = "count_tokens" in path
+    is_count_tokens = path == COUNT_TOKENS_PATH
     third_party = cfg.route_for(model) is not None
     for row in _rows(conn, user_id):
         kind = row["kind"]
