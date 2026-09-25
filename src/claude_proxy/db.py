@@ -191,22 +191,27 @@ def find_user(conn: sqlite3.Connection, ref: str | int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM users WHERE name=?", (str(ref),)).fetchone()
 
 
+def _user_name(conn: sqlite3.Connection, user_id: int) -> str:
+    row = conn.execute("SELECT name FROM users WHERE id=?", (user_id,)).fetchone()
+    return row["name"] if row else str(user_id)
+
+
 def rotate_key(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> str:
     raw, h, prefix = generate_virtual_key()
     conn.execute("UPDATE users SET key_hash=?, key_prefix=? WHERE id=?", (h, prefix, user_id))
-    audit(conn, actor, "rotate_key", str(user_id))
+    audit(conn, actor, "rotate_key", _user_name(conn, user_id))
     return raw
 
 
 def set_enabled(conn: sqlite3.Connection, user_id: int, enabled: bool, actor: int | None = None) -> None:
     conn.execute("UPDATE users SET enabled=? WHERE id=?", (1 if enabled else 0, user_id))
-    audit(conn, actor, "enable" if enabled else "disable", str(user_id))
+    audit(conn, actor, "enable" if enabled else "disable", _user_name(conn, user_id))
 
 
 def revoke(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> None:
     conn.execute("UPDATE users SET revoked_at=?, enabled=0 WHERE id=?", (int(time.time()), user_id))
     conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
-    audit(conn, actor, "revoke", str(user_id))
+    audit(conn, actor, "revoke", _user_name(conn, user_id))
 
 
 def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> int:

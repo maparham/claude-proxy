@@ -379,7 +379,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         admin(request)
         n = names()
         rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (min(limit, 1000),)).fetchall()
-        return {"entries": [{**dict(r), "actor": n.get(r["actor_user_id"], "cli" if r["actor_user_id"] is None else None)} for r in rows]}
+        # Older entries named the user by id for these actions; show the name, or say the user is gone.
+        by_id = ("rotate_key", "enable", "disable", "revoke")
+        target = lambda r: (n.get(int(r["target"]), f"user #{r['target']} (deleted)")  # noqa: E731
+                            if r["action"] in by_id and (r["target"] or "").isdigit() else r["target"])
+        return {"entries": [{**dict(r), "target": target(r),
+                             "actor": n.get(r["actor_user_id"], "cli" if r["actor_user_id"] is None else None)} for r in rows]}
 
     @app.get("/api/me/status")
     async def me_status(request: Request, format: str = "json"):

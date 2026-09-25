@@ -234,3 +234,15 @@ async def test_sessions_carry_their_title_only_for_the_owner(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         mine = (await c.get("/api/sessions", headers=bearer(keys["bob"]))).json()["sessions"]
     assert [(s["session_id"], s["title"]) for s in mine] == [(f"s-{ids['bob']}", None)]
+
+
+async def test_audit_names_the_user_even_for_old_id_entries(env):
+    gw, conn, ids, keys = env
+    from claude_proxy.db import audit, set_enabled
+    audit(conn, ids["admin"], "revoke", "9999")                 # an old entry for a user since deleted
+    audit(conn, ids["admin"], "disable", str(ids["bob"]))       # an old entry written by id
+    set_enabled(conn, ids["alice"], False, actor=ids["admin"])  # new entries are written by name
+    async with admin_client(gw) as c:
+        entries = (await c.get("/api/audit")).json()["entries"]
+    got = [(e["action"], e["target"]) for e in entries if e["action"] != "login"][:3]
+    assert got == [("disable", "alice"), ("disable", "bob"), ("revoke", "user #9999 (deleted)")]

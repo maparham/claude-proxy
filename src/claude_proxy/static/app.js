@@ -6,7 +6,7 @@ const S = {
   user: null, csrf: null, tab: "overview", charts: [],
   settings: { reference_model: "claude-sonnet-5", stale_after_s: 1800 },   // replaced by /api/session
   prefs: loadPrefs(),
-  colorSlots: {},   // dimension -> {key: slot}; colour follows the entity for the whole session
+  colorSlots: loadSlots(),   // dimension -> {key: slot}; colour follows the entity, kept across page loads
 };
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -16,6 +16,7 @@ function loadPrefs() {
   const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd" };
   try { return { ...d, ...JSON.parse(localStorage.getItem("cp-prefs") || "{}") }; } catch { return d; }
 }
+function loadSlots() { try { return JSON.parse(localStorage.getItem("cp-colors") || "{}"); } catch { return {}; } }
 function savePrefs() { try { localStorage.setItem("cp-prefs", JSON.stringify(S.prefs)); } catch { /* private mode */ } }
 
 function css(name) { return getComputedStyle(document.documentElement).getPropertyValue(name).trim(); }
@@ -25,7 +26,10 @@ function colorFor(dim, key) {
   if (key === OTHER) return css("--other");
   if (key === "unattributed") return css("--unattributed");
   const m = (S.colorSlots[dim] ||= {});
-  if (!(key in m)) m[key] = Object.keys(m).length;
+  if (!(key in m)) {
+    m[key] = Object.keys(m).length;
+    try { localStorage.setItem("cp-colors", JSON.stringify(S.colorSlots)); } catch { /* private mode */ }
+  }
   const slot = m[key];
   return slot < SLOTS ? css(`--s${slot + 1}`) : css("--other");
 }
@@ -35,10 +39,10 @@ function topKeys(totals, max = 7) {
   return keys.length <= max + 1 ? keys : keys.slice(0, max);
 }
 
-const nf = new Intl.NumberFormat(undefined, { maximumFractionDigits: 1, notation: "compact" });
+const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1, notation: "compact" });   // 24.9M, never "24.9m" (minutes?)
 const nfFull = new Intl.NumberFormat();
 function fmtNum(v) { return v == null ? "—" : nf.format(v); }
-function fmtUsd(v) { return v == null ? "—" : v === 0 ? "$0" : "$" + (v >= 100 ? v.toFixed(0) : v >= 1 ? v.toFixed(2) : v.toFixed(3)); }
+function fmtUsd(v) { return v == null ? "—" : v === 0 ? "$0" : v < 0.01 ? "<$0.01" : "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)); }
 function fmtPct(v, d = 0) { return v == null ? "—" : `${v.toFixed(d)}%`; }
 function fmtDur(s) {
   if (s == null) return "—";
@@ -139,7 +143,7 @@ const UNIT_TIPS = {
 const LIMIT_PLACEHOLDER = { count: "e.g. 200", weighted: "e.g. 5000000", raw: "e.g. 20000000", usd: "e.g. 50", pct: "e.g. 25", list: "claude-sonnet-*,muse-spark" };
 const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : KIND_NOTE.window);
 Object.entries(KIND_TIPS).forEach(([k, v]) => {
-  TIPS[`kind:${k}`] = `<span class="th">${k}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
+  TIPS[`kind:${k}`] = `<span class="th">${k.replace(/_/g, " ")}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
 });
 const ERROR_TIPS = {
   gateway_limit: "A gateway limit refused the request (named in brackets). It never reached the provider and isn't counted as usage.",
@@ -169,6 +173,8 @@ function modelName(id) {
   return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2].replace("-", ".")}` : id;
 }
 const refModel = () => modelName(S.settings.reference_model);
+// Requests without a model, such as Claude Code listing models (GET /v1/models): counted, but no tokens.
+const NO_MODEL = "no model";
 // Tip text quotes config through placeholders: {ref} the weighting reference model, {stale} the staleness cutoff.
 const fillTip = (html) => html.replace(/\{ref\}/g, esc(refModel())).replace(/\{stale\}/g, fmtDur(S.settings.stale_after_s));
 
@@ -252,6 +258,7 @@ function chart(el) {
 }
 window.addEventListener("resize", () => S.charts.forEach((c) => c.resize()));
 
+const narrow = () => document.documentElement.clientWidth < 600;
 function baseOption() {
   const ink2 = css("--ink-2"), muted = css("--muted"), grid = css("--grid"), axis = css("--axis"), surface = css("--surface"), ink = css("--ink");
   return {
@@ -262,9 +269,9 @@ function baseOption() {
       trigger: "axis", backgroundColor: surface, borderColor: css("--border") || axis, textStyle: { color: ink, fontSize: 12 },
       axisPointer: { type: "line", lineStyle: { color: axis } }, confine: true,
     },
-    legend: { top: 0, left: 0, icon: "roundRect", itemWidth: 10, itemHeight: 10, textStyle: { color: ink2, fontSize: 12 } },
-    xAxis: { axisLine: { lineStyle: { color: axis } }, axisTick: { show: false }, axisLabel: { color: muted, fontSize: 11 }, splitLine: { show: false } },
-    yAxis: { axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: muted, fontSize: 11 }, splitLine: { lineStyle: { color: grid } } },
+    legend: { type: "scroll", top: 0, left: 0, right: 0, icon: "roundRect", itemWidth: 10, itemHeight: 10, textStyle: { color: ink2, fontSize: 12 } },
+    xAxis: { axisLine: { lineStyle: { color: axis } }, axisTick: { show: false }, axisLabel: { color: muted, fontSize: 11, hideOverlap: true }, splitLine: { show: false } },
+    yAxis: { axisLine: { show: false }, axisTick: { show: false }, axisLabel: { color: muted, fontSize: 11, hideOverlap: true }, splitLine: { lineStyle: { color: grid } } },
   };
 }
 function timeLabel(gran) {
@@ -277,8 +284,11 @@ function timeLabel(gran) {
 
 // Stacked bars over time from API points [{t, key, <metric>}].
 function stackedTime(el, points, metric, dim, gran, opts = {}) {
+  const none = dim === "model" ? NO_MODEL : "—";
+  points = points.map((p) => (p.key == null ? { ...p, key: none } : p));
   const totals = {};
-  points.forEach((p) => { totals[p.key ?? "—"] = (totals[p.key ?? "—"] || 0) + (p[metric] || 0); });
+  points.forEach((p) => { totals[p.key] = (totals[p.key] || 0) + (p[metric] || 0); });
+  if (Object.values(totals).some((v) => v > 0)) points = points.filter((p) => totals[p.key] > 0);
   const keep = new Set(topKeys(totals));
   const fold = (k) => (keep.has(k) ? k : OTHER);
   const seen = [...new Set(points.map((p) => p.t))].sort((a, b) => a - b);
@@ -293,7 +303,7 @@ function stackedTime(el, points, metric, dim, gran, opts = {}) {
   } else times.push(...seen);
   const series = {};
   points.forEach((p) => {
-    const k = fold(p.key ?? "—");
+    const k = fold(p.key);
     (series[k] ||= new Map()).set(p.t, (series[k].get(p.t) || 0) + (p[metric] || 0));
   });
   const keys = Object.keys(series).sort((a, b) => (a === OTHER) - (b === OTHER) || totals[b] - totals[a]);
@@ -428,7 +438,7 @@ async function renderOverview(main) {
       ${banners.join("")}
       <div class="controls">${seg("period", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], S.prefs.period)}</div>
       <div class="tiles">
-        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${esc(nfFull.format(t.requests))} forwarded</div></div>
+        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${t.requests >= 1000 ? `${esc(nfFull.format(t.requests))} forwarded` : "forwarded to a provider"}</div></div>
         <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
         <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
         <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : "not billed on the subscription"}</div></div>
@@ -441,7 +451,7 @@ async function renderOverview(main) {
           <div id="quota-bars"></div>
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>
-        <div class="card"><h3>${isAdmin() ? "Requests by user, last 7 days" : "Your limits"}</h3>
+        <div class="card"><h3>${isAdmin() ? "Usage by user, last 7 days" : "Your limits"}</h3>
           <p class="sub">${isAdmin() ? "Daily, weighted tokens." : `Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
           ${isAdmin() ? `<div class="chart short" id="ov-users"></div>` : limitsBlock(me.limits)}
         </div>
@@ -485,11 +495,12 @@ async function renderUsage(main) {
       ${seg("split", splits, p.split)}
       ${seg("metric", Object.entries(METRICS).map(([k, v]) => [k, v, `metric:${k}`]), p.metric)}
     </div>
-    <div class="card"><h3>${esc(METRICS[p.metric])} per ${p.granularity}</h3><p class="sub">Scroll or pinch to zoom; click a legend item to hide it.</p>
+    <div class="card"><h3>${esc(METRICS[p.metric])} per ${p.granularity}</h3><p class="sub" id="usage-hint">Scroll or pinch to zoom.</p>
       <div class="chart tall" id="usage-chart"></div><div id="usage-table"></div></div></section>`;
   wireSegs(main, render);
   if (!d.points.length) { $("#usage-chart").outerHTML = `<p class="muted">No requests in this range.</p>`; return; }
   const { keys, times, series } = stackedTime($("#usage-chart"), d.points, p.metric, p.split, p.granularity);
+  if (keys.length > 1) $("#usage-hint").textContent = "Scroll or pinch to zoom; click a legend item to hide it.";
   $("#usage-table").innerHTML = tableView("Show as table", ["Period", ...keys], times.map((t) =>
     [timeLabel(p.granularity)(t * 1000), ...keys.map((k) => fmtMetric(p.metric, series[k].get(t) || 0))]));
 }
@@ -501,7 +512,7 @@ async function renderUsers(main) {
     <p class="lede">Each person has their own gateway key. Limits are checked before every request against that person's recorded usage; share limits compare an ${tipT("estimated share", "share")} of the account's quota.</p>
     <div class="controls"><button class="btn primary" id="add-user">Add user</button></div>
     <div class="card table-wrap"><table class="data"><thead><tr>
-      <th>User${tipI("key_prefix", "About the key prefix")}</th><th class="r">24 h</th><th class="r">7 d</th><th class="r">30 d</th><th class="r">Est. share 5 h / 7 d${tipI("share_col")}</th><th>Limits${tipI("limits_col")}</th><th>Last seen</th><th></th></tr></thead>
+      <th>User${tipI("key_prefix", "About the key prefix")}</th><th class="r">24 h</th><th class="r">7 d</th><th class="r">30 d</th><th class="r">Est. share 5 h / 7 d, pts${tipI("share_col")}</th><th>Limits${tipI("limits_col")}</th><th>Last request</th><th></th></tr></thead>
       <tbody>${users.map(userRow).join("")}</tbody></table></div>
     <p class="muted" style="font-size:12px;margin-top:8px">Usage columns are weighted tokens, with estimated cost underneath. Concurrent requests from one user can each pass a check before either is recorded, so a limit can be overshot by about one request per open session.</p>
   </section>`;
@@ -526,7 +537,7 @@ function userRow(u) {
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
-    <td class="muted">${fmtAgo(u.last_seen)}</td>
+    <td class="muted nowrap">${fmtAgo(u.last_seen)}</td>
     <td>${userActions(u)}</td></tr>`;
 }
 function userActions(u) {
@@ -583,7 +594,7 @@ function limitsDialog(u) {
       <button class="btn small danger" data-del="${esc(l.kind)}" data-scope="${esc(l.scope)}">Remove</button></div>`).join("") : `<p class="muted">No limits yet.</p>`}</div>
     <h3 style="margin-top:16px">Set a limit</h3>
     <form id="f-lim" class="form-grid">
-      <label><span>Kind${tipI("kind", "About the selected kind")}</span><select name="kind">${Object.keys(kinds).map((k) => `<option>${esc(k)}</option>`).join("")}</select></label>
+      <label><span>Kind${tipI("kind", "About the selected kind")}</span><select name="kind">${Object.keys(kinds).map((k) => `<option value="${esc(k)}">${esc(k.replace(/_/g, " "))}</option>`).join("")}</select></label>
       <label><span>Value${tipI("value")}</span><input type="text" name="value" required placeholder="e.g. 500000"></label>
       <label><span>Unit${tipI("unit", "About the selected unit")}</span><select name="unit"></select></label>
       <label><span>Models (glob)${tipI("scope")}</span><input type="text" name="scope" value="*"></label>
@@ -598,7 +609,7 @@ function limitsDialog(u) {
     d.querySelector('[data-tip="kind"]').dataset.tipHtml = TIPS[`kind:${k}`] || `<b>${esc(k)}</b>`;
     d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(unit)}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
     f.value.placeholder = LIMIT_PLACEHOLDER[unit] || "";
-    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(k)}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
+    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(k.replace(/_/g, " "))}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
       + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}${f.unit.disabled ? " The only unit for this kind." : ""}` : ""));
   };
   const syncUnits = () => {
@@ -650,7 +661,7 @@ async function renderUser(main) {
       <p class="lede">Key <code>${esc(u.prefix)}…</code> · added ${fmtTime(u.created_at)} · last request ${fmtAgo(u.last_seen)}</p>
       <div class="controls">${seg("userPeriod", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], period)}<span class="spacer"></span>${userActions(u)}</div>
       <div class="tiles">
-        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${esc(nfFull.format(t.requests))} forwarded</div></div>
+        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${t.requests >= 1000 ? `${esc(nfFull.format(t.requests))} forwarded` : "forwarded to a provider"}</div></div>
         <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
         <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
         <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">not billed on the subscription</div></div>
@@ -659,14 +670,14 @@ async function renderUser(main) {
       <div class="grid cols-2">
         <div class="card"><h3>Limits${tipI("limits_col")}</h3><p class="sub">Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.</p>${limitsBlock(u.limits)}</div>
         <div class="card table-wrap"><h3>Models</h3><p class="sub">${esc(span)}, largest first.</p>${models.models.length ? `<table class="data"><thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th class="r">Cache hits${tipI("cache_ratio")}</th></tr></thead><tbody>
-          ${models.models.map((m) => `<tr><td>${esc(m.model || "unknown")}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
+          ${models.models.map((m) => `<tr><td>${esc(m.model || NO_MODEL)}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
           </tbody></table>` : `<p class="muted">No requests in range.</p>`}</div>
       </div>
       <div class="card" style="margin-top:16px"><h3>Weighted tokens per ${gran}, by model${tipI("weighted")}</h3><p class="sub">${esc(span)}.</p><div class="chart" id="u-usage"></div></div>
       <div class="grid cols-2" style="margin-top:16px">
-        <div class="card"><h3>Activity</h3><p class="sub">Requests by weekday and hour, your local time, ${esc(span)}.</p><div class="chart" id="u-heat"></div></div>
+        <div class="card"><h3>Activity</h3><p class="sub">Requests by weekday and hour, your local time, ${esc(span)}.</p><div class="heat-wrap"><div class="chart" id="u-heat"></div></div></div>
         <div class="card table-wrap"><h3>Recent errors</h3><p class="sub">${esc(span)}.</p>${errs.recent.length ? `<table class="data"><thead><tr><th>When</th><th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
-          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
           </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div>
       </div>
       <div class="card table-wrap" style="margin-top:16px"><h3>Sessions</h3><p class="sub">${esc(span)}, most recently active first.</p>${sess.sessions.length ? sessionsTable(sess.sessions, false) : `<p class="muted">No sessions in range.</p>`}</div>
@@ -713,10 +724,12 @@ async function renderQuota(main) {
   const totals = {};
   h.forEach((pt) => Object.entries(pt.shares).forEach(([k, v]) => (totals[k] = Math.max(totals[k] || 0, v))));
   const users = topKeys(totals);
+  let peak = 0;
   const rows = h.map((pt) => {
+    peak = Math.max(peak, pt.utilization_pct);
     const named = users.map((k) => pt.shares[k] || 0);
     const other = Object.entries(pt.shares).filter(([k]) => !users.includes(k)).reduce((a, [, v]) => a + v, 0);
-    const un = Math.max(0, pt.utilization_pct - named.reduce((a, b) => a + b, 0) - other);
+    const un = Math.max(0, peak - named.reduce((a, b) => a + b, 0) - other);   // a report that dips within the window is noise
     return { t: pt.t * 1000, named, other, un };
   });
   const hasOther = rows.some((r) => r.other > 0);
@@ -754,8 +767,8 @@ async function renderModels(main) {
     chart($("#m-bars")).setOption({
       ...o, legend: { show: false }, tooltip: { ...o.tooltip, trigger: "item", valueFormatter: (v) => fmtMetric(mm, v) },
       grid: { ...o.grid, top: 8 },
-      xAxis: { ...o.yAxis, type: "value", axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtMetric(mm, v) } },
-      yAxis: { ...o.xAxis, type: "category", data: models.map((m) => m.model || "unknown") },
+      xAxis: { ...o.yAxis, type: "value", splitNumber: narrow() ? 2 : 5, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtMetric(mm, v) } },
+      yAxis: { ...o.xAxis, type: "category", data: models.map((m) => m.model || NO_MODEL) },
       series: [{ type: "bar", barMaxWidth: 18, itemStyle: { color: css("--s1"), borderRadius: [0, 4, 4, 0] }, data: models.map((m) => m[mm]) }],
     });
   } else $("#m-bars").outerHTML = `<p class="muted">No requests in range.</p>`;
@@ -763,7 +776,8 @@ async function renderModels(main) {
   if (pts.length) {
     chart($("#m-cache")).setOption({
       ...o, legend: { show: false }, tooltip: { ...o.tooltip, valueFormatter: (v) => fmtPct(v * 100, 1) },
-      xAxis: { ...o.xAxis, type: "time" }, yAxis: { ...o.yAxis, type: "value", min: 0, max: 1, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => `${Math.round(v * 100)}%` } },
+      xAxis: { ...o.xAxis, type: "time", minInterval: 86400000, axisLabel: { ...o.xAxis.axisLabel, formatter: (v) => timeLabel("day")(v) } },
+      yAxis: { ...o.yAxis, type: "value", min: 0, max: 1, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => `${Math.round(v * 100)}%` } },
       series: [{ name: "cache hit ratio", type: "line", showSymbol: pts.length < 40, symbolSize: 8, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
                  data: pts.map((p) => [p.t * 1000, p.ratio]) }],
     });
@@ -775,7 +789,7 @@ async function renderActivity(main) {
   const d = await api(`/api/heatmap?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>Activity</h2><p class="lede">Requests by weekday and hour of day, in your local time.</p>
     <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)}</div>
-    <div class="card"><div class="chart" id="heat"></div></div></section>`;
+    <div class="card heat-wrap"><div class="chart" id="heat"></div></div></section>`;
   wireSegs(main, render);
   heatmap($("#heat"), d.cells);
 }
@@ -787,17 +801,17 @@ function heatmap(el, cells) {
     ...o, legend: { show: false }, grid: { ...o.grid, top: 8, bottom: 48 },
     tooltip: { ...o.tooltip, trigger: "item", formatter: (x) => `${days[x.value[1]]} ${String(x.value[0]).padStart(2, "0")}:00 — <b>${x.value[2]}</b> requests` },
     xAxis: { ...o.xAxis, type: "category", data: [...Array(24).keys()].map((h) => String(h).padStart(2, "0")), splitArea: { show: false } },
-    yAxis: { ...o.yAxis, type: "category", data: days, splitLine: { show: false } },
-    visualMap: { min: 0, max, calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 140, text: [`${max} requests`, "0"],
+    yAxis: { ...o.yAxis, type: "category", data: days, inverse: true, splitLine: { show: false } },
+    visualMap: { min: 1, max: Math.max(2, max), calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 140, text: [`${max} requests`, "1"],
                  textStyle: { color: css("--muted"), fontSize: 11 },
-                 inRange: { color: [css("--seq-0"), css("--seq-1"), css("--seq-2"), css("--seq-3"), css("--seq-4"), css("--seq-5")] } },
+                 inRange: { color: [css("--seq-1"), css("--seq-2"), css("--seq-3"), css("--seq-4"), css("--seq-5")] } },
     series: [{ type: "heatmap", data: cells, itemStyle: { borderColor: css("--surface"), borderWidth: 2, borderRadius: 3 } }],
   });
 }
 
 async function renderSessions(main) {
   const d = await api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}`);
-  main.innerHTML = `<section class="view"><h2>Sessions</h2><p class="lede">Claude Code sessions seen in the last ${S.prefs.range === "1d" ? "24 hours" : "7 days"}, newest first.</p>
+  main.innerHTML = `<section class="view"><h2>Sessions</h2><p class="lede">Claude Code sessions seen in the last ${S.prefs.range === "1d" ? "24 hours" : "7 days"}, most recently active first.</p>
     <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">No sessions recorded. Claude Code sends a session header on each request; if this stays empty, the header name has changed.</p>`}</div></section>`;
 }
 const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${esc(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
@@ -817,7 +831,7 @@ async function renderErrors(main) {
     <div class="controls">${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
     <div class="card table-wrap" style="margin-top:16px"><h3>Most recent</h3>${d.recent.length ? `<table class="data"><thead><tr><th>When</th>${isAdmin() ? "<th>User</th>" : ""}<th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
-      ${d.recent.map((r) => `<tr><td>${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+      ${d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
     </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div></section>`;
   wireSegs(main, render);
   if (!d.points.length) { $("#err-chart").outerHTML = `<p class="muted">Nothing to plot.</p>`; return; }
@@ -825,11 +839,15 @@ async function renderErrors(main) {
   stackedTime($("#err-chart"), pts, "n", "error", d.bucket_s === 3600 ? "hour" : "day");
 }
 
+function auditDetail(json) {
+  if (!json) return "";
+  try { return Object.entries(JSON.parse(json)).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join(" · "); } catch { return json; }
+}
 async function renderAudit(main) {
   const d = await api("/api/audit");
   main.innerHTML = `<section class="view"><h2>Audit log</h2><p class="lede">Admin actions from the dashboard and the CLI.</p>
     <div class="card table-wrap"><table class="data"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>
-      ${d.entries.map((e) => `<tr><td>${fmtTime(e.at)}</td><td>${esc(e.actor ?? "—")}</td><td>${esc(e.action)}</td><td>${esc(e.target ?? "")}</td><td class="muted">${esc(e.detail_json ?? "")}</td></tr>`).join("")}
+      ${d.entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${esc(e.actor ?? "—")}</td><td>${esc(e.action)}</td><td>${esc(e.target ?? "")}</td><td class="muted">${esc(auditDetail(e.detail_json))}</td></tr>`).join("")}
     </tbody></table></div></section>`;
 }
 

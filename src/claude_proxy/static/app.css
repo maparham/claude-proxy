@@ -113,6 +113,8 @@ table.data tr.clickable { cursor: pointer; }
 .user-link { color: inherit; text-decoration: none; }
 .user-link:hover { text-decoration: underline; }
 table.data td.nowrap { white-space: nowrap; }
+.heat-wrap { overflow-x: auto; }
+.heat-wrap > .chart { min-width: 560px; }
 .crumb { margin: 0 0 8px; font-size: 13px; }
 .controls .spacer { flex: 1; }
 .table-wrap { overflow-x: auto; }
