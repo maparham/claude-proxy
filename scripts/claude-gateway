@@ -7,6 +7,9 @@
 #   claude-gateway on --key-only     # back to sending only the gateway key
 #   claude-gateway off
 #   claude-gateway status
+#   claude-gateway on --opencode --url https://claude.example.com --routes-key sk-proxy-r-...   # OpenCode, first time
+#   claude-gateway on --opencode     # later: refreshes the model list
+#   claude-gateway off --opencode
 #
 # Key-only mode (the default) sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the "env" block of
 # ~/.claude/settings.json. Claude Code then has no claude.ai login, so claude.ai connectors and Claude in
@@ -14,18 +17,25 @@
 # Own-login mode is for a machine that is itself signed in to a Claude subscription (the owner's): it sets
 # ANTHROPIC_BASE_URL and sends the gateway key in ANTHROPIC_CUSTOM_HEADERS, so Claude Code keeps its own
 # login for Claude in Chrome and connectors while requests still go through, and are metered by, the gateway.
-# `on` also installs a statusline showing the user's gateway limits, unless one is already set; then it prints
+# `on` also installs a UserPromptSubmit hook (statusline.sh --warn) that shows a warning when a limit is at 80%,
+# and a statusline showing the user's gateway limits, unless one is already set; then it prints
 # how to add them to that one instead. `off` removes exactly what `on` added and leaves every other setting
 # alone. The URL, key, mode and a copy of statusline.sh are kept in ~/.config/claude-gateway/ (client.json is
 # mode 600). Start a new Claude Code session after switching.
+# --opencode acts on OpenCode only (third-party models such as Muse; Anthropic accepts the subscription only from
+# Claude Code). With the routes-only key the admin issues (`claude-proxy user routes-key`), it adds a "gateway"
+# provider to ~/.config/opencode/opencode.json and a muse subagent; `off --opencode` removes exactly those. The key
+# is kept in ~/.config/claude-gateway/routes.key (mode 600) and opencode.json only refers to that file.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
 CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
 
 STATUSLINE=$(dirname "$CLIENT")/statusline.sh
+ROUTES_KEY=$(dirname "$CLIENT")/routes.key
+OPENCODE_DIR=${CLAUDE_GATEWAY_OPENCODE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}   # where OpenCode reads its global config
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
 save_client() {   # url key [dashboard]
   mkdir -p "$(dirname "$CLIENT")"
@@ -41,15 +51,19 @@ EOF
   chmod 600 "$CLIENT"
 }
 
-field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""))' "$CLIENT" "$@"; }
+field() { python3 -c 'import json,os,sys; c=json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}; print(c.get(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""))' "$CLIENT" "$@"; }
 
 set_mode() {
   python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mode"]=sys.argv[2]; json.dump(c, open(p,"w"), indent=2)' "$CLIENT" "$1"
 }
 
-install_statusline() {   # copy statusline.sh from beside this script (through any symlink) next to client.json
+src_dir() {   # the directory this script really lives in (through any symlink)
+  dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
+}
+
+install_statusline() {   # copy statusline.sh from beside this script next to client.json
   local src
-  src=$(dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")")/statusline.sh
+  src=$(src_dir)/statusline.sh
   if [ -f "$src" ]; then cp "$src" "$STATUSLINE" && chmod 755 "$STATUSLINE"; fi
 }
 
@@ -79,6 +93,20 @@ ours_line = lambda v: isinstance(v, dict) and v.get("command") == line_cmd
 if c.pop("added_statusline", False) and ours_line(s.get("statusLine")):
     del s["statusLine"]
 
+# The limit warning (statusline.sh --warn): our own group in the UserPromptSubmit hooks, beside any others.
+warn_cmd = line_cmd + " --warn"
+ours_hook = lambda g: isinstance(g, dict) and any(isinstance(h, dict) and h.get("command") == warn_cmd for h in g.get("hooks", []))
+if c.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
+    submit = s["hooks"].get("UserPromptSubmit")
+    if isinstance(submit, list):
+        groups = [g for g in submit if not ours_hook(g)]
+        if groups:
+            s["hooks"]["UserPromptSubmit"] = groups
+        else:
+            s["hooks"].pop("UserPromptSubmit", None)
+    if not s["hooks"]:
+        del s["hooks"]
+
 if mode == "on":
     env.update({"ANTHROPIC_BASE_URL": c["url"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
     if c.get("mode") == "own-login":
@@ -95,6 +123,11 @@ if mode == "on":
         elif not ours_line(s["statusLine"]):
             print("You already have a statusline, so it was left as it is. To show your gateway limits in it too,\n"
                   "add the output of this command to it: " + line_cmd)
+        hooks = s.setdefault("hooks", {})
+        if isinstance(hooks, dict) and isinstance(hooks.setdefault("UserPromptSubmit", []), list):
+            if not any(ours_hook(g) for g in hooks["UserPromptSubmit"]):
+                hooks["UserPromptSubmit"].append({"hooks": [{"type": "command", "command": warn_cmd, "timeout": 10}]})
+                c["added_warn_hook"] = True
 if not env:
     del s["env"]
 
@@ -135,10 +168,195 @@ has_own_login() {   # best effort: a claude.ai login stored by Claude Code on th
   security find-generic-password -s "Claude Code-credentials" >/dev/null 2>&1 || [ -s "$HOME/.claude/.credentials.json" ]
 }
 
+preflight_routes() {   # url key out: the gateway takes the OpenCode key the way OpenCode sends it; its model list goes to out
+  local code
+  code=$(curl -sS -o "$3" -w '%{http_code}' --max-time 15 -H "x-api-key: $2" -H "anthropic-version: 2023-06-01" \
+         "$1/v1/models" 2>/dev/null) || code=000
+  if [ "$code" != 200 ]; then
+    echo "The gateway at $1 did not accept the OpenCode key (HTTP $code); leaving OpenCode as it is." >&2
+    head -c 400 "$3" >&2; echo >&2; rm -f "$3"; exit 1
+  fi
+}
+
+opencode_edit() {   # on <models.json> | off. `on` takes the URL and key from CG_URL and CG_KEY.
+  python3 - "$1" "$OPENCODE_DIR" "$CLIENT" "$ROUTES_KEY" "$(src_dir)/../examples/opencode/muse.md" "${2:-}" <<'EOF'
+import hashlib, json, os, shutil, sys, tempfile
+mode, oc_dir, client, key_file, agent_src, models_file = sys.argv[1:7]
+key_file = os.path.abspath(key_file)
+conf = os.path.join(oc_dir, "opencode.json")      # never opencode.jsonc: OpenCode merges the two
+agent = os.path.join(oc_dir, "agents", "muse.md")
+SCHEMA = "https://opencode.ai/config.json"
+
+def digest(p):
+    with open(p, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+def write_json(path, data, perms=None):
+    path = os.path.realpath(path)   # a symlinked opencode.json (dotfiles-style) keeps pointing at its target
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+        f.write("\n")
+    os.chmod(tmp, perms if perms is not None else (os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644))
+    os.replace(tmp, path)
+
+conf = os.path.realpath(conf)   # resolve once: reads, writes and the "delete only if we created it" removal all
+                                 # then act on the real file, so a dotfiles-style symlink survives on/off.
+
+c = json.load(open(client)) if os.path.exists(client) else {}
+if not isinstance(c, dict):
+    c = {}
+rec = c.get("opencode") if isinstance(c.get("opencode"), dict) else {}
+try:
+    s = json.load(open(conf)) if os.path.exists(conf) else None
+except ValueError:
+    sys.exit(f"{conf} is not plain JSON (comments or a trailing comma?), so it was left as it is. "
+             "Add the gateway provider by hand, or move the comments to opencode.jsonc.")
+created = s is None
+if created:
+    s = {"$schema": SCHEMA}
+elif not isinstance(s, dict):
+    sys.exit(f"{conf} is not a JSON object, so it was left as it is. Add the gateway provider by hand.")
+providers = s.get("provider") if isinstance(s.get("provider"), dict) else {}
+
+if mode == "on":
+    url, key = os.environ["CG_URL"].rstrip("/"), os.environ["CG_KEY"]
+    if "provider" in s and not isinstance(s["provider"], dict):
+        sys.exit(f'{conf} has a "provider" field that is not a JSON object, so it was left as it is. '
+                  "Add the gateway provider by hand.")
+    if "gateway" in providers and not rec.get("added_provider"):
+        sys.exit(f"{conf} already has a provider named 'gateway' that claude-gateway did not add; left as it is.")
+    model_data = json.load(open(models_file)).get("data", [])
+    if any(str(m.get("id", "")).startswith("claude-") for m in model_data):
+        sys.exit("The gateway answered with Claude models for this key; that looks like a Claude Code key, not "
+                 f"an OpenCode routes key. {conf} was left as it is.")
+    models = {}
+    for m in model_data:
+        entry = {"name": m.get("display_name") or m["id"]}
+        if m.get("max_input_tokens") and m.get("max_tokens"):
+            entry["limit"] = {"context": m["max_input_tokens"], "output": m["max_tokens"]}
+        models[m["id"]] = entry
+
+    # Record that we own this provider (and its URL, kept separately from Claude Code's own) BEFORE touching
+    # opencode.json: if a later step fails (routes.key, opencode.json or the agent copy), a rerun of `on
+    # --opencode` sees added_provider already true and repairs rather than refusing, and `off --opencode` can
+    # always find its own record to undo.
+    # had_provider: whether opencode.json had a "provider" key before we ever touched it. A record from before
+    # this field existed (added_provider already true, had_provider absent) can't tell empty-from-absent anymore,
+    # so it falls back to the old behaviour (drop "provider" entirely on off) rather than guessing wrong.
+    had_provider = rec["had_provider"] if "had_provider" in rec else (not rec.get("added_provider") and "provider" in s)
+    rec = {"added_provider": True, "created_file": rec.get("created_file", created),
+           "agent_sha256": rec.get("agent_sha256"), "url": url, "had_provider": had_provider}
+    c["opencode"] = rec
+    os.makedirs(os.path.dirname(client), exist_ok=True)
+    write_json(client, c, 0o600)
+
+    s.setdefault("provider", {})["gateway"] = {
+        "npm": "@ai-sdk/anthropic", "name": "Claude gateway",
+        "options": {"baseURL": url + "/v1", "apiKey": "{file:" + key_file + "}"},
+        "models": models}
+    os.makedirs(os.path.dirname(key_file), exist_ok=True)
+    old = os.umask(0o077)
+    try:
+        with open(key_file, "w") as f:
+            f.write(key)                           # no newline: OpenCode sends the file's content as the key
+    finally:
+        os.umask(old)
+    os.chmod(key_file, 0o600)
+    os.makedirs(oc_dir, exist_ok=True)
+    write_json(conf, s)
+    if not os.path.lexists(agent) and os.path.exists(agent_src):   # lexists: a broken symlink already "exists"
+        try:
+            os.makedirs(os.path.dirname(agent), exist_ok=True)
+            shutil.copyfile(agent_src, agent)
+            rec["agent_sha256"] = digest(agent)
+        except OSError as e:
+            print(f"Could not install the muse agent at {agent} ({e}); "
+                  "the gateway provider was installed without it.", file=sys.stderr)
+else:
+    removed_provider = False
+    if rec.get("added_provider") and "gateway" in providers:
+        del providers["gateway"]
+        removed_provider = True
+        if not providers and not rec.get("had_provider"):
+            s.pop("provider", None)   # spec 4: a config that never had "provider" comes back without one
+        if rec.get("created_file") and s == {"$schema": SCHEMA}:
+            os.remove(conf)
+        else:
+            write_json(conf, s)
+    gateway_present = False   # re-read: our own removal above may have changed this, and we may not own it at all
+    if os.path.exists(conf):
+        try:
+            cur = json.load(open(conf))
+            gateway_present = isinstance(cur, dict) and "gateway" in (cur.get("provider") or {})
+        except ValueError:
+            gateway_present = True   # can't tell; be conservative and keep the key file
+    sha = rec.get("agent_sha256")
+    if sha and os.path.exists(agent) and digest(agent) == sha:   # untouched since `on` copied it
+        os.remove(agent)
+    had_key = os.path.exists(key_file)
+    if gateway_present:
+        if had_key:
+            print(f"{conf} still has a 'gateway' provider that this command did not remove; "
+                  "the OpenCode key file was left in place.", file=sys.stderr)
+        summary = f"{conf} still has a 'gateway' provider that this command did not remove." + \
+                  (" The OpenCode key file was kept." if had_key else "")
+    elif had_key:
+        os.remove(key_file)
+        summary = ("OpenCode no longer uses the gateway; the key file was deleted." if removed_provider else
+                   f"The OpenCode key file was deleted (no 'gateway' provider was found in {conf}).")
+    elif removed_provider:
+        summary = "OpenCode no longer uses the gateway."
+    else:
+        summary = "OpenCode had no gateway provider set up; nothing to undo."
+    print(summary)
+    c.pop("opencode", None)
+if c or os.path.exists(client):
+    os.makedirs(os.path.dirname(client), exist_ok=True)
+    write_json(client, c, 0o600)
+EOF
+}
+
+opencode_url() {   # the URL last used for OpenCode's provider, kept separately from Claude Code's own URL
+  python3 -c 'import json,os,sys
+c = json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}
+oc = c.get("opencode") if isinstance(c.get("opencode"), dict) else {}
+print(oc.get("url") or "")' "$CLIENT"
+}
+
+opencode_on() {   # url-or-empty key-or-empty; empty means the saved one
+  local url key models
+  url=$1
+  [ -n "$url" ] || url=$(opencode_url)
+  [ -n "$url" ] || url=$(field url)
+  url=${url%/}
+  key=${2:-$(cat "$ROUTES_KEY" 2>/dev/null || true)}
+  [ -n "$url" ] || { echo "No gateway URL yet: claude-gateway on --opencode --url <url> --routes-key <key>" >&2; exit 1; }
+  [ -n "$key" ] || { echo "No OpenCode key yet: claude-gateway on --opencode --routes-key <key> (the admin issues it)" >&2; exit 1; }
+  case "$key" in
+    sk-proxy-r-*) ;;
+    *) echo "This is a Claude Code key; ask the admin for an OpenCode key (claude-proxy user routes-key)." >&2; exit 1 ;;
+  esac
+  models=$(mktemp)
+  preflight_routes "$url" "$key" "$models"
+  export CG_URL=$url CG_KEY=$key
+  if ! opencode_edit on "$models"; then rm -f "$models"; exit 1; fi
+  rm -f "$models"
+  echo "OpenCode now has a 'gateway' provider for $url (third-party models only). Start a new OpenCode session to pick it up."
+}
+
+opencode_state() {
+  if [ -f "$OPENCODE_DIR/opencode.json" ] && python3 -c 'import json,sys; sys.exit(0 if "gateway" in (json.load(open(sys.argv[1])).get("provider") or {}) else 1)' "$OPENCODE_DIR/opencode.json" 2>/dev/null; then
+    echo "opencode: gateway provider installed"
+  else
+    echo "opencode: not set up"
+  fi
+}
+
 cmd=${1:-status}; shift || true
 case "$cmd" in
   on)
-    url="" key="" dash="" mode=""
+    url="" key="" dash="" mode="" opencode="" rkey=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --url) url=$2; shift 2 ;;
@@ -146,14 +364,25 @@ case "$cmd" in
         --dashboard) dash=$2; shift 2 ;;
         --own-login) mode=own-login; shift ;;
         --key-only) mode=key-only; shift ;;
+        --opencode) opencode=1; shift ;;
+        --routes-key) rkey=$2; shift 2 ;;
         *) usage 1 ;;
       esac
     done
+    if [ -n "$opencode" ]; then
+      [ -z "$key$dash$mode" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
+      opencode_on "$url" "$rkey"
+      exit 0
+    fi
+    [ -z "$rkey" ] || { echo "--routes-key goes with --opencode." >&2; exit 1; }
+    case "$key" in
+      sk-proxy-r-*) echo "This is an OpenCode key; Claude Code needs your Claude Code key." >&2; exit 1 ;;
+    esac
     if [ -n "$url$key" ]; then
       [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
       save_client "$url" "$key" "$dash"
     fi
-    [ -f "$CLIENT" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
+    [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
     mode=${mode:-$(field mode key-only)}
     if [ "$mode" = own-login ] && ! has_own_login; then
       echo "Own-login mode needs this machine signed in to Claude Code with a subscription (run 'claude', then /login)," >&2
@@ -166,18 +395,30 @@ case "$cmd" in
     echo "Claude Code now uses the gateway at $(field url) ($(field mode key-only) mode). Start a new session to pick it up."
     ;;
   off)
-    edit_settings off
-    echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+    case "${1:-}" in
+      --opencode)
+        shift
+        [ $# -eq 0 ] || usage 1
+        opencode_edit off
+        exit 0
+        ;;
+      "")
+        edit_settings off
+        echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+        ;;
+      *) usage 1 ;;
+    esac
     ;;
   status)
     read -r url mode <<<"$(current)" || true
-    if [ -z "${url:-}" ]; then echo "off: Claude Code uses this machine's own login"; exit 0; fi
+    if [ -z "${url:-}" ]; then echo "off: Claude Code uses this machine's own login"; opencode_state; exit 0; fi
     echo "on: $url ($mode mode)"
     if curl -fsS --max-time 10 "$url/health" >/dev/null; then echo "gateway: reachable"; else echo "gateway: NOT reachable (Claude Code will fail; 'claude-gateway off' to fall back)"; fi
     if [ -f "$CLIENT" ]; then
       line=$(curl -fsS --max-time 10 -H "Authorization: Bearer $(field key)" "$(field dashboard)/api/me/status?format=text" 2>/dev/null || true)
       [ -n "$line" ] && echo "usage: $line"
     fi
+    opencode_state
     ;;
   -h|--help|help) usage 0 ;;
   *) usage 1 ;;

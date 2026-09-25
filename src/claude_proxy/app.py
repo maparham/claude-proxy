@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import limits, quota, titles
 from .auth import AuthError, authenticate, client_status
-from .config import Route
+from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request, set_session_title
 from .forwarder import (filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward,
@@ -20,6 +20,36 @@ from .gateway import Gateway
 from .meter import SSEMeter, parse_non_streaming
 
 logger = logging.getLogger("claude_proxy")
+
+
+def route_model_entries(cfg: Config) -> list[dict]:
+    """The third-party models /v1/models lists, in Anthropic's shape (spec 3.2)."""
+    out = []
+    for route in cfg.routes:
+        for name in route.listed_models():
+            info = route.model_info.get(name, {})
+            m = {"type": "model", "id": name, "display_name": info.get("display_name") or f"{name} (via {route.name})",
+                 "created_at": "2026-01-01T00:00:00Z"}
+            if "context" in info:
+                m["max_input_tokens"], m["max_tokens"] = info["context"], info["output"]
+            out.append(m)
+    return out
+
+
+def scope_allows(key_scope: str, method: str, path: str, route: Route | None) -> bool:
+    """Whether a key of this scope may make this request (spec 2.3). A routes-only key (OpenCode) gets exactly two
+    things: messages and token counts for a routed model, and the model list, which the gateway answers itself.
+    Everything else is refused, so it can never reach the subscription credential."""
+    if key_scope == "full":
+        return True
+    if method == "GET" and path == "/v1/models":
+        return True
+    return method == "POST" and path in ROUTED_PATHS and route is not None
+
+
+def _route_patterns(cfg: Config) -> str:
+    return ", ".join(p for r in cfg.routes for p in r.models) or "none configured"
+
 
 ROUTED_PATHS = ("/v1/messages", "/v1/messages/count_tokens")
 METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
@@ -124,6 +154,18 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["model"] = model
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
+
+    if not scope_allows(user["key_scope"], request.method, path, route):
+        # Before the model check and limits: this key never reaches Claude, whatever else is wrong with the request.
+        record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
+        return api_error(403, "permission_error", f"This key is for third-party models only ({_route_patterns(cfg)}). "
+                         "Claude models need your Claude Code key.")
+    if user["key_scope"] != "full" and path == "/v1/models":
+        base["provider"] = "gateway"
+        record(status=200, stream=0, complete=1)
+        entries = route_model_entries(cfg)
+        return JSONResponse({"data": entries, "has_more": False, "first_id": entries[0]["id"] if entries else None,
+                             "last_id": entries[-1]["id"] if entries else None})
 
     if request.method == "POST" and path in ROUTED_PATHS and model is None:
         # Model allow-lists, scoped limits and routing all need the model; never forward a body the gateway can't read.
@@ -251,11 +293,7 @@ async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, 
     try:
         data = json.loads(raw)
         ids = {m.get("id") for m in data.get("data", [])}
-        for route in gw.cfg.routes:
-            for name in route.model_map:
-                if name not in ids:
-                    data["data"].append({"type": "model", "id": name, "display_name": f"{name} (via {route.name})",
-                                         "created_at": "2026-01-01T00:00:00Z"})
+        data["data"].extend(m for m in route_model_entries(gw.cfg) if m["id"] not in ids)
         raw = json.dumps(data).encode()
     except (ValueError, AttributeError, TypeError, KeyError):   # not the usual shape: pass it on as is
         pass

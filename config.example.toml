@@ -43,6 +43,9 @@ models = ["muse-spark*"]
 model_map = { "muse-spark" = "muse-spark-1.3" }
 strip_headers = ["anthropic-beta"]
 drop_body_fields = []     # e.g. ["context_management"] if Meta rejects an Anthropic-only field
+# Sizes /v1/models reports for each listed model (OpenCode uses them); give context and output together.
+# Routes match by glob, so /v1/models lists only the model_map and model_info keys.
+model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name = "Muse Spark 1.3" } }
 
 # Prices in USD per million tokens, first match wins; these are prepended to the built-in table.
 # [pricing]

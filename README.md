@@ -82,6 +82,10 @@ It prints each of their limits, e.g. `maya · daily $61/$100 · 5h 30%`, in cyan
 figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
 see only their own data.
 
+`claude-gateway on` also adds a prompt hook (`statusline.sh --warn`): when any of those figures reaches 80%,
+Claude Code shows the status line as a warning before the prompt is sent, again every 15 minutes, and at once
+at 100%. It never blocks a prompt; the gateway is still the only place limits are enforced.
+
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and
 no Anthropic rate-limit headers. A share limit (`share_5h 20`) shows to them as their own "5h limit",
@@ -96,6 +100,32 @@ Copy `examples/muse-worker.md` to `~/.claude/agents/` (or a project's `.claude/a
 it to `muse-spark-1.3`. The Claude credential is never sent on that route. Claude Code prints a
 notice that it doesn't know `muse-spark`'s context window and assumes 200k tokens. Set
 `CLAUDE_CODE_MAX_CONTEXT_TOKENS` if you want it to use more.
+
+### OpenCode for Muse and other third-party models
+
+Anthropic accepts a subscription login only from Claude.ai and Claude Code, so OpenCode can't use Claude
+through the gateway. It can use the gateway's other routes. The admin issues a second key that works only for
+them:
+
+```sh
+claude-proxy user routes-key maya          # or Users & limits → OpenCode key; --remove deletes it
+```
+
+On maya's machine:
+
+```sh
+scripts/claude-gateway on --opencode --url https://gateway.example.com --routes-key sk-proxy-r-...
+scripts/claude-gateway on --opencode       # later: picks up new routes
+scripts/claude-gateway off --opencode
+```
+
+This adds a `gateway` provider to `~/.config/opencode/opencode.json`, with each route model and the context
+window set in the route's `model_info`, and a `muse` subagent in `~/.config/opencode/agents/`. The key stays in
+`~/.config/claude-gateway/routes.key`. The gateway refuses it for Claude models and for the dashboard (it can
+read `/api/me/status`), with a 403 that says to use the Claude Code key. Limits, metering and the dashboard
+count it as maya's. Share limits don't apply to third-party models, so Muse still works after maya's share of
+the subscription is used up. OpenCode sends a session header, so its requests are grouped into sessions in the
+Sessions tab, just without titles, and its own title-generation request is billed to the person like any other.
 
 ## Limits
 
@@ -143,7 +173,7 @@ claude-proxy limit list
   older than `retention_days` (default 180) are deleted.
 - To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
   history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
-  removes their recorded usage from totals and charts.
+  removes their recorded usage from totals and charts. Revoking also stops the person's OpenCode key.
 - Admin actions from the dashboard and the CLI go to the audit log.
 - `python scripts/demo_data.py demo.db` fills a database with synthetic traffic, for trying the dashboard.
 

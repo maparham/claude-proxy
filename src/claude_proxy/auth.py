@@ -32,7 +32,7 @@ def client_status(headers, status: int) -> int:
     return 403 if status == 401 and headers.get(KEY_HEADER) else status
 
 
-def authenticate(conn: sqlite3.Connection, headers) -> sqlite3.Row:
+def authenticate(conn: sqlite3.Connection, headers) -> dict:
     """Map a virtual key to its user. Fails closed (spec 4 step 2)."""
     raw = credential_from_headers(headers)
     if not raw:

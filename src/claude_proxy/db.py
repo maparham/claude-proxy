@@ -18,7 +18,9 @@ SCHEMA = [
         enabled INTEGER NOT NULL DEFAULT 1,
         created_at INTEGER NOT NULL,
         revoked_at INTEGER,
-        password_hash TEXT
+        password_hash TEXT,
+        routes_key_hash TEXT,       -- the routes-only key (OpenCode): third-party models only
+        routes_key_prefix TEXT
     )""",
     """CREATE TABLE IF NOT EXISTS limits (
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -127,6 +129,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE requests ADD COLUMN requested_model TEXT")
     if "csrf_token" not in _columns(conn, "sessions"):
         conn.execute("ALTER TABLE sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''")
+    if "routes_key_hash" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN routes_key_hash TEXT")
+    if "routes_key_prefix" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN routes_key_prefix TEXT")
+    # SQLite can't ADD COLUMN ... UNIQUE; a unique index gives the same guarantee, and NULLs never collide in it.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_routes_key ON users(routes_key_hash)")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
@@ -159,10 +167,14 @@ def hash_key(raw: str) -> str:
     return hashlib.sha256(raw.encode()).hexdigest()
 
 
-def generate_virtual_key() -> tuple[str, str, str]:
+FULL_KEY_PREFIX = "sk-proxy-"
+ROUTES_KEY_PREFIX = "sk-proxy-r-"   # only for people to tell the keys apart; scope comes from the column that matched
+
+
+def generate_virtual_key(prefix: str = FULL_KEY_PREFIX) -> tuple[str, str, str]:
     """Returns (raw_key, key_hash, key_prefix). The raw key is shown once and never stored."""
-    raw = "sk-proxy-" + secrets.token_urlsafe(32)
-    return raw, hash_key(raw), raw[:12]
+    raw = prefix + secrets.token_urlsafe(32)
+    return raw, hash_key(raw), raw[:len(prefix) + 3]
 
 
 def audit(conn: sqlite3.Connection, actor_user_id: int | None, action: str, target: str, detail: dict | None = None) -> None:
@@ -179,8 +191,14 @@ def create_user(conn: sqlite3.Connection, name: str, role: str = "user", passwor
     return cur.lastrowid, raw
 
 
-def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> sqlite3.Row | None:
-    return conn.execute("SELECT * FROM users WHERE key_hash=?", (hash_key(raw_key),)).fetchone()
+def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
+    """The user a gateway key belongs to, with `key_scope`: "full" for their Claude Code key, "routes" for their
+    routes-only key, which may only reach third-party routes (app.scope_allows)."""
+    h = hash_key(raw_key)
+    row = conn.execute("SELECT * FROM users WHERE key_hash=? OR routes_key_hash=?", (h, h)).fetchone()
+    if row is None:
+        return None
+    return {**dict(row), "key_scope": "full" if row["key_hash"] == h else "routes"}
 
 
 def find_user(conn: sqlite3.Connection, ref: str | int) -> sqlite3.Row | None:
@@ -204,6 +222,26 @@ def rotate_key(conn: sqlite3.Connection, user_id: int, actor: int | None = None)
     conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
     audit(conn, actor, "rotate_key", _user_name(conn, user_id))
     return raw
+
+
+def set_routes_key(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> str:
+    """Issue or replace a user's routes-only key. Returns the raw key, shown once."""
+    u = conn.execute("SELECT revoked_at, routes_key_hash FROM users WHERE id=?", (user_id,)).fetchone()
+    if u is None or u["revoked_at"] is not None:
+        raise ValueError("No such user, or the user is revoked.")
+    raw, h, prefix = generate_virtual_key(ROUTES_KEY_PREFIX)
+    conn.execute("UPDATE users SET routes_key_hash=?, routes_key_prefix=? WHERE id=?", (h, prefix, user_id))
+    audit(conn, actor, "routes_key_replace" if u["routes_key_hash"] else "routes_key_issue", _user_name(conn, user_id))
+    return raw
+
+
+def remove_routes_key(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> bool:
+    """Delete a user's routes-only key. False when they had none."""
+    n = conn.execute("UPDATE users SET routes_key_hash=NULL, routes_key_prefix=NULL "
+                     "WHERE id=? AND routes_key_hash IS NOT NULL", (user_id,)).rowcount
+    if n:
+        audit(conn, actor, "routes_key_remove", _user_name(conn, user_id))
+    return bool(n)
 
 
 def set_enabled(conn: sqlite3.Connection, user_id: int, enabled: bool, actor: int | None = None) -> None:
@@ -251,14 +289,15 @@ def create_session(conn: sqlite3.Connection, user_id: int, ttl_s: int = 7 * 8640
     return raw, csrf
 
 
-def find_session(conn: sqlite3.Connection, raw_token: str) -> sqlite3.Row | None:
+def find_session(conn: sqlite3.Connection, raw_token: str) -> dict | None:
     if not raw_token:
         return None
-    return conn.execute(
+    row = conn.execute(
         "SELECT u.*, s.csrf_token AS csrf_token FROM users u JOIN sessions s ON s.user_id=u.id "
         "WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1 AND u.revoked_at IS NULL",
         (hash_key(raw_token), int(time.time())),
     ).fetchone()
+    return {**dict(row), "key_scope": "full"} if row else None
 
 
 def delete_session(conn: sqlite3.Connection, raw_token: str) -> None:

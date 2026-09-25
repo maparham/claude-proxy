@@ -36,6 +36,7 @@ GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
 BUCKETS = ("5h", "7d")
 IS_ERROR = "(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL)"
 ERROR_KIND = ("CASE WHEN rejected_by = 'auth' THEN 'gateway_auth' WHEN rejected_by = 'request' THEN 'gateway_bad_request' "
+              "WHEN rejected_by = 'key_scope' THEN 'gateway_key_scope' "
               "WHEN rejected_by IS NOT NULL THEN 'gateway_limit' ELSE COALESCE(error_type, 'http_' || status) END")
 _ph = PasswordHasher()
 # Verified against when the user does not exist, so timing does not reveal valid usernames.
@@ -97,12 +98,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     # ---------- auth ----------
 
-    def principal(request: Request, write: bool = False):
+    def principal(request: Request, write: bool = False, routes_ok: bool = False):
         if request.headers.get("authorization") or request.headers.get("x-api-key"):
             try:
-                return authenticate(conn, request.headers)
+                user = authenticate(conn, request.headers)
             except AuthError as e:
                 fail(e.status, e.body["error"]["message"])
+            # A routes-only key (OpenCode) may read its own status and nothing else, and never acts as an admin.
+            if user["key_scope"] != "full" and not (routes_ok and user["key_scope"] == "routes"):
+                fail(403, "This key only works for third-party models; use your Claude Code key for the dashboard.")
+            return user
         user = db.find_session(conn, request.cookies.get(COOKIE, ""))
         if user is None:
             fail(401, "Not signed in.")
@@ -156,6 +161,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         except AuthError:
             limiter.failed(ip)
             fail(401, "Unknown, disabled or revoked key.")
+        if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
+            fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
         return start_session(user)
 
     @app.post("/api/logout")
@@ -411,7 +418,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/me/status")
     async def me_status(request: Request, format: str = "json"):
-        user = principal(request)
+        user = principal(request, routes_ok=True)
         now = time.time()
         states = limits.states(conn, cfg, user["id"], now=now)
         account = None
@@ -459,6 +466,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(400, "You cannot disable or revoke your own account.")
         if action == "rotate":
             return {"ok": True, "key": db.rotate_key(conn, u["id"], actor["id"])}
+        if action == "routes_key":
+            try:
+                return {"ok": True, "key": db.set_routes_key(conn, u["id"], actor["id"])}
+            except ValueError as e:
+                fail(400, str(e))
+        if action == "routes_key_remove":
+            return {"ok": True, "removed": db.remove_routes_key(conn, u["id"], actor["id"])}
         if action == "delete":
             try:
                 return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
@@ -546,7 +560,8 @@ async def _json(request: Request) -> dict:
 
 
 def _public_user(u) -> dict:
-    return {"id": u["id"], "name": u["name"], "role": u["role"], "prefix": u["key_prefix"]}
+    return {"id": u["id"], "name": u["name"], "role": u["role"], "prefix": u["key_prefix"],
+            "routes_prefix": u["routes_key_prefix"]}
 
 
 def _exhaustion(conn, now: float) -> dict | None:

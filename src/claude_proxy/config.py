@@ -139,6 +139,26 @@ class Route:
     # Top-level request fields the provider rejects (e.g. Anthropic-only "context_management").
     drop_body_fields: list[str] = field(default_factory=list)
     auth_header: str = "authorization"  # "authorization" (Bearer) or "x-api-key"
+    # Per listed model name: {"context": tokens, "output": tokens, "display_name": str}. Supplied by the admin;
+    # /v1/models reports the sizes so OpenCode knows the real context window (spec 3.1).
+    model_info: dict[str, dict] = field(default_factory=dict)
+
+    def __post_init__(self):
+        for name, info in self.model_info.items():
+            unknown = set(info) - {"context", "output", "display_name"}
+            if unknown:
+                raise TypeError(f"model_info[{name!r}]: unknown keys {sorted(unknown)}")
+            if ("context" in info) != ("output" in info):
+                raise TypeError(f"model_info[{name!r}]: give both context and output, or neither")
+            for k in ("context", "output"):
+                v = info.get(k)
+                if k in info and (isinstance(v, bool) or not isinstance(v, int) or v <= 0):
+                    raise TypeError(f"model_info[{name!r}].{k} must be a positive whole number of tokens")
+
+    def listed_models(self) -> list[str]:
+        """Globs can't be enumerated, so the models /v1/models lists are the model_map and model_info keys.
+        A model that matches `models` but is in neither is still routed, just not listed."""
+        return list(dict.fromkeys([*self.model_map, *self.model_info]))
 
     def matches(self, model: str | None) -> bool:
         return bool(model) and any(fnmatch.fnmatchcase(model, p) for p in self.models)
@@ -157,6 +177,9 @@ def _default_routes() -> list[Route]:
         api_key_env="META_API_KEY",
         models=["muse-spark*"],
         model_map={"muse-spark": "muse-spark-1.3"},
+        # 1M window as listed for muse-spark-1.3 by Promptfoo's Meta provider docs and OpenRouter; Meta publishes
+        # no output limit for 1.3, so 32000 is a conservative cap.
+        model_info={"muse-spark": {"context": 1048576, "output": 32000, "display_name": "Muse Spark 1.3"}},
     )]
 
 
