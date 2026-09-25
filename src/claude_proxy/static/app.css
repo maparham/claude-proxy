@@ -109,6 +109,12 @@ table.data td.r, table.data th.r { text-align: right; font-variant-numeric: tabu
 .sess-title { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-id { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 table.data tr:hover td { background: var(--wash); }
+table.data tr.clickable { cursor: pointer; }
+.user-link { color: inherit; text-decoration: none; }
+.user-link:hover { text-decoration: underline; }
+table.data td.nowrap { white-space: nowrap; }
+.crumb { margin: 0 0 8px; font-size: 13px; }
+.controls .spacer { flex: 1; }
 .table-wrap { overflow-x: auto; }
 details.tableview { margin-top: 8px; }
 details.tableview summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }

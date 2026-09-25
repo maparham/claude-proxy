@@ -13,7 +13,7 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const tzOffset = () => -new Date().getTimezoneOffset() * 60;
 
 function loadPrefs() {
-  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", bucket: "5h", modelMetric: "cost_usd" };
+  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd" };
   try { return { ...d, ...JSON.parse(localStorage.getItem("cp-prefs") || "{}") }; } catch { return d; }
 }
 function savePrefs() { try { localStorage.setItem("cp-prefs", JSON.stringify(S.prefs)); } catch { /* private mode */ } }
@@ -107,6 +107,7 @@ const TIPS = {
   provider_sub: `Claude models run on the shared subscription. The figure is what they would cost on the API, not a bill.`,
   provider_own: `This provider is billed to its own API key, at roughly this cost.`,
   cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper against the quota.</p>`,
+  recent_requests: `Every request this user sent, refused ones included. Tokens, weighted tokens and cost are counted only for requests that reached a provider.`,
   session: `<span class="th">Session</span><p>Claude Code sends a session id with each request; one row per id. Duration runs from the first to the last request.</p><p class="tm">The title is the one Claude Code generates for the session. Sessions without one show only their id.</p>`,
 };
 const KIND_TIPS = {
@@ -154,6 +155,13 @@ const ERROR_TIPS = {
   api_error: "The provider returned a server error (5xx).",
 };
 Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
+const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", upstream_quota: "Account quota exhausted (429)",
+                       upstream_throttle: "Per-minute throttle (429)", upstream_request_scoped: "Request refused (429)",
+                       gateway_needs_login: "Subscription login needed", gateway_upstream_unreachable: "Upstream unreachable",
+                       gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
+                       gateway_refresh_unavailable: "Token refresh temporarily failing",
+                       api_error: "Upstream server error" };
+const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
 
 // "claude-sonnet-5" -> "Sonnet 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as is.
 function modelName(id) {
@@ -367,12 +375,14 @@ const VIEWS = {
   sessions: { label: "Sessions", render: renderSessions },
   errors: { label: "Errors", render: renderErrors },
   audit: { label: "Audit log", render: renderAudit, admin: true },
+  user: { label: "User", render: renderUser, admin: true, hidden: true, parent: "users" },   // #user/<id>, opened from Users & limits
 };
 const isAdmin = () => S.user && S.user.role === "admin";
 
 function renderTabs() {
-  const tabs = Object.entries(VIEWS).filter(([, v]) => !v.admin || isAdmin());
-  $("#tabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === S.tab}">${esc(v.label)}</button>`).join("");
+  const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()));
+  const current = VIEWS[S.tab]?.parent || S.tab;
+  $("#tabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(v.label)}</button>`).join("");
 }
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
@@ -496,25 +506,35 @@ async function renderUsers(main) {
     <p class="muted" style="font-size:12px;margin-top:8px">Usage columns are weighted tokens, with estimated cost underneath. Concurrent requests from one user can each pass a check before either is recorded, so a limit can be overshot by about one request per open session.</p>
   </section>`;
   $("#add-user").onclick = addUserDialog;
-  main.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => userAction(b.dataset.act, +b.dataset.id, users.find((u) => u.id === +b.dataset.id))));
+  wireUserActions(main, users);
+  // A click anywhere on a row, except its buttons, links and tips, opens that user's page.
+  main.querySelectorAll("tr[data-user]").forEach((tr) => tr.addEventListener("click", (e) => {
+    if (!e.target.closest("button, a, [data-tip], [data-tip-html]")) location.hash = `user/${tr.dataset.user}`;
+  }));
+}
+function wireUserActions(root, users) {
+  root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => userAction(b.dataset.act, +b.dataset.id, users.find((u) => u.id === +b.dataset.id))));
 }
 
 function userRow(u) {
   const state = u.revoked ? `<span class="badge">revoked</span>` : !u.enabled ? `<span class="badge">disabled</span>` : "";
   const cell = (k) => `<td class="r"><div>${fmtNum(u.usage[k].weighted)}</div><div class="muted">${fmtUsd(u.usage[k].cost_usd)}</div></td>`;
   const share = (b) => (u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`);
-  return `<tr>
-    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><b>${esc(u.name)}</b> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}
+  return `<tr class="clickable" data-user="${u.id}">
+    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}
       <div class="muted" style="font-size:12px">${esc(u.prefix)}…</div></td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
     <td class="muted">${fmtAgo(u.last_seen)}</td>
-    <td><div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>` : `
+    <td>${userActions(u)}</td></tr>`;
+}
+function userActions(u) {
+  return `<div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
       <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
       <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? "Disable" : "Enable"}</button>
-      <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">Revoke</button>`}</div></td></tr>`;
+      <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">Revoke</button>`}</div>`;
 }
 
 function openDialog(html) {
@@ -600,6 +620,69 @@ function limitsDialog(u) {
     try { await api("/api/admin/limits/delete", { method: "POST", body: { user: u.id, kind: b.dataset.del, scope: b.dataset.scope } }); d.close(); render(); }
     catch (err) { $("#lim-err").textContent = err.message; }
   }));
+}
+
+async function renderUser(main) {
+  const id = S.userId, p = S.prefs;
+  const period = ["24h", "7d", "30d"].includes(p.userPeriod) ? p.userPeriod : "7d";
+  const range = { "24h": "1d", "7d": "7d", "30d": "30d" }[period], gran = range === "1d" ? "hour" : "day";
+  const q = `user_id=${id}&tz_offset=${tzOffset()}`;
+  const [{ users }, lim] = await Promise.all([api("/api/users"), api("/api/limits")]);
+  S.kinds = lim.kinds;
+  const u = users.find((x) => x.id === id);
+  if (!u) {
+    main.innerHTML = `<section class="view"><p><a href="#users">← All users</a></p><p class="muted">There is no user with this id; they may have been deleted.</p></section>`;
+    return;
+  }
+  const [ov, series, models, heat, sess, errs, reqs] = await Promise.all([
+    api(`/api/overview?user_id=${id}`), api(`/api/series?range=${range}&granularity=${gran}&split=model&${q}`),
+    api(`/api/models?range=${range}&${q}`), api(`/api/heatmap?range=${range}&${q}`), api(`/api/sessions?range=${range}&${q}`),
+    api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`)]);
+  const t = ov.totals[period];
+  const state = u.revoked ? `<span class="badge">revoked</span>` : !u.enabled ? `<span class="badge">disabled</span>` : "";
+  const share = (b, label) => `<div class="card tile"><div class="label">Est. share, ${label}${tipI("share")}</div>
+    <div class="value">${u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`}</div><div class="foot">${u.share[b] == null ? "no fresh report from Anthropic" : `points of the account's ${label} bucket`}</div></div>`;
+  const span = { "24h": "last 24 hours", "7d": "last 7 days", "30d": "last 30 days" }[period];
+  main.innerHTML = `
+    <section class="view">
+      <p class="crumb"><a href="#users">← All users</a></p>
+      <h2><span class="dot" style="background:${colorFor("user", u.name)};margin-right:8px"></span>${esc(u.name)} ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}</h2>
+      <p class="lede">Key <code>${esc(u.prefix)}…</code> · added ${fmtTime(u.created_at)} · last request ${fmtAgo(u.last_seen)}</p>
+      <div class="controls">${seg("userPeriod", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], period)}<span class="spacer"></span>${userActions(u)}</div>
+      <div class="tiles">
+        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${esc(nfFull.format(t.requests))} forwarded</div></div>
+        <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
+        <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
+        <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">not billed on the subscription</div></div>
+        ${share("5h", "5-hour")}${share("7d", "7-day")}
+      </div>
+      <div class="grid cols-2">
+        <div class="card"><h3>Limits${tipI("limits_col")}</h3><p class="sub">Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.</p>${limitsBlock(u.limits)}</div>
+        <div class="card table-wrap"><h3>Models</h3><p class="sub">${esc(span)}, largest first.</p>${models.models.length ? `<table class="data"><thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th class="r">Cache hits${tipI("cache_ratio")}</th></tr></thead><tbody>
+          ${models.models.map((m) => `<tr><td>${esc(m.model || "unknown")}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
+          </tbody></table>` : `<p class="muted">No requests in range.</p>`}</div>
+      </div>
+      <div class="card" style="margin-top:16px"><h3>Weighted tokens per ${gran}, by model${tipI("weighted")}</h3><p class="sub">${esc(span)}.</p><div class="chart" id="u-usage"></div></div>
+      <div class="grid cols-2" style="margin-top:16px">
+        <div class="card"><h3>Activity</h3><p class="sub">Requests by weekday and hour, your local time, ${esc(span)}.</p><div class="chart" id="u-heat"></div></div>
+        <div class="card table-wrap"><h3>Recent errors</h3><p class="sub">${esc(span)}.</p>${errs.recent.length ? `<table class="data"><thead><tr><th>When</th><th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
+          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+          </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div>
+      </div>
+      <div class="card table-wrap" style="margin-top:16px"><h3>Sessions</h3><p class="sub">${esc(span)}, most recently active first.</p>${sess.sessions.length ? sessionsTable(sess.sessions, false) : `<p class="muted">No sessions in range.</p>`}</div>
+      <div class="card table-wrap" style="margin-top:16px"><h3>Recent requests${tipI("recent_requests")}</h3><p class="sub">The last ${reqs.requests.length} requests at any time, newest first; the range above doesn't apply.</p>${reqs.requests.length ? `<table class="data"><thead><tr><th>When</th><th>Model</th><th>Session</th><th class="r">Input</th><th class="r">Output</th><th class="r">Cache read</th><th class="r">Cache write</th><th class="r">Weighted</th><th class="r">Est. cost</th><th class="r">Took</th><th>Result</th></tr></thead><tbody>
+        ${reqs.requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${esc(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
+          <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
+          <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
+          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`).join("")}
+        </tbody></table>` : `<p class="muted">No requests yet.</p>`}</div>
+    </section>`;
+  wireSegs(main, render);
+  wireUserActions(main, users);
+  if (series.points.length) stackedTime($("#u-usage"), series.points, "weighted", "model", gran);
+  else $("#u-usage").outerHTML = `<p class="muted">No requests in range.</p>`;
+  if (heat.cells.length) heatmap($("#u-heat"), heat.cells);
+  else $("#u-heat").outerHTML = `<p class="muted">No requests in range.</p>`;
 }
 
 async function renderQuota(main) {
@@ -690,14 +773,17 @@ async function renderModels(main) {
 async function renderActivity(main) {
   const p = S.prefs;
   const d = await api(`/api/heatmap?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
   main.innerHTML = `<section class="view"><h2>Activity</h2><p class="lede">Requests by weekday and hour of day, in your local time.</p>
     <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)}</div>
     <div class="card"><div class="chart" id="heat"></div></div></section>`;
   wireSegs(main, render);
-  const max = Math.max(1, ...d.cells.map((c) => c[2]));
+  heatmap($("#heat"), d.cells);
+}
+function heatmap(el, cells) {
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const max = Math.max(1, ...cells.map((c) => c[2]));
   const o = baseOption();
-  chart($("#heat")).setOption({
+  chart(el).setOption({
     ...o, legend: { show: false }, grid: { ...o.grid, top: 8, bottom: 48 },
     tooltip: { ...o.tooltip, trigger: "item", formatter: (x) => `${days[x.value[1]]} ${String(x.value[0]).padStart(2, "0")}:00 — <b>${x.value[2]}</b> requests` },
     xAxis: { ...o.xAxis, type: "category", data: [...Array(24).keys()].map((h) => String(h).padStart(2, "0")), splitArea: { show: false } },
@@ -705,38 +791,37 @@ async function renderActivity(main) {
     visualMap: { min: 0, max, calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 140, text: [`${max} requests`, "0"],
                  textStyle: { color: css("--muted"), fontSize: 11 },
                  inRange: { color: [css("--seq-0"), css("--seq-1"), css("--seq-2"), css("--seq-3"), css("--seq-4"), css("--seq-5")] } },
-    series: [{ type: "heatmap", data: d.cells, itemStyle: { borderColor: css("--surface"), borderWidth: 2, borderRadius: 3 } }],
+    series: [{ type: "heatmap", data: cells, itemStyle: { borderColor: css("--surface"), borderWidth: 2, borderRadius: 3 } }],
   });
 }
 
 async function renderSessions(main) {
   const d = await api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}`);
   main.innerHTML = `<section class="view"><h2>Sessions</h2><p class="lede">Claude Code sessions seen in the last ${S.prefs.range === "1d" ? "24 hours" : "7 days"}, newest first.</p>
-    <div class="card table-wrap">${d.sessions.length ? `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${isAdmin() ? "<th>User</th>" : ""}<th>Started</th><th class="r">Duration</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th>Models</th></tr></thead><tbody>
-      ${d.sessions.map((s) => `<tr><td>${s.title ? `<div class="sess-title" title="${esc(s.title)}">${esc(s.title)}</div><div class="sess-id">${esc(s.session_id.slice(0, 8))}</div>` : `<span class="muted">${esc(s.session_id.slice(0, 8))}</span>`}</td>${isAdmin() ? `<td>${esc(s.user)}</td>` : ""}<td>${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
+    <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">No sessions recorded. Claude Code sends a session header on each request; if this stays empty, the header name has changed.</p>`}</div></section>`;
+}
+const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${esc(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
+  : id ? `<span class="muted">${esc(id.slice(0, 8))}</span>` : `<span class="muted">—</span>`);
+function sessionsTable(sessions, showUser) {
+  return `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${showUser ? "<th>User</th>" : ""}<th>Started</th><th class="r">Duration</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th>Models</th></tr></thead><tbody>
+      ${sessions.map((s) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${esc(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${s.requests}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${esc(s.models.join(", "))}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="muted">No sessions recorded. Claude Code sends a session header on each request; if this stays empty, the header name has changed.</p>`}</div></section>`;
+    </tbody></table>`;
 }
 
 async function renderErrors(main) {
   const p = S.prefs;
   const range = p.range === "90d" ? "30d" : p.range;
   const d = await api(`/api/errors?range=${range}&tz_offset=${tzOffset()}`);
-  const LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", upstream_quota: "Account quota exhausted (429)",
-                   upstream_throttle: "Per-minute throttle (429)", upstream_request_scoped: "Request refused (429)",
-                   gateway_needs_login: "Subscription login needed", gateway_upstream_unreachable: "Upstream unreachable",
-                   gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
-                   gateway_refresh_unavailable: "Token refresh temporarily failing",
-                   api_error: "Upstream server error" };
   main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">Gateway rejections and upstream errors. Upstream 429s are split into an ${tipT("exhausted account quota", "err:upstream_quota")}, a ${tipT("per-minute throttle", "err:upstream_throttle")}, and a ${tipT("refusal of one request", "err:upstream_request_scoped")}. Hover a kind below for what it means.</p>
     <div class="controls">${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
     <div class="card table-wrap" style="margin-top:16px"><h3>Most recent</h3>${d.recent.length ? `<table class="data"><thead><tr><th>When</th>${isAdmin() ? "<th>User</th>" : ""}<th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
-      ${d.recent.map((r) => `<tr><td>${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${tipT(esc(LABELS[r.k] || r.k), `err:${r.k}`)}${r.rejected_by && r.rejected_by !== "auth" ? ` <span class="muted">(${esc(r.rejected_by)})</span>` : ""}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+      ${d.recent.map((r) => `<tr><td>${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
     </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div></section>`;
   wireSegs(main, render);
   if (!d.points.length) { $("#err-chart").outerHTML = `<p class="muted">Nothing to plot.</p>`; return; }
-  const pts = d.points.map((x) => ({ t: x.t, key: LABELS[x.k] || x.k, n: x.n }));
+  const pts = d.points.map((x) => ({ t: x.t, key: ERROR_LABELS[x.k] || x.k, n: x.n }));
   stackedTime($("#err-chart"), pts, "n", "error", d.bucket_s === 3600 ? "hour" : "day");
 }
 
@@ -767,9 +852,15 @@ async function boot() {
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
   $("#who").textContent = `${S.user.name} · ${S.user.role}`;
-  const h = location.hash.slice(1);
-  if (VIEWS[h]) S.tab = h;
+  route();
   render();
+}
+// "#models" opens a tab, "#user/3" a user's page. Returns whether the address named a page.
+function route() {
+  const h = location.hash.slice(1), m = /^user\/(\d+)$/.exec(h);
+  if (m) { S.tab = "user"; S.userId = +m[1]; return true; }
+  if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
+  return false;
 }
 async function login(path, body) {
   $("#login-error").textContent = "";
@@ -792,8 +883,8 @@ $("#theme-toggle").onclick = () => {
   render();
 };
 try { const t = localStorage.getItem("cp-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
-window.addEventListener("hashchange", () => { const h = location.hash.slice(1); if (VIEWS[h] && h !== S.tab) { S.tab = h; render(); } });
-setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["overview", "users"].includes(S.tab)) render(); }, 60000);
+window.addEventListener("hashchange", () => { if (S.user && route()) render(); });
+setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["overview", "users", "user"].includes(S.tab)) render(); }, 60000);
 
 showLogin();
 boot();
