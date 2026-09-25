@@ -4,6 +4,7 @@
 
 const S = {
   user: null, csrf: null, tab: "overview", charts: [],
+  settings: { reference_model: "claude-sonnet-5", stale_after_s: 1800 },   // replaced by /api/session
   prefs: loadPrefs(),
   colorSlots: {},   // dimension -> {key: slot}; colour follows the entity for the whole session
 };
@@ -70,7 +71,7 @@ async function api(path, opts = {}) {
 const TIPS = {
   login_key: `Your <b>gateway key</b> (<code>sk-proxy-…</code>) from the admin, the same one Claude Code uses as <code>ANTHROPIC_AUTH_TOKEN</code>. It shows only your own usage.`,
   requests: `Requests the gateway forwarded to a provider. Requests it refused (bad key, limit reached) are not counted.`,
-  weighted: `<span class="th">Weighted tokens</span><p>Every token priced at API list rates and expressed in <b>Sonnet 5 input tokens</b>: an Opus output token counts for many, a cache read for a tenth of an input token of the same model.</p><p class="tm">The closest match to what a request costs against the subscription quota.</p>`,
+  weighted: `<span class="th">Weighted tokens</span><p>Every token priced at API list rates and expressed in <b>{ref} input tokens</b>: an Opus output token counts for many, a cache read for a tenth of an input token of the same model.</p><p class="tm">The closest match to what a request costs against the subscription quota.</p>`,
   raw: `<span class="th">Raw tokens</span><p>Input, output, cache-write and cache-read tokens, each counted as 1. Cache reads are cheap but plentiful, so they usually dominate.</p>`,
   cost: `<span class="th">API-equivalent cost</span><p>What these requests would cost at Anthropic's API list prices. Claude usage is covered by the subscription, so this is a yardstick, not a bill.</p><p class="tm">Models missing from the price table count as $0 and are listed as unpriced.</p>`,
   active_users: `Users with at least one forwarded request in the last 24 hours.`,
@@ -80,7 +81,7 @@ const TIPS = {
   "bucket:7d": `<span class="th">7-day bucket</span><p>Weekly usage allowance. Anthropic resets it 7 days after its window opened.</p>`,
   share: `<span class="th">Estimated share</span><p>Anthropic reports only the account total. Each rise between two reports is split across the users whose requests finished in between, by weighted tokens.</p><p class="tm">Reports are whole percents, so small shares are rough.</p>`,
   unattributed: `<span class="th">Not attributed</span><p>Usage the gateway can't pin on a user: the account used outside the gateway (claude.ai, another login), or usage from before this window's first report.</p>`,
-  stale: `No report from Anthropic recently (30 min by default). Reports arrive with each Claude response; the gateway polls when it's quiet. Share limits are skipped meanwhile.`,
+  stale: `No report from Anthropic in the last {stale}. Reports arrive with each Claude response; the gateway polls when it's quiet. Share limits are skipped meanwhile.`,
   exhaustion: `How fast the 5-hour bucket rose over the last 30 minutes, projected to 100%. If that lands <b>before the reset</b>, Claude requests will start failing unless usage slows.`,
   served: `Limits are checked before each request against usage already recorded, so the request that crosses the line goes through and the next one is refused.`,
   share_col: `Each user's estimated share of the account's 5-hour and 7-day buckets, in percentage points.`,
@@ -98,7 +99,7 @@ const TIPS = {
   unit: `What the value is measured in.`,
   value: `The cap, in the chosen unit. For <code>allowed_models</code>, the list of model globs.`,
   "split:provider": `<b>anthropic</b> is the shared Claude subscription; other providers (such as Muse on Meta) use their own API key.`,
-  "metric:weighted": `Tokens priced by type and model, in Sonnet 5 input tokens. Best proxy for quota cost.`,
+  "metric:weighted": `Tokens priced by type and model, in {ref} input tokens. Best proxy for quota cost.`,
   "metric:raw": `Every token counts 1, cache reads included.`,
   "metric:cost_usd": `Estimated cost at Anthropic API list prices. Not billed on the subscription.`,
   "metric:requests": `Forwarded requests, regardless of size.`,
@@ -128,7 +129,7 @@ const KIND_NOTE = {
 };
 const UNIT_TIPS = {
   count: "Number of requests.",
-  weighted: "Tokens priced by type and model, in Sonnet 5 input-token equivalents. The best proxy for quota cost.",
+  weighted: "Tokens priced by type and model, in {ref} input-token equivalents. The best proxy for quota cost.",
   raw: "Every token counts 1, cache reads included, so long cached sessions add up fast.",
   usd: "US dollars at API list prices.",
   pct: "Percentage points of the account bucket, 0 to 100.",
@@ -154,6 +155,15 @@ const ERROR_TIPS = {
 };
 Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
 
+// "claude-sonnet-5" -> "Sonnet 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as is.
+function modelName(id) {
+  const m = /^claude-([a-z]+)-(\d+(?:-\d{1,2})?)(?:-\d{8})?$/.exec(id || "");
+  return m ? `${m[1][0].toUpperCase()}${m[1].slice(1)} ${m[2].replace("-", ".")}` : id;
+}
+const refModel = () => modelName(S.settings.reference_model);
+// Tip text quotes config through placeholders: {ref} the weighting reference model, {stale} the staleness cutoff.
+const fillTip = (html) => html.replace(/\{ref\}/g, esc(refModel())).replace(/\{stale\}/g, fmtDur(S.settings.stale_after_s));
+
 // Info dot, dotted term, or an attribute for any element. Unknown keys render nothing extra.
 const tipI = (key, label = "What is this?") => (TIPS[key]
   ? `<span class="tip-i" tabindex="0" role="button" aria-label="${esc(label)}" data-tip="${esc(key)}">?</span>` : "");
@@ -169,7 +179,7 @@ function showTip(el, pinned = false) {
   clearTimeout(TIP.timer);
   if (TIP.for !== el) hideTip();
   const tip = $("#tip");
-  tip.innerHTML = html;
+  tip.innerHTML = fillTip(html);
   if (tip.showPopover && !tip.matches(":popover-open")) tip.showPopover();
   tip.classList.add("open");
   TIP.for = el; TIP.pinned = pinned;
@@ -409,7 +419,7 @@ async function renderOverview(main) {
       <div class="controls">${seg("period", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], S.prefs.period)}</div>
       <div class="tiles">
         <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${esc(nfFull.format(t.requests))} forwarded</div></div>
-        <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">Sonnet-input-equivalent</div></div>
+        <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
         <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
         <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : "not billed on the subscription"}</div></div>
         ${isAdmin() ? `<div class="card tile"><div class="label">Active users${tipI("active_users")}</div><div class="value">${ov.active_users_24h}</div><div class="foot">in the last 24 h</div></div>` : ""}
@@ -458,7 +468,7 @@ async function renderUsage(main) {
   if (!isAdmin() && p.split === "user") p.split = "model";
   const d = await api(`/api/series?range=${p.range}&granularity=${p.granularity}&split=${p.split}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>Usage over time</h2>
-    <p class="lede">${tipT("Weighted tokens", "weighted")} price each token type and model at API list-price ratios, in units of a Claude Sonnet 5 input token, so they approximate what a request costs against the quota. ${tipT("Raw tokens", "raw")} are dominated by cache reads.</p>
+    <p class="lede">${tipT("Weighted tokens", "weighted")} price each token type and model at API list-price ratios, in units of one ${esc(refModel())} input token, so they approximate what a request costs against the quota. ${tipT("Raw tokens", "raw")} are dominated by cache reads.</p>
     <div class="controls">
       ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range)}
       ${seg("granularity", [["hour", "Hourly"], ["day", "Daily"], ["week", "Weekly"]], p.granularity)}
@@ -568,8 +578,8 @@ function limitsDialog(u) {
     d.querySelector('[data-tip="kind"]').dataset.tipHtml = TIPS[`kind:${k}`] || `<b>${esc(k)}</b>`;
     d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(unit)}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
     f.value.placeholder = LIMIT_PLACEHOLDER[unit] || "";
-    $("#lim-hint", d).innerHTML = `<b>${esc(k)}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
-      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}` : "");
+    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(k)}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
+      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}` : ""));
   };
   const syncUnits = () => {
     const k = f.kind.value;
@@ -750,6 +760,7 @@ async function boot() {
   try {
     const s = await api("/api/session");
     S.user = s.user; S.csrf = s.csrf;
+    if (s.settings) S.settings = s.settings;
     credentialPill(s.credential);
   } catch { return; }
   $("#login").classList.add("hidden");

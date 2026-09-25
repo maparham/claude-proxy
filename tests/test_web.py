@@ -198,3 +198,12 @@ async def test_delete_only_revoked_users_and_their_history(env):
         col = "id" if table == "users" else "user_id"
         assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (ids["bob"],)).fetchone()[0] == 0
     assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC").fetchone()[:] == ("delete_user", "bob")
+
+
+async def test_session_reports_settings_the_dashboard_quotes(env, cfg):
+    gw, *_ = env
+    cfg.pricing.reference_model = "claude-opus-5-5"
+    cfg.quota.stale_after_s = 900
+    async with admin_client(gw) as c:
+        s = (await c.get("/api/session")).json()
+    assert s["settings"] == {"reference_model": "claude-opus-5-5", "stale_after_s": 900}
