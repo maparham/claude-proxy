@@ -145,3 +145,42 @@ def test_statusline_mode_still_colours_figures(stub, warn_env):
     r = run(["sh", str(STATUSLINE)], warn_env)
     assert r.returncode == 0
     assert "\033[33m90/100\033[36m" in r.stdout and r.stdout.startswith("\033[36m◆ alice")
+
+
+# ---------- claude-gateway ----------
+
+@pytest.fixture
+def home(tmp_path):
+    h = tmp_path / "home"
+    h.mkdir(exist_ok=True)
+    return h
+
+
+def cg(home, *args):
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    return run(["bash", str(GATEWAY), *args], {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp)})
+
+
+def test_on_installs_the_warning_hook_beside_others_and_off_removes_only_it(stub, home):
+    settings = home / ".claude" / "settings.json"
+    settings.parent.mkdir()
+    other = {"hooks": [{"type": "command", "command": "echo other"}]}
+    settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [other]}}, indent=2) + "\n")
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, r.stderr
+    s = json.loads(settings.read_text())
+    groups = s["hooks"]["UserPromptSubmit"]
+    assert groups[0] == other
+    ours = groups[1]["hooks"][0]
+    assert ours["type"] == "command" and ours["command"].endswith("statusline.sh --warn") and ours["timeout"] == 10
+    assert cg(home, "on").returncode == 0                                 # idempotent
+    assert len(json.loads(settings.read_text())["hooks"]["UserPromptSubmit"]) == 2
+    assert cg(home, "off").returncode == 0
+    assert json.loads(settings.read_text()).get("hooks") == {"UserPromptSubmit": [other]}
+
+
+def test_off_removes_the_hooks_block_it_created(stub, home):
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "off").returncode == 0
+    assert "hooks" not in json.loads((home / ".claude" / "settings.json").read_text())

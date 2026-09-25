@@ -14,7 +14,8 @@
 # Own-login mode is for a machine that is itself signed in to a Claude subscription (the owner's): it sets
 # ANTHROPIC_BASE_URL and sends the gateway key in ANTHROPIC_CUSTOM_HEADERS, so Claude Code keeps its own
 # login for Claude in Chrome and connectors while requests still go through, and are metered by, the gateway.
-# `on` also installs a statusline showing the user's gateway limits, unless one is already set; then it prints
+# `on` also installs a UserPromptSubmit hook (statusline.sh --warn) that shows a warning when a limit is at 80%,
+# and a statusline showing the user's gateway limits, unless one is already set; then it prints
 # how to add them to that one instead. `off` removes exactly what `on` added and leaves every other setting
 # alone. The URL, key, mode and a copy of statusline.sh are kept in ~/.config/claude-gateway/ (client.json is
 # mode 600). Start a new Claude Code session after switching.
@@ -25,7 +26,7 @@ CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
 
 STATUSLINE=$(dirname "$CLIENT")/statusline.sh
 
-usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
 save_client() {   # url key [dashboard]
   mkdir -p "$(dirname "$CLIENT")"
@@ -79,6 +80,18 @@ ours_line = lambda v: isinstance(v, dict) and v.get("command") == line_cmd
 if c.pop("added_statusline", False) and ours_line(s.get("statusLine")):
     del s["statusLine"]
 
+# The limit warning (statusline.sh --warn): our own group in the UserPromptSubmit hooks, beside any others.
+warn_cmd = line_cmd + " --warn"
+ours_hook = lambda g: isinstance(g, dict) and any(isinstance(h, dict) and h.get("command") == warn_cmd for h in g.get("hooks", []))
+if c.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
+    groups = [g for g in s["hooks"].get("UserPromptSubmit", []) if not ours_hook(g)]
+    if groups:
+        s["hooks"]["UserPromptSubmit"] = groups
+    else:
+        s["hooks"].pop("UserPromptSubmit", None)
+    if not s["hooks"]:
+        del s["hooks"]
+
 if mode == "on":
     env.update({"ANTHROPIC_BASE_URL": c["url"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
     if c.get("mode") == "own-login":
@@ -95,6 +108,11 @@ if mode == "on":
         elif not ours_line(s["statusLine"]):
             print("You already have a statusline, so it was left as it is. To show your gateway limits in it too,\n"
                   "add the output of this command to it: " + line_cmd)
+        hooks = s.setdefault("hooks", {})
+        if isinstance(hooks, dict) and isinstance(hooks.setdefault("UserPromptSubmit", []), list):
+            if not any(ours_hook(g) for g in hooks["UserPromptSubmit"]):
+                hooks["UserPromptSubmit"].append({"hooks": [{"type": "command", "command": warn_cmd, "timeout": 10}]})
+                c["added_warn_hook"] = True
 if not env:
     del s["env"]
 
