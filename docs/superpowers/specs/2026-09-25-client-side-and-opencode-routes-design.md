@@ -1,7 +1,7 @@
 # Client side: Claude Code wrapper and OpenCode on third-party routes
 
 - **Date:** 2026-09-25
-- **Status:** Draft, revised after a review by another agent; awaiting user review
+- **Status:** Implemented (branch opencode-routes)
 - **Builds on:** `2026-09-21-claude-proxy-design.md` (sections 4, 9, 11 and 17). This spec lifts one of its non-goals, "serving non-Claude-Code clients", for third-party routes only. `claude` is still never run as a subprocess.
 
 ## 1. Purpose
