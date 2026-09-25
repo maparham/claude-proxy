@@ -1846,7 +1846,7 @@ and before `set -euo pipefail`, add these comment lines:
 
 ```bash
 ROUTES_KEY=$(dirname "$CLIENT")/routes.key
-OPENCODE_DIR=${CLAUDE_GATEWAY_OPENCODE_DIR:-$HOME/.config/opencode}
+OPENCODE_DIR=${CLAUDE_GATEWAY_OPENCODE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}   # where OpenCode reads its global config
 ```
 
 4c. Make `field` tolerate a missing `client.json` (the OpenCode set-up may run first):
@@ -2112,11 +2112,11 @@ export CLAUDE_PROXY_DB=/tmp/live.db CLAUDE_PROXY_CREDENTIAL_KEY=$(.venv/bin/clau
 .venv/bin/claude-proxy init && .venv/bin/claude-proxy user add maya
 RK=$(.venv/bin/claude-proxy user routes-key maya | tail -1)
 .venv/bin/claude-proxy serve   # as a background task, with the same environment
-# then, with a throwaway HOME so the person's real OpenCode config is untouched (unset XDG_CONFIG_HOME if set):
-mkdir -p /tmp/live-home && HOME=/tmp/live-home bash scripts/claude-gateway on --opencode --url http://127.0.0.1:8080 --routes-key "$RK"
+# then, with a throwaway HOME so the person's real OpenCode config is untouched:
+mkdir -p /tmp/live-home && HOME=/tmp/live-home XDG_CONFIG_HOME=/tmp/live-home/.config bash scripts/claude-gateway on --opencode --url http://127.0.0.1:8080 --routes-key "$RK"
 ```
 
-Then run `HOME=/tmp/live-home opencode run -m gateway/muse-spark "Reply with ok"` (it reads `/tmp/live-home/.config/opencode/opencode.json`; wrap it in `perl -e 'alarm 180; exec @ARGV'`) and confirm a reply. The subscription login is not needed: Muse never touches it. Confirm refusal: `curl -s -H "x-api-key: $RK" -H 'content-type: application/json' -d '{"model":"claude-sonnet-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' http://127.0.0.1:8080/v1/messages` returns the 403 message from Global Constraints. Stop the server.
+Then run `HOME=/tmp/live-home XDG_CONFIG_HOME=/tmp/live-home/.config opencode run -m gateway/muse-spark "Reply with ok"` (it reads `/tmp/live-home/.config/opencode/opencode.json`; wrap it in `perl -e 'alarm 180; exec @ARGV'`) and confirm a reply. The subscription login is not needed: Muse never touches it. Confirm refusal: `curl -s -H "x-api-key: $RK" -H 'content-type: application/json' -d '{"model":"claude-sonnet-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}' http://127.0.0.1:8080/v1/messages` returns the 403 message from Global Constraints. Also confirm the warning hook is shown to the person: with the Task 1 pty driver and a gateway whose status line is at 80% or more for the user, submit a prompt and check that `Gateway: …` appears in the tty log. If it does not, record it in the report (the hook is then harmless but invisible). Stop the server.
 
 - [ ] **Step 5: Commit**
 
