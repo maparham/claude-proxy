@@ -10,6 +10,9 @@
 #   claude-gateway on --opencode --url https://claude.example.com --routes-key sk-proxy-r-...   # OpenCode, first time
 #   claude-gateway on --opencode     # later: refreshes the model list
 #   claude-gateway off --opencode
+#   claude-gateway on --gclaude --url https://claude.example.com --key sk-proxy-...   # gclaude, first time
+#   claude-gateway on --gclaude      # later
+#   claude-gateway off --gclaude
 #
 # Key-only mode (the default) sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the "env" block of
 # ~/.claude/settings.json. Claude Code then has no claude.ai login, so claude.ai connectors and Claude in
@@ -26,6 +29,11 @@
 # Claude Code). With the routes-only key the admin issues (`claude-proxy user routes-key`), it adds a "gateway"
 # provider to ~/.config/opencode/opencode.json and a muse subagent; `off --opencode` removes exactly those. The key
 # is kept in ~/.config/claude-gateway/routes.key (mode 600) and opencode.json only refers to that file.
+# --gclaude leaves ~/.claude alone and installs a `gclaude` command in ~/.local/bin instead: it runs Claude Code with
+# CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude, whose settings.json gets the key-only setup above, so `claude`
+# keeps this machine's own login and both can run at once. CLAUDE.md, agents, commands and skills from ~/.claude
+# are linked in; settings, login, history and sessions stay separate. `off --gclaude` removes the command, the links
+# and its settings, and keeps gclaude's history.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
@@ -34,6 +42,9 @@ CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
 STATUSLINE=$(dirname "$CLIENT")/statusline.sh
 ROUTES_KEY=$(dirname "$CLIENT")/routes.key
 OPENCODE_DIR=${CLAUDE_GATEWAY_OPENCODE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}   # where OpenCode reads its global config
+GCLAUDE_DIR=${CLAUDE_GATEWAY_GCLAUDE_DIR:-$(dirname "$CLIENT")/claude}   # gclaude's CLAUDE_CONFIG_DIR
+GCLAUDE=${CLAUDE_GATEWAY_BIN:-$HOME/.local/bin}/gclaude
+GCLAUDE_MARK="# Installed by claude-gateway on --gclaude."
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
@@ -67,16 +78,20 @@ install_statusline() {   # copy statusline.sh from beside this script next to cl
   if [ -f "$src" ]; then cp "$src" "$STATUSLINE" && chmod 755 "$STATUSLINE"; fi
 }
 
-edit_settings() {   # on|off
-  mkdir -p "$(dirname "$SETTINGS")"
-  [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
-  cp -p "$SETTINGS" "$SETTINGS.bak-claude-gateway"
-  python3 - "$1" "$SETTINGS" "$CLIENT" "$STATUSLINE" <<'EOF'
+edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its own record in client.json and is always key-only.
+  local settings=${2:-$SETTINGS}
+  mkdir -p "$(dirname "$settings")"
+  [ -f "$settings" ] || echo '{}' > "$settings"
+  cp -p "$settings" "$settings.bak-claude-gateway"
+  python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" <<'EOF'
 import json, os, shlex, sys, tempfile
-mode, settings, client, statusline = sys.argv[1:]
+mode, settings, client, statusline, scope = sys.argv[1:]
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
+st = c   # what this command added, so `off` removes exactly that; gclaude's own settings keep a separate record
+if scope == "gclaude":
+    st = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
 ours = lambda v: isinstance(v, str) and v.lower().startswith("x-gateway-key:")
 
 if mode == "on" and "ANTHROPIC_CUSTOM_HEADERS" in env and not ours(env["ANTHROPIC_CUSTOM_HEADERS"]):
@@ -86,17 +101,17 @@ for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_GATEWAY_DASHBOAR
     env.pop(k, None)
 if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
-if c.pop("added_disable_connectors", False):
+if st.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
 line_cmd = shlex.quote(statusline)
 ours_line = lambda v: isinstance(v, dict) and v.get("command") == line_cmd
-if c.pop("added_statusline", False) and ours_line(s.get("statusLine")):
+if st.pop("added_statusline", False) and ours_line(s.get("statusLine")):
     del s["statusLine"]
 
 # The limit warning (statusline.sh --warn): our own group in the UserPromptSubmit hooks, beside any others.
 warn_cmd = line_cmd + " --warn"
 ours_hook = lambda g: isinstance(g, dict) and any(isinstance(h, dict) and h.get("command") == warn_cmd for h in g.get("hooks", []))
-if c.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
+if st.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
     submit = s["hooks"].get("UserPromptSubmit")
     if isinstance(submit, list):
         groups = [g for g in submit if not ours_hook(g)]
@@ -109,17 +124,17 @@ if c.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
 
 if mode == "on":
     env.update({"ANTHROPIC_BASE_URL": c["url"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
-    if c.get("mode") == "own-login":
+    if c.get("mode") == "own-login" and scope == "global":
         env["ANTHROPIC_CUSTOM_HEADERS"] = "x-gateway-key: " + c["key"]
     else:
         env["ANTHROPIC_AUTH_TOKEN"] = c["key"]
         if "disableClaudeAiConnectors" not in s:
             s["disableClaudeAiConnectors"] = True
-            c["added_disable_connectors"] = True
+            st["added_disable_connectors"] = True
     if os.path.exists(statusline):
         if "statusLine" not in s:
             s["statusLine"] = {"type": "command", "command": line_cmd, "refreshInterval": 30}
-            c["added_statusline"] = True
+            st["added_statusline"] = True
         elif not ours_line(s["statusLine"]):
             print("You already have a statusline, so it was left as it is. To show your gateway limits in it too,\n"
                   "add the output of this command to it: " + line_cmd)
@@ -127,7 +142,7 @@ if mode == "on":
         if isinstance(hooks, dict) and isinstance(hooks.setdefault("UserPromptSubmit", []), list):
             if not any(ours_hook(g) for g in hooks["UserPromptSubmit"]):
                 hooks["UserPromptSubmit"].append({"hooks": [{"type": "command", "command": warn_cmd, "timeout": 10}]})
-                c["added_warn_hook"] = True
+                st["added_warn_hook"] = True
 if not env:
     del s["env"]
 
@@ -353,10 +368,90 @@ opencode_state() {
   fi
 }
 
+gclaude_ours() { [ -f "$GCLAUDE" ] && grep -qxF "$GCLAUDE_MARK" "$GCLAUDE"; }
+gclaude_free() { gclaude_ours || [ ! -e "$GCLAUDE" ] || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
+
+gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, and a first-run state file
+  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" <<'EOF'
+import json, os, shlex, sys
+mode, client, gdir, launcher, mark, shared, own_state = sys.argv[1:]
+SHARED = ("CLAUDE.md", "agents", "commands", "skills")
+c = json.load(open(client)) if os.path.exists(client) else {}
+rec = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
+
+if mode == "on":
+    links = set(rec.get("links", []))
+    for name in SHARED:
+        src, dst = os.path.join(shared, name), os.path.join(gdir, name)
+        if os.path.exists(src) and not os.path.lexists(dst):   # never replace what the gclaude dir already has
+            os.symlink(src, dst)
+            links.add(name)
+    rec["links"] = sorted(links)
+    state = os.path.join(gdir, ".claude.json")   # Claude Code's own state; seeded once so it skips its welcome screens
+    if not os.path.lexists(state):
+        seed = {"hasCompletedOnboarding": True}
+        try:
+            theme = json.load(open(own_state)).get("theme")
+            if theme:
+                seed["theme"] = theme
+        except (OSError, ValueError, AttributeError):
+            pass
+        with open(state, "w") as f:
+            json.dump(seed, f)
+    os.makedirs(os.path.dirname(launcher), exist_ok=True)
+    with open(launcher, "w") as f:
+        f.write("#!/bin/sh\n"
+                "# gclaude: Claude Code through the claude-proxy gateway, with its own settings and history in\n"
+                f"# {gdir}. Plain `claude` keeps this machine's own login.\n"
+                f"{mark}\n"
+                "# Remove it with: claude-gateway off --gclaude\n"
+                "command -v claude >/dev/null 2>&1 || { echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127; }\n"
+                f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
+                "export CLAUDE_CONFIG_DIR\n"
+                'exec claude "$@"\n')
+    os.chmod(launcher, 0o755)
+else:
+    for name in rec.get("links", []):
+        dst = os.path.join(gdir, name)
+        if os.path.islink(dst) and os.readlink(dst) == os.path.join(shared, name):
+            os.remove(dst)
+    c.pop("gclaude", None)
+if c or os.path.exists(client):
+    json.dump(c, open(client, "w"), indent=2)
+EOF
+}
+
+gclaude_on() {
+  gclaude_free
+  [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --gclaude --url <url> --key <key>" >&2; exit 1; }
+  preflight key-only
+  install_statusline
+  mkdir -p "$GCLAUDE_DIR"
+  chmod 700 "$GCLAUDE_DIR"   # its settings.json holds the gateway key
+  [ -f "$GCLAUDE_DIR/settings.json" ] || ( umask 077; echo '{}' > "$GCLAUDE_DIR/settings.json" )
+  edit_settings on "$GCLAUDE_DIR/settings.json" gclaude
+  chmod 600 "$GCLAUDE_DIR/settings.json" "$GCLAUDE_DIR/settings.json.bak-claude-gateway"
+  gclaude_files on
+  echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
+  case ":$PATH:" in *":$(dirname "$GCLAUDE"):"*) ;; *) echo "Add $(dirname "$GCLAUDE") to your PATH to run gclaude." ;; esac
+}
+
+gclaude_off() {
+  if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then echo "gclaude was not set up; nothing to undo."; return; fi
+  [ -f "$GCLAUDE_DIR/settings.json" ] && edit_settings off "$GCLAUDE_DIR/settings.json" gclaude
+  gclaude_files off
+  if gclaude_ours; then rm -f "$GCLAUDE"; fi
+  echo "gclaude is removed. Its history and sessions are still in $GCLAUDE_DIR; delete that folder to drop them."
+}
+
+gclaude_state() {
+  if gclaude_ours; then echo "gclaude: installed ($GCLAUDE)"; else echo "gclaude: not set up"; fi
+}
+
 cmd=${1:-status}; shift || true
 case "$cmd" in
   on)
-    url="" key="" dash="" mode="" opencode="" rkey=""
+    url="" key="" dash="" mode="" opencode="" rkey="" gclaude=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --url) url=$2; shift 2 ;;
@@ -366,11 +461,12 @@ case "$cmd" in
         --key-only) mode=key-only; shift ;;
         --opencode) opencode=1; shift ;;
         --routes-key) rkey=$2; shift 2 ;;
+        --gclaude) gclaude=1; shift ;;
         *) usage 1 ;;
       esac
     done
     if [ -n "$opencode" ]; then
-      [ -z "$key$dash$mode" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
+      [ -z "$key$dash$mode$gclaude" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
       opencode_on "$url" "$rkey"
       exit 0
     fi
@@ -378,10 +474,15 @@ case "$cmd" in
     case "$key" in
       sk-proxy-r-*) echo "This is an OpenCode key; Claude Code needs your Claude Code key." >&2; exit 1 ;;
     esac
+    if [ -n "$gclaude" ] && [ -n "$mode" ]; then
+      echo "gclaude always sends the gateway key (key-only mode); --own-login and --key-only are for plain 'claude-gateway on'." >&2; exit 1
+    fi
     if [ -n "$url$key" ]; then
       [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
+      [ -z "$gclaude" ] || gclaude_free
       save_client "$url" "$key" "$dash"
     fi
+    if [ -n "$gclaude" ]; then gclaude_on; exit 0; fi
     [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
     mode=${mode:-$(field mode key-only)}
     if [ "$mode" = own-login ] && ! has_own_login; then
@@ -402,6 +503,12 @@ case "$cmd" in
         opencode_edit off
         exit 0
         ;;
+      --gclaude)
+        shift
+        [ $# -eq 0 ] || usage 1
+        gclaude_off
+        exit 0
+        ;;
       "")
         edit_settings off
         echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
@@ -411,13 +518,14 @@ case "$cmd" in
     ;;
   status)
     read -r url mode <<<"$(current)" || true
-    if [ -z "${url:-}" ]; then echo "off: Claude Code uses this machine's own login"; opencode_state; exit 0; fi
+    if [ -z "${url:-}" ]; then echo "off: Claude Code uses this machine's own login"; gclaude_state; opencode_state; exit 0; fi
     echo "on: $url ($mode mode)"
     if curl -fsS --max-time 10 "$url/health" >/dev/null; then echo "gateway: reachable"; else echo "gateway: NOT reachable (Claude Code will fail; 'claude-gateway off' to fall back)"; fi
     if [ -f "$CLIENT" ]; then
       line=$(curl -fsS --max-time 10 -H "Authorization: Bearer $(field key)" "$(field dashboard)/api/me/status?format=text" 2>/dev/null || true)
       [ -n "$line" ] && echo "usage: $line"
     fi
+    gclaude_state
     opencode_state
     ;;
   -h|--help|help) usage 0 ;;
