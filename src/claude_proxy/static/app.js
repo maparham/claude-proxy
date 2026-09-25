@@ -93,6 +93,8 @@ const TIPS = {
   key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
   act_limits: `View or change this user's limits.`,
   act_rotate: `Issue a new key and stop the old one immediately. Usage history is kept.`,
+  act_routes_key: `Issue a key for OpenCode that works only for third-party models (such as Muse), never Claude. Issuing again replaces it.`,
+  act_routes_key_remove: `Delete this user's OpenCode key. Their Claude Code key keeps working.`,
   act_disable: `Block the key until re-enabled. Nothing is deleted.`,
   act_enable: `Let the key work again.`,
   act_revoke: `Stop the key for good. Usage stays in the totals; a revoked user can only be deleted.`,
@@ -172,6 +174,7 @@ Object.entries(KIND_TIPS).forEach(([k, v]) => {
 const ERROR_TIPS = {
   gateway_limit: "A gateway limit refused the request (named in brackets). It never reached the provider and isn't counted as usage.",
   gateway_auth: "Missing, wrong, disabled or revoked gateway key.",
+  gateway_key_scope: "An OpenCode key asked for a Claude model or a path it can't use. It never reached a provider.",
   gateway_bad_request: "The request body wasn't JSON with a <code>model</code>, so the gateway refused it without forwarding.",
   upstream_quota: "Anthropic refused it because an account bucket (5-hour or weekly) is full. Clears when that bucket resets.",
   upstream_throttle: "Anthropic's short-term rate limit (per-minute requests or tokens). Usually clears within a minute.",
@@ -184,7 +187,7 @@ const ERROR_TIPS = {
   api_error: "The provider returned a server error (5xx).",
 };
 Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
-const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", gateway_bad_request: "Unreadable request", upstream_quota: "Account quota exhausted (429)",
+const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", gateway_key_scope: "OpenCode key: not allowed", gateway_bad_request: "Unreadable request", upstream_quota: "Account quota exhausted (429)",
                        upstream_throttle: "Per-minute throttle (429)", upstream_request_scoped: "Request refused (429)",
                        gateway_needs_login: "Subscription login needed", gateway_upstream_unreachable: "Upstream unreachable",
                        gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
@@ -605,7 +608,7 @@ function userRow(u) {
   const share = (b) => (u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`);
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}
-      <div class="muted" style="font-size:12px">${esc(u.prefix)}…</div></td>
+      <div class="muted" style="font-size:12px">${esc(u.prefix)}…${u.routes_prefix ? ` · OpenCode ${esc(u.routes_prefix)}…` : ""}</div></td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
@@ -613,9 +616,12 @@ function userRow(u) {
     <td>${userActions(u)}</td></tr>`;
 }
 function userActions(u) {
-  return `<div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>` : `
+  const opencode = `<button class="btn small" data-act="routes_key" data-id="${u.id}" data-tip="act_routes_key">${u.routes_prefix ? "New OpenCode key" : "OpenCode key"}</button>` +
+    (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">Remove OpenCode key</button>` : "");
+  return `<div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
       <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
+      ${opencode}
       <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? "Disable" : "Enable"}</button>
       <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">Revoke</button>`}</div>`;
 }
@@ -627,8 +633,8 @@ function openDialog(html) {
   d.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { d.close(); render(); }));
   return d;
 }
-function keyDialog(title, key) {
-  openDialog(`<h3>${esc(title)}</h3><p>Copy this key now; it is not shown again. The user sets it as <code>ANTHROPIC_AUTH_TOKEN</code>.</p>
+function keyDialog(title, key, how = "The user sets it as <code>ANTHROPIC_AUTH_TOKEN</code>.") {
+  openDialog(`<h3>${esc(title)}</h3><p>Copy this key now; it is not shown again. ${how}</p>
     <code class="key" id="new-key">${esc(key)}</code><p><button class="btn" id="copy-key">Copy</button> <button class="btn primary" data-close>Done</button></p>`);
   $("#copy-key").onclick = async () => { try { await navigator.clipboard.writeText(key); $("#copy-key").textContent = "Copied"; } catch { /* clipboard blocked */ } };
 }
@@ -652,6 +658,8 @@ async function userAction(act, id, u) {
   try {
     const r = await api(`/api/admin/users/${id}/${act}`, { method: "POST", body: {} });
     if (act === "rotate") return keyDialog(`New key for ${u.name}`, r.key);
+    if (act === "routes_key") return keyDialog(`OpenCode key for ${u.name}`, r.key,
+      "It works only for third-party models. The user runs <code>claude-gateway on --opencode --url … --routes-key …</code> with it.");
     render();
   } catch (e) { alertInline(e.message); }
 }
