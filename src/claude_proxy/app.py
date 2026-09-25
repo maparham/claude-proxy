@@ -36,6 +36,21 @@ def route_model_entries(cfg: Config) -> list[dict]:
     return out
 
 
+def scope_allows(key_scope: str, method: str, path: str, route: Route | None) -> bool:
+    """Whether a key of this scope may make this request (spec 2.3). A routes-only key (OpenCode) gets exactly two
+    things: messages and token counts for a routed model, and the model list, which the gateway answers itself.
+    Everything else is refused, so it can never reach the subscription credential."""
+    if key_scope != "routes":
+        return True
+    if method == "GET" and path == "/v1/models":
+        return True
+    return method == "POST" and path in ROUTED_PATHS and route is not None
+
+
+def _route_patterns(cfg: Config) -> str:
+    return ", ".join(p for r in cfg.routes for p in r.models) or "none configured"
+
+
 ROUTED_PATHS = ("/v1/messages", "/v1/messages/count_tokens")
 METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
 
@@ -139,6 +154,18 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["model"] = model
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
+
+    if not scope_allows(user["key_scope"], request.method, path, route):
+        # Before the model check and limits: this key never reaches Claude, whatever else is wrong with the request.
+        record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
+        return api_error(403, "permission_error", f"This key is for third-party models only ({_route_patterns(cfg)}). "
+                         "Claude models need your Claude Code key.")
+    if user["key_scope"] == "routes" and path == "/v1/models":
+        base["provider"] = "gateway"
+        record(status=200, stream=0, complete=1)
+        entries = route_model_entries(cfg)
+        return JSONResponse({"data": entries, "has_more": False, "first_id": entries[0]["id"] if entries else None,
+                             "last_id": entries[-1]["id"] if entries else None})
 
     if request.method == "POST" and path in ROUTED_PATHS and model is None:
         # Model allow-lists, scoped limits and routing all need the model; never forward a body the gateway can't read.
