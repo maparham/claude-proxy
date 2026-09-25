@@ -11,6 +11,10 @@ on:
 
 # One run per branch at a time, in push order (a newer queued run replaces an older queued one), so an
 # older commit can't deploy over a newer one and deploys never overlap.
+defaults:
+  run:
+    shell: bash   # adds pipefail, so a failed docker save fails the step
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: false
@@ -27,6 +31,7 @@ jobs:
     needs: test
     if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: Build image

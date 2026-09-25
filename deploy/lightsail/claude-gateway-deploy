@@ -36,8 +36,9 @@ with tarfile.open(path, "r:gz") as t:
         index = json.load(t.extractfile("index.json"))
     except KeyError:
         index = {}
-names = [d.get("annotations", {}).get("io.containerd.image.name") for d in index.get("manifests", [])]
-if tags != [want] or any(n not in (None, "docker.io/library/" + want) for n in names):
+names = [n for d in index.get("manifests", []) for k, n in d.get("annotations", {}).items()
+         if k in ("io.containerd.image.name", "org.opencontainers.image.ref.name")]
+if tags != [want] or any(n not in ("docker.io/library/" + want, want, want.split(":")[1]) for n in names):
     sys.exit(f"image must be tagged exactly {want}, found {tags} {names}")
 PY
 echo "loading claude-proxy:$SHA"
@@ -58,17 +59,19 @@ dst = sqlite3.connect(db)
 sqlite3.connect("/data/claude_proxy.db").backup(dst)
 dst.close()
 os.chmod(db, 0o600)
-shutil.copy2("/data/config.toml", f"/data/backups/{stamp}.config.toml")
+if os.path.exists("/data/config.toml"):
+    shutil.copy2("/data/config.toml", f"/data/backups/{stamp}.config.toml")
 for old in sorted(glob.glob("/data/backups/*.db"))[:-keep]:
-    os.remove(old)
-    os.remove(old[:-3] + ".config.toml")
+    for f in (old, old[:-3] + ".config.toml"):
+        if os.path.exists(f):
+            os.remove(f)
 PY
 in_volume sh -c 'cat >/data/config.toml.new && mv /data/config.toml.new /data/config.toml' <"$WORK/config.toml"
 
-switch_to() { printf 'GATEWAY_TAG=%s\n' "$1" >.env; docker compose up -d --no-build; }
+switch_to() { printf 'GATEWAY_TAG=%s\n' "$1" >.env; docker compose up -d --no-build --force-recreate; }
 healthy() {
   local i
-  for i in $(seq 30); do curl -fsS -o /dev/null http://127.0.0.1:18480/health && break; sleep 1; done
+  for i in $(seq 30); do curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:18480/health && break; sleep 1; done
   docker compose exec -T gateway claude-proxy status 2>&1 | grep -v "HTTP Request" | tee "$WORK/status" >&2
   grep -q '^credential: OK' "$WORK/status"
 }
@@ -77,7 +80,7 @@ echo "switching $PREV -> $SHA"
 if ! { switch_to "$SHA" && healthy; }; then
   echo "claude-proxy:$SHA is unhealthy; rolling back to $PREV" >&2
   docker compose logs --tail 40 gateway >&2 || true
-  in_volume cp "/data/backups/$STAMP.config.toml" /data/config.toml || true
+  in_volume sh -c "[ ! -f /data/backups/$STAMP.config.toml ] || cp /data/backups/$STAMP.config.toml /data/config.toml" || true
   { switch_to "$PREV" && healthy; } || echo "ROLLBACK TO $PREV IS ALSO UNHEALTHY; the gateway needs attention" >&2
   exit 1
 fi

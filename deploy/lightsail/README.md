@@ -37,7 +37,9 @@ that workflow redeploys `master`. Actions builds the image, streams it with `con
 
 A deploy never touches `gateway.env`, the grant or the rest of the data volume. The database is never
 restored automatically, because a copy from before the deploy may hold a refresh token that has since
-rotated. The deploy key in `authorized_keys` can run only `claude-gateway-deploy`.
+rotated. The deploy key in `authorized_keys` can run only `claude-gateway-deploy`. Rollback puts the old
+code on whatever schema the new code left behind; migrations in `db.py` are additive, but one that
+isn't can make the rollback fail too, and then the backup in `/data/backups` is the way back.
 
 One-time setup, and again after changing `claude-gateway-deploy` or `docker-compose.yml`, or to rotate
 the key:
@@ -53,7 +55,8 @@ Roll back by hand: `ssh ec2-user@3.139.146.5`, `cd claude-gateway/deploy/lightsa
 
 Details:
 
-- `docker compose up -d --build` from this directory, with `gateway.env` (mode 600) holding
+- `docker compose up -d --no-build` from this directory runs the image named by `GATEWAY_TAG` in `.env`
+  (build by hand with `update.sh`, not `--build`, which would overwrite that tag), with `gateway.env` (mode 600) holding
   `CLAUDE_PROXY_CREDENTIAL_KEY` and optionally `META_API_KEY`. `config.toml` is copied into the `data`
   volume as `/data/config.toml`.
 - cloudflared ingress (above the catch-all `http_status:404` rule):
