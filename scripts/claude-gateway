@@ -192,12 +192,16 @@ def digest(p):
         return hashlib.sha256(f.read()).hexdigest()
 
 def write_json(path, data, perms=None):
+    path = os.path.realpath(path)   # a symlinked opencode.json (dotfiles-style) keeps pointing at its target
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
     with os.fdopen(fd, "w") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
         f.write("\n")
     os.chmod(tmp, perms if perms is not None else (os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o644))
     os.replace(tmp, path)
+
+conf = os.path.realpath(conf)   # resolve once: reads, writes and the "delete only if we created it" removal all
+                                 # then act on the real file, so a dotfiles-style symlink survives on/off.
 
 c = json.load(open(client)) if os.path.exists(client) else {}
 if not isinstance(c, dict):
@@ -222,8 +226,12 @@ if mode == "on":
                   "Add the gateway provider by hand.")
     if "gateway" in providers and not rec.get("added_provider"):
         sys.exit(f"{conf} already has a provider named 'gateway' that claude-gateway did not add; left as it is.")
+    model_data = json.load(open(models_file)).get("data", [])
+    if any(str(m.get("id", "")).startswith("claude-") for m in model_data):
+        sys.exit("The gateway answered with Claude models for this key; that looks like a Claude Code key, not "
+                 f"an OpenCode routes key. {conf} was left as it is.")
     models = {}
-    for m in json.load(open(models_file)).get("data", []):
+    for m in model_data:
         entry = {"name": m.get("display_name") or m["id"]}
         if m.get("max_input_tokens") and m.get("max_tokens"):
             entry["limit"] = {"context": m["max_input_tokens"], "output": m["max_tokens"]}
@@ -233,8 +241,12 @@ if mode == "on":
     # opencode.json: if a later step fails (routes.key, opencode.json or the agent copy), a rerun of `on
     # --opencode` sees added_provider already true and repairs rather than refusing, and `off --opencode` can
     # always find its own record to undo.
+    # had_provider: whether opencode.json had a "provider" key before we ever touched it. A record from before
+    # this field existed (added_provider already true, had_provider absent) can't tell empty-from-absent anymore,
+    # so it falls back to the old behaviour (drop "provider" entirely on off) rather than guessing wrong.
+    had_provider = rec["had_provider"] if "had_provider" in rec else (not rec.get("added_provider") and "provider" in s)
     rec = {"added_provider": True, "created_file": rec.get("created_file", created),
-           "agent_sha256": rec.get("agent_sha256"), "url": url}
+           "agent_sha256": rec.get("agent_sha256"), "url": url, "had_provider": had_provider}
     c["opencode"] = rec
     os.makedirs(os.path.dirname(client), exist_ok=True)
     write_json(client, c, 0o600)
@@ -262,10 +274,12 @@ if mode == "on":
             print(f"Could not install the muse agent at {agent} ({e}); "
                   "the gateway provider was installed without it.", file=sys.stderr)
 else:
+    removed_provider = False
     if rec.get("added_provider") and "gateway" in providers:
         del providers["gateway"]
-        if not providers:
-            s.pop("provider", None)
+        removed_provider = True
+        if not providers and not rec.get("had_provider"):
+            s.pop("provider", None)   # spec 4: a config that never had "provider" comes back without one
         if rec.get("created_file") and s == {"$schema": SCHEMA}:
             os.remove(conf)
         else:
@@ -280,12 +294,22 @@ else:
     sha = rec.get("agent_sha256")
     if sha and os.path.exists(agent) and digest(agent) == sha:   # untouched since `on` copied it
         os.remove(agent)
+    had_key = os.path.exists(key_file)
     if gateway_present:
-        if os.path.exists(key_file):
+        if had_key:
             print(f"{conf} still has a 'gateway' provider that this command did not remove; "
                   "the OpenCode key file was left in place.", file=sys.stderr)
-    elif os.path.exists(key_file):
+        summary = f"{conf} still has a 'gateway' provider that this command did not remove." + \
+                  (" The OpenCode key file was kept." if had_key else "")
+    elif had_key:
         os.remove(key_file)
+        summary = ("OpenCode no longer uses the gateway; the key file was deleted." if removed_provider else
+                   f"The OpenCode key file was deleted (no 'gateway' provider was found in {conf}).")
+    elif removed_provider:
+        summary = "OpenCode no longer uses the gateway."
+    else:
+        summary = "OpenCode had no gateway provider set up; nothing to undo."
+    print(summary)
     c.pop("opencode", None)
 if c or os.path.exists(client):
     os.makedirs(os.path.dirname(client), exist_ok=True)
@@ -309,6 +333,10 @@ opencode_on() {   # url-or-empty key-or-empty; empty means the saved one
   key=${2:-$(cat "$ROUTES_KEY" 2>/dev/null || true)}
   [ -n "$url" ] || { echo "No gateway URL yet: claude-gateway on --opencode --url <url> --routes-key <key>" >&2; exit 1; }
   [ -n "$key" ] || { echo "No OpenCode key yet: claude-gateway on --opencode --routes-key <key> (the admin issues it)" >&2; exit 1; }
+  case "$key" in
+    sk-proxy-r-*) ;;
+    *) echo "This is a Claude Code key; ask the admin for an OpenCode key (claude-proxy user routes-key)." >&2; exit 1 ;;
+  esac
   models=$(mktemp)
   preflight_routes "$url" "$key" "$models"
   export CG_URL=$url CG_KEY=$key
@@ -347,6 +375,9 @@ case "$cmd" in
       exit 0
     fi
     [ -z "$rkey" ] || { echo "--routes-key goes with --opencode." >&2; exit 1; }
+    case "$key" in
+      sk-proxy-r-*) echo "This is an OpenCode key; Claude Code needs your Claude Code key." >&2; exit 1 ;;
+    esac
     if [ -n "$url$key" ]; then
       [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
       save_client "$url" "$key" "$dash"
@@ -364,13 +395,19 @@ case "$cmd" in
     echo "Claude Code now uses the gateway at $(field url) ($(field mode key-only) mode). Start a new session to pick it up."
     ;;
   off)
-    if [ "${1:-}" = --opencode ]; then
-      opencode_edit off
-      echo "OpenCode no longer uses the gateway; the OpenCode key file was deleted."
-      exit 0
-    fi
-    edit_settings off
-    echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+    case "${1:-}" in
+      --opencode)
+        shift
+        [ $# -eq 0 ] || usage 1
+        opencode_edit off
+        exit 0
+        ;;
+      "")
+        edit_settings off
+        echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+        ;;
+      *) usage 1 ;;
+    esac
     ;;
   status)
     read -r url mode <<<"$(current)" || true

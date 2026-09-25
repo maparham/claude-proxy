@@ -76,7 +76,6 @@ band=0
 [ "${p:-0}" -ge 100 ] 2>/dev/null && band=2
 state="$cache.warned"
 if [ "$band" = 0 ]; then
-  rm -f "$state"
   exit 0
 fi
 last=$(cat "$state" 2>/dev/null)

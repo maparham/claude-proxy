@@ -121,6 +121,17 @@ def test_warn_again_after_15_minutes(stub, warn_env):
     assert warn(warn_env).stdout
 
 
+def test_warn_no_reentry_after_dropping_bands_within_15_minutes(stub, warn_env):
+    stub.status_line = "alice · daily 80/100 req"
+    assert warn(warn_env).stdout
+    fresh(warn_env)
+    stub.status_line = "alice · daily 70/100 req"
+    assert warn(warn_env).stdout == ""
+    fresh(warn_env)
+    stub.status_line = "alice · daily 80/100 req"
+    assert warn(warn_env).stdout == ""
+
+
 def test_warn_silent_when_the_gateway_is_down(stub, warn_env):
     stub.status_line = None
     r = warn(warn_env)
@@ -238,11 +249,11 @@ def test_opencode_off_restores_config_and_keeps_later_edits(stub, home):
     original = {"$schema": "https://opencode.ai/config.json", "theme": "dark", "provider": {"mine": {"npm": "x"}}}
     text = json.dumps(original, indent=2) + "\n"
     conf.write_text(text)
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     assert cg(home, "off", "--opencode").returncode == 0
     assert conf.read_text() == text
     assert not key_file.exists() and not agent.exists()
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     edited = json.loads(conf.read_text())
     edited["theme"] = "light"
     edited["provider"]["theirs"] = {"npm": "y"}
@@ -253,7 +264,7 @@ def test_opencode_off_restores_config_and_keeps_later_edits(stub, home):
 
 def test_opencode_off_deletes_a_config_it_created(stub, home):
     stub.models = MODELS
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     assert cg(home, "off", "--opencode").returncode == 0
     conf, key_file, agent = oc_paths(home)
     assert not conf.exists() and not key_file.exists() and not agent.exists()
@@ -262,7 +273,7 @@ def test_opencode_off_deletes_a_config_it_created(stub, home):
 
 def test_opencode_rerun_refreshes_models_and_spares_an_edited_agent(stub, home):
     stub.models = {"data": [MODELS["data"][0]], "has_more": False}
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     conf, key_file, agent = oc_paths(home)
     agent.write_text(agent.read_text() + "\nMy own note.\n")
     stub.models = MODELS
@@ -275,7 +286,7 @@ def test_opencode_rerun_refreshes_models_and_spares_an_edited_agent(stub, home):
 
 def test_opencode_on_changes_nothing_when_the_gateway_refuses_the_key(stub, home):
     stub.models_status = 403
-    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "bad")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-bad")
     assert r.returncode == 1 and "did not accept the OpenCode key (HTTP 403)" in r.stderr
     conf, key_file, agent = oc_paths(home)
     assert not conf.exists() and not key_file.exists() and not agent.exists()
@@ -286,7 +297,7 @@ def test_opencode_on_leaves_a_non_json_config_alone(stub, home):
     conf, key_file, agent = oc_paths(home)
     conf.parent.mkdir(parents=True)
     conf.write_text('{\n  // a comment\n  "theme": "dark"\n}\n')
-    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k")
     assert r.returncode == 1 and "not plain JSON" in r.stderr
     assert conf.read_text() == '{\n  // a comment\n  "theme": "dark"\n}\n'
     assert not key_file.exists()
@@ -297,7 +308,7 @@ def test_opencode_on_refuses_a_gateway_provider_it_did_not_add(stub, home):
     conf, key_file, agent = oc_paths(home)
     conf.parent.mkdir(parents=True)
     conf.write_text(json.dumps({"provider": {"gateway": {"npm": "mine"}}}, indent=2) + "\n")
-    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k")
     assert r.returncode == 1 and "did not add" in r.stderr
     assert json.loads(conf.read_text()) == {"provider": {"gateway": {"npm": "mine"}}}
 
@@ -308,13 +319,13 @@ def test_opencode_on_never_touches_opencode_jsonc(stub, home):
     conf.parent.mkdir(parents=True)
     jsonc = conf.parent / "opencode.jsonc"
     jsonc.write_text('{\n  // mine\n  "theme": "dark"\n}\n')
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     assert jsonc.read_text() == '{\n  // mine\n  "theme": "dark"\n}\n'
     assert "gateway" in json.loads(conf.read_text())["provider"]
 
 
 def test_routes_key_without_opencode_is_refused(stub, home):
-    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full", "--routes-key", "k")
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full", "--routes-key", "sk-proxy-r-k")
     assert r.returncode == 1 and "--routes-key goes with --opencode" in r.stderr
 
 
@@ -323,7 +334,7 @@ def test_opencode_on_refuses_a_provider_field_that_is_not_an_object(stub, home):
     conf, key_file, agent = oc_paths(home)
     conf.parent.mkdir(parents=True)
     conf.write_text(json.dumps({"provider": ["not", "an", "object"]}, indent=2) + "\n")
-    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k")
     assert r.returncode == 1 and "not a JSON object" in r.stderr
     assert json.loads(conf.read_text()) == {"provider": ["not", "an", "object"]}
     assert not key_file.exists() and not agent.exists()
@@ -337,7 +348,7 @@ def test_opencode_on_survives_a_dangling_agent_symlink_and_off_still_fully_undoe
     conf, key_file, agent = oc_paths(home)
     agent.parent.mkdir(parents=True)
     agent.symlink_to(agent.parent / "no-such-dir" / "target")   # broken symlink whose target's parent doesn't exist
-    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k")
     assert "Traceback" not in r.stderr
     assert cg(home, "off", "--opencode").returncode == 0
     assert not key_file.exists()
@@ -349,7 +360,7 @@ def test_opencode_on_survives_agents_existing_as_a_plain_file(stub, home):
     conf, key_file, agent = oc_paths(home)
     agent.parent.parent.mkdir(parents=True)                      # ~/.config/opencode
     agent.parent.write_text("not a directory")                   # agents is a file, not a directory
-    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k")
     assert "Traceback" not in r.stderr
     assert cg(home, "off", "--opencode").returncode == 0
     assert not key_file.exists()
@@ -358,7 +369,7 @@ def test_opencode_on_survives_agents_existing_as_a_plain_file(stub, home):
 
 def test_opencode_off_keeps_the_key_file_when_client_json_is_gone_but_the_provider_remains(stub, home):
     stub.models = MODELS
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     conf, key_file, agent = oc_paths(home)
     (home / ".config" / "claude-gateway" / "client.json").unlink()
     assert cg(home, "off", "--opencode").returncode == 0
@@ -374,7 +385,7 @@ def test_opencode_on_does_not_move_claude_codes_url(stub, home):
     stub_b = Stub()
     try:
         stub_b.models = MODELS
-        assert cg(home, "on", "--opencode", "--url", stub_b.url, "--routes-key", "k").returncode == 0
+        assert cg(home, "on", "--opencode", "--url", stub_b.url, "--routes-key", "sk-proxy-r-k").returncode == 0
         data = json.loads(client.read_text())
         assert data["url"] == url_a and url_a == stub.url.rstrip("/")
         assert data["opencode"]["url"] == stub_b.url
@@ -388,6 +399,121 @@ def test_opencode_on_does_not_move_claude_codes_url(stub, home):
 
 def test_plain_on_refuses_when_only_opencode_is_configured(stub, home):
     stub.models = MODELS
-    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
     r = cg(home, "on")
     assert r.returncode == 1 and "No gateway configured yet" in r.stderr
+
+
+# ---------- claude-gateway: full/routes key mismatches (review finding 1) ----------
+
+CLAUDE_MODELS = {"data": [{"type": "model", "id": "claude-sonnet-5", "display_name": "Claude Sonnet 5",
+                          "created_at": "2026-01-01T00:00:00Z"}],
+                 "has_more": False, "first_id": "claude-sonnet-5", "last_id": "claude-sonnet-5"}
+
+
+def test_opencode_on_refuses_a_key_that_is_not_a_routes_key(stub, home):
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-fullkey")
+    assert r.returncode == 1
+    assert "This is a Claude Code key; ask the admin for an OpenCode key (claude-proxy user routes-key)." in r.stderr
+    conf, key_file, agent = oc_paths(home)
+    assert not conf.exists() and not key_file.exists() and not agent.exists()
+    assert not (home / ".config" / "claude-gateway" / "client.json").exists()
+    assert stub.requests == []   # refused before ever reaching the gateway
+
+
+def test_plain_on_refuses_a_routes_key(stub, home):
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    settings = home / ".claude" / "settings.json"
+    client = home / ".config" / "claude-gateway" / "client.json"
+    before = settings.read_bytes()
+    n_requests = len(stub.requests)
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-r-routeskey")
+    assert r.returncode == 1
+    assert "This is an OpenCode key; Claude Code needs your Claude Code key." in r.stderr
+    assert settings.read_bytes() == before
+    assert json.loads(client.read_text())["key"] == "sk-proxy-full"
+    assert len(stub.requests) == n_requests   # refused before ever reaching the gateway again
+
+
+def test_opencode_on_refuses_when_the_gateway_answers_with_claude_models(stub, home):
+    stub.models = CLAUDE_MODELS
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-fooled")
+    assert r.returncode == 1
+    assert "looks like a Claude Code key" in r.stderr
+    conf, key_file, agent = oc_paths(home)
+    assert not conf.exists() and not key_file.exists() and not agent.exists()
+    assert not (home / ".config" / "claude-gateway" / "client.json").exists()
+
+
+# ---------- claude-gateway --opencode: a symlinked opencode.json survives (review finding 2) ----------
+
+def test_opencode_on_off_preserves_a_symlinked_opencode_json(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    real = home / "dotfiles" / "opencode.json"
+    real.parent.mkdir(parents=True)
+    original = {"$schema": "https://opencode.ai/config.json", "theme": "dark"}
+    real.write_text(json.dumps(original, indent=2) + "\n")
+    conf.symlink_to(real)
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
+    assert conf.is_symlink() and conf.resolve() == real.resolve()
+    assert "gateway" in json.loads(real.read_text())["provider"]
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert conf.is_symlink() and conf.resolve() == real.resolve()
+    assert real.read_text() == json.dumps(original, indent=2) + "\n"   # spec 4: byte-identical after on/off
+
+
+# ---------- claude-gateway off --opencode: message reflects what happened (review finding 3) ----------
+
+def test_off_opencode_says_nothing_was_installed(stub, home):
+    r = cg(home, "off", "--opencode")
+    assert r.returncode == 0
+    assert "nothing to undo" in r.stdout
+
+
+def test_off_opencode_says_it_removed_the_provider(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
+    r = cg(home, "off", "--opencode")
+    assert r.returncode == 0
+    assert "key file was deleted" in r.stdout
+
+
+def test_off_opencode_says_it_kept_the_key(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
+    (home / ".config" / "claude-gateway" / "client.json").unlink()
+    r = cg(home, "off", "--opencode")
+    assert r.returncode == 0
+    assert "did not remove" in r.stdout and "kept" in r.stdout
+
+
+# ---------- claude-gateway off: rejects unknown arguments, including the --opencode typo (review finding 4) ----------
+
+def test_off_rejects_a_typo_instead_of_falling_through_to_claude_code_off(stub, home):
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    settings = home / ".claude" / "settings.json"
+    before = settings.read_text()
+    r = cg(home, "off", "--opencdoe")
+    assert r.returncode == 1
+    assert settings.read_text() == before
+
+
+def test_off_rejects_extra_arguments_after_opencode(stub, home):
+    r = cg(home, "off", "--opencode", "extra")
+    assert r.returncode == 1
+
+
+# ---------- claude-gateway --opencode: an empty "provider": {} round-trips (review finding 5) ----------
+
+def test_opencode_on_off_keeps_an_originally_empty_provider_object(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    conf.parent.mkdir(parents=True)
+    original = {"$schema": "https://opencode.ai/config.json", "provider": {}}
+    text = json.dumps(original, indent=2) + "\n"
+    conf.write_text(text)
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert conf.read_text() == text
