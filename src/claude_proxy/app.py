@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from . import limits, quota, titles
 from .auth import AuthError, authenticate, client_status
-from .config import Route
+from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request, set_session_title
 from .forwarder import (filter_request_headers, filter_response_headers, merge_beta, session_id, should_forward,
@@ -20,6 +20,21 @@ from .gateway import Gateway
 from .meter import SSEMeter, parse_non_streaming
 
 logger = logging.getLogger("claude_proxy")
+
+
+def route_model_entries(cfg: Config) -> list[dict]:
+    """The third-party models /v1/models lists, in Anthropic's shape (spec 3.2)."""
+    out = []
+    for route in cfg.routes:
+        for name in route.listed_models():
+            info = route.model_info.get(name, {})
+            m = {"type": "model", "id": name, "display_name": info.get("display_name") or f"{name} (via {route.name})",
+                 "created_at": "2026-01-01T00:00:00Z"}
+            if "context" in info:
+                m["max_input_tokens"], m["max_tokens"] = info["context"], info["output"]
+            out.append(m)
+    return out
+
 
 ROUTED_PATHS = ("/v1/messages", "/v1/messages/count_tokens")
 METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
@@ -251,11 +266,7 @@ async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, 
     try:
         data = json.loads(raw)
         ids = {m.get("id") for m in data.get("data", [])}
-        for route in gw.cfg.routes:
-            for name in route.model_map:
-                if name not in ids:
-                    data["data"].append({"type": "model", "id": name, "display_name": f"{name} (via {route.name})",
-                                         "created_at": "2026-01-01T00:00:00Z"})
+        data["data"].extend(m for m in route_model_entries(gw.cfg) if m["id"] not in ids)
         raw = json.dumps(data).encode()
     except (ValueError, AttributeError, TypeError, KeyError):   # not the usual shape: pass it on as is
         pass
