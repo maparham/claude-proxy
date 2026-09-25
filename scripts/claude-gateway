@@ -10,13 +10,16 @@
 # ~/.claude/settings.json (terminal and IDE sessions); `off` removes exactly those three keys and
 # leaves every other setting alone. The URL and key are kept in ~/.config/claude-gateway/client.json
 # (mode 600). Sessions that are already open keep their connection; start a new one after switching.
+# claude.ai connectors need the machine's own claude.ai login, so they cannot load through the gateway;
+# `on` also sets "disableClaudeAiConnectors" (unless it was already set) to silence the startup warning,
+# and `off` removes it again only if `on` added it.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
 CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
 KEYS=(ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN CLAUDE_GATEWAY_DASHBOARD)
 
-usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+usage() { sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
 
 save_client() {   # url key [dashboard]
   mkdir -p "$(dirname "$CLIENT")"
@@ -39,14 +42,21 @@ import json, os, sys, tempfile
 mode, settings, client, *keys = sys.argv[1:]
 s = json.load(open(settings))
 env = s.setdefault("env", {})
+c = json.load(open(client)) if os.path.exists(client) else {}
 if mode == "on":
-    c = json.load(open(client))
     env.update({"ANTHROPIC_BASE_URL": c["url"], "ANTHROPIC_AUTH_TOKEN": c["key"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
+    if "disableClaudeAiConnectors" not in s:
+        s["disableClaudeAiConnectors"] = True
+        c["added_disable_connectors"] = True
 else:
     for k in keys:
         env.pop(k, None)
     if not env:
         del s["env"]
+    if c.pop("added_disable_connectors", False):
+        s.pop("disableClaudeAiConnectors", None)
+if c:
+    json.dump(c, open(client, "w"), indent=2)
 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings))
 with os.fdopen(fd, "w") as f:
     json.dump(s, f, indent=2)
