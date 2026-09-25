@@ -328,3 +328,66 @@ def test_opencode_on_refuses_a_provider_field_that_is_not_an_object(stub, home):
     assert json.loads(conf.read_text()) == {"provider": ["not", "an", "object"]}
     assert not key_file.exists() and not agent.exists()
     assert not (home / ".config" / "claude-gateway" / "client.json").exists()
+
+
+# ---------- claude-gateway --opencode: half-installed recovery and shared URL (review fixes) ----------
+
+def test_opencode_on_survives_a_dangling_agent_symlink_and_off_still_fully_undoes(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    agent.parent.mkdir(parents=True)
+    agent.symlink_to(agent.parent / "no-such-dir" / "target")   # broken symlink whose target's parent doesn't exist
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    assert "Traceback" not in r.stderr
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert not key_file.exists()
+    assert not conf.exists() or "gateway" not in json.loads(conf.read_text()).get("provider", {})
+
+
+def test_opencode_on_survives_agents_existing_as_a_plain_file(stub, home):
+    stub.models = MODELS
+    conf, key_file, agent = oc_paths(home)
+    agent.parent.parent.mkdir(parents=True)                      # ~/.config/opencode
+    agent.parent.write_text("not a directory")                   # agents is a file, not a directory
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k")
+    assert "Traceback" not in r.stderr
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert not key_file.exists()
+    assert not conf.exists() or "gateway" not in json.loads(conf.read_text()).get("provider", {})
+
+
+def test_opencode_off_keeps_the_key_file_when_client_json_is_gone_but_the_provider_remains(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    conf, key_file, agent = oc_paths(home)
+    (home / ".config" / "claude-gateway" / "client.json").unlink()
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert key_file.exists()
+    assert "gateway" in json.loads(conf.read_text())["provider"]
+
+
+def test_opencode_on_does_not_move_claude_codes_url(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    client = home / ".config" / "claude-gateway" / "client.json"
+    url_a = json.loads(client.read_text())["url"]
+    stub_b = Stub()
+    try:
+        stub_b.models = MODELS
+        assert cg(home, "on", "--opencode", "--url", stub_b.url, "--routes-key", "k").returncode == 0
+        data = json.loads(client.read_text())
+        assert data["url"] == url_a and url_a == stub.url.rstrip("/")
+        assert data["opencode"]["url"] == stub_b.url
+        r = cg(home, "on", "--opencode")               # no --url: must reuse B, not Claude Code's A
+        assert r.returncode == 0, r.stderr
+        path, _ = stub_b.requests[-1]
+        assert path == "/v1/models"
+    finally:
+        stub_b.server.shutdown()
+
+
+def test_plain_on_refuses_when_only_opencode_is_configured(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "k").returncode == 0
+    r = cg(home, "on")
+    assert r.returncode == 1 and "No gateway configured yet" in r.stderr

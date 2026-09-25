@@ -228,11 +228,21 @@ if mode == "on":
         if m.get("max_input_tokens") and m.get("max_tokens"):
             entry["limit"] = {"context": m["max_input_tokens"], "output": m["max_tokens"]}
         models[m["id"]] = entry
+
+    # Record that we own this provider (and its URL, kept separately from Claude Code's own) BEFORE touching
+    # opencode.json: if a later step fails (routes.key, opencode.json or the agent copy), a rerun of `on
+    # --opencode` sees added_provider already true and repairs rather than refusing, and `off --opencode` can
+    # always find its own record to undo.
+    rec = {"added_provider": True, "created_file": rec.get("created_file", created),
+           "agent_sha256": rec.get("agent_sha256"), "url": url}
+    c["opencode"] = rec
+    os.makedirs(os.path.dirname(client), exist_ok=True)
+    write_json(client, c, 0o600)
+
     s.setdefault("provider", {})["gateway"] = {
         "npm": "@ai-sdk/anthropic", "name": "Claude gateway",
         "options": {"baseURL": url + "/v1", "apiKey": "{file:" + key_file + "}"},
         "models": models}
-    rec = {"added_provider": True, "created_file": rec.get("created_file", created), "agent_sha256": rec.get("agent_sha256")}
     os.makedirs(os.path.dirname(key_file), exist_ok=True)
     old = os.umask(0o077)
     try:
@@ -243,12 +253,14 @@ if mode == "on":
     os.chmod(key_file, 0o600)
     os.makedirs(oc_dir, exist_ok=True)
     write_json(conf, s)
-    if not os.path.exists(agent) and os.path.exists(agent_src):
-        os.makedirs(os.path.dirname(agent), exist_ok=True)
-        shutil.copyfile(agent_src, agent)
-        rec["agent_sha256"] = digest(agent)
-    c["url"] = url
-    c["opencode"] = rec
+    if not os.path.lexists(agent) and os.path.exists(agent_src):   # lexists: a broken symlink already "exists"
+        try:
+            os.makedirs(os.path.dirname(agent), exist_ok=True)
+            shutil.copyfile(agent_src, agent)
+            rec["agent_sha256"] = digest(agent)
+        except OSError as e:
+            print(f"Could not install the muse agent at {agent} ({e}); "
+                  "the gateway provider was installed without it.", file=sys.stderr)
 else:
     if rec.get("added_provider") and "gateway" in providers:
         del providers["gateway"]
@@ -258,10 +270,21 @@ else:
             os.remove(conf)
         else:
             write_json(conf, s)
+    gateway_present = False   # re-read: our own removal above may have changed this, and we may not own it at all
+    if os.path.exists(conf):
+        try:
+            cur = json.load(open(conf))
+            gateway_present = isinstance(cur, dict) and "gateway" in (cur.get("provider") or {})
+        except ValueError:
+            gateway_present = True   # can't tell; be conservative and keep the key file
     sha = rec.get("agent_sha256")
     if sha and os.path.exists(agent) and digest(agent) == sha:   # untouched since `on` copied it
         os.remove(agent)
-    if os.path.exists(key_file):
+    if gateway_present:
+        if os.path.exists(key_file):
+            print(f"{conf} still has a 'gateway' provider that this command did not remove; "
+                  "the OpenCode key file was left in place.", file=sys.stderr)
+    elif os.path.exists(key_file):
         os.remove(key_file)
     c.pop("opencode", None)
 if c or os.path.exists(client):
@@ -270,9 +293,18 @@ if c or os.path.exists(client):
 EOF
 }
 
+opencode_url() {   # the URL last used for OpenCode's provider, kept separately from Claude Code's own URL
+  python3 -c 'import json,os,sys
+c = json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}
+oc = c.get("opencode") if isinstance(c.get("opencode"), dict) else {}
+print(oc.get("url") or "")' "$CLIENT"
+}
+
 opencode_on() {   # url-or-empty key-or-empty; empty means the saved one
   local url key models
-  url=${1:-$(field url)}
+  url=$1
+  [ -n "$url" ] || url=$(opencode_url)
+  [ -n "$url" ] || url=$(field url)
   url=${url%/}
   key=${2:-$(cat "$ROUTES_KEY" 2>/dev/null || true)}
   [ -n "$url" ] || { echo "No gateway URL yet: claude-gateway on --opencode --url <url> --routes-key <key>" >&2; exit 1; }
@@ -319,7 +351,7 @@ case "$cmd" in
       [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
       save_client "$url" "$key" "$dash"
     fi
-    [ -f "$CLIENT" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
+    [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
     mode=${mode:-$(field mode key-only)}
     if [ "$mode" = own-login ] && ! has_own_login; then
       echo "Own-login mode needs this machine signed in to Claude Code with a subscription (run 'claude', then /login)," >&2
