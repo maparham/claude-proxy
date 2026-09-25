@@ -1,0 +1,104 @@
+#!/usr/bin/env bash
+# Point this machine's Claude Code at a claude-proxy gateway, or back at its own login.
+#
+#   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # first time
+#   claude-gateway on                                                        # later
+#   claude-gateway off
+#   claude-gateway status
+#
+# `on` adds ANTHROPIC_BASE_URL, ANTHROPIC_AUTH_TOKEN and CLAUDE_GATEWAY_DASHBOARD to the "env" block of
+# ~/.claude/settings.json (terminal and IDE sessions); `off` removes exactly those three keys and
+# leaves every other setting alone. The URL and key are kept in ~/.config/claude-gateway/client.json
+# (mode 600). Sessions that are already open keep their connection; start a new one after switching.
+set -euo pipefail
+
+SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
+CLIENT=${CLAUDE_GATEWAY_CLIENT:-$HOME/.config/claude-gateway/client.json}
+KEYS=(ANTHROPIC_BASE_URL ANTHROPIC_AUTH_TOKEN CLAUDE_GATEWAY_DASHBOARD)
+
+usage() { sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit "${1:-0}"; }
+
+save_client() {   # url key [dashboard]
+  mkdir -p "$(dirname "$CLIENT")"
+  ( umask 077; python3 - "$CLIENT" "$@" <<'EOF'
+import json, sys
+path, url, key = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3]
+dash = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else url.replace("://claude.", "://claude-dash.", 1)
+json.dump({"url": url, "key": key, "dashboard": dash.rstrip("/")}, open(path, "w"), indent=2)
+EOF
+  )
+  chmod 600 "$CLIENT"
+}
+
+edit_settings() {   # on|off
+  mkdir -p "$(dirname "$SETTINGS")"
+  [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+  cp -p "$SETTINGS" "$SETTINGS.bak-claude-gateway"
+  python3 - "$1" "$SETTINGS" "$CLIENT" "${KEYS[@]}" <<'EOF'
+import json, os, sys, tempfile
+mode, settings, client, *keys = sys.argv[1:]
+s = json.load(open(settings))
+env = s.setdefault("env", {})
+if mode == "on":
+    c = json.load(open(client))
+    env.update({"ANTHROPIC_BASE_URL": c["url"], "ANTHROPIC_AUTH_TOKEN": c["key"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
+else:
+    for k in keys:
+        env.pop(k, None)
+    if not env:
+        del s["env"]
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings))
+with os.fdopen(fd, "w") as f:
+    json.dump(s, f, indent=2)
+    f.write("\n")
+os.chmod(tmp, os.stat(settings).st_mode & 0o777)
+os.replace(tmp, settings)
+EOF
+}
+
+current() {   # prints the gateway URL in settings, or nothing
+  [ -f "$SETTINGS" ] && python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env",{}).get("ANTHROPIC_BASE_URL",""))' "$SETTINGS" || true
+}
+
+field() { python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))[sys.argv[2]])' "$CLIENT" "$1"; }
+
+cmd=${1:-status}; shift || true
+case "$cmd" in
+  on)
+    url="" key="" dash=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --url) url=$2; shift 2 ;;
+        --key) key=$2; shift 2 ;;
+        --dashboard) dash=$2; shift 2 ;;
+        *) usage 1 ;;
+      esac
+    done
+    if [ -n "$url$key" ]; then
+      [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
+      save_client "$url" "$key" "$dash"
+    fi
+    [ -f "$CLIENT" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
+    if ! curl -fsS --max-time 10 "$(field url)/health" >/dev/null; then
+      echo "The gateway at $(field url) is not answering; leaving Claude Code as it is." >&2; exit 1
+    fi
+    edit_settings on
+    echo "Claude Code now uses the gateway at $(field url). Start a new session to pick it up."
+    ;;
+  off)
+    edit_settings off
+    echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+    ;;
+  status)
+    url=$(current)
+    if [ -z "$url" ]; then echo "off: Claude Code uses this machine's own login"; exit 0; fi
+    echo "on: $url"
+    if curl -fsS --max-time 10 "$url/health" >/dev/null; then echo "gateway: reachable"; else echo "gateway: NOT reachable (Claude Code will fail; 'claude-gateway off' to fall back)"; fi
+    if [ -f "$CLIENT" ]; then
+      line=$(curl -fsS --max-time 10 -H "Authorization: Bearer $(field key)" "$(field dashboard)/api/me/status?format=text" 2>/dev/null || true)
+      [ -n "$line" ] && echo "usage: $line"
+    fi
+    ;;
+  -h|--help|help) usage 0 ;;
+  *) usage 1 ;;
+esac

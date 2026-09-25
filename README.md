@@ -60,6 +60,15 @@ export ANTHROPIC_BASE_URL=http://gateway.lan:8080
 export ANTHROPIC_AUTH_TOKEN=sk-proxy-...        # their own gateway key
 ```
 
+Or use `scripts/claude-gateway`, which edits `~/.claude/settings.json` for them and switches back cleanly:
+
+```sh
+scripts/claude-gateway on --url https://gateway.example.com --key sk-proxy-...   # first time
+scripts/claude-gateway off        # back to this machine's own login
+scripts/claude-gateway on         # later: reuses the saved URL and key
+scripts/claude-gateway status     # on/off, reachability, current usage
+```
+
 That's all. They don't need a local `/login`. Plan bars and `/usage` aren't available in this
 mode, so for their allowance they can install the statusline:
 
