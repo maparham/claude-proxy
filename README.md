@@ -60,7 +60,15 @@ export ANTHROPIC_BASE_URL=http://gateway.lan:8080
 export ANTHROPIC_AUTH_TOKEN=sk-proxy-...        # their own gateway key
 ```
 
-Or use `scripts/claude-gateway`, which edits `~/.claude/settings.json` for them and switches back cleanly:
+Or use `claude-gateway`, which edits `~/.claude/settings.json` for them and switches back cleanly. It needs no
+checkout of this repository; this installs it in `~/.local` (run it again to update):
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --gclaude --url https://gateway.example.com --key sk-proxy-...   # install and set up gclaude in one go
+```
+
+From a checkout, `scripts/claude-gateway` is the same command:
 
 ```sh
 scripts/claude-gateway on --url https://gateway.example.com --key sk-proxy-...   # first time
