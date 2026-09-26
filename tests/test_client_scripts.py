@@ -954,3 +954,117 @@ def test_opencode_on_warns_when_the_muse_agent_is_missing(stub, home, tmp_path):
             {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp)})
     assert r.returncode == 0, r.stderr
     assert "muse agent" in r.stderr and not oc_paths(home)[2].exists()
+
+
+# ---------- gclaude shares plugins and memory with plain claude (gclaude-sync.py) ----------
+
+def own_plugins_and_memory(home):
+    own = home / ".claude"
+    own.mkdir(exist_ok=True)
+    (own / "plugins" / "cache").mkdir(parents=True)
+    (own / "plugins" / "installed_plugins.json").write_text('{"version": 2, "plugins": {}}')
+    (own / "settings.json").write_text(json.dumps({
+        "enabledPlugins": {"superpowers@m": True, "swift@m": False},
+        "extraKnownMarketplaces": {"extra": {"source": {"source": "github", "repo": "a/b"}}},
+        "model": "opus"}))
+    for name in ("-p1", "-p3"):
+        (own / "projects" / name / "memory").mkdir(parents=True)
+        (own / "projects" / name / "memory" / "MEMORY.md").write_text(f"{name} memories\n")
+    (own / "projects" / "-nomem").mkdir(parents=True)
+    return own
+
+
+def test_gclaude_shares_plugins_and_their_enabled_list(stub, home):
+    own = own_plugins_and_memory(home)
+    before = (own / "settings.json").read_text()
+    gdir, gsettings, launcher = gc_paths(home)
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert os.readlink(gdir / "plugins") == str(own / "plugins")
+    s = json.loads(gsettings.read_text())
+    assert s["enabledPlugins"] == {"superpowers@m": True, "swift@m": False}
+    assert s["extraKnownMarketplaces"] == {"extra": {"source": {"source": "github", "repo": "a/b"}}}
+    assert "model" not in s and s["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-full"
+    assert gsettings.stat().st_mode & 0o777 == 0o600
+    s["enabledPlugins"]["gclaude-only@m"] = True                         # enabled only in gclaude: kept
+    gsettings.write_text(json.dumps(s))
+    own_s = json.loads(before)
+    own_s["enabledPlugins"]["swift@m"] = True                            # changed in plain claude: followed
+    (own / "settings.json").write_text(json.dumps(own_s))
+    assert run_gclaude(home, launcher).returncode == 0
+    assert json.loads(gsettings.read_text())["enabledPlugins"] == \
+        {"superpowers@m": True, "swift@m": True, "gclaude-only@m": True}
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not (gdir / "plugins").exists()
+    assert json.loads(gsettings.read_text()) == {"enabledPlugins": {"gclaude-only@m": True}}
+    assert (own / "plugins" / "installed_plugins.json").exists()
+
+
+def test_gclaude_replaces_the_untouched_plugins_folder_claude_code_made_but_keeps_real_installs(stub, home):
+    own_plugins_and_memory(home)
+    gdir, _, _ = gc_paths(home)
+    (gdir / "plugins" / "marketplaces" / "official").mkdir(parents=True)
+    (gdir / "plugins" / "known_marketplaces.json").write_text("{}")
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert (gdir / "plugins").is_symlink()
+    assert cg(home, "off", "--gclaude").returncode == 0
+    (gdir / "plugins").mkdir()
+    (gdir / "plugins" / "installed_plugins.json").write_text('{"plugins": {"mine@m": []}}')
+    r = cg(home, "on", "--gclaude")
+    assert r.returncode == 0 and "not shared" in r.stderr
+    assert not (gdir / "plugins").is_symlink() and (gdir / "plugins" / "installed_plugins.json").exists()
+
+
+def test_gclaude_shares_memory_per_project_but_not_history(stub, home):
+    own = own_plugins_and_memory(home)
+    gdir, _, launcher = gc_paths(home)
+    (gdir / "projects" / "-p1").mkdir(parents=True)
+    (gdir / "projects" / "-p1" / "session.jsonl").write_text("{}\n")
+    (gdir / "projects" / "-p3" / "memory").mkdir(parents=True)         # empty, as Claude Code makes it
+    (gdir / "projects" / "-p2" / "memory").mkdir(parents=True)
+    (gdir / "projects" / "-p2" / "memory" / "MEMORY.md").write_text("gclaude's own\n")
+    r = cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0
+    for name in ("-p1", "-p3"):
+        assert os.readlink(gdir / "projects" / name / "memory") == str(own / "projects" / name / "memory")
+    assert (gdir / "projects" / "-p1" / "session.jsonl").exists()        # history stays gclaude's
+    assert not (gdir / "projects" / "-p2" / "memory").is_symlink()
+    assert not (gdir / "projects" / "-nomem").exists()                   # nothing to share there
+    assert not (own / "projects" / "-nomem" / "memory").exists()
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not (gdir / "projects" / "-p1" / "memory").exists()
+    assert (gdir / "projects" / "-p2" / "memory" / "MEMORY.md").read_text() == "gclaude's own\n"
+    assert (own / "projects" / "-p1" / "memory" / "MEMORY.md").read_text() == "-p1 memories\n"
+
+
+def test_gclaude_links_the_current_projects_memory_once_plain_claude_has_been_used_there(stub, home, tmp_path):
+    import re, subprocess as sp
+    own = own_plugins_and_memory(home)
+    repo = tmp_path / "my_repo"
+    (repo / "sub").mkdir(parents=True)
+    sp.run(["git", "init", "-q", str(repo)], check=True)
+    name = re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(repo))
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, launcher = gc_paths(home)
+    fake = home / "fakebin"
+    fake.mkdir(exist_ok=True)
+    (fake / "claude").write_text("#!/bin/sh\nexit 0\n")
+    (fake / "claude").chmod(0o755)
+    env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home)}
+    assert sp.run([str(launcher)], cwd=repo / "sub", env=env).returncode == 0
+    assert not (gdir / "projects" / name).exists()                       # plain claude never used there
+    (own / "projects" / name).mkdir()
+    assert sp.run([str(launcher)], cwd=repo / "sub", env=env).returncode == 0
+    assert os.readlink(gdir / "projects" / name / "memory") == str(own / "projects" / name / "memory")
+    assert (own / "projects" / name / "memory").is_dir()
+
+
+def test_gclaude_starts_even_when_sharing_fails(stub, home):
+    own = own_plugins_and_memory(home)
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    (own / "settings.json").write_text("{not json")
+    (own / "projects").chmod(0o000)
+    try:
+        r = run_gclaude(home, gc_paths(home)[2])
+    finally:
+        (own / "projects").chmod(0o755)
+    assert r.returncode == 0

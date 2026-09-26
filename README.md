@@ -99,10 +99,17 @@ scripts/claude-gateway off --gclaude
 
 This leaves `~/.claude` alone and installs `~/.local/bin/gclaude`, which runs Claude Code with
 `CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude`. That folder gets the key-only setup above (key, statusline,
-limit warning), and links to `CLAUDE.md`, `agents`, `commands` and `skills` in `~/.claude` (commands one by one,
-refreshed each time gclaude starts). Settings, plugins, history and sessions are separate, so both commands can
-run at once in the same terminal. `off --gclaude` removes the command, the links, `/usage` and the gateway
-settings, and keeps gclaude's history.
+limit warning), and shares the rest of your own setup in `~/.claude`, refreshed each time gclaude starts
+(`scripts/gclaude-sync.py`):
+
+- `CLAUDE.md`, `agents`, `skills` and each of your `commands`;
+- plugins: installed once for both, and gclaude follows plain `claude`'s list of enabled plugins (a plugin you
+  enable only in gclaude stays enabled there);
+- memory: each project's `memory` folder, once plain `claude` has been used in that project, so a memory saved in
+  either shows up in both. A gclaude memory folder that already holds memories of its own is left alone.
+
+Settings, login, history and sessions stay separate, so both commands can run at once in the same terminal.
+`off --gclaude` removes the command, the links, `/usage` and the gateway settings, and keeps gclaude's history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
 In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
