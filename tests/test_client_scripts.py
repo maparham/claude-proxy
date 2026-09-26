@@ -876,3 +876,81 @@ def test_off_gclaude_says_when_the_command_is_not_ours(stub, home):
     r = cg(home, "off", "--gclaude")
     assert r.returncode == 0 and "not installed by claude-gateway" in r.stdout
     assert launcher.read_text() == "#!/bin/sh\necho mine\n"
+
+# ---------- review leftovers: no key in curl's argv, off leaves no debris, setup warnings ----------
+
+def logging_curl(home):
+    """A curl first on PATH that records its arguments, then runs the real one."""
+    import shutil
+    fake = home / "argvbin"
+    fake.mkdir(exist_ok=True)
+    log = home / "curl-argv.log"
+    (fake / "curl").write_text(f'#!/bin/sh\nprintf "%s\\n" "$*" >> {log}\nexec {shutil.which("curl")} "$@"\n')
+    (fake / "curl").chmod(0o755)
+    return fake, log
+
+
+def test_keys_never_appear_in_curls_arguments(stub, home, tmp_path):
+    stub.models = MODELS
+    fake, log = logging_curl(home)
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "TMPDIR": str(tmp)}
+    for args in (["on", "--url", stub.url, "--key", "sk-proxy-fullsecret"],
+                 ["on", "--gclaude"],
+                 ["status"],
+                 ["on", "--opencode", "--routes-key", "sk-proxy-r-routesecret"]):
+        r = run(["bash", str(GATEWAY), *args], env)
+        assert r.returncode == 0, (args, r.stderr)
+    r = run(["sh", str(STATUSLINE)], {**env, "CLAUDE_GATEWAY_DASHBOARD": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-fullsecret"})
+    assert r.returncode == 0
+    argv = log.read_text()
+    assert argv.count("\n") >= 6 and "secret" not in argv
+    sent = [h.get("authorization", "") + h.get("x-api-key", "") for _, h in stub.requests]
+    assert "Bearer sk-proxy-fullsecret" in sent and "sk-proxy-r-routesecret" in sent
+
+
+def test_opencode_off_removes_the_agents_folder_it_created_and_an_empty_client_json(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
+    assert cg(home, "off", "--opencode").returncode == 0
+    conf, key_file, agent = oc_paths(home)
+    assert not agent.parent.exists()
+    assert not (home / ".config" / "claude-gateway" / "client.json").exists()
+
+
+def test_opencode_off_keeps_an_agents_folder_that_was_already_there(stub, home):
+    stub.models = MODELS
+    conf, _, agent = oc_paths(home)
+    agent.parent.mkdir(parents=True)
+    assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert agent.parent.is_dir() and not agent.exists()
+
+
+def test_opencode_off_keeps_client_json_that_still_has_claude_code_settings(stub, home):
+    stub.models = MODELS
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--opencode", "--routes-key", "sk-proxy-r-k").returncode == 0
+    assert cg(home, "off", "--opencode").returncode == 0
+    assert json.loads((home / ".config" / "claude-gateway" / "client.json").read_text())["key"] == "sk-proxy-full"
+
+
+def test_opencode_on_warns_when_the_gateway_has_no_models_for_the_key(stub, home):
+    r = cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k")
+    assert r.returncode == 0
+    assert "no third-party models" in r.stderr
+
+
+def test_opencode_on_warns_when_the_muse_agent_is_missing(stub, home, tmp_path):
+    import shutil
+    stub.models = MODELS
+    alone = tmp_path / "alone"
+    alone.mkdir()
+    shutil.copy(GATEWAY, alone / "claude-gateway")
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    r = run(["bash", str(alone / "claude-gateway"), "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k"],
+            {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp)})
+    assert r.returncode == 0, r.stderr
+    assert "muse agent" in r.stderr and not oc_paths(home)[2].exists()

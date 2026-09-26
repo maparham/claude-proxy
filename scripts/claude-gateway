@@ -172,8 +172,8 @@ preflight() {   # mode: the gateway answers and accepts the key the way that mod
   url=$(field url)
   if [ "$1" = own-login ]; then auth="x-gateway-key: $(field key)"; else auth="Authorization: Bearer $(field key)"; fi
   out=$(mktemp)
-  code=$(curl -sS -o "$out" -w '%{http_code}' --max-time 15 -H "$auth" -H "anthropic-version: 2023-06-01" \
-         "$url/v1/models" 2>/dev/null) || code=000
+  code=$(printf '%s\n' "$auth" | curl -sS -o "$out" -w '%{http_code}' --max-time 15 -H @- -H "anthropic-version: 2023-06-01" \
+         "$url/v1/models" 2>/dev/null) || code=000   # the key goes on stdin: in curl's arguments, `ps` would show it
   if [ "$code" != 200 ]; then
     echo "The gateway at $url did not accept the key (HTTP $code); leaving Claude Code as it is." >&2
     head -c 400 "$out" >&2; echo >&2; rm -f "$out"; exit 1
@@ -187,7 +187,7 @@ has_own_login() {   # best effort: a claude.ai login stored by Claude Code on th
 
 preflight_routes() {   # url key out: the gateway takes the OpenCode key the way OpenCode sends it; its model list goes to out
   local code
-  code=$(curl -sS -o "$3" -w '%{http_code}' --max-time 15 -H "x-api-key: $2" -H "anthropic-version: 2023-06-01" \
+  code=$(printf 'x-api-key: %s\n' "$2" | curl -sS -o "$3" -w '%{http_code}' --max-time 15 -H @- -H "anthropic-version: 2023-06-01" \
          "$1/v1/models" 2>/dev/null) || code=000
   if [ "$code" != 200 ]; then
     echo "The gateway at $1 did not accept the OpenCode key (HTTP $code); leaving OpenCode as it is." >&2
@@ -253,6 +253,9 @@ if mode == "on":
         if m.get("max_input_tokens") and m.get("max_tokens"):
             entry["limit"] = {"context": m["max_input_tokens"], "output": m["max_tokens"]}
         models[m["id"]] = entry
+    if not models:
+        print("The gateway has no third-party models for this key yet, so the gateway provider is empty. Rerun "
+              "'claude-gateway on --opencode' after the admin adds a route.", file=sys.stderr)
 
     # Record that we own this provider (and its URL, kept separately from Claude Code's own) BEFORE touching
     # opencode.json: if a later step fails (routes.key, opencode.json or the agent copy), a rerun of `on
@@ -263,7 +266,8 @@ if mode == "on":
     # so it falls back to the old behaviour (drop "provider" entirely on off) rather than guessing wrong.
     had_provider = rec["had_provider"] if "had_provider" in rec else (not rec.get("added_provider") and "provider" in s)
     rec = {"added_provider": True, "created_file": rec.get("created_file", created),
-           "agent_sha256": rec.get("agent_sha256"), "url": url, "had_provider": had_provider}
+           "agent_sha256": rec.get("agent_sha256"), "url": url, "had_provider": had_provider,
+           "created_agents_dir": rec.get("created_agents_dir", False)}
     c["opencode"] = rec
     os.makedirs(os.path.dirname(client), exist_ok=True)
     write_json(client, c, 0o600)
@@ -282,8 +286,13 @@ if mode == "on":
     os.chmod(key_file, 0o600)
     os.makedirs(oc_dir, exist_ok=True)
     write_json(conf, s)
-    if not os.path.lexists(agent) and os.path.exists(agent_src):   # lexists: a broken symlink already "exists"
+    if not os.path.lexists(agent) and not os.path.exists(agent_src):   # lexists: a broken symlink already "exists"
+        print(f"The muse agent was not installed: {agent_src} is missing (run claude-gateway from its repository).",
+              file=sys.stderr)
+    elif not os.path.lexists(agent):
         try:
+            if not os.path.lexists(os.path.dirname(agent)):
+                rec["created_agents_dir"] = True
             os.makedirs(os.path.dirname(agent), exist_ok=True)
             shutil.copyfile(agent_src, agent)
             rec["agent_sha256"] = digest(agent)
@@ -311,6 +320,9 @@ else:
     sha = rec.get("agent_sha256")
     if sha and os.path.exists(agent) and digest(agent) == sha:   # untouched since `on` copied it
         os.remove(agent)
+    agents_dir = os.path.dirname(agent)
+    if rec.get("created_agents_dir") and os.path.isdir(agents_dir) and not os.listdir(agents_dir):
+        os.rmdir(agents_dir)
     had_key = os.path.exists(key_file)
     if gateway_present:
         if had_key:
@@ -328,9 +340,11 @@ else:
         summary = "OpenCode had no gateway provider set up; nothing to undo."
     print(summary)
     c.pop("opencode", None)
-if c or os.path.exists(client):
+if c:
     os.makedirs(os.path.dirname(client), exist_ok=True)
     write_json(client, c, 0o600)
+elif os.path.exists(client):
+    os.remove(client)   # nothing else was configured
 EOF
 }
 
@@ -583,7 +597,7 @@ case "$cmd" in
     echo "on: $url ($mode mode)"
     if curl -fsS --max-time 10 "$url/health" >/dev/null; then echo "gateway: reachable"; else echo "gateway: NOT reachable (Claude Code will fail; 'claude-gateway off' to fall back)"; fi
     if [ -f "$CLIENT" ]; then
-      line=$(curl -fsS --max-time 10 -H "Authorization: Bearer $(field key)" "$(field dashboard)/api/me/status?format=text" 2>/dev/null || true)
+      line=$(printf 'Authorization: Bearer %s\n' "$(field key)" | curl -fsS --max-time 10 -H @- "$(field dashboard)/api/me/status?format=text" 2>/dev/null || true)
       [ -n "$line" ] && echo "usage: $line"
     fi
     gclaude_state

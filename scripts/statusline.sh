@@ -64,7 +64,8 @@ if [ -z "$usage" ] && [ -f "$cache" ] && [ "$(age "$cache")" -lt 30 ]; then
   line=$(cat "$cache")
 else
   key=${ANTHROPIC_AUTH_TOKEN:-$(printf '%s\n' "${ANTHROPIC_CUSTOM_HEADERS:-}" | sed -n 's/^[Xx]-[Gg]ateway-[Kk]ey: *//p' | head -n 1)}
-  if line=$(curl -fsS --max-time 3 -H "Authorization: Bearer ${key}" \
+  # The key goes to curl on stdin: in its arguments, `ps` would show it to every local user.
+  if line=$(printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 3 -H @- \
             "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=text" 2>/dev/null); then
     printf '%s\n' "$line" > "$cache"
   else
