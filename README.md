@@ -113,7 +113,8 @@ claude-gateway off                 # off --gclaude when global mode is set up to
 
 This leaves `~/.claude` alone and installs `~/.local/bin/gclaude`, which runs Claude Code with
 `CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude`. That folder gets the key-only setup above (key, statusline,
-limit warning), and shares the rest of your own setup in `~/.claude`, refreshed each time gclaude starts
+limit warning; the statusline shows your limits and then your own statusline from `~/.claude`, if you have one,
+through `statusline.sh --then`), and shares the rest of your own setup in `~/.claude`, refreshed each time gclaude starts
 (`scripts/gclaude-sync.py`):
 
 - `CLAUDE.md`, `agents`, `skills` and each of your `commands`;

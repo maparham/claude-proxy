@@ -45,7 +45,7 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 
 - **Status line** in `gclaude`: your limits, e.g. `◆ maya · daily $61/$100 61% (resets in 3.2 h)`: used, limit, percentage, and when the
   count goes back to zero. A daily window opens with your first request and lasts 24 hours. A figure turns yellow at 80% and
-  red at 100%.
+  red at 100%. If you have your own status line in `claude`, `gclaude` shows it after your limits.
 - **Warning**: from 80% of a limit, Claude Code shows `Gateway: …` above its reply (again every 15 minutes, and at
   once at 100%). It never blocks you; the gateway refuses requests only once a limit is reached.
 - **`/usage`** in `gclaude` shows the same line with a link to the dashboard, without using a request.

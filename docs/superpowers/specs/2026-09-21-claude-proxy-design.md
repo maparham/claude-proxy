@@ -12,7 +12,7 @@ A small self-hosted gateway that lets 2-3 people use the ordinary Claude Code CL
 
 1. Users keep the unmodified Claude Code CLI, running locally on their own repos. Onboarding is two environment variables.
 2. Every request is metered per user with input, output, cache-read and cache-write tokens, model, latency and status.
-3. An admin can set, per user, absolute token limits per rolling window and share-of-account-quota limits.
+3. An admin can set, per user, absolute token limits per window and share-of-account-quota limits.
 4. An interactive dashboard shows account utilization, per-user usage, and statistics with plots.
 5. Each user can see their own usage and remaining allowance, including from inside Claude Code via the statusline.
 
@@ -29,7 +29,7 @@ A small self-hosted gateway that lets 2-3 people use the ordinary Claude Code CL
 
 - **Stack:** Python 3.12, FastAPI, httpx, SQLite, and a no-build-step frontend using ECharts. This is the dominant stack for this niche and the user did not choose a language.
 - **Scale:** one host, one subscription, one admin, 2-10 users, low tens of requests per minute.
-- **Windows are rolling**, matching Claude's own 5-hour and 7-day behaviour. Calendar-aligned windows are not supported in v1.
+- **Windows open with the first request and reset all at once**, like Claude's own 5-hour limit: a window lasts its length from the user's first request, then the count goes back to zero and the next request opens a new one. (Until 2026-09-26 they were rolling: each request stopped counting one window-length after it started.) Calendar-aligned windows are not supported in v1.
 - **Deployment:** the gateway listens on localhost or a LAN interface. TLS is terminated by a reverse proxy such as Caddy when exposed beyond the LAN.
 
 ## 2. Policy note
@@ -69,7 +69,7 @@ One Python process runs everything. Components live in separate modules with nar
 
 1. Claude Code sends a request to the gateway with `Authorization: Bearer <virtual key>`, because the user set `ANTHROPIC_AUTH_TOKEN`.
 2. `auth` hashes the key and looks up the user. Unknown, disabled or revoked keys get a 401 with an Anthropic-shaped `authentication_error` body. The gateway fails closed.
-3. `limits` evaluates every configured limit for the user against recorded history. If any is exceeded, the gateway returns 429 with an Anthropic-shaped body: `{"type":"error","error":{"type":"rate_limit_error","message":"<which limit, current value, reset time>"}}` and a `retry-after` header set to the seconds until the earliest limit frees up. The rejection is recorded as an event.
+3. `limits` evaluates every configured limit for the user against recorded history. If any is exceeded, the gateway returns 429 with an Anthropic-shaped body: `{"type":"error","error":{"type":"rate_limit_error","message":"<which limit, current value, reset time>"}}` and a `retry-after` header set to the seconds until the exceeded limit's window resets. The rejection is recorded as an event.
 4. `forwarder` builds the upstream request. It removes the client's `Authorization` and `x-api-key` headers, adds the credential backend's headers, and otherwise forwards method, path, query, headers and body unchanged. Hop-by-hop headers are dropped per RFC 9110.
 5. The upstream response streams back to the client as bytes arrive. `meter` observes a copy of the stream in parallel and never delays it.
 6. When the response ends, `meter` produces a usage record. The gateway writes one `requests` row with user, timings, status, model and token counts. It also captures any `anthropic-ratelimit-unified-*` response headers into a `quota_snapshots` row.
@@ -168,10 +168,10 @@ Each user may have any subset of these limits. All are optional.
 
 | Limit | Unit | Window | Evaluated against |
 |---|---|---|---|
-| `tokens_5h` | weighted or raw tokens, admin's choice | rolling 5 hours | Observed usage |
-| `tokens_daily` | same | rolling 24 hours | Observed usage |
-| `tokens_weekly` | same | rolling 7 days | Observed usage |
-| `requests_daily` | request count | rolling 24 hours | Observed usage |
+| `tokens_5h` | weighted or raw tokens, admin's choice | 5 hours | Observed usage |
+| `tokens_daily` | same | 24 hours | Observed usage |
+| `tokens_weekly` | same | 7 days | Observed usage |
+| `requests_daily` | request count | 24 hours | Observed usage |
 | `share_5h` | percentage points of the account 5-hour bucket | Anthropic's current 5-hour window | Estimated share |
 | `share_7d` | percentage points of the account 7-day bucket | Anthropic's current 7-day window | Estimated share |
 | `allowed_models` | list of model name patterns | none | The request's `model` field |
@@ -324,11 +324,11 @@ The non-goal "protocol translation" still holds. Meta's Model API serves an Anth
 
 | Limit | Unit | Window |
 |---|---|---|
-| `requests_minute` | request count | rolling 60 seconds |
-| `tokens_minute` | weighted or raw tokens | rolling 60 seconds |
-| `tokens_monthly` | weighted or raw tokens | rolling 30 days |
-| `requests_monthly` | request count | rolling 30 days |
-| `cost_monthly` | USD, estimated | rolling 30 days |
+| `requests_minute` | request count | 60 seconds |
+| `tokens_minute` | weighted or raw tokens | 60 seconds |
+| `tokens_monthly` | weighted or raw tokens | 30 days |
+| `requests_monthly` | request count | 30 days |
+| `cost_monthly` | USD, estimated | 30 days |
 
 - **Model scope.** Every token, request and cost limit takes an optional model scope, a glob matched against the recorded model. The default scope `*` counts all requests. A scoped limit is only evaluated for requests whose model matches its scope. `limits` gains a `scope` column and its key becomes `(user_id, kind, scope)`.
 - **Estimated cost.** Computed on read from a per-model price table in config (USD per million input, output, cache-write and cache-read tokens). For the subscription route this is an API-equivalent estimate, since the subscription is not billed per token; for a third-party route it approximates the real charge. Models without a price are counted as zero and flagged on the dashboard.

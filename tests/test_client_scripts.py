@@ -170,6 +170,36 @@ def test_statusline_shows_each_used_limit_pair_as_a_percentage(stub, warn_env):
                                " · x 996/1000 req 99%\n")                  # rounded down: 100% only once reached
 
 
+def own_statusline(tmp_path, body):
+    script = tmp_path / "my line.sh"      # a space, so the command needs quoting
+    script.write_text("#!/bin/sh\n" + body)
+    script.chmod(0o755)
+    return script
+
+
+def test_statusline_then_shows_the_users_own_line_after_the_gateway_line(stub, warn_env, tmp_path):
+    import shlex
+    mine = own_statusline(tmp_path, 'printf "mine %s" "$(cat)"\n')
+    r = run(["sh", str(STATUSLINE), "--then", shlex.quote(str(mine))], warn_env, stdin='{"model": "x"}')
+    assert r.returncode == 0, r.stderr
+    assert plain(r.stdout) == '◆ alice · daily 10/100 req 10% | mine {"model": "x"}\n'
+
+
+def test_statusline_then_shows_the_gateway_line_once_when_the_users_line_has_it_too(stub, warn_env, tmp_path):
+    import shlex
+    mine = own_statusline(tmp_path, f'printf "%s mine" "$(sh {shlex.quote(str(STATUSLINE))} </dev/null)"\n')
+    r = run(["sh", str(STATUSLINE), "--then", shlex.quote(str(mine))], warn_env)
+    assert plain(r.stdout) == "◆ alice · daily 10/100 req 10% |  mine\n"
+
+
+def test_statusline_then_without_dashboard_still_shows_the_users_line(warn_env, tmp_path):
+    import shlex
+    mine = own_statusline(tmp_path, 'echo mine\n')
+    env = {k: v for k, v in warn_env.items() if k != "CLAUDE_GATEWAY_DASHBOARD"}
+    r = run(["sh", str(STATUSLINE), "--then", shlex.quote(str(mine))], env)
+    assert (r.returncode, r.stdout) == (0, "mine\n")
+
+
 def test_statusline_skips_the_percentage_of_a_zero_limit(stub, warn_env):
     stub.status_line = "alice · daily $0/$0"
     assert plain(run(["sh", str(STATUSLINE)], warn_env).stdout) == "◆ alice · daily $0/$0\n"
@@ -725,6 +755,35 @@ def test_gclaude_off_undoes_its_setup_but_keeps_history(stub, home):
     assert (gdir / "history.jsonl").exists()
     assert settings.read_bytes() == before
     assert "gclaude" not in json.loads((home / ".config" / "claude-gateway" / "client.json").read_text())
+
+
+def test_gclaude_statusline_keeps_the_users_own_after_the_gateway_line(stub, home):
+    settings = own_claude(home)
+    mine = own_statusline(home, 'echo mine\n')
+    import shlex
+    settings.write_text(json.dumps({"statusLine": {"type": "command", "command": shlex.quote(str(mine)), "padding": 0}}))
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    line = json.loads(gsettings.read_text())["statusLine"]
+    assert line["padding"] == 0 and line["refreshInterval"] == 30
+    tmp = home / "tmp"
+    r = run(["sh", "-c", line["command"]], {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp),
+                                            "CLAUDE_GATEWAY_DASHBOARD": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-full"})
+    assert plain(r.stdout) == "◆ alice · daily 10/100 req 10% | mine\n"
+    assert cg(home, "on", "--gclaude").returncode == 0                   # a rerun doesn't wrap it twice
+    assert json.loads(gsettings.read_text())["statusLine"] == line
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert "statusLine" not in json.loads(gsettings.read_text())
+
+
+def test_gclaude_leaves_a_statusline_set_in_its_own_settings_alone(stub, home):
+    settings = own_claude(home)
+    settings.write_text(json.dumps({"statusLine": {"type": "command", "command": "echo global"}}))
+    _, gsettings, _ = gc_paths(home)
+    gsettings.parent.mkdir(parents=True)
+    gsettings.write_text(json.dumps({"statusLine": {"type": "command", "command": "echo mine"}}))
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert json.loads(gsettings.read_text())["statusLine"] == {"type": "command", "command": "echo mine"}
 
 
 def test_gclaude_and_global_mode_keep_separate_records(stub, home):

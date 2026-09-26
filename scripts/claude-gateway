@@ -22,7 +22,8 @@
 # login for Claude in Chrome and connectors while requests still go through, and are metered by, the gateway.
 # `on` also installs a UserPromptSubmit hook (statusline.sh --warn) that shows a warning when a limit is at 80%,
 # and a statusline showing the user's gateway limits, unless one is already set; then it prints
-# how to add them to that one instead. `off` removes exactly what `on` added and leaves every other setting
+# how to add them to that one instead. gclaude's statusline shows the limits and then the user's own statusline
+# from ~/.claude, if they have one (statusline.sh --then). `off` removes exactly what `on` added and leaves every other setting
 # alone. The URL, key, mode and a copy of statusline.sh are kept in ~/.config/claude-gateway/ (client.json is
 # mode 600). Start a new Claude Code session after switching.
 # --opencode acts on OpenCode only (third-party models such as Muse; Anthropic accepts the subscription only from
@@ -88,9 +89,9 @@ edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its ow
   mkdir -p "$(dirname "$settings")"
   [ -f "$settings" ] || echo '{}' > "$settings"
   cp -p "$settings" "$settings.bak-claude-gateway"
-  python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" <<'EOF'
+  python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" "$SETTINGS" <<'EOF'
 import json, os, shlex, sys, tempfile
-mode, settings, client, statusline, scope = sys.argv[1:]
+mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
@@ -109,7 +110,8 @@ if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
 if st.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
 line_cmd = shlex.quote(statusline)
-ours_line = lambda v: isinstance(v, dict) and v.get("command") == line_cmd
+ours_line = lambda v: isinstance(v, dict) and isinstance(v.get("command"), str) and (
+    v["command"] == line_cmd or v["command"].startswith(line_cmd + " --then "))
 if st.pop("added_statusline", False) and ours_line(s.get("statusLine")):
     del s["statusLine"]
 
@@ -139,6 +141,14 @@ if mode == "on":
     if os.path.exists(statusline):
         if "statusLine" not in s:
             s["statusLine"] = {"type": "command", "command": line_cmd, "refreshInterval": 30}
+            # gclaude keeps the user's own statusline (from ~/.claude) after the gateway line, rather than replacing it.
+            try:
+                own = json.load(open(own_settings)).get("statusLine") if scope == "gclaude" else None
+            except (OSError, ValueError):
+                own = None
+            if isinstance(own, dict) and own.get("type") == "command" and isinstance(own.get("command"), str) and not ours_line(own):
+                s["statusLine"] = {**own, "command": line_cmd + " --then " + shlex.quote(own["command"])}
+                s["statusLine"].setdefault("refreshInterval", 30)
             st["added_statusline"] = True
         elif not ours_line(s["statusLine"]):
             print("You already have a statusline, so it was left as it is. To show your gateway limits in it too,\n"

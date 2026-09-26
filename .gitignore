@@ -10,3 +10,4 @@ secrets/
 *.key
 demo.db*
 uv.lock
+.playwright-mcp/
