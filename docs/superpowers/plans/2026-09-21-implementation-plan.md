@@ -8,7 +8,7 @@
 
 - Stack: `Python 3.12, FastAPI, httpx, SQLite, ECharts` (`spec:30`), single Python process (`spec:54`), WAL SQLite raw events (`spec:187`).
 - Scale: 1 host / 1 sub / 1 admin / 2-10 users, low tens req/min (`spec:31`).
-- Windows are rolling only (`spec:32`). No calendar windows in v1.
+- Windows open with the first request and reset all at once (`spec:32`). No calendar windows in v1.
 - No multi-account pooling/rotation, no OpenAI translation, no cost budgets, no fingerprint spoofing, no CLI wrapping, no mid-stream cutoff (`spec:19-26`).
 - Policy-aware: Consumer Terms forbids sharing one account (`spec:35`); mitigate with pluggable `CredentialBackend` (`spec:88-111`) so same ledger fronts OAuth today, API key tomorrow.
 

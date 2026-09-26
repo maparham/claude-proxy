@@ -3,6 +3,10 @@
 #
 # ~/.claude/settings.json:
 #   "statusLine": {"type": "command", "command": "/path/to/statusline.sh", "refreshInterval": 30}
+# With --then CMD it shows the gateway line and then CMD's line (your own statusline, given the same stdin):
+#   "command": "/path/to/statusline.sh --then '/path/to/my-statusline.sh'"
+# CMD runs with CLAUDE_GATEWAY_STATUS_INNER=1, and this script prints nothing as a statusline in there, so a CMD
+# that shows the gateway line itself doesn't show it twice.
 # With --warn it is a UserPromptSubmit hook instead. When a figure on the line is at 80% or more it prints
 # {"systemMessage": "Gateway: <line>"}, which Claude Code shows; again after 15 minutes, or at once when a
 # figure reaches 100%. Nothing else ever goes to stdout in that mode: a hook's plain output joins the prompt.
@@ -14,17 +18,20 @@
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL, e.g. http://gateway.lan:8081
-warn= usage=
-[ "${1:-}" = --warn ] && warn=1
+warn= usage= then=
+case "${1:-}" in --warn) warn=1 ;; --then) then=${2:-} ;; esac
+[ -z "$warn" ] && [ -n "${CLAUDE_GATEWAY_STATUS_INNER:-}" ] && exit 0
 input=$(cat)   # Claude Code sends session or prompt JSON on stdin; only --warn looks at it, for a /usage prompt
 [ -n "$warn" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ] &&
   grep -qF '# Installed by claude-gateway on --gclaude.' "$CLAUDE_CONFIG_DIR/commands/usage.md" 2>/dev/null &&
   printf '%s' "$input" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"/usage([[:space:]][^"]*)?"' && usage=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
+own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNER=1 sh -c "$then" 2>/dev/null; }
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
   [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
   [ -n "$warn" ] && exit 0
+  [ -n "$then" ] && { own_line; exit 0; }
   echo "statusline.sh: set CLAUDE_GATEWAY_DASHBOARD" >&2
   exit 1
 fi
@@ -80,7 +87,8 @@ else
 fi
 
 if [ -z "$warn" ]; then
-  show "${line:-gateway status unavailable}"
+  own=$(own_line)
+  printf '%s%s\n' "$(show "${line:-gateway status unavailable}")" "${own:+ | $own}"
   exit 0
 fi
 
