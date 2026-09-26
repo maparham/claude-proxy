@@ -86,6 +86,29 @@ see only their own data.
 Claude Code shows the status line as a warning before the prompt is sent, again every 15 minutes, and at once
 at 100%. It never blocks a prompt; the gateway is still the only place limits are enforced.
 
+### gclaude: the gateway beside your own `claude`
+
+To keep `claude` on this machine's own login and reach the gateway with a second command, use `--gclaude`
+instead:
+
+```sh
+scripts/claude-gateway on --gclaude --url https://gateway.example.com --key sk-proxy-...   # first time
+gclaude                            # Claude Code through the gateway; any claude flag works (gclaude -p "...")
+scripts/claude-gateway off --gclaude
+```
+
+This leaves `~/.claude` alone and installs `~/.local/bin/gclaude`, which runs Claude Code with
+`CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude`. That folder gets the key-only setup above (key, statusline,
+limit warning), and links to `CLAUDE.md`, `agents`, `commands` and `skills` in `~/.claude` (commands one by one,
+refreshed each time gclaude starts). Settings, plugins, history and sessions are separate, so both commands can
+run at once in the same terminal. `off --gclaude` removes the command, the links, `/usage` and the gateway
+settings, and keeps gclaude's history.
+
+Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
+In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
+model and shows a fresh gateway line, e.g. `Gateway: maya · daily $61/$100 · details: https://…/dashboard`,
+so it costs nothing. Plain `claude` keeps the real `/usage`.
+
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and
 no Anthropic rate-limit headers. A share limit (`share_5h 20`) shows to them as their own "5h limit",
