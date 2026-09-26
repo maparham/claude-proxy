@@ -772,6 +772,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
         return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
 
+    @app.get("/privacy")
+    async def privacy():
+        # Linked from the Google sign-in consent screen, which requires a privacy policy.
+        html = (STATIC / "privacy.html").read_text().replace("after 180 days", f"after {cfg.retention_days} days")
+        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+
     @app.get("/static/{name}")
     async def static(name: str, v: str | None = None):
         path = (STATIC / name).resolve()

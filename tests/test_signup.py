@@ -404,3 +404,11 @@ async def test_the_authorize_page_shows_where_the_request_came_from(env):
         s = (await cli.post("/api/device/start", json={})).json()
         v = (await browser.get(f"/api/device/{s['user_code']}")).json()
     assert v["ip"] == "127.0.0.1" and v["your_ip"] == "127.0.0.1"
+
+
+async def test_privacy_page(env):
+    gw, *_ = env
+    gw.cfg.retention_days = 90
+    async with app(gw) as c:
+        r = await c.get("/privacy")
+    assert r.status_code == 200 and "after 90 days" in r.text and "not stored" in r.text
