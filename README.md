@@ -90,9 +90,9 @@ one; then it says how to add them to it). Setting it up by hand instead:
 "statusLine": { "type": "command", "command": "/path/to/scripts/statusline.sh", "refreshInterval": 30 }
 ```
 
-It prints each of their limits, e.g. `maya · daily $61/$100 61% (frees in 3.2 h) · 5h 30% (resets in 2.1 h)`: a
-used/limit figure gets its percentage, rounded down, and each limit says when room comes back (a rolling limit
-"frees" as its oldest counted usage leaves the window; a share limit "resets" with the account's bucket). It is
+It prints each of their limits, e.g. `maya · daily $61/$100 61% (resets in 3.2 h) · 5h 30% (resets in 2.1 h)`: a
+used/limit figure gets its percentage, rounded down, and each limit says when it resets (a usage limit when its window
+ends, a share limit with the account's bucket). It is
 cyan with a leading `◆`, and a figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
 see only their own data.
 
@@ -181,7 +181,7 @@ Sessions tab, just without titles, and its own title-generation request is bille
 Set in the dashboard (Users & limits → Limits) or the CLI:
 
 ```sh
-claude-proxy limit set maya tokens_daily 2000000              # weighted tokens, rolling 24 h
+claude-proxy limit set maya tokens_daily 2000000              # weighted tokens, per 24 h window
 claude-proxy limit set omid requests_minute 20
 claude-proxy limit set sara share_5h 30                        # ≤ 30 points of the account's 5-hour bucket (estimated)
 claude-proxy limit set sara requests_daily 100 --scope 'claude-opus-*'
@@ -192,11 +192,14 @@ claude-proxy limit list
 
 | Kind | Unit | Window |
 |---|---|---|
-| `requests_minute`, `requests_daily`, `requests_monthly` | count | 60 s, 24 h, 30 d rolling |
-| `tokens_minute`, `tokens_5h`, `tokens_daily`, `tokens_weekly`, `tokens_monthly` | `weighted` (default) or `raw` | rolling |
-| `cost_daily`, `cost_monthly` | USD | 24 h, 30 d rolling |
+| `requests_minute`, `requests_daily`, `requests_monthly` | count | 60 s, 24 h, 30 d |
+| `tokens_minute`, `tokens_5h`, `tokens_daily`, `tokens_weekly`, `tokens_monthly` | `weighted` (default) or `raw` | 60 s, 5 h, 24 h, 7 d, 30 d |
+| `cost_daily`, `cost_monthly` | USD | 24 h, 30 d |
 | `share_5h`, `share_7d` | percentage points of the account bucket | Anthropic's current window |
 | `allowed_models` | comma-separated globs | — |
+
+A usage limit's window opens with the user's first request, like Claude's own 5-hour limit. When it ends, the count goes
+back to zero, and the next request opens a new window. A user over a limit waits until their window resets.
 
 - **Weighted tokens** are API-equivalent cost in units of a Claude Sonnet 5 input token. They count
   output, cache writes and cache reads at their list-price ratios and pricier models higher, so

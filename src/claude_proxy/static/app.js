@@ -141,7 +141,7 @@ const KIND_TIPS = {
   allowed_models: "Only these models may be requested; anything else is refused. Comma-separated globs, e.g. <code>claude-sonnet-*,muse-spark</code>.",
 };
 const KIND_NOTE = {
-  window: "Rolling window: a request stops counting one window-length after it started. Only forwarded requests count; token-counting calls are free.",
+  window: "The window opens with the first request and lasts its length; then the count goes back to zero and the next request opens a new one. Only forwarded requests count; token-counting calls are free.",
   share: "Skipped while there is no fresh report from Anthropic.",
 };
 const UNIT_TIPS = {
@@ -432,7 +432,7 @@ function limitValue(l) {
   }
   if (l.skipped) return `skipped · ${l.skipped}`;
   const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => `${v.toFixed(1)} pts` : fmtNum;
-  const reset = l.reset_in ? ` · ${l.estimated ? "resets" : "frees"} in ${fmtDur(l.reset_in)}` : "";
+  const reset = l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : "";
   return `${l.estimated ? "est. " : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
 }
 function limitValueTip(l) {
@@ -441,8 +441,7 @@ function limitValueTip(l) {
   if (l.skipped) return "Not enforced right now: without a fresh report from Anthropic the share can't be estimated. Token and request limits still apply.";
   if (l.estimated) return "<b>est.</b> means estimated, not measured. <b>Resets</b> is when Anthropic resets the account bucket.";
   if (!l.reset_in) return "";
-  return l.exceeded ? "<b>Frees</b> is when enough usage has left the rolling window to get back under the limit."
-    : "<b>Frees</b> is when the oldest counted request leaves the rolling window.";
+  return "<b>Resets</b> is when the window that opened with the first request ends and the count goes back to zero.";
 }
 function limitsBlock(ls) {
   if (!ls.length) return `<span class="muted">No limits</span>`;
@@ -529,7 +528,7 @@ async function renderOverview(main) {
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>` : ""}
         <div class="card"><h3>${isAdmin() ? "Usage by user, last 7 days" : "Your limits"}</h3>
-          <p class="sub">${isAdmin() ? "Daily, weighted tokens." : `Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
+          <p class="sub">${isAdmin() ? "Daily, weighted tokens." : `Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
           ${isAdmin() ? `<div class="chart short" id="ov-users"></div>` : limitsBlock(me.limits)}
         </div>
       </div>
@@ -834,7 +833,7 @@ async function renderUser(main) {
         ${share("5h", "5-hour")}${share("7d", "7-day")}
       </div>
       <div class="grid cols-2">
-        <div class="card"><h3>Limits${tipI("limits_col")}</h3><p class="sub">Rolling windows; ${tipT("the request that crosses a limit is still served", "served")}.</p>${limitsBlock(u.limits)}</div>
+        <div class="card"><h3>Limits${tipI("limits_col")}</h3><p class="sub">Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.</p>${limitsBlock(u.limits)}</div>
         <div class="card table-wrap"><h3>Models</h3><p class="sub">${esc(span)}, largest first.</p>${models.models.length ? `<table class="data"><thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th class="r">Cache hits${tipI("cache_ratio")}</th></tr></thead><tbody>
           ${models.models.map((m) => `<tr><td>${esc(m.model || NO_MODEL)}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
           </tbody></table>` : `<p class="muted">No requests in range.</p>`}</div>

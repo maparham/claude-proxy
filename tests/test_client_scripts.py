@@ -164,9 +164,9 @@ def plain(text):
 
 
 def test_statusline_shows_each_used_limit_pair_as_a_percentage(stub, warn_env):
-    stub.status_line = "alice · daily $305/$500 · weekly 4.2M/5.0M tok (frees in 7.0 days) · 5h 30% · x 996/1000 req"
+    stub.status_line = "alice · daily $305/$500 · weekly 4.2M/5.0M tok (resets in 7.0 days) · 5h 30% · x 996/1000 req"
     r = run(["sh", str(STATUSLINE)], warn_env)
-    assert plain(r.stdout) == ("◆ alice · daily $305/$500 61% · weekly 4.2M/5.0M tok 84% (frees in 7.0 days) · 5h 30%"
+    assert plain(r.stdout) == ("◆ alice · daily $305/$500 61% · weekly 4.2M/5.0M tok 84% (resets in 7.0 days) · 5h 30%"
                                " · x 996/1000 req 99%\n")                  # rounded down: 100% only once reached
 
 
