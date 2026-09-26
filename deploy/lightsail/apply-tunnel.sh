@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Add the gateway's two hostnames to the box's existing cloudflared tunnel and restart it.
-# Run from the repo root:  deploy/lightsail/apply-tunnel.sh ec2-user@3.139.146.5 rahkar.pro
+# Run from the repo root:  deploy/lightsail/apply-tunnel.sh ec2-user@<server-ip> rahkar.pro
 # The tunnel's other hostnames drop for a few seconds during the restart.
 set -euo pipefail
 HOST=${1:?usage: $0 user@host domain}
