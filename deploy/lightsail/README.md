@@ -41,6 +41,10 @@ rotated. The deploy key in `authorized_keys` can run only `claude-gateway-deploy
 code on whatever schema the new code left behind; migrations in `db.py` are additive, but one that
 isn't can make the rollback fail too, and then the backup in `/data/backups` is the way back.
 
+`.github/workflows/monitor.yml` checks `https://claude.<domain>/health` hourly from outside and fails
+(GitHub then emails you) if the gateway is unreachable or `"credential"` is false, i.e. the
+subscription login needs `claude-proxy login`. "Run workflow" on it checks on demand.
+
 One-time setup, and again after changing `claude-gateway-deploy` or `docker-compose.yml`, or to rotate
 the key:
 

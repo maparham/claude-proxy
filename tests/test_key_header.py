@@ -98,3 +98,11 @@ async def test_bearer_key_clients_still_get_401(setup, anthropic):
     async with asgi_client(create_app(gw)) as c:
         r = await c.post("/v1/messages", json=MSG, headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 401
+
+
+async def test_health_reports_only_whether_the_login_works(setup, db):
+    gw, conn, *_ = setup
+    async with asgi_client(create_app(gw)) as c:
+        assert (await c.get("/health")).json() == {"ok": True, "credential": True}
+        conn.execute("DELETE FROM credentials")
+        assert (await c.get("/health")).json() == {"ok": True, "credential": False}

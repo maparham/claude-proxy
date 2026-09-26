@@ -21,3 +21,5 @@ services:
       options: { max-size: "10m", max-file: "3" }
 volumes:
   data:
+    external: true                 # created by migrate-from-mac.sh; compose never removes it
+    name: claude-gateway_data
