@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # Point this machine's Claude Code at a claude-proxy gateway, or back at its own login.
 #
-#   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # first time
-#   claude-gateway on                                                        # later
-#   claude-gateway on --own-login    # keep this machine's claude.ai login active (Claude in Chrome, connectors)
-#   claude-gateway on --key-only     # back to sending only the gateway key
-#   claude-gateway off
+#   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # gclaude (the default), first time
+#   claude-gateway on                # later
+#   claude-gateway off               # removes whichever of gclaude and global mode is set up
 #   claude-gateway status
+#   claude-gateway on --global --url https://claude.example.com --key sk-proxy-...   # global mode: plain claude itself
+#   claude-gateway on --own-login    # global mode keeping this machine's claude.ai login (Claude in Chrome, connectors)
+#   claude-gateway on --key-only     # global mode, back to sending only the gateway key
+#   claude-gateway off --global
 #   claude-gateway on --opencode --url https://claude.example.com --routes-key sk-proxy-r-...   # OpenCode, first time
 #   claude-gateway on --opencode     # later: refreshes the model list
 #   claude-gateway off --opencode
-#   claude-gateway on --gclaude --url https://claude.example.com --key sk-proxy-...   # gclaude, first time
-#   claude-gateway on --gclaude      # later
-#   claude-gateway off --gclaude
+#   claude-gateway on --gclaude / off --gclaude      # gclaude, explicitly
 #
-# Key-only mode (the default) sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the "env" block of
+# Global mode (--global) edits ~/.claude itself. Its key-only mode (the default there) sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the "env" block of
 # ~/.claude/settings.json. Claude Code then has no claude.ai login, so claude.ai connectors and Claude in
 # Chrome are off; the script sets "disableClaudeAiConnectors" (unless already set) to silence the warning.
 # Own-login mode is for a machine that is itself signed in to a Claude subscription (the owner's): it sets
@@ -29,14 +29,15 @@
 # Claude Code). With the routes-only key the admin issues (`claude-proxy user routes-key`), it adds a "gateway"
 # provider to ~/.config/opencode/opencode.json and a muse subagent; `off --opencode` removes exactly those. The key
 # is kept in ~/.config/claude-gateway/routes.key (mode 600) and opencode.json only refers to that file.
-# --gclaude leaves ~/.claude alone and installs a `gclaude` command in ~/.local/bin instead: it runs Claude Code with
+# gclaude (the default, or --gclaude) leaves ~/.claude alone and installs a `gclaude` command in ~/.local/bin instead: it runs Claude Code with
 # CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude, whose settings.json gets the key-only setup above, so `claude`
 # keeps this machine's own login and both can run at once. CLAUDE.md, agents, commands, skills, plugins (with the
 # list of enabled ones) and each project's memory from ~/.claude are shared, refreshed each time gclaude starts
 # (gclaude-sync.py); settings, login, history and sessions stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
-# gclaude uses the same saved URL and key as plain `on`: --url/--key given with --gclaude replace them for both.
+# gclaude and global mode share the saved URL and key: --url/--key given to either replace them for both. On a
+# machine already in global mode, a bare `on` refreshes global mode rather than switching it to gclaude.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
@@ -515,6 +516,11 @@ gclaude_off() {
   fi
 }
 
+gclaude_set_up() {   # its command, or its record in client.json (what `off --gclaude` would undo)
+  gclaude_ours || python3 -c 'import json,os,sys; c=json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}
+sys.exit(0 if isinstance(c.get("gclaude"), dict) else 1)' "$CLIENT"
+}
+
 gclaude_state() {
   if gclaude_ours; then echo "gclaude: installed ($GCLAUDE)"; else echo "gclaude: not set up"; fi
 }
@@ -522,14 +528,15 @@ gclaude_state() {
 cmd=${1:-status}; shift || true
 case "$cmd" in
   on)
-    url="" key="" dash="" mode="" opencode="" rkey="" gclaude=""
+    url="" key="" dash="" mode="" opencode="" rkey="" gclaude="" global=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --url) url=$2; shift 2 ;;
         --key) key=$2; shift 2 ;;
         --dashboard) dash=$2; shift 2 ;;
-        --own-login) mode=own-login; shift ;;
-        --key-only) mode=key-only; shift ;;
+        --global) global=1; shift ;;
+        --own-login) mode=own-login; global=1; shift ;;
+        --key-only) mode=key-only; global=1; shift ;;
         --opencode) opencode=1; shift ;;
         --routes-key) rkey=$2; shift 2 ;;
         --gclaude) gclaude=1; shift ;;
@@ -537,7 +544,7 @@ case "$cmd" in
       esac
     done
     if [ -n "$opencode" ]; then
-      [ -z "$key$dash$mode$gclaude" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
+      [ -z "$key$dash$mode$gclaude$global" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
       opencode_on "$url" "$rkey"
       exit 0
     fi
@@ -545,8 +552,20 @@ case "$cmd" in
     case "$key" in
       sk-proxy-r-*) echo "This is an OpenCode key; Claude Code needs your Claude Code key." >&2; exit 1 ;;
     esac
-    if [ -n "$gclaude" ] && [ -n "$mode" ]; then
-      echo "gclaude always sends the gateway key (key-only mode); --own-login and --key-only are for plain 'claude-gateway on'." >&2; exit 1
+    if [ -n "$gclaude" ] && [ -n "$global" ]; then
+      [ -z "$mode" ] || { echo "gclaude always sends the gateway key (key-only mode); --own-login and --key-only are for global mode (claude-gateway on --global)." >&2; exit 1; }
+      echo "Choose one: --gclaude (the default) or --global." >&2; exit 1
+    fi
+    # gclaude is the default. A bare `on` on a machine already in global mode keeps refreshing that, so nobody is
+    # switched without asking.
+    if [ -z "$gclaude$global" ]; then
+      if [ -n "$(current)" ]; then
+        global=1
+        echo "This machine is in global mode (plain 'claude' uses the gateway), so that is what 'on' refreshes. To use"
+        echo "gclaude instead: claude-gateway off --global, then claude-gateway on."
+      else
+        gclaude=1
+      fi
     fi
     if [ -n "$url$key" ]; then
       [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
@@ -554,7 +573,7 @@ case "$cmd" in
       save_client "$url" "$key" "$dash"
     fi
     if [ -n "$gclaude" ]; then gclaude_on; exit 0; fi
-    [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --url <url> --key <key>" >&2; exit 1; }
+    [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --global --url <url> --key <key>" >&2; exit 1; }
     mode=${mode:-$(field mode key-only)}
     if [ "$mode" = own-login ] && ! has_own_login; then
       echo "Own-login mode needs this machine signed in to Claude Code with a subscription (run 'claude', then /login)," >&2
@@ -580,9 +599,25 @@ case "$cmd" in
         gclaude_off
         exit 0
         ;;
-      "")
+      --global)
+        shift
+        [ $# -eq 0 ] || usage 1
         edit_settings off
         echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+        ;;
+      "")   # whichever of global mode and gclaude is set up
+        has_gclaude=""
+        if gclaude_set_up; then has_gclaude=1; fi
+        if [ -n "$(current)" ] && [ -n "$has_gclaude" ]; then
+          echo "Both global mode and gclaude are set up: claude-gateway off --global, or off --gclaude." >&2; exit 1
+        elif [ -n "$(current)" ]; then
+          edit_settings off
+          echo "Claude Code uses this machine's own login again. Start a new session to pick it up."
+        elif [ -n "$has_gclaude" ]; then
+          gclaude_off
+        else
+          echo "Neither gclaude nor global mode is set up; nothing to undo."
+        fi
         ;;
       *) usage 1 ;;
     esac

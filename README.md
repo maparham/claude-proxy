@@ -62,21 +62,23 @@ export ANTHROPIC_BASE_URL=http://gateway.lan:8080
 export ANTHROPIC_AUTH_TOKEN=sk-proxy-...        # their own gateway key
 ```
 
-Or use `claude-gateway`, which edits `~/.claude/settings.json` for them and switches back cleanly. It needs no
-checkout of this repository; this installs it in `~/.local` (run it again to update):
+Or use `claude-gateway`. It needs no checkout of this repository; this installs it in `~/.local` (run it
+again to update) and sets it up:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh
-curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --gclaude --url https://gateway.example.com --key sk-proxy-...   # install and set up gclaude in one go
+curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://gateway.example.com --key sk-proxy-...
 ```
 
-From a checkout, `scripts/claude-gateway` is the same command:
+By default `claude-gateway on` sets up **gclaude** (below): a second command that runs Claude Code through the
+gateway while `claude` keeps this machine's own login. For a machine where plain `claude` itself should use the
+gateway, global mode edits `~/.claude/settings.json` and switches back cleanly. From a checkout,
+`scripts/claude-gateway` is the same command:
 
 ```sh
-scripts/claude-gateway on --url https://gateway.example.com --key sk-proxy-...   # first time
-scripts/claude-gateway off        # back to this machine's own login
-scripts/claude-gateway on         # later: reuses the saved URL and key
-scripts/claude-gateway status     # on/off, reachability, current usage
+claude-gateway on --global --url https://gateway.example.com --key sk-proxy-...   # first time
+claude-gateway off                # back to this machine's own login
+claude-gateway on                 # later: reuses the saved URL and key (and stays in global mode)
+claude-gateway status             # on/off, reachability, current usage
 ```
 
 That's all. They don't need a local `/login`. Plan bars and `/usage` aren't available in this
@@ -99,13 +101,13 @@ at 100%. It never blocks a prompt; the gateway is still the only place limits ar
 
 ### gclaude: the gateway beside your own `claude`
 
-To keep `claude` on this machine's own login and reach the gateway with a second command, use `--gclaude`
-instead:
+To keep `claude` on this machine's own login and reach the gateway with a second command, use gclaude, which
+is what `claude-gateway on` sets up unless the machine is already in global mode:
 
 ```sh
-scripts/claude-gateway on --gclaude --url https://gateway.example.com --key sk-proxy-...   # first time
+claude-gateway on --url https://gateway.example.com --key sk-proxy-...   # first time (or on --gclaude)
 gclaude                            # Claude Code through the gateway; any claude flag works (gclaude -p "...")
-scripts/claude-gateway off --gclaude
+claude-gateway off                 # off --gclaude when global mode is set up too
 ```
 
 This leaves `~/.claude` alone and installs `~/.local/bin/gclaude`, which runs Claude Code with
