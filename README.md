@@ -53,6 +53,8 @@ then run `init`/`login`/`user add` with `docker exec -it`.
 
 ## Onboard a person
 
+[docs/team-setup.md](docs/team-setup.md) is the short version to send to the team.
+
 On their machine, in the shell profile or in `~/.claude/settings.json` under `"env"`:
 
 ```sh
