@@ -785,8 +785,10 @@ function mountClerk() {
   });
 }
 async function showClerk() {
+  // The other forms wait until the page knows whether Clerk is on, so they don't flash before its sign-in.
   const clerk = await setupClerk();
-  if (!clerk || S.user) return;
+  if (!clerk) { $("#classic").classList.remove("hidden"); return; }
+  if (S.user) return;
   $("#clerk-area").classList.remove("hidden");
   if (!S.otherWays) $("#classic").classList.add("hidden");
   if (clerk.session) clerkExchange();   // signed in to Clerk already, e.g. back from Google: just trade it in
