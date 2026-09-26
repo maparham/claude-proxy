@@ -122,6 +122,10 @@ through `statusline.sh --then`), and shares the rest of your own setup in `~/.cl
   `claude` too (and `off --gclaude` doesn't undo that). gclaude follows the changes you make to plain `claude`'s
   list of enabled plugins; a plugin you turn on or off in gclaude stays that way until you change the same one
   in plain `claude`;
+- MCP servers: the user-scope servers in `~/.claude.json` (`claude mcp add --scope user`), followed the same way
+  as the enabled plugins: a server added, changed or removed in plain `claude` shows up in gclaude at its next
+  start, and one you add or change in gclaude stays gclaude's. Project-scope servers (`.mcp.json`) work in both
+  already;
 - memory: each project's `memory` folder, once plain `claude` has been used in that project, so a memory saved in
   either shows up in both. A gclaude memory folder that already holds memories of its own is left alone.
 

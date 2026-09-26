@@ -33,8 +33,8 @@
 # gclaude (the default, or --gclaude) leaves ~/.claude alone and installs a `gclaude` command in ~/.local/bin instead: it runs Claude Code with
 # CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude, whose settings.json gets the key-only setup above, so `claude`
 # keeps this machine's own login and both can run at once. CLAUDE.md, agents, commands, skills, plugins (with the
-# list of enabled ones) and each project's memory from ~/.claude are shared, refreshed each time gclaude starts
-# (gclaude-sync.py); settings, login, history and sessions stay separate.
+# list of enabled ones), user-scope MCP servers and each project's memory from ~/.claude are shared, refreshed each
+# time gclaude starts (gclaude-sync.py); settings, login, history and sessions stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
 # gclaude and global mode share the saved URL and key: --url/--key given to either replace them for both. On a
@@ -473,7 +473,7 @@ if mode == "on":
                 "command -v claude >/dev/null 2>&1 || { echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127; }\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
-                "# Share commands, plugins and memory from ~/.claude (see gclaude-sync.py); never stops gclaude.\n"
+                "# Share commands, plugins, MCP servers and memory from ~/.claude (see gclaude-sync.py); never stops gclaude.\n"
                 f"python3 {shlex.quote(sync)} sync \"$CLAUDE_CONFIG_DIR\" {shlex.quote(shared)} 2>/dev/null\n"
                 'exec claude "$@"\n')
     os.chmod(tmp, 0o755)
