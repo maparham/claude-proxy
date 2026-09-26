@@ -140,6 +140,13 @@ def test_rerunning_with_a_saved_key_for_that_gateway_does_not_ask_again(dash, ho
     assert "/api/device/start" in dash.paths() and client(home)["key"] == "sk-proxy-again"
 
 
+def test_a_gateway_restart_while_waiting_is_not_fatal(dash, home):
+    dash.tokens = [(502, {}), (429, {}), (200, {"key": "sk-proxy-machine", "user": "maya"})]
+    r = cg(home, "on", "--url", dash.url, "--dashboard", dash.url, CLAUDE_GATEWAY_OPEN="")
+    assert r.returncode == 0, r.stderr
+    assert client(home)["key"] == "sk-proxy-machine"
+
+
 def test_expired_code_and_unreachable_dashboard(dash, home):
     dash.tokens = [(400, {"error": "expired_token"})]
     r = cg(home, "on", "--url", dash.url, "--dashboard", dash.url, CLAUDE_GATEWAY_OPEN="")

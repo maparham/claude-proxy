@@ -61,7 +61,10 @@ class Verifier:
         if stale or (kid not in self._keys and time.time() - self._fetched > 30):
             r = await self.http.get(f"https://{self.fapi}/.well-known/jwks.json", timeout=10)
             r.raise_for_status()
-            self._keys = {k["kid"]: _public_key(k) for k in r.json().get("keys", []) if k.get("kty") == "RSA" and "kid" in k}
+            try:
+                self._keys = {k["kid"]: _public_key(k) for k in r.json().get("keys", []) if k.get("kty") == "RSA" and "kid" in k}
+            except (ValueError, KeyError, TypeError, AttributeError):
+                raise ClerkError("Clerk's key list is unreadable") from None
             self._fetched = time.time()
         if kid not in self._keys:
             raise ClerkError("token signed by an unknown key")
@@ -80,7 +83,7 @@ class Verifier:
         key = await self._key(str(head.get("kid", "")))
         try:
             key.verify(_b64(sig_b64), f"{head_b64}.{body_b64}".encode(), padding.PKCS1v15(), hashes.SHA256())
-        except InvalidSignature:
+        except (InvalidSignature, ValueError):
             raise ClerkError("bad signature") from None
         exp, nbf = claims.get("exp"), claims.get("nbf", claims.get("iat", 0))
         if not isinstance(exp, (int, float)) or exp + LEEWAY_S < now:
@@ -89,10 +92,11 @@ class Verifier:
             raise ClerkError("token not valid yet")
         if claims.get("iss") != f"https://{self.fapi}":
             raise ClerkError("token from another Clerk instance")
-        if claims.get("azp") is not None and claims["azp"].rstrip("/") != self.origin:
+        # A session token (it has a session id) made in this dashboard, not any other token the instance signs.
+        if not isinstance(claims.get("azp"), str) or claims["azp"].rstrip("/") != self.origin:
             raise ClerkError("token made for another site")
-        if not str(claims.get("sub", "")).startswith("user_"):
-            raise ClerkError("token has no user")
+        if not str(claims.get("sub", "")).startswith("user_") or not claims.get("sid"):
+            raise ClerkError("not a user's session token")
         return claims
 
     async def email(self, user_id: str) -> str:

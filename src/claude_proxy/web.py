@@ -14,6 +14,7 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import math
 import secrets
 import shlex
 import sqlite3
@@ -150,8 +151,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def client_ip(request: Request) -> str:
         return request.client.host if request.client else "unknown"
 
-    def start_session(user) -> JSONResponse:
-        raw, csrf = db.create_session(conn, user["id"])
+    def start_session(user, key_id: int | None = None) -> JSONResponse:
+        raw, csrf = db.create_session(conn, user["id"], key_id=key_id)
         resp = JSONResponse({"ok": True, "csrf": csrf, "user": _public_user(user)})
         resp.set_cookie(COOKIE, raw, max_age=7 * 86400, httponly=True, samesite="strict",
                         secure=cfg.listener.secure_cookies, path="/")
@@ -189,7 +190,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(401, "Unknown, disabled or revoked key.")
         if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
-        return start_session(user)
+        return start_session(user, key_id=user.get("machine_key_id"))
 
     @app.get("/api/auth-config")
     async def auth_config():
@@ -208,6 +209,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             claims = await verifier.verify(str(body.get("token", "")))
             user = conn.execute("SELECT * FROM users WHERE clerk_id=?", (claims["sub"],)).fetchone()
             email = None if user else await verifier.email(claims["sub"])
+            if user is None:   # another sign-in of the same person may have linked it meanwhile
+                user = conn.execute("SELECT * FROM users WHERE clerk_id=?", (claims["sub"],)).fetchone()
         except clerk.ClerkError as e:
             limiter.failed(ip)
             fail(401, f"Sign-in failed: {e}.")
@@ -235,6 +238,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         if not cfg.signup.enabled:
             fail(403, "Sign-ups are closed. Ask the gateway admin for an account.")
+        # A deleted account's email stays in the audit log: signing up again never brings a new credit.
+        if conn.execute("SELECT 1 FROM audit_log WHERE action='signup' AND lower(target)=?", (email,)).fetchone():
+            fail(403, "This account was removed. Ask the gateway admin.")
         if conn.execute("SELECT 1 FROM users WHERE lower(name)=?", (email,)).fetchone():
             fail(409, f"The name {email} is taken. Ask the gateway admin.")
         conn.execute("BEGIN IMMEDIATE")
@@ -546,6 +552,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                   f"--dashboard {q(cfg.listener.dashboard_url.rstrip('/'))} \"$@\"\n")
         return PlainTextResponse(script, media_type="text/x-shellscript", headers={"Cache-Control": "no-cache"})
 
+    def browser_user(request: Request, write: bool = False):
+        """Someone signed in to this dashboard in the browser, the only one who may authorize a computer. Not a key
+        sent as Bearer, and not a session made from a computer's own key: a leaked key must not mint more."""
+        if request.headers.get("authorization") or request.headers.get("x-api-key"):
+            fail(403, "Authorize computers in the browser, signed in to the dashboard.")
+        user = principal(request, write)
+        if user.get("session_key_id"):
+            fail(403, "You signed in with a computer's key, which can't authorize another computer. Sign in with "
+                      "Google, GitHub, your email or the gateway key the admin gave you.")
+        return user
+
     @app.post("/api/device/start")
     async def device_start(request: Request):
         need_urls()
@@ -560,8 +577,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             code = "".join(secrets.choice(USER_CODE_LETTERS) for _ in range(8))
             code = f"{code[:4]}-{code[4:]}"
             try:
-                conn.execute("INSERT INTO device_requests(device_hash, user_code, label, created_at, expires_at) VALUES(?,?,?,?,?)",
-                             (db.hash_key(device_code), code, label, now, now + DEVICE_TTL_S))
+                conn.execute("INSERT INTO device_requests(device_hash, user_code, label, created_at, expires_at, ip) VALUES(?,?,?,?,?,?)",
+                             (db.hash_key(device_code), code, label, now, now + DEVICE_TTL_S, ip))
                 break
             except sqlite3.IntegrityError:
                 continue
@@ -580,20 +597,22 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/device/{user_code}")
     async def device_view(request: Request, user_code: str):
-        principal(request)
+        browser_user(request)
         row = pending(user_code)
+        # The address lets someone spot a request that isn't theirs: the label is whatever the computer says.
         return {"user_code": row["user_code"], "label": row["label"], "created_at": row["created_at"],
-                "expires_in": row["expires_at"] - int(time.time())}
+                "expires_in": row["expires_at"] - int(time.time()), "ip": row["ip"], "your_ip": client_ip(request)}
 
     @app.post("/api/device/{user_code}/{decision}")
     async def device_decide(request: Request, user_code: str, decision: str):
-        user = principal(request, write=True)
+        user = browser_user(request, write=True)
         if decision not in ("approve", "deny"):
             fail(404, "Unknown action.")
         row = pending(user_code)
-        conn.execute("UPDATE device_requests SET user_id=?, decision=? WHERE id=? AND decision IS NULL",
-                     (user["id"], "approved" if decision == "approve" else "denied", row["id"]))
-        db.audit(conn, user["id"], f"device_{decision}", user["name"], {"label": row["label"]})
+        if conn.execute("UPDATE device_requests SET user_id=?, decision=? WHERE id=? AND decision IS NULL",
+                        (user["id"], "approved" if decision == "approve" else "denied", row["id"])).rowcount != 1:
+            fail(404, "That request was answered already.")
+        db.audit(conn, user["id"], f"device_{decision}", user["name"], {"label": row["label"], "ip": row["ip"]})
         return {"ok": True}
 
     @app.post("/api/device/token")
@@ -678,7 +697,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 daily = float((await _json(request)).get("cost_daily", 100))
             except (TypeError, ValueError):
                 daily = -1.0
-            if not daily > 0:
+            if not (daily > 0 and math.isfinite(daily)):
                 fail(400, "Need a daily amount in dollars above 0.")
             conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (u["id"],))
             conn.execute("INSERT OR REPLACE INTO limits(user_id, kind, scope, value, unit, updated_at, updated_by) VALUES(?,?,?,?,?,?,?)",

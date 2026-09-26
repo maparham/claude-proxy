@@ -36,7 +36,7 @@ def jwt(claims: dict, kid="k1", key=KEY) -> str:
 
 def claims(sub="user_1", **kw) -> dict:
     now = int(time.time())
-    return {"sub": sub, "iss": f"https://{FAPI}", "azp": DASH, "exp": now + 60, "nbf": now - 5, "iat": now - 5, **kw}
+    return {"sub": sub, "sid": "sess_1", "iss": f"https://{FAPI}", "azp": DASH, "exp": now + 60, "nbf": now - 5, "iat": now - 5, **kw}
 
 
 class Clerk:
@@ -100,7 +100,10 @@ def test_frontend_api_comes_from_the_publishable_key():
     ({"nbf": int(time.time()) + 120}, "not valid yet"),
     ({"iss": "https://clerk.other.dev"}, "another Clerk instance"),
     ({"azp": "https://evil.test"}, "another site"),
-    ({"sub": "org_1"}, "no user"),
+    ({"azp": None}, "another site"),
+    ({"azp": ["x"]}, "another site"),
+    ({"sub": "org_1"}, "not a user's session token"),
+    ({"sid": None}, "not a user's session token"),   # e.g. another kind of token the instance signs
 ])
 async def test_clerk_tokens_are_checked(env, bad, why):
     gw, *_ = env
@@ -120,6 +123,9 @@ async def test_clerk_token_signature_and_key_id(env):
         await v.verify(jwt(claims(), kid="k9"))
     with pytest.raises(clerk.ClerkError, match="not a JWT"):
         await v.verify("abc")
+    head, body, _ = jwt(claims()).split(".")
+    with pytest.raises(clerk.ClerkError, match="bad signature"):
+        await v.verify(f"{head}.{body}.!!!")
     assert sum("jwks" in u for u in fake.calls) == 1   # cached; an unknown kid refetches at most every 30 s
 
 
@@ -317,7 +323,8 @@ async def test_credit_runs_out_and_upgrade_replaces_it(env):
     conn.execute("UPDATE requests SET started_at=started_at-40*86400")   # a credit has no window: old spending counts
     spend(conn, uid, 1.5)
     d = limits.evaluate(conn, gw.cfg, uid, "claude-sonnet-5", "/v1/messages")
-    assert d.status == 429 and d.kind == "cost_total"
+    assert d.status == 403 and d.kind == "cost_total"   # it never frees up: nothing to retry
+    assert d.body["error"]["type"] == "permission_error"
     assert d.body["error"]["message"] == "Your gateway credit is used up ($5.50 of $5.00). Ask the gateway admin for more."
     st = limits.states(conn, gw.cfg, uid)[0]
     assert st.reset_in is None and st.exceeded
@@ -326,6 +333,8 @@ async def test_credit_runs_out_and_upgrade_replaces_it(env):
         r = await c.post("/api/login", json={"username": "admin", "password": PW})
         c.headers["x-csrf-token"] = r.json()["csrf"]
         assert (await c.post(f"/api/admin/users/{uid}/upgrade", json={"cost_daily": 0})).status_code == 400
+        assert (await c.post(f"/api/admin/users/{uid}/upgrade", content=b'{"cost_daily": Infinity}',
+                             headers={"content-type": "application/json"})).status_code == 400
         assert (await c.post(f"/api/admin/users/{uid}/upgrade", json={"cost_daily": 50})).status_code == 200
     rows = conn.execute("SELECT kind, value FROM limits WHERE user_id=?", (uid,)).fetchall()
     assert [tuple(r) for r in rows] == [("cost_daily", "50")]
@@ -336,3 +345,62 @@ def test_cost_total_is_a_valid_admin_limit():
     assert limits.validate("cost_total", "*", "5", None) == ("*", "5", "usd")
     with pytest.raises(ValueError):
         limits.validate("cost_total", "*", "5", "count")
+
+
+async def test_only_a_browser_sign_in_can_authorize_a_computer(env):
+    gw, conn, _ = env
+    async with app(gw) as cli, app(gw) as browser, app(gw) as thief:
+        user = await signed_in(browser)
+        a = (await cli.post("/api/device/start", json={"label": "one"})).json()
+        await browser.post(f"/api/device/{a['user_code']}/approve", json={})
+        key = (await cli.post("/api/device/token", json={"device_code": a["device_code"]})).json()["key"]
+        b = (await cli.post("/api/device/start", json={"label": "two"})).json()
+        r = await cli.post(f"/api/device/{b['user_code']}/approve", json={}, headers={"Authorization": f"Bearer {key}"})
+        assert r.status_code == 403   # a key as Bearer never authorizes
+        r = await thief.post("/api/login/key", json={"key": key})   # a session made from a computer's key
+        assert r.status_code == 200 and r.json()["user"]["role"] == "user"
+        thief.headers["x-csrf-token"] = r.json()["csrf"]
+        r = await thief.post(f"/api/device/{b['user_code']}/approve", json={})
+        assert r.status_code == 403 and "computer's key" in r.json()["error"]
+        assert (await thief.get("/api/session")).status_code == 200
+        key_id = (await browser.get("/api/keys")).json()["keys"][0]["id"]
+        assert (await browser.post(f"/api/keys/{key_id}/remove", json={})).json()["removed"]
+        assert (await thief.get("/api/session")).status_code == 401   # removing the key ends its sessions
+    assert conn.execute("SELECT COUNT(*) FROM sessions WHERE key_id IS NOT NULL").fetchone()[0] == 0
+    assert user
+
+
+async def test_an_admins_computer_key_is_not_an_admin(env):
+    gw, conn, _ = env
+    from claude_proxy.db import add_machine_key
+    admin_id = conn.execute("SELECT id FROM users WHERE name='admin'").fetchone()[0]
+    key = add_machine_key(conn, admin_id, "phished")
+    assert authenticate(conn, {"authorization": f"Bearer {key}"})["role"] == "user"
+    async with app(gw) as c:
+        assert (await c.get("/api/users", headers={"Authorization": f"Bearer {key}"})).status_code == 403
+        r = await c.post("/api/login/key", json={"key": key})
+        assert r.json()["user"]["role"] == "user"
+        assert (await c.get("/api/users")).status_code == 403
+        assert (await c.get("/api/session")).json()["user"]["role"] == "user"
+
+
+async def test_a_deleted_account_gets_no_new_credit(env):
+    gw, conn, _ = env
+    from claude_proxy.db import delete_user, revoke
+    async with app(gw) as c:
+        uid = (await signed_in(c))["id"]
+    revoke(conn, uid)
+    delete_user(conn, uid)
+    async with app(gw) as c:
+        r = await c.post("/api/login/clerk", json={"token": jwt(claims())})
+    assert r.status_code == 403 and "removed" in r.json()["error"]
+    assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+
+
+async def test_the_authorize_page_shows_where_the_request_came_from(env):
+    gw, *_ = env
+    async with app(gw) as cli, app(gw) as browser:
+        await signed_in(browser)
+        s = (await cli.post("/api/device/start", json={})).json()
+        v = (await browser.get(f"/api/device/{s['user_code']}")).json()
+    assert v["ip"] == "127.0.0.1" and v["your_ip"] == "127.0.0.1"

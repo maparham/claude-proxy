@@ -97,7 +97,8 @@ try:
 except OSError as e:
     sys.exit(f"Can't reach the dashboard at {dash}: {e}")
 if code != 200 or "device_code" not in s:
-    sys.exit(f"The dashboard at {dash} can't authorize this computer: {s.get('error') or 'HTTP %d' % code}")
+    hint = f" (is {dash} this gateway's dashboard? Give it with --dashboard)" if code == 404 else ""
+    sys.exit(f"The dashboard at {dash} can't authorize this computer: {s.get('error') or 'HTTP %d' % code}{hint}")
 link = s["verification_uri_complete"]
 say(f"To connect this computer, open {link}")
 say(f"and check that it shows the code {s['user_code']}.")
@@ -114,6 +115,8 @@ while time.time() < deadline:
         code, r = post("/api/device/token", {"device_code": s["device_code"]})
     except OSError:
         continue   # a blip; keep waiting
+    if code >= 500 or code == 429:
+        continue   # e.g. the gateway restarting behind its proxy; the approval is still there
     if code == 200 and r.get("key"):
         say(f"Authorized as {r.get('user', '?')}.")
         print(r["key"])

@@ -720,22 +720,27 @@ async function renderAuthorize(main) {
   }
   main.innerHTML = `<section class="view"><div class="card authorize">
     <h2>Connect a computer</h2>
-    <p><b>${esc(req.label)}</b> asks to use the gateway as <b>${esc(S.user.name)}</b>, through <code>gclaude</code>.</p>
+    <p>A computer that calls itself <b>${esc(req.label)}</b> asks to use the gateway as <b>${esc(S.user.name)}</b>, through <code>gclaude</code>.
+      It asked ${fmtAgo(req.created_at)} from ${esc(req.ip || "an unknown address")}${req.ip && req.ip !== req.your_ip ? ` <b>(not this browser's address, ${esc(req.your_ip)})</b>` : ""}.</p>
     <p>Check that your terminal shows this code:</p><div class="user-code">${esc(req.user_code)}</div>
-    <p class="muted">Only authorize if you just ran <code>claude-gateway on</code> yourself. The computer gets a key of its own, which you can remove later under Your computers.</p>
+    <p class="muted">Only authorize if you just ran <code>claude-gateway on</code> yourself: if someone sent you this link, cancel. The computer gets a key of its own, which you can remove later under Your computers.</p>
     <p><button class="btn primary" id="az-yes">Authorize</button> <button class="btn" id="az-no">Cancel</button></p></div></section>`;
   const decide = async (decision, title, text) => {
+    main.querySelectorAll(".authorize button").forEach((b) => (b.disabled = true));
     try { await api(`/api/device/${encodeURIComponent(req.user_code)}/${decision}`, { method: "POST", body: {} }); }
-    catch (e) { return alertInline(e.message); }
+    catch (e) { main.querySelectorAll(".authorize button").forEach((b) => (b.disabled = false)); return alertInline(e.message); }
     $(".authorize", main).innerHTML = `<h2>${title}</h2><p>${text}</p><p><a href="#overview">Go to the dashboard</a></p>`;
   };
   $("#az-yes").onclick = () => decide("approve", "Authorized", "Go back to your terminal: it finishes setting up by itself.");
   $("#az-no").onclick = () => decide("deny", "Cancelled", "The computer was not connected. You can close this page.");
 }
 // The code survives signing in, including a Google or GitHub round trip that loses the address's #part.
-function rememberAuthorize(code) { try { sessionStorage.setItem("cp-authorize", code); } catch { /* private mode */ } }
+// Kept for the 10 minutes a code lives, so an abandoned one doesn't take over a later sign-in.
+function rememberAuthorize(code) { try { sessionStorage.setItem("cp-authorize", JSON.stringify({ code, at: Date.now() })); } catch { /* private mode */ } }
 function forgetAuthorize() { try { sessionStorage.removeItem("cp-authorize"); } catch { /* private mode */ } }
-function rememberedAuthorize() { try { return sessionStorage.getItem("cp-authorize"); } catch { return null; } }
+function rememberedAuthorize() {
+  try { const v = JSON.parse(sessionStorage.getItem("cp-authorize")); return v && Date.now() - v.at < 600000 ? v.code : null; } catch { return null; }
+}
 
 // ---------- sign-in with Clerk (Google, GitHub, email code), when the gateway has it ----------
 

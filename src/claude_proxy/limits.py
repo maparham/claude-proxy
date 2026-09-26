@@ -265,6 +265,8 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             st = _share_state(conn, cfg, user_id, row, now)
         else:
             continue
+        if st.exceeded and kind in TOTALS:   # it never frees up, so nothing for a client to wait for and retry
+            return Decision(403, kind, {"type": "error", "error": {"type": "permission_error", "message": _describe(st)}})
         if st.exceeded:
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)

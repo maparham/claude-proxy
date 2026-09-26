@@ -105,7 +105,8 @@ SCHEMA = [
         token_hash TEXT NOT NULL UNIQUE,
         csrf_token TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at INTEGER NOT NULL,
+        key_id INTEGER              -- signed in with this machine's key (keys.id): ends with it, never acts as an admin
     )""",
     # When each usage limit's current window opened (limits.py): at the first request after the previous one ended.
     """CREATE TABLE IF NOT EXISTS limit_windows (
@@ -167,6 +168,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN routes_key_prefix TEXT")
     # SQLite can't ADD COLUMN ... UNIQUE; a unique index gives the same guarantee, and NULLs never collide in it.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_routes_key ON users(routes_key_hash)")
+    if "key_id" not in _columns(conn, "sessions"):
+        conn.execute("ALTER TABLE sessions ADD COLUMN key_id INTEGER")
     if "email" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
     if "clerk_id" not in _columns(conn, "users"):
@@ -242,7 +245,9 @@ def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
     now = int(time.time())
     if (k["last_used_at"] or 0) < now - 3600:   # at most one write an hour: this runs before every request
         conn.execute("UPDATE keys SET last_used_at=? WHERE id=?", (now, k["id"]))
-    return {**dict(row), "key_scope": "full"}
+    # A computer authorized in the browser never carries admin powers, even an admin's: one click on a phished
+    # Authorize link must not hand out the gateway.
+    return {**dict(row), "key_scope": "full", "role": "user", "machine_key_id": k["id"]}
 
 
 def add_machine_key(conn: sqlite3.Connection, user_id: int, label: str) -> str:
@@ -264,6 +269,7 @@ def remove_machine_key(conn: sqlite3.Connection, user_id: int, key_id: int, acto
     n = conn.execute("UPDATE keys SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
                      (int(time.time()), key_id, user_id)).rowcount
     if n:
+        conn.execute("DELETE FROM sessions WHERE key_id=?", (key_id,))   # a session made from the key ends with it
         audit(conn, actor, "machine_key_remove", _user_name(conn, user_id), {"key_id": key_id})
     return bool(n)
 
@@ -346,13 +352,13 @@ def insert_request(conn: sqlite3.Connection, **kw) -> int:
     return conn.execute(f"INSERT INTO requests({cols}) VALUES({placeholders})", tuple(kw.values())).lastrowid
 
 
-def create_session(conn: sqlite3.Connection, user_id: int, ttl_s: int = 7 * 86400) -> tuple[str, str]:
-    """Returns (session_token, csrf_token)."""
+def create_session(conn: sqlite3.Connection, user_id: int, ttl_s: int = 7 * 86400, key_id: int | None = None) -> tuple[str, str]:
+    """Returns (session_token, csrf_token). `key_id`: signed in with that machine key."""
     raw = secrets.token_urlsafe(32)
     csrf = secrets.token_urlsafe(24)
     now = int(time.time())
-    conn.execute("INSERT INTO sessions(user_id, token_hash, csrf_token, created_at, expires_at) VALUES(?,?,?,?,?)",
-                 (user_id, hash_key(raw), csrf, now, now + ttl_s))
+    conn.execute("INSERT INTO sessions(user_id, token_hash, csrf_token, created_at, expires_at, key_id) VALUES(?,?,?,?,?,?)",
+                 (user_id, hash_key(raw), csrf, now, now + ttl_s, key_id))
     return raw, csrf
 
 
@@ -360,11 +366,14 @@ def find_session(conn: sqlite3.Connection, raw_token: str) -> dict | None:
     if not raw_token:
         return None
     row = conn.execute(
-        "SELECT u.*, s.csrf_token AS csrf_token FROM users u JOIN sessions s ON s.user_id=u.id "
-        "WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1 AND u.revoked_at IS NULL",
+        "SELECT u.*, s.csrf_token AS csrf_token, s.key_id AS session_key_id FROM users u JOIN sessions s ON s.user_id=u.id "
+        "WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1 AND u.revoked_at IS NULL AND (s.key_id IS NULL OR "
+        "EXISTS(SELECT 1 FROM keys k WHERE k.id=s.key_id AND k.revoked_at IS NULL))",
         (hash_key(raw_token), int(time.time())),
     ).fetchone()
-    return {**dict(row), "key_scope": "full"} if row else None
+    if row is None:
+        return None
+    return {**dict(row), "key_scope": "full"} | ({"role": "user"} if row["session_key_id"] else {})
 
 
 def delete_session(conn: sqlite3.Connection, raw_token: str) -> None:

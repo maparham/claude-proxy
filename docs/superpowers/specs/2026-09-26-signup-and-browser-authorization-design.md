@@ -30,7 +30,7 @@ Every dashboard page and every proxied request uses the gateway's sessions and k
 
 1. **Linked user.** A user whose `clerk_id` matches is the one.
 2. **Verified email.** Otherwise, a user whose `email` or `name` equals the verified email, compared case-insensitively, is linked: `clerk_id` and `email` are set. This is how existing accounts named by email join.
-3. **Removed user.** If that user is revoked, sign-in is refused. A removed account never gets a new credit.
+3. **Removed user.** If that user is revoked, sign-in is refused. A removed account never gets a new credit: sign-up is also refused for an email whose `signup` is in the audit log, so deleting the account doesn't reset it.
 4. **New account, open sign-ups.** With no match and `signup.enabled`, a user is created: named after the email, role `user`, and a `cost_total` limit of `signup.credit_usd`. It is audited as `signup`.
 5. **New account, closed sign-ups.** With no match and sign-ups off, the answer is 403 "Sign-ups are closed; ask the gateway admin for an account."
 
@@ -52,6 +52,8 @@ keys(id, user_id → users ON DELETE CASCADE, key_hash UNIQUE, key_prefix, label
 - `find_user_by_key` also matches a key in `keys` that is not revoked, as a full key.
 - `last_used_at` is written at most once an hour per key, so the hot path stays read-only.
 - The user's original key is unchanged, and so are admin rotate, revoke and delete: revoking or disabling the user stops all their keys.
+- **A machine key is never an admin**, not even an admin's own. It acts as a user in the dashboard and in error messages, so one click on a phished Authorize link can't hand out the gateway.
+- **A dashboard session made from a machine key ends with that key.** When the key is removed, the session goes too, and such a session can never authorize another computer (section 4).
 - The dashboard shows "Your machines" (label, prefix, created, last used), and a person can remove one. An admin sees and removes them on the user's page.
 
 ## 4. Browser authorization (device flow)
@@ -62,10 +64,10 @@ Everything is served by the dashboard listener, shaped after RFC 8628.
 |---|---|---|
 | `POST /api/device/start {label}` | anyone; at most 10 per client address per 5 min | Creates a request with an 8-letter user code (`BCDF-GHJK`, no vowels or look-alikes) and a random device code, which is stored only as a hash. Expires in 10 min. Returns `device_code, user_code, verification_uri, verification_uri_complete (…/dashboard#authorize/<code>), interval (3 s), expires_in`. |
 | `GET /api/device/<user_code>` | signed-in session | The pending request's label and time left, for the Authorize page. 404 if unknown or expired. |
-| `POST /api/device/<user_code>/approve` / `deny` | signed-in session, with CSRF | Records the decision against the signed-in user. |
+| `POST /api/device/<user_code>/approve` / `deny` | signed-in browser session, with CSRF; not a Bearer key, not a session made from a machine key | Records the decision against the signed-in user. A leaked machine key therefore can't mint more keys. |
 | `POST /api/device/token {device_code}` | the CLI | `authorization_pending` (400) until decided; `slow_down` when polled faster than the interval; `access_denied` or `expired_token` (400, and the request is removed); once approved, **creates the key now**, removes the request and returns `{key, user, url, dashboard}`. The key is never stored in plain text, not even briefly. |
 
-- **The Authorize page** (`#authorize/<code>`) shows the machine's label and the code in large type: "Check that your terminal shows this code. Only authorize if you just ran `claude-gateway on` yourself."
+- **The Authorize page** (`#authorize/<code>`) shows the code in large type, the label as what the computer "calls itself" (it is unverified), and when and from which address the request came, flagged when it differs from the browser's: "Check that your terminal shows this code. Only authorize if you just ran `claude-gateway on` yourself: if someone sent you this link, cancel."
 - **Returning after sign-in.** If the person isn't signed in, the code is kept in `sessionStorage` across the sign-in, including Google or GitHub redirects, and the page comes back after it.
 - **Cleanup.** Expired requests are deleted by the daily `cleanup` and at each start.
 
@@ -79,7 +81,7 @@ curl -fsSL <signup.installer_url> | sh -s -- on --url <public_url> --dashboard <
 
 - **What it is.** A new limit kind, `cost_total` (usd): the user's estimated cost over all forwarded requests kept in the database, optionally scoped to models. Retention (180 days) bounds it. It has no window, so `reset_in` is always empty.
 - **Where it counts.** It is enforced like the others and shows as `credit $1.20/$5.00 24%` in the status line and in `/usage`. The dashboard calls it "credit".
-- **When it runs out.** The rejection reads: "Your gateway credit is used up ($5.00 of $5.00). Ask the gateway admin for more."
+- **When it runs out.** The rejection is a 403 `permission_error`, since it never frees up and a client shouldn't retry: "Your gateway credit is used up ($5.00 of $5.00). Ask the gateway admin for more."
 - **Upgrading.** Limits apply together, so a real limit only helps once the credit is gone. The Users page gets an **Upgrade** action, which removes `cost_total` and sets `cost_daily` to an amount the admin picks (default $100). Removing or raising the limit in the Limits dialog works too.
 
 ## 6. `claude-gateway on` without a key
@@ -89,7 +91,7 @@ curl -fsSL <signup.installer_url> | sh -s -- on --url <public_url> --dashboard <
   - It posts to `start` with the label `<short hostname>`.
   - It prints the link and the code.
   - It opens the link with `open` or `xdg-open`, unless over SSH or neither command exists.
-  - It polls `token` until the key arrives, 10 minutes pass, or the request is denied.
+  - It polls `token` until the key arrives, 10 minutes pass, or the request is denied. A 5xx or 429 while polling (the gateway restarting) is waited out.
   - It saves the key the way `--key` does and continues as before (gclaude by default).
 - **Other options.** `--login` authorizes again even with a saved key, for example after a machine was removed. `--key` still works.
 - **Re-running the installer** on a machine that already has a key for that URL only updates. It doesn't ask again.
