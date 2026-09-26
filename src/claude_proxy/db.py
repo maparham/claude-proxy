@@ -105,7 +105,8 @@ SCHEMA = [
         token_hash TEXT NOT NULL UNIQUE,
         csrf_token TEXT NOT NULL DEFAULT '',
         created_at INTEGER NOT NULL,
-        expires_at INTEGER NOT NULL
+        expires_at INTEGER NOT NULL,
+        key_id INTEGER              -- signed in with this machine's key (keys.id): ends with it, never acts as an admin
     )""",
     # When each usage limit's current window opened (limits.py): at the first request after the previous one ended.
     """CREATE TABLE IF NOT EXISTS limit_windows (
@@ -114,6 +115,30 @@ SCHEMA = [
         scope TEXT NOT NULL,
         started_at REAL NOT NULL,
         PRIMARY KEY (user_id, kind, scope)
+    )""",
+    # Keys a user authorized from the browser, one per machine (sign-up design section 3). Their original key stays in users.
+    """CREATE TABLE IF NOT EXISTS keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key_hash TEXT NOT NULL UNIQUE,
+        key_prefix TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at INTEGER
+    )""",
+    # `claude-gateway on` waiting for someone to authorize it in the browser (sign-up design section 4).
+    """CREATE TABLE IF NOT EXISTS device_requests (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        device_hash TEXT NOT NULL UNIQUE,
+        user_code TEXT NOT NULL UNIQUE,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        last_poll_at REAL,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        decision TEXT CHECK(decision IN ('approved','denied')),
+        ip TEXT                     -- where the request came from, shown on the Authorize page
     )""",
 ]
 
@@ -143,6 +168,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN routes_key_prefix TEXT")
     # SQLite can't ADD COLUMN ... UNIQUE; a unique index gives the same guarantee, and NULLs never collide in it.
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_routes_key ON users(routes_key_hash)")
+    if "key_id" not in _columns(conn, "sessions"):
+        conn.execute("ALTER TABLE sessions ADD COLUMN key_id INTEGER")
+    if "email" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    if "clerk_id" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN clerk_id TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk ON users(clerk_id)")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
@@ -200,13 +232,46 @@ def create_user(conn: sqlite3.Connection, name: str, role: str = "user", passwor
 
 
 def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
-    """The user a gateway key belongs to, with `key_scope`: "full" for their Claude Code key, "routes" for their
-    routes-only key, which may only reach third-party routes (app.scope_allows)."""
+    """The user a gateway key belongs to, with `key_scope`: "full" for their Claude Code key or a machine's key,
+    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows)."""
     h = hash_key(raw_key)
     row = conn.execute("SELECT * FROM users WHERE key_hash=? OR routes_key_hash=?", (h, h)).fetchone()
+    if row is not None:
+        return {**dict(row), "key_scope": "full" if row["key_hash"] == h else "routes"}
+    k = conn.execute("SELECT id, user_id, last_used_at FROM keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
+    row = conn.execute("SELECT * FROM users WHERE id=?", (k["user_id"],)).fetchone() if k else None
     if row is None:
         return None
-    return {**dict(row), "key_scope": "full" if row["key_hash"] == h else "routes"}
+    now = int(time.time())
+    if (k["last_used_at"] or 0) < now - 3600:   # at most one write an hour: this runs before every request
+        conn.execute("UPDATE keys SET last_used_at=? WHERE id=?", (now, k["id"]))
+    # A computer authorized in the browser never carries admin powers, even an admin's: one click on a phished
+    # Authorize link must not hand out the gateway.
+    return {**dict(row), "key_scope": "full", "role": "user", "machine_key_id": k["id"]}
+
+
+def add_machine_key(conn: sqlite3.Connection, user_id: int, label: str) -> str:
+    """A new full key for one of the user's machines. Returns the raw key, which is never stored."""
+    raw, h, prefix = generate_virtual_key()
+    conn.execute("INSERT INTO keys(user_id, key_hash, key_prefix, label, created_at) VALUES(?,?,?,?,?)",
+                 (user_id, h, prefix, label, int(time.time())))
+    audit(conn, user_id, "machine_key_add", _user_name(conn, user_id), {"label": label, "prefix": prefix})
+    return raw
+
+
+def machine_keys(conn: sqlite3.Connection, user_id: int) -> list[dict]:
+    rows = conn.execute("SELECT id, key_prefix, label, created_at, last_used_at FROM keys WHERE user_id=? AND revoked_at IS NULL "
+                        "ORDER BY created_at DESC, id DESC", (user_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def remove_machine_key(conn: sqlite3.Connection, user_id: int, key_id: int, actor: int | None = None) -> bool:
+    n = conn.execute("UPDATE keys SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
+                     (int(time.time()), key_id, user_id)).rowcount
+    if n:
+        conn.execute("DELETE FROM sessions WHERE key_id=?", (key_id,))   # a session made from the key ends with it
+        audit(conn, actor, "machine_key_remove", _user_name(conn, user_id), {"key_id": key_id})
+    return bool(n)
 
 
 def find_user(conn: sqlite3.Connection, ref: str | int) -> sqlite3.Row | None:
@@ -287,13 +352,13 @@ def insert_request(conn: sqlite3.Connection, **kw) -> int:
     return conn.execute(f"INSERT INTO requests({cols}) VALUES({placeholders})", tuple(kw.values())).lastrowid
 
 
-def create_session(conn: sqlite3.Connection, user_id: int, ttl_s: int = 7 * 86400) -> tuple[str, str]:
-    """Returns (session_token, csrf_token)."""
+def create_session(conn: sqlite3.Connection, user_id: int, ttl_s: int = 7 * 86400, key_id: int | None = None) -> tuple[str, str]:
+    """Returns (session_token, csrf_token). `key_id`: signed in with that machine key."""
     raw = secrets.token_urlsafe(32)
     csrf = secrets.token_urlsafe(24)
     now = int(time.time())
-    conn.execute("INSERT INTO sessions(user_id, token_hash, csrf_token, created_at, expires_at) VALUES(?,?,?,?,?)",
-                 (user_id, hash_key(raw), csrf, now, now + ttl_s))
+    conn.execute("INSERT INTO sessions(user_id, token_hash, csrf_token, created_at, expires_at, key_id) VALUES(?,?,?,?,?,?)",
+                 (user_id, hash_key(raw), csrf, now, now + ttl_s, key_id))
     return raw, csrf
 
 
@@ -301,11 +366,14 @@ def find_session(conn: sqlite3.Connection, raw_token: str) -> dict | None:
     if not raw_token:
         return None
     row = conn.execute(
-        "SELECT u.*, s.csrf_token AS csrf_token FROM users u JOIN sessions s ON s.user_id=u.id "
-        "WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1 AND u.revoked_at IS NULL",
+        "SELECT u.*, s.csrf_token AS csrf_token, s.key_id AS session_key_id FROM users u JOIN sessions s ON s.user_id=u.id "
+        "WHERE s.token_hash=? AND s.expires_at>? AND u.enabled=1 AND u.revoked_at IS NULL AND (s.key_id IS NULL OR "
+        "EXISTS(SELECT 1 FROM keys k WHERE k.id=s.key_id AND k.revoked_at IS NULL))",
         (hash_key(raw_token), int(time.time())),
     ).fetchone()
-    return {**dict(row), "key_scope": "full"} if row else None
+    if row is None:
+        return None
+    return {**dict(row), "key_scope": "full"} | ({"role": "user"} if row["session_key_id"] else {})
 
 
 def delete_session(conn: sqlite3.Connection, raw_token: str) -> None:
@@ -321,5 +389,6 @@ def cleanup(conn: sqlite3.Connection, retention_days: int) -> dict[str, int]:
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
         "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
+        "device_requests": conn.execute("DELETE FROM device_requests WHERE expires_at<?", (int(now),)).rowcount,
     }
     return out

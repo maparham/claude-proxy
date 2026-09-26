@@ -35,6 +35,10 @@ class ListenerConfig:
     dashboard_port: int = field(default_factory=lambda: int(_env("CLAUDE_PROXY_DASHBOARD_PORT", "8081")))
     # Set when the dashboard is served over TLS (e.g. behind Caddy) so the session cookie is Secure.
     secure_cookies: bool = field(default_factory=lambda: _env("CLAUDE_PROXY_SECURE_COOKIES", "0") == "1")
+    # Where people reach the two listeners (e.g. through a tunnel); needed for sign-up and `claude-gateway on`
+    # authorizing in the browser: the install command, the authorize link and the origin Clerk tokens must come from.
+    public_url: str = ""
+    dashboard_url: str = ""
 
 
 @dataclass
@@ -66,6 +70,18 @@ class QuotaConfig:
     poll_min_interval_s: int = 180
     poll_max_backoff_s: int = 1800
     stale_after_s: int = 1800    # share limits are skipped when the newest snapshot is older
+
+
+@dataclass
+class SignupConfig:
+    """Self-service accounts (sign-up design, 2026-09-26): people sign in with Clerk; a new account gets a one-time credit."""
+    enabled: bool = False              # False: Clerk sign-in still links existing accounts, but creates none
+    credit_usd: float = 5.0            # the new account's cost_total limit
+    clerk_publishable_key: str = ""    # public; the secret key is CLERK_SECRET_KEY in the environment
+    installer_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh"
+
+    def clerk_secret(self) -> str | None:
+        return os.environ.get("CLERK_SECRET_KEY") or None
 
 
 @dataclass
@@ -190,6 +206,7 @@ class Config:
     credential: CredentialConfig = field(default_factory=CredentialConfig)
     quota: QuotaConfig = field(default_factory=QuotaConfig)
     db: DBConfig = field(default_factory=DBConfig)
+    signup: SignupConfig = field(default_factory=SignupConfig)
     pricing: Pricing = field(default_factory=Pricing)
     routes: list[Route] = field(default_factory=_default_routes)
     retention_days: int = 180
@@ -216,7 +233,7 @@ class Config:
             raise ConfigError(f"{toml_path}: {e}") from e
 
         sections = {"listener": cfg.listener, "upstream": cfg.upstream, "credential": cfg.credential,
-                    "quota": cfg.quota, "db": cfg.db}
+                    "quota": cfg.quota, "db": cfg.db, "signup": cfg.signup}
         for name, target in sections.items():
             for k, v in data.get(name, {}).items():
                 if not hasattr(target, k):

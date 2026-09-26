@@ -2,7 +2,8 @@
 
 Access (spec 10.1):
 - admin: username + password (argon2id) -> session cookie (HttpOnly, SameSite=Strict, Secure behind TLS);
-- user: their virtual key, either exchanged for a session cookie or sent as a Bearer token (statusline);
+- user: their virtual key, either exchanged for a session cookie or sent as a Bearer token (statusline), or a Clerk
+  sign-in (Google, GitHub, email code) exchanged for a session cookie, which can also create the account (sign-up design);
 - cookie sessions must send the session's CSRF token in `x-csrf-token` on every state change;
 - no loopback or IP-based exemptions; failed logins are rate limited per client address.
 Non-admins only ever see their own usage, their own limits and their own estimated share.
@@ -13,6 +14,10 @@ import asyncio
 import hashlib
 import hmac
 import logging
+import math
+import secrets
+import shlex
+import sqlite3
 import time
 from collections import defaultdict, deque
 from pathlib import Path
@@ -23,7 +28,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
-from . import db, limits, quota, usage
+import httpx
+
+from . import clerk, db, limits, quota, usage
 from .auth import AuthError, authenticate
 from .gateway import Gateway
 
@@ -43,14 +50,19 @@ _ph = PasswordHasher()
 _DUMMY_HASH = _ph.hash("not-a-real-password")
 
 
+USER_CODE_LETTERS = "BCDFGHJKLMNPQRSTVWXZ"   # no vowels (no words), no look-alikes of digits
+DEVICE_TTL_S, DEVICE_INTERVAL_S = 600, 3
+
+
 def fail(status: int, message: str):
     raise HTTPException(status_code=status, detail=message)
 
 
 class LoginLimiter:
-    def __init__(self, max_failures: int = 5, window_s: int = 300):
+    def __init__(self, max_failures: int = 5, window_s: int = 300, what: str = "failed logins"):
         self.max_failures = max_failures
         self.window_s = window_s
+        self.what = what
         self.failures: dict[str, deque] = defaultdict(deque)
 
     def check(self, ip: str) -> None:
@@ -61,7 +73,7 @@ class LoginLimiter:
         if q is not None and not q:
             del self.failures[ip]   # keep the table to addresses with recent failures
         elif q and len(q) >= self.max_failures:
-            fail(429, f"Too many failed logins. Try again in {int(self.window_s - (now - q[0])) + 1}s.")
+            fail(429, f"Too many {self.what}. Try again in {int(self.window_s - (now - q[0])) + 1}s.")
 
     def failed(self, ip: str) -> None:
         now = time.time()
@@ -72,14 +84,21 @@ class LoginLimiter:
 
 
 class SecurityHeaders(BaseHTTPMiddleware):
+    def __init__(self, app, clerk_host: str | None = None):
+        super().__init__(app)
+        # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame.
+        clerk, bot = (f" https://{clerk_host}", " https://challenges.cloudflare.com") if clerk_host else ("", "")
+        self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/{clerk}{bot}; "
+                    f"style-src 'self' 'unsafe-inline'; img-src 'self' data:{clerk}{' https://img.clerk.com' if clerk else ''}; "
+                    f"connect-src 'self'{clerk}; frame-src{bot or ' ' + repr('none')}; worker-src 'self' blob:; "
+                    "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+
     async def dispatch(self, request, call_next):
         resp = await call_next(request)
         resp.headers["X-Frame-Options"] = "DENY"
         resp.headers["X-Content-Type-Options"] = "nosniff"
         resp.headers["Referrer-Policy"] = "no-referrer"
-        resp.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/; style-src 'self' 'unsafe-inline'; "
-            "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
+        resp.headers["Content-Security-Policy"] = self.csp
         if request.url.path.startswith("/api/"):
             resp.headers["Cache-Control"] = "no-store"
         return resp
@@ -87,10 +106,18 @@ class SecurityHeaders(BaseHTTPMiddleware):
 
 def create_dashboard_app(gw: Gateway) -> FastAPI:
     app = FastAPI(title="claude-proxy dashboard", docs_url=None, redoc_url=None, openapi_url=None)
-    app.add_middleware(SecurityHeaders)
-    app.state.gw = gw
-    limiter = LoginLimiter()
     conn, cfg = gw.conn, gw.cfg
+    verifier = None
+    if cfg.signup.clerk_publishable_key:
+        if not cfg.listener.dashboard_url:
+            logger.error("Clerk sign-in is off: it needs [listener] dashboard_url, the origin its tokens are made for.")
+        else:
+            verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http)
+    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None)
+    app.state.gw = gw
+    app.state.clerk = verifier
+    limiter = LoginLimiter()
+    starts = LoginLimiter(max_failures=10, what="authorization requests from this address")
 
     @app.exception_handler(HTTPException)
     async def _http_error(request, exc: HTTPException):
@@ -124,8 +151,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def client_ip(request: Request) -> str:
         return request.client.host if request.client else "unknown"
 
-    def start_session(user) -> JSONResponse:
-        raw, csrf = db.create_session(conn, user["id"])
+    def start_session(user, key_id: int | None = None) -> JSONResponse:
+        raw, csrf = db.create_session(conn, user["id"], key_id=key_id)
         resp = JSONResponse({"ok": True, "csrf": csrf, "user": _public_user(user)})
         resp.set_cookie(COOKIE, raw, max_age=7 * 86400, httponly=True, samesite="strict",
                         secure=cfg.listener.secure_cookies, path="/")
@@ -163,7 +190,73 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(401, "Unknown, disabled or revoked key.")
         if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
+        return start_session(user, key_id=user.get("machine_key_id"))
+
+    @app.get("/api/auth-config")
+    async def auth_config():
+        # Before sign-in: whether to offer Clerk's sign-in, and with which (public) key.
+        return {"clerk": {"publishable_key": cfg.signup.clerk_publishable_key, "frontend_api": verifier.fapi} if verifier else None,
+                "signup": bool(verifier and cfg.signup.enabled)}
+
+    @app.post("/api/login/clerk")
+    async def login_clerk(request: Request):
+        ip = client_ip(request)
+        limiter.check(ip)
+        if verifier is None:
+            fail(404, "Sign-in with Clerk is not set up on this gateway.")
+        body = await _json(request)
+        try:
+            claims = await verifier.verify(str(body.get("token", "")))
+            user = conn.execute("SELECT * FROM users WHERE clerk_id=?", (claims["sub"],)).fetchone()
+            email = None if user else await verifier.email(claims["sub"])
+            if user is None:   # another sign-in of the same person may have linked it meanwhile
+                user = conn.execute("SELECT * FROM users WHERE clerk_id=?", (claims["sub"],)).fetchone()
+        except clerk.ClerkError as e:
+            limiter.failed(ip)
+            fail(401, f"Sign-in failed: {e}.")
+        except httpx.HTTPError:
+            fail(503, "Could not reach Clerk to check the sign-in; try again.")
+        if user is None:
+            user = clerk_account(claims["sub"], email)
+        if user["revoked_at"] is not None or not user["enabled"]:
+            fail(403, "This account is disabled. Ask the gateway admin.")
+        db.audit(conn, user["id"], "login", user["name"], {"via": "clerk"})
         return start_session(user)
+
+    def clerk_account(clerk_id: str, email: str):
+        """The gateway user for a first Clerk sign-in: an account named by (or holding) that email, else a new one."""
+        # Admins keep signing in with their password; only a user account can be taken over by an email.
+        user = conn.execute("SELECT * FROM users WHERE role='user' AND (lower(email)=? OR lower(name)=?) ORDER BY id LIMIT 1",
+                            (email, email)).fetchone()
+        if user is not None:
+            if user["clerk_id"]:
+                fail(409, f"{email} is linked to another sign-in. Ask the gateway admin.")
+            if user["revoked_at"] is not None:
+                fail(403, "This account was removed. Ask the gateway admin.")
+            conn.execute("UPDATE users SET clerk_id=?, email=? WHERE id=?", (clerk_id, email, user["id"]))
+            db.audit(conn, user["id"], "clerk_link", user["name"], {"email": email})
+            return conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
+        if not cfg.signup.enabled:
+            fail(403, "Sign-ups are closed. Ask the gateway admin for an account.")
+        # A deleted account's email stays in the audit log: signing up again never brings a new credit.
+        if conn.execute("SELECT 1 FROM audit_log WHERE action='signup' AND lower(target)=?", (email,)).fetchone():
+            fail(403, "This account was removed. Ask the gateway admin.")
+        if conn.execute("SELECT 1 FROM users WHERE lower(name)=?", (email,)).fetchone():
+            fail(409, f"The name {email} is taken. Ask the gateway admin.")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            uid, _ = db.create_user(conn, email)   # its own key is never shown; machines get theirs in the browser
+            conn.execute("UPDATE users SET clerk_id=?, email=? WHERE id=?", (clerk_id, email, uid))
+            conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)",
+                         (uid, "cost_total", "*", f"{cfg.signup.credit_usd:g}", "usd", int(time.time())))
+            db.audit(conn, uid, "signup", email, {"credit_usd": cfg.signup.credit_usd})
+            conn.execute("COMMIT")
+        except BaseException as e:
+            conn.execute("ROLLBACK")
+            if isinstance(e, sqlite3.IntegrityError):   # the same person signing in twice at once
+                fail(409, "That account was just created; sign in again.")
+            raise
+        return conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
 
     @app.post("/api/logout")
     async def logout(request: Request):
@@ -177,7 +270,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = principal(request)
         out = {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
                # Configurable values the dashboard's explanations quote.
-               "settings": {"reference_model": cfg.pricing.reference_model}}
+               "settings": {"reference_model": cfg.pricing.reference_model},
+               "install": install_command()}
         if is_admin(user):
             be = gw.backend.describe()
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
@@ -436,6 +530,132 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
         return out
 
+    # ---------- browser authorization for `claude-gateway on` (sign-up design section 4) ----------
+
+    def install_command() -> str | None:
+        ready = cfg.listener.public_url and cfg.listener.dashboard_url
+        return f"curl -fsSL {cfg.listener.dashboard_url.rstrip('/')}/install | sh" if ready else None
+
+    def need_urls():
+        if not (cfg.listener.public_url and cfg.listener.dashboard_url):
+            fail(503, "This gateway has no [listener] public_url and dashboard_url set, so it can't authorize in the browser.")
+
+    @app.get("/install")
+    async def install():
+        need_urls()
+        q = shlex.quote
+        script = ("#!/bin/sh\n"
+                  f"# Installs claude-gateway and connects this computer to {cfg.listener.dashboard_url}: it opens the\n"
+                  "# browser to authorize it, then sets up gclaude.\n"
+                  "set -eu\n"
+                  f"curl -fsSL {q(cfg.signup.installer_url)} | sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
+                  f"--dashboard {q(cfg.listener.dashboard_url.rstrip('/'))} \"$@\"\n")
+        return PlainTextResponse(script, media_type="text/x-shellscript", headers={"Cache-Control": "no-cache"})
+
+    def browser_user(request: Request, write: bool = False):
+        """Someone signed in to this dashboard in the browser, the only one who may authorize a computer. Not a key
+        sent as Bearer, and not a session made from a computer's own key: a leaked key must not mint more."""
+        if request.headers.get("authorization") or request.headers.get("x-api-key"):
+            fail(403, "Authorize computers in the browser, signed in to the dashboard.")
+        user = principal(request, write)
+        if user.get("session_key_id"):
+            fail(403, "You signed in with a computer's key, which can't authorize another computer. Sign in with "
+                      "Google, GitHub, your email or the gateway key the admin gave you.")
+        return user
+
+    @app.post("/api/device/start")
+    async def device_start(request: Request):
+        need_urls()
+        ip = client_ip(request)
+        starts.check(ip)
+        starts.failed(ip)   # every start counts: anyone may make one
+        label = " ".join(str((await _json(request)).get("label") or "").split())[:64] or "a computer"
+        now = int(time.time())
+        conn.execute("DELETE FROM device_requests WHERE expires_at<?", (now,))
+        device_code = secrets.token_urlsafe(32)
+        while True:
+            code = "".join(secrets.choice(USER_CODE_LETTERS) for _ in range(8))
+            code = f"{code[:4]}-{code[4:]}"
+            try:
+                conn.execute("INSERT INTO device_requests(device_hash, user_code, label, created_at, expires_at, ip) VALUES(?,?,?,?,?,?)",
+                             (db.hash_key(device_code), code, label, now, now + DEVICE_TTL_S, ip))
+                break
+            except sqlite3.IntegrityError:
+                continue
+        page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard"
+        return {"device_code": device_code, "user_code": code, "verification_uri": f"{page}#authorize",
+                "verification_uri_complete": f"{page}#authorize/{code}", "interval": DEVICE_INTERVAL_S, "expires_in": DEVICE_TTL_S}
+
+    def pending(user_code: str):
+        code = "".join(c for c in user_code.upper() if c.isalpha())
+        row = conn.execute("SELECT * FROM device_requests WHERE user_code=? AND expires_at>=? AND decision IS NULL",
+                           (f"{code[:4]}-{code[4:]}", int(time.time()))).fetchone()
+        if row is None:
+            fail(404, "No such request waiting: it may have expired (after 10 minutes) or been answered already. "
+                      "Run claude-gateway on again for a new code.")
+        return row
+
+    @app.get("/api/device/{user_code}")
+    async def device_view(request: Request, user_code: str):
+        browser_user(request)
+        row = pending(user_code)
+        # The address lets someone spot a request that isn't theirs: the label is whatever the computer says.
+        return {"user_code": row["user_code"], "label": row["label"], "created_at": row["created_at"],
+                "expires_in": row["expires_at"] - int(time.time()), "ip": row["ip"], "your_ip": client_ip(request)}
+
+    @app.post("/api/device/{user_code}/{decision}")
+    async def device_decide(request: Request, user_code: str, decision: str):
+        user = browser_user(request, write=True)
+        if decision not in ("approve", "deny"):
+            fail(404, "Unknown action.")
+        row = pending(user_code)
+        if conn.execute("UPDATE device_requests SET user_id=?, decision=? WHERE id=? AND decision IS NULL",
+                        (user["id"], "approved" if decision == "approve" else "denied", row["id"])).rowcount != 1:
+            fail(404, "That request was answered already.")
+        db.audit(conn, user["id"], f"device_{decision}", user["name"], {"label": row["label"], "ip": row["ip"]})
+        return {"ok": True}
+
+    @app.post("/api/device/token")
+    async def device_token(request: Request):
+        need_urls()
+        body = await _json(request)
+        now = time.time()
+        row = conn.execute("SELECT * FROM device_requests WHERE device_hash=?", (db.hash_key(str(body.get("device_code", ""))),)).fetchone()
+        if row is None:
+            fail(400, "invalid_grant")
+        if row["expires_at"] < now:
+            conn.execute("DELETE FROM device_requests WHERE id=?", (row["id"],))
+            fail(400, "expired_token")
+        if row["decision"] is None:
+            too_soon = row["last_poll_at"] is not None and now - row["last_poll_at"] < DEVICE_INTERVAL_S - 0.5
+            conn.execute("UPDATE device_requests SET last_poll_at=? WHERE id=?", (now, row["id"]))
+            fail(400, "slow_down" if too_soon else "authorization_pending")
+        # Only one poll may take the answer: the key is made now and never stored in plain text.
+        if conn.execute("DELETE FROM device_requests WHERE id=? AND decision IS NOT NULL", (row["id"],)).rowcount != 1:
+            fail(400, "invalid_grant")
+        user = conn.execute("SELECT * FROM users WHERE id=?", (row["user_id"],)).fetchone()
+        if row["decision"] != "approved" or user is None or user["revoked_at"] is not None or not user["enabled"]:
+            fail(400, "access_denied")
+        key = db.add_machine_key(conn, user["id"], row["label"])
+        return {"key": key, "user": user["name"], "url": cfg.listener.public_url.rstrip("/"),
+                "dashboard": cfg.listener.dashboard_url.rstrip("/")}
+
+    # ---------- machines: the keys authorized from the browser ----------
+
+    @app.get("/api/keys")
+    async def keys_list(request: Request, user_id: int | None = None):
+        user = principal(request)
+        uid = user_id if is_admin(user) and user_id is not None else user["id"]
+        return {"keys": db.machine_keys(conn, uid)}
+
+    @app.post("/api/keys/{key_id}/remove")
+    async def key_remove(request: Request, key_id: int):
+        user = principal(request, write=True)
+        row = conn.execute("SELECT user_id FROM keys WHERE id=?", (key_id,)).fetchone()
+        if row is None or (row["user_id"] != user["id"] and not is_admin(user)):
+            fail(404, "No such machine.")
+        return {"ok": True, "removed": db.remove_machine_key(conn, row["user_id"], key_id, user["id"])}
+
     # ---------- admin actions ----------
 
     def target_user(ref) -> dict:
@@ -471,6 +691,19 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 return {"ok": True, "key": db.set_routes_key(conn, u["id"], actor["id"])}
             except ValueError as e:
                 fail(400, str(e))
+        if action == "upgrade":
+            # From the one-time credit to a daily allowance: limits apply together, so the credit has to go.
+            try:
+                daily = float((await _json(request)).get("cost_daily", 100))
+            except (TypeError, ValueError):
+                daily = -1.0
+            if not (daily > 0 and math.isfinite(daily)):
+                fail(400, "Need a daily amount in dollars above 0.")
+            conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (u["id"],))
+            conn.execute("INSERT OR REPLACE INTO limits(user_id, kind, scope, value, unit, updated_at, updated_by) VALUES(?,?,?,?,?,?,?)",
+                         (u["id"], "cost_daily", "*", f"{daily:g}", "usd", int(time.time()), actor["id"]))
+            db.audit(conn, actor["id"], "upgrade", u["name"], {"cost_daily": daily})
+            return {"ok": True}
         if action == "routes_key_remove":
             return {"ok": True, "removed": db.remove_routes_key(conn, u["id"], actor["id"])}
         if action == "delete":
@@ -561,7 +794,7 @@ async def _json(request: Request) -> dict:
 
 def _public_user(u) -> dict:
     return {"id": u["id"], "name": u["name"], "role": u["role"], "prefix": u["key_prefix"],
-            "routes_prefix": u["routes_key_prefix"]}
+            "routes_prefix": u["routes_key_prefix"], "email": u["email"]}
 
 
 def _exhaustion(conn, now: float) -> dict | None:
@@ -588,7 +821,7 @@ def _fmt_pct(v) -> str:
     return "?" if v is None else f"{v:.0f}%"
 
 
-_PERIOD = {"minute": "per min", "5h": "5h", "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
+_PERIOD = {"minute": "per min", "5h": "5h", "daily": "daily", "weekly": "weekly", "monthly": "monthly", "total": "credit"}
 
 
 def _amount(v: float, unit: str) -> str:

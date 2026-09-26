@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # Point this machine's Claude Code at a claude-proxy gateway, or back at its own login.
 #
-#   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # gclaude (the default), first time
+#   claude-gateway on --url https://claude.example.com   # gclaude (the default), first time: authorize in the browser
+#   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # or with a key from the admin
 #   claude-gateway on                # later
+#   claude-gateway on --login        # authorize this computer again, e.g. after it was removed in the dashboard
 #   claude-gateway off               # removes whichever of gclaude and global mode is set up
 #   claude-gateway status
 #   claude-gateway on --global --url https://claude.example.com --key sk-proxy-...   # global mode: plain claude itself
@@ -37,6 +39,9 @@
 # (gclaude-sync.py); settings, login, history and sessions stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
+# Without --key (and none saved for that URL), `on` authorizes in the browser: it opens the dashboard (--dashboard,
+# else the URL with claude. replaced by claude-dash.) at a code, and once you click Authorize there the dashboard
+# hands this computer a key of its own. Over SSH it only prints the link and the code, to open on any device.
 # gclaude and global mode share the saved URL and key: --url/--key given to either replace them for both. On a
 # machine already in global mode, a bare `on` refreshes global mode rather than switching it to gclaude.
 set -euo pipefail
@@ -66,6 +71,68 @@ json.dump(c, open(path, "w"), indent=2)
 EOF
   )
   chmod 600 "$CLIENT"
+}
+
+authorize() {   # url dashboard: prints the key the dashboard hands this computer once someone authorizes it there
+  python3 - "$@" <<'EOF'
+import json, os, shutil, socket, subprocess, sys, time
+url, dash = sys.argv[1], sys.argv[2]
+say = lambda m: print(m, file=sys.stderr, flush=True)
+
+def post(path, body):   # via curl, which uses the system's certificates (some Pythons have none)
+    r = subprocess.run(["curl", "-sS", "--max-time", "15", "-X", "POST", "-H", "content-type: application/json",
+                        "--data-binary", "@-", "-w", "\n%{http_code}", dash + path],
+                       input=json.dumps(body), capture_output=True, text=True)
+    text, _, code = r.stdout.rpartition("\n")
+    if r.returncode or not code.isdigit():
+        raise OSError(r.stderr.strip() or "no answer")
+    try:
+        data = json.loads(text)
+    except ValueError:
+        data = {}
+    return int(code), data if isinstance(data, dict) else {}
+
+try:
+    code, s = post("/api/device/start", {"label": socket.gethostname().split(".")[0]})
+except OSError as e:
+    sys.exit(f"Can't reach the dashboard at {dash}: {e}")
+if code != 200 or "device_code" not in s:
+    hint = f" (is {dash} this gateway's dashboard? Give it with --dashboard)" if code == 404 else ""
+    sys.exit(f"The dashboard at {dash} can't authorize this computer: {s.get('error') or 'HTTP %d' % code}{hint}")
+link = s["verification_uri_complete"]
+say(f"To connect this computer, open {link}")
+say(f"and check that it shows the code {s['user_code']}.")
+opener = os.environ.get("CLAUDE_GATEWAY_OPEN")
+if opener is None and not os.environ.get("SSH_CONNECTION"):
+    opener = shutil.which("open" if sys.platform == "darwin" else "xdg-open")
+if opener and subprocess.run([opener, link], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    say("It is open in your browser.")
+say("Waiting for you to authorize it there...")
+interval, deadline = float(s.get("interval", 3)), time.time() + float(s.get("expires_in", 600))
+while time.time() < deadline:
+    time.sleep(interval)
+    try:
+        code, r = post("/api/device/token", {"device_code": s["device_code"]})
+    except OSError:
+        continue   # a blip; keep waiting
+    if code >= 500 or code == 429:
+        continue   # e.g. the gateway restarting behind its proxy; the approval is still there
+    if code == 200 and r.get("key"):
+        say(f"Authorized as {r.get('user', '?')}.")
+        print(r["key"])
+        sys.exit(0)
+    err = r.get("error")
+    if err == "slow_down":
+        interval += 2
+    elif err != "authorization_pending":
+        sys.exit({"access_denied": "Cancelled in the browser; nothing was changed.",
+                  "expired_token": "The code expired. Run the command again for a new one."}.get(err, f"Authorization failed: {err or code}"))
+sys.exit("The code expired. Run the command again for a new one.")
+EOF
+}
+
+dashboard_for() {   # url: the dashboard saved for it, else the usual claude. -> claude-dash. naming
+  if [ "$(field url)" = "${1%/}" ] && [ -n "$(field dashboard)" ]; then field dashboard; else echo "${1/:\/\/claude./://claude-dash.}"; fi
 }
 
 field() { python3 -c 'import json,os,sys; c=json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}; print(c.get(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""))' "$CLIENT" "$@"; }
@@ -538,7 +605,7 @@ gclaude_state() {
 cmd=${1:-status}; shift || true
 case "$cmd" in
   on)
-    url="" key="" dash="" mode="" opencode="" rkey="" gclaude="" global=""
+    url="" key="" dash="" mode="" opencode="" rkey="" gclaude="" global="" login=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --url) url=$2; shift 2 ;;
@@ -550,11 +617,12 @@ case "$cmd" in
         --opencode) opencode=1; shift ;;
         --routes-key) rkey=$2; shift 2 ;;
         --gclaude) gclaude=1; shift ;;
+        --login) login=1; shift ;;
         *) usage 1 ;;
       esac
     done
     if [ -n "$opencode" ]; then
-      [ -z "$key$dash$mode$gclaude$global" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
+      [ -z "$key$dash$mode$gclaude$global$login" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
       opencode_on "$url" "$rkey"
       exit 0
     fi
@@ -577,10 +645,23 @@ case "$cmd" in
         gclaude=1
       fi
     fi
-    if [ -n "$url$key" ]; then
-      [ -n "$url" ] && [ -n "$key" ] || { echo "Give both --url and --key the first time." >&2; exit 1; }
+    [ -z "$key" ] || [ -z "$login" ] || { echo "Choose one: --key or --login." >&2; exit 1; }
+    if [ -n "$key" ]; then
+      url=${url:-$(field url)}
+      [ -n "$url" ] || { echo "Give --url with --key the first time." >&2; exit 1; }
       [ -z "$gclaude" ] || gclaude_free
       save_client "$url" "$key" "$dash"
+    elif [ -n "$url$login" ] || [ -z "$(field key)" ]; then
+      url=${url:-$(field url)}
+      [ -n "$url" ] || { echo "No gateway configured yet: claude-gateway on --url <gateway url>" >&2; exit 1; }
+      if [ -z "$login" ] && [ -n "$(field key)" ] && [ "$(field url)" = "${url%/}" ]; then
+        [ -z "$dash" ] || save_client "$url" "$(field key)" "$dash"   # already connected there: keep its key
+      else
+        [ -z "$gclaude" ] || gclaude_free
+        dash=${dash:-$(dashboard_for "$url")}
+        key=$(authorize "$url" "${dash%/}") || exit 1
+        save_client "$url" "$key" "$dash"
+      fi
     fi
     if [ -n "$gclaude" ]; then gclaude_on; exit 0; fi
     [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --global --url <url> --key <key>" >&2; exit 1; }

@@ -27,10 +27,11 @@ WINDOWS = {
     "requests_monthly": 30 * DAY, "tokens_monthly": 30 * DAY, "cost_monthly": 30 * DAY,
 }
 SHARE_BUCKETS = {"share_5h": "5h", "share_7d": "7d"}
+TOTALS = ("cost_total",)   # no window: everything the database still holds, e.g. a new account's one-time credit
 UNITS = {
     **{k: ("count",) for k in WINDOWS if k.startswith("requests_")},
     **{k: ("weighted", "raw") for k in WINDOWS if k.startswith("tokens_")},
-    "cost_daily": ("usd",), "cost_monthly": ("usd",),
+    "cost_daily": ("usd",), "cost_monthly": ("usd",), "cost_total": ("usd",),
     "share_5h": ("pct",), "share_7d": ("pct",),
     "allowed_models": ("list",),
 }
@@ -152,6 +153,19 @@ def _window_state(conn, cfg, user_id, row, now) -> LimitState:
                       reset_in=max(1, int(round(start + WINDOWS[kind] - now))), exceeded=current >= limit)
 
 
+def _total_state(conn, cfg, user_id, row) -> LimitState:
+    kind, scope, unit = row["kind"], row["scope"], row["unit"]
+    limit = float(row["value"])
+    groups = conn.execute(f"SELECT requested_model AS rm, model, {SUMS} FROM requests WHERE user_id=? AND rejected_by IS NULL "
+                          f"AND path!=? GROUP BY rm, model", (user_id, COUNT_TOKENS_PATH)).fetchall()
+    if scope != "*":
+        groups = [g for g in groups if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
+    current = sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
+                  for g in groups)
+    return LimitState(kind, scope, row["value"], unit, current=current, limit=limit,
+                      remaining=max(0.0, limit - current), exceeded=current >= limit)
+
+
 def _share_state(conn, cfg, user_id, row, now) -> LimitState:
     limit = float(row["value"])
     st = LimitState(row["kind"], row["scope"], row["value"], row["unit"], limit=limit, estimated=True)
@@ -173,6 +187,8 @@ def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | Non
     for row in _rows(conn, user_id):
         if row["kind"] in WINDOWS:
             out.append(_window_state(conn, cfg, user_id, row, now))
+        elif row["kind"] in TOTALS:
+            out.append(_total_state(conn, cfg, user_id, row))
         elif row["kind"] in SHARE_BUCKETS:
             out.append(_share_state(conn, cfg, user_id, row, now))
         else:
@@ -191,6 +207,9 @@ def _describe(st: LimitState) -> str:
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
     if st.kind in SHARE_LABELS:
         return f"Gateway {SHARE_LABELS[st.kind]}{scope} reached: {st.pct or 0:.0f}% used{wait}."
+    if st.kind in TOTALS:
+        return (f"Your gateway credit{scope} is used up (${st.current:.2f} of ${st.limit:.2f}). "
+                "Ask the gateway admin for more.")
     if st.unit == "usd":
         amount = f"${st.current:.2f} of ${st.limit:.2f}"
     else:
@@ -238,12 +257,16 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             continue
         if kind in WINDOWS:
             st = _window_state(conn, cfg, user_id, row, now)
+        elif kind in TOTALS:
+            st = _total_state(conn, cfg, user_id, row)
         elif kind in SHARE_BUCKETS:
             if third_party:
                 continue
             st = _share_state(conn, cfg, user_id, row, now)
         else:
             continue
+        if st.exceeded and kind in TOTALS:   # it never frees up, so nothing for a client to wait for and retry
+            return Decision(403, kind, {"type": "error", "error": {"type": "permission_error", "message": _describe(st)}})
         if st.exceeded:
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)

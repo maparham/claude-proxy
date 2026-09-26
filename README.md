@@ -69,6 +69,10 @@ again to update) and sets it up:
 curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://gateway.example.com --key sk-proxy-...
 ```
 
+Without `--key`, `claude-gateway on --url …` authorizes in the browser instead: it opens the dashboard at a code,
+and once you click **Authorize** there, the dashboard gives this computer a key of its own. With sign-up set up
+(below), a teammate's whole setup is `curl -fsSL https://<dashboard>/install | sh`.
+
 By default `claude-gateway on` sets up **gclaude** (below): a second command that runs Claude Code through the
 gateway while `claude` keeps this machine's own login. For a machine where plain `claude` itself should use the
 gateway, global mode edits `~/.claude/settings.json` and switches back cleanly. From a checkout,
@@ -99,6 +103,35 @@ see only their own data.
 `claude-gateway on` also adds a prompt hook (`statusline.sh --warn`): when any of those figures reaches 80%,
 Claude Code shows the status line as a warning before the prompt is sent, again every 15 minutes, and at once
 at 100%. It never blocks a prompt; the gateway is still the only place limits are enforced.
+
+### Sign-up and browser authorization
+
+People can create their own account and connect their computers without the admin sending keys
+(`docs/superpowers/specs/2026-09-26-signup-and-browser-authorization-design.md`):
+
+- **Sign-up**: the dashboard's sign-in is [Clerk](https://clerk.com) (Google, GitHub or an emailed code). A first
+  sign-in links an existing user whose name or email is that address; otherwise, with `signup.enabled`, it creates
+  one with a one-time credit (`cost_total`, `signup.credit_usd`). Clerk only proves who someone is; the dashboard
+  then uses its own session, and requests never touch Clerk.
+- **Computers**: `curl -fsSL https://<dashboard>/install | sh` installs claude-gateway and runs
+  `claude-gateway on`, which shows a code and opens `…/dashboard#authorize/<code>`. **Authorize** there gives that
+  computer a key of its own (the `keys` table), listed and removable under **Your computers**.
+- **Upgrade**: limits apply together, so the admin's **Upgrade** swaps the credit for a daily allowance.
+
+```toml
+[listener]
+public_url = "https://claude.example.com"            # where people reach the gateway
+dashboard_url = "https://claude-dash.example.com"    # and the dashboard
+
+[signup]
+enabled = true
+credit_usd = 5.0
+clerk_publishable_key = "pk_live_..."                # CLERK_SECRET_KEY goes in the environment (gateway.env)
+```
+
+In Clerk: email code, Google and GitHub sign-in, bot protection, and blocking of email sub-addresses and
+disposable domains. A production instance also needs its DNS records (DNS only, not proxied, in Cloudflare) and
+its own Google and GitHub OAuth apps.
 
 ### gclaude: the gateway beside your own `claude`
 

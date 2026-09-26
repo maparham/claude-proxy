@@ -3,6 +3,7 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://claude.example.com --key sk-proxy-...   # and set up gclaude
+#   curl -fsSL https://claude-dash.example.com/install | sh    # a gateway's own: this, then `on` authorizing in the browser
 #
 # It puts claude-gateway and the files it installs from (statusline.sh, gclaude-sync.py, examples/opencode) in
 # ~/.local/share/claude-gateway, replacing an earlier copy, and links ~/.local/bin/claude-gateway to it. Anything
