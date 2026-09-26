@@ -94,6 +94,7 @@ const TIPS = {
   limits_col: `Per-user caps, checked before every request. The bar turns amber at 80% and red at 100%.`,
   key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
   act_limits: `View or change this user's limits.`,
+  act_upgrade: `Replace their one-time sign-up credit with a daily allowance.`,
   act_rotate: `Issue a new key and stop the old one immediately. Usage history is kept.`,
   act_routes_key: `Issue a key for OpenCode that works only for third-party models (such as Muse), never Claude. Issuing again replaces it.`,
   act_routes_key_remove: `Delete this user's OpenCode key. Their Claude Code key keeps working.`,
@@ -136,6 +137,7 @@ const KIND_TIPS = {
   tokens_monthly: "Tokens in the last 30 days.",
   cost_daily: "Estimated API-equivalent cost in the last 24 hours, in USD.",
   cost_monthly: "Estimated API-equivalent cost in the last 30 days, in USD.",
+  cost_total: "A one-time <b>credit</b>: the estimated API-equivalent cost of all their requests so far, in USD. New sign-ups get one.",
   share_5h: "The user's <b>estimated share</b> of the account's 5-hour bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
   share_7d: "The user's <b>estimated share</b> of the account's 7-day bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
   allowed_models: "Only these models may be requested; anything else is refused. Comma-separated globs, e.g. <code>claude-sonnet-*,muse-spark</code>.",
@@ -164,12 +166,14 @@ const KIND_SHORT = {
   tokens_monthly: "How many tokens they can use in any 30 days.",
   cost_daily: "How many dollars they can spend in any 24 hours, at API prices.",
   cost_monthly: "How many dollars they can spend in any 30 days, at API prices.",
+  cost_total: "How many dollars they can spend in total, once: a starting credit.",
   share_5h: "What percent of the shared subscription's 5-hour quota they can use.",
   share_7d: "What percent of the shared subscription's weekly quota they can use.",
   allowed_models: "Which models they may use. Any other model is refused.",
 };
 const LIMIT_PLACEHOLDER = { count: "e.g. 200", weighted: "e.g. 5000000", raw: "e.g. 20000000", usd: "e.g. 50", pct: "e.g. 25", list: "claude-sonnet-*,muse-spark" };
-const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : KIND_NOTE.window);
+KIND_NOTE.total = "No window: it never frees up. Raise it, or use Upgrade on the Users page to switch to a daily allowance.";
+const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : k === "cost_total" ? KIND_NOTE.total : KIND_NOTE.window);
 Object.entries(KIND_TIPS).forEach(([k, v]) => {
   TIPS[`kind:${k}`] = `<span class="th">${k.replace(/_/g, " ")}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
 });
@@ -212,6 +216,7 @@ const USER_TIPS = {
   sess_weighted: `Tokens adjusted by type and model, in {ref} input tokens.`,
   sess_cost: `What it would cost at API prices. Not a bill.`,
   "kind:tokens_5h": `<span class="th">tokens 5h</span><p>Tokens in the last 5 hours.</p><p class="tm">${KIND_NOTE.window}</p>`,
+  "kind:cost_total": `<span class="th">Credit</span><p>Your one-time starting credit, at API prices. When it is used up, requests stop until the gateway admin gives you more.</p>`,
   "kind:5h_limit": `<span class="th">5-hour limit</span><p>How much of your 5-hour allowance you have used. At 100%, Claude requests are refused until it resets.</p>`,
   "kind:weekly_limit": `<span class="th">Weekly limit</span><p>How much of your weekly allowance you have used. At 100%, Claude requests are refused until it resets.</p>`,
   "err:usage_limit": "A usage limit was reached. Requests work again once it resets.",
@@ -422,7 +427,7 @@ function meter(pct) {
 }
 function limitLabel(l) {
   const scope = l.scope && l.scope !== "*" ? ` [${l.scope}]` : "";
-  return `${l.kind.replace(/_/g, " ")}${scope}`;
+  return `${l.kind === "cost_total" ? "credit" : l.kind.replace(/_/g, " ")}${scope}`;
 }
 function limitValue(l) {
   if (l.kind === "allowed_models") return l.value;
@@ -455,6 +460,7 @@ const VIEWS = {
   overview: { label: "Overview", render: renderOverview },
   usage: { label: "Usage over time", render: renderUsage },
   users: { label: "Users & limits", render: renderUsers, admin: true },
+  authorize: { label: "Connect a computer", render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by claude-gateway on
   quota: { label: "Account quota", render: renderQuota, admin: true },
   models: { label: "Models & cache", render: renderModels },
   activity: { label: "Activity", render: renderActivity },
@@ -498,7 +504,7 @@ function credentialPill(c) {
 }
 
 async function renderOverview(main) {
-  const [ov, me] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status")]);
+  const [ov, me, keys] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys")]);
   if (ov.credential) credentialPill(ov.credential);
   const t = ov.totals[S.prefs.period] || ov.totals["24h"];
   const banners = [];
@@ -532,8 +538,10 @@ async function renderOverview(main) {
           ${isAdmin() ? `<div class="chart short" id="ov-users"></div>` : limitsBlock(me.limits)}
         </div>
       </div>
+      ${machinesCard(keys.keys, S.install)}
     </section>`;
   wireSegs(main, render);
+  wireMachines(main);
   if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">No account figures yet. They arrive with the first response through the gateway.</p>`;
   if (isAdmin()) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
@@ -619,7 +627,9 @@ function userRow(u) {
 function userActions(u) {
   const opencode = `<button class="btn small" data-act="routes_key" data-id="${u.id}" data-tip="act_routes_key">${u.routes_prefix ? "New OpenCode key" : "OpenCode key"}</button>` +
     (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">Remove OpenCode key</button>` : "");
-  return `<div class="row-actions">${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
+  const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked
+    ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">Upgrade</button>` : "";
+  return `<div class="row-actions">${upgrade}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
       <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
       ${opencode}
@@ -654,6 +664,7 @@ function addUserDialog() {
 }
 async function userAction(act, id, u) {
   if (act === "limits") return limitsDialog(u);
+  if (act === "upgrade") return upgradeDialog(u);
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
   if (act === "delete" && !confirmInline(`Delete ${u.name} permanently? Their recorded usage is deleted too and disappears from account totals and charts. This cannot be undone.`)) return;
   try {
@@ -664,6 +675,121 @@ async function userAction(act, id, u) {
     render();
   } catch (e) { alertInline(e.message); }
 }
+function upgradeDialog(u) {
+  const d = openDialog(`<h3>Upgrade ${esc(u.name)}</h3><p>Replaces their one-time credit with a daily allowance.</p>
+    <form id="f-up" class="form-grid"><label>Dollars a day<input type="number" name="daily" min="1" step="any" value="100" required></label>
+    <button class="btn primary" type="submit">Upgrade</button></form><div class="error" id="up-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  $("#f-up", d).onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api(`/api/admin/users/${u.id}/upgrade`, { method: "POST", body: { cost_daily: +new FormData(e.target).get("daily") } }); d.close(); render(); }
+    catch (err) { $("#up-err").textContent = err.message; }
+  };
+}
+
+// ---------- computers: keys authorized in the browser by claude-gateway on ----------
+
+function machinesCard(keys, install, owner) {
+  const rows = keys.map((k) => `<tr><td><b>${esc(k.label)}</b></td><td class="muted"><code>${esc(k.key_prefix)}…</code></td>
+    <td class="nowrap">${fmtTime(k.created_at)}</td><td class="muted nowrap">${k.last_used_at ? fmtAgo(k.last_used_at) : "not yet"}</td>
+    <td><button class="btn small danger" data-key-remove="${k.id}" data-label="${esc(k.label)}">Remove</button></td></tr>`).join("");
+  return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? "Computers" : "Your computers"}</h3>
+    ${install ? `<p class="sub">To set up a computer, run this in its terminal. It opens this page to authorize it, then sets up <code>gclaude</code>.</p>
+      <div class="copy-row"><code class="key">${esc(install)}</code><button class="btn small" data-copy="${esc(install)}">Copy</button></div>` : ""}
+    ${keys.length ? `<table class="data"><thead><tr><th>Computer</th><th>Key</th><th>Authorized</th><th>Last used</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="muted">${owner ? "No computers authorized in the browser." : "None authorized in the browser yet."}</p>`}</div>`;
+}
+function wireMachines(root) {
+  root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { /* clipboard blocked */ }
+  }));
+  root.querySelectorAll("[data-key-remove]").forEach((b) => (b.onclick = async () => {
+    if (!confirmInline(`Remove ${b.dataset.label}? Its key stops working at once; run claude-gateway on --login there to connect it again.`)) return;
+    try { await api(`/api/keys/${b.dataset.keyRemove}/remove`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
+  }));
+}
+
+async function renderAuthorize(main) {
+  const code = S.authCode;
+  forgetAuthorize();
+  let req;
+  try { req = await api(`/api/device/${encodeURIComponent(code)}`); }
+  catch (e) {
+    if (e.message === "signed out") throw e;
+    main.innerHTML = `<section class="view"><div class="card authorize"><h2>Nothing to authorize</h2><p>${esc(e.message)}</p><p><a href="#overview">Go to the dashboard</a></p></div></section>`;
+    return;
+  }
+  main.innerHTML = `<section class="view"><div class="card authorize">
+    <h2>Connect a computer</h2>
+    <p><b>${esc(req.label)}</b> asks to use the gateway as <b>${esc(S.user.name)}</b>, through <code>gclaude</code>.</p>
+    <p>Check that your terminal shows this code:</p><div class="user-code">${esc(req.user_code)}</div>
+    <p class="muted">Only authorize if you just ran <code>claude-gateway on</code> yourself. The computer gets a key of its own, which you can remove later under Your computers.</p>
+    <p><button class="btn primary" id="az-yes">Authorize</button> <button class="btn" id="az-no">Cancel</button></p></div></section>`;
+  const decide = async (decision, title, text) => {
+    try { await api(`/api/device/${encodeURIComponent(req.user_code)}/${decision}`, { method: "POST", body: {} }); }
+    catch (e) { return alertInline(e.message); }
+    $(".authorize", main).innerHTML = `<h2>${title}</h2><p>${text}</p><p><a href="#overview">Go to the dashboard</a></p>`;
+  };
+  $("#az-yes").onclick = () => decide("approve", "Authorized", "Go back to your terminal: it finishes setting up by itself.");
+  $("#az-no").onclick = () => decide("deny", "Cancelled", "The computer was not connected. You can close this page.");
+}
+// The code survives signing in, including a Google or GitHub round trip that loses the address's #part.
+function rememberAuthorize(code) { try { sessionStorage.setItem("cp-authorize", code); } catch { /* private mode */ } }
+function forgetAuthorize() { try { sessionStorage.removeItem("cp-authorize"); } catch { /* private mode */ } }
+function rememberedAuthorize() { try { return sessionStorage.getItem("cp-authorize"); } catch { return null; } }
+
+// ---------- sign-in with Clerk (Google, GitHub, email code), when the gateway has it ----------
+
+let clerkReady = null;
+function loadScript(src, attrs = {}) {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = src; el.crossOrigin = "anonymous"; el.async = true;
+    Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+    el.onload = resolve; el.onerror = () => reject(new Error(`Could not load ${src}`));
+    document.head.appendChild(el);
+  });
+}
+function setupClerk() {
+  clerkReady ??= (async () => {
+    const cfg = await api("/api/auth-config");
+    if (!cfg.clerk) return null;
+    const npm = `https://${cfg.clerk.frontend_api}/npm`;
+    await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
+    await loadScript(`${npm}/@clerk/clerk-js@6/dist/clerk.browser.js`, { "data-clerk-publishable-key": cfg.clerk.publishable_key });
+    await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor } });
+    window.Clerk.addListener(({ session }) => { if (session && !S.user && !$("#login").classList.contains("hidden")) clerkExchange(); });
+    return window.Clerk;
+  })().catch((e) => { console.warn(e); return null; });
+  return clerkReady;
+}
+async function clerkExchange() {
+  if (S.exchanging) return;
+  S.exchanging = true;
+  try {
+    const ok = await login("/api/login/clerk", { token: await window.Clerk.session.getToken() });
+    if (!ok) { const msg = $("#login-error").textContent; await window.Clerk.signOut(); $("#login-error").textContent = msg; mountClerk(); }   // refused: let them try another account
+  } finally { S.exchanging = false; }
+}
+function mountClerk() {
+  if (S.clerkMounted) return;
+  S.clerkMounted = true;
+  window.Clerk.mountSignIn($("#clerk-signin"), { withSignUp: true, routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
+}
+async function showClerk() {
+  const clerk = await setupClerk();
+  if (!clerk || S.user) return;
+  $("#clerk-area").classList.remove("hidden");
+  if (!S.otherWays) $("#classic").classList.add("hidden");
+  if (clerk.session) clerkExchange();   // signed in to Clerk already, e.g. back from Google: just trade it in
+  else mountClerk();
+}
+$("#other-ways").onclick = (e) => {
+  e.preventDefault();
+  S.otherWays = !S.otherWays;
+  $("#classic").classList.toggle("hidden", !S.otherWays);
+  e.target.textContent = S.otherWays ? "Hide other ways to sign in" : "Other ways to sign in";
+};
+
 // Native confirm/alert block the page; use the dialog instead for anything but the irreversible revoke.
 function confirmInline(msg) { return window.confirm(msg); }
 function alertInline(msg) { openDialog(`<h3>Could not do that</h3><p>${esc(msg)}</p><button class="btn" data-close>OK</button>`); }
@@ -810,10 +936,10 @@ async function renderUser(main) {
     main.innerHTML = `<section class="view"><p><a href="#users">← All users</a></p><p class="muted">There is no user with this id; they may have been deleted.</p></section>`;
     return;
   }
-  const [ov, series, models, heat, sess, errs, reqs] = await Promise.all([
+  const [ov, series, models, heat, sess, errs, reqs, keys] = await Promise.all([
     api(`/api/overview?user_id=${id}`), api(`/api/series?range=${range}&granularity=${gran}&split=model&${q}`),
     api(`/api/models?range=${range}&${q}`), api(`/api/heatmap?range=${range}&${q}`), api(`/api/sessions?range=${range}&${q}`),
-    api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`)]);
+    api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`), api(`/api/keys?user_id=${id}`)]);
   const t = ov.totals[period];
   const state = u.revoked ? `<span class="badge">revoked</span>` : !u.enabled ? `<span class="badge">disabled</span>` : "";
   const share = (b, label) => `<div class="card tile"><div class="label">Est. share, ${label}${tipI("share")}</div>
@@ -852,9 +978,11 @@ async function renderUser(main) {
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
           <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`).join("")}
         </tbody></table>` : `<p class="muted">No requests yet.</p>`}</div>
+      ${machinesCard(keys.keys, null, u.name)}
     </section>`;
   wireSegs(main, render);
   wireUserActions(main, users);
+  wireMachines(main);
   if (series.points.length) stackedTime($("#u-usage"), series.points, "weighted", "model", gran);
   else $("#u-usage").outerHTML = `<p class="muted">No requests in range.</p>`;
   if (heat.cells.length) heatmap($("#u-heat"), heat.cells);
@@ -1024,16 +1152,22 @@ function showLogin() {
   $("#app").classList.add("hidden");
   $("#login").classList.remove("hidden");
   disposeCharts();
+  const m = /^#authorize\/([A-Za-z-]+)$/.exec(location.hash);
+  if (m) rememberAuthorize(m[1]);
+  $("#authorize-hint").classList.toggle("hidden", !rememberedAuthorize());
+  showClerk();
 }
 async function boot() {
   try {
     const s = await api("/api/session");
-    S.user = s.user; S.csrf = s.csrf;
+    S.user = s.user; S.csrf = s.csrf; S.install = s.install;
     if (s.settings) S.settings = { ...S.settings, ...s.settings };
     Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
     $("#cred-pill").hidden = !s.credential;
     if (s.credential) credentialPill(s.credential);
-  } catch { return; }
+  } catch { showLogin(); return; }
+  const pending = rememberedAuthorize();
+  if (pending && !location.hash.startsWith("#authorize/")) history.replaceState(null, "", `#authorize/${pending}`);
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
   $("#who").textContent = `${S.user.name} · ${S.user.role}`;
@@ -1042,15 +1176,16 @@ async function boot() {
 }
 // "#models" opens a tab, "#user/3" a user's page. Returns whether the address named a page.
 function route() {
-  const h = location.hash.slice(1), m = /^user\/(\d+)$/.exec(h);
+  const h = location.hash.slice(1), m = /^user\/(\d+)$/.exec(h), a = /^authorize\/([A-Za-z-]+)$/.exec(h);
   if (m) { S.tab = "user"; S.userId = +m[1]; return true; }
+  if (a) { S.tab = "authorize"; S.authCode = a[1]; return true; }
   if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
   return false;
 }
 async function login(path, body) {
   $("#login-error").textContent = "";
-  try { const r = await api(path, { method: "POST", body }); S.csrf = r.csrf; await boot(); }
-  catch (e) { $("#login-error").textContent = e.message; }
+  try { const r = await api(path, { method: "POST", body }); S.csrf = r.csrf; await boot(); return true; }
+  catch (e) { $("#login-error").textContent = e.message; return false; }
 }
 $("#form-admin").onsubmit = (e) => { e.preventDefault(); const f = new FormData(e.target); login("/api/login", { username: f.get("username"), password: f.get("password") }); };
 $("#form-key").onsubmit = (e) => { e.preventDefault(); login("/api/login/key", { key: new FormData(e.target).get("key") }); };
@@ -1060,7 +1195,12 @@ $("#login-switch").onclick = (e) => {
   $("#form-admin").classList.toggle("hidden", keyMode);
   e.target.textContent = keyMode ? "Sign in as admin instead" : "Use my gateway key instead";
 };
-$("#logout").onclick = async () => { await api("/api/logout", { method: "POST", body: {} }).catch(() => {}); S.user = null; showLogin(); };
+$("#logout").onclick = async () => {
+  await api("/api/logout", { method: "POST", body: {} }).catch(() => {});
+  S.user = null;
+  if (window.Clerk?.session) await window.Clerk.signOut().catch(() => {});   // or the sign-in page would trade it in again
+  showLogin();
+};
 $("#theme-toggle").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
@@ -1071,5 +1211,4 @@ try { const t = localStorage.getItem("cp-theme"); if (t) document.documentElemen
 window.addEventListener("hashchange", () => { if (S.user && route()) render(); });
 setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["overview", "users", "user"].includes(S.tab)) render(); }, 60000);
 
-showLogin();
 boot();

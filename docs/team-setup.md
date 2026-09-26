@@ -1,7 +1,7 @@
 # Using the team's Claude gateway
 
 The gateway at `https://claude.rahkar.pro` shares one Claude subscription across the team. Each person
-has their own key, limits and usage.
+has their own account, limits and usage.
 
 ## Which command to use
 
@@ -20,16 +20,24 @@ the gateway refuses Claude requests from OpenCode.
 
 ## Setting up
 
-1. Ask the admin for your gateway key (`sk-proxy-…`), and for an OpenCode key (`sk-proxy-r-…`) if you want Muse.
-2. Install and set up `gclaude` in one line. You need [Claude Code](https://code.claude.com), `curl` and `python3`.
+1. Sign up at [claude-dash.rahkar.pro](https://claude-dash.rahkar.pro/dashboard) with Google, GitHub or your
+   email. A new account starts with a one-time $5 credit; ask the admin when you need more.
+2. Run this in your terminal. You need [Claude Code](https://code.claude.com), `curl` and `python3`.
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://claude.rahkar.pro --key sk-proxy-...
+   curl -fsSL https://claude-dash.rahkar.pro/install | sh
    ```
+
+   It opens the dashboard at a code: check that it matches the one in your terminal and click **Authorize**. The
+   terminal then sets up `gclaude` by itself. Over SSH it prints the link to open on any device instead. Each
+   computer gets a key of its own, listed under **Your computers** on the dashboard, where you can remove it.
 
    If it says to add `~/.local/bin` to your PATH, do that (for zsh: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`)
    and open a new terminal.
 3. Run `gclaude` in a project. The first time, Claude Code asks whether you trust the folder.
+
+If the admin gave you a key (`sk-proxy-…`) instead, add it: `… | sh -s -- on --url https://claude.rahkar.pro --key sk-proxy-...`
+with the installer below. Ask the admin for an OpenCode key (`sk-proxy-r-…`) if you want Muse.
 
 For OpenCode (after step 2):
 
@@ -49,14 +57,14 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 - **Warning**: from 80% of a limit, Claude Code shows `Gateway: …` above its reply (again every 15 minutes, and at
   once at 100%). It never blocks you; the gateway refuses requests only once a limit is reached.
 - **`/usage`** in `gclaude` shows the same line with a link to the dashboard, without using a request.
-- **Dashboard**: `https://claude-dash.rahkar.pro/dashboard`, signed in with your gateway key, shows your own
-  requests, sessions and usage.
+- **Dashboard**: `https://claude-dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
 - **Terminal**: `claude-gateway status`.
 
 ## Updating and removing
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on   # update
+curl -fsSL https://claude-dash.rahkar.pro/install | sh   # update (it keeps this computer's key)
+claude-gateway on --login         # connect this computer again, e.g. after removing it in the dashboard
 claude-gateway off                # remove gclaude (keeps its history)
 claude-gateway off --opencode     # remove the gateway from OpenCode
 ```
@@ -79,3 +87,6 @@ claude-proxy user revoke maya                      # both keys stop working
 
 The dashboard's **Users & limits** page does the same. Send each person their key privately; the README has the
 full list of limits and settings.
+
+People who sign up themselves appear there with a `credit` limit (the one-time $5). **Upgrade** replaces it with a
+daily allowance; raising or removing the credit in **Limits** works too.
