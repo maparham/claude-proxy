@@ -24,7 +24,7 @@ the gateway refuses Claude requests from OpenCode.
 2. Install and set up `gclaude` in one line. You need [Claude Code](https://code.claude.com), `curl` and `python3`.
 
    ```sh
-   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --gclaude --url https://claude.rahkar.pro --key sk-proxy-...
+   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://claude.rahkar.pro --key sk-proxy-...
    ```
 
    If it says to add `~/.local/bin` to your PATH, do that (for zsh: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`)
@@ -39,7 +39,7 @@ opencode        # then /models → Claude gateway → Muse Spark 1.3, or ask for
 ```
 
 If your machine has no Claude login of its own, you can instead point plain `claude` at the gateway with
-`claude-gateway on --url https://claude.rahkar.pro --key sk-proxy-...`, and back with `claude-gateway off`.
+`claude-gateway on --global --url https://claude.rahkar.pro --key sk-proxy-...`, and back with `claude-gateway off`.
 
 ## Seeing your limits
 
@@ -55,8 +55,8 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 ## Updating and removing
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --gclaude   # update
-claude-gateway off --gclaude      # remove gclaude (keeps its history)
+curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on   # update
+claude-gateway off                # remove gclaude (keeps its history)
 claude-gateway off --opencode     # remove the gateway from OpenCode
 ```
 

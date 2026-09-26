@@ -266,7 +266,7 @@ def test_on_installs_the_warning_hook_beside_others_and_off_removes_only_it(stub
     settings.parent.mkdir()
     other = {"hooks": [{"type": "command", "command": "echo other"}]}
     settings.write_text(json.dumps({"hooks": {"UserPromptSubmit": [other]}}, indent=2) + "\n")
-    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full")
+    r = cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full")
     assert r.returncode == 0, r.stderr
     s = json.loads(settings.read_text())
     groups = s["hooks"]["UserPromptSubmit"]
@@ -280,7 +280,7 @@ def test_on_installs_the_warning_hook_beside_others_and_off_removes_only_it(stub
 
 
 def test_off_removes_the_hooks_block_it_created(stub, home):
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     assert cg(home, "off").returncode == 0
     assert "hooks" not in json.loads((home / ".claude" / "settings.json").read_text())
 
@@ -288,7 +288,7 @@ def test_off_removes_the_hooks_block_it_created(stub, home):
 @pytest.mark.parametrize("malformed", [None, "nope"])
 def test_off_leaves_a_malformed_user_prompt_submit_alone(stub, home, malformed):
     settings = home / ".claude" / "settings.json"
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     s = json.loads(settings.read_text())
     s["hooks"]["UserPromptSubmit"] = malformed
     settings.write_text(json.dumps(s, indent=2) + "\n")
@@ -413,7 +413,7 @@ def test_opencode_on_never_touches_opencode_jsonc(stub, home):
 
 
 def test_routes_key_without_opencode_is_refused(stub, home):
-    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full", "--routes-key", "sk-proxy-r-k")
+    r = cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full", "--routes-key", "sk-proxy-r-k")
     assert r.returncode == 1 and "--routes-key goes with --opencode" in r.stderr
 
 
@@ -467,7 +467,7 @@ def test_opencode_off_keeps_the_key_file_when_client_json_is_gone_but_the_provid
 
 def test_opencode_on_does_not_move_claude_codes_url(stub, home):
     stub.models = MODELS
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     client = home / ".config" / "claude-gateway" / "client.json"
     url_a = json.loads(client.read_text())["url"]
     stub_b = Stub()
@@ -510,12 +510,12 @@ def test_opencode_on_refuses_a_key_that_is_not_a_routes_key(stub, home):
 
 
 def test_plain_on_refuses_a_routes_key(stub, home):
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     settings = home / ".claude" / "settings.json"
     client = home / ".config" / "claude-gateway" / "client.json"
     before = settings.read_bytes()
     n_requests = len(stub.requests)
-    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-r-routeskey")
+    r = cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-r-routeskey")
     assert r.returncode == 1
     assert "This is an OpenCode key; Claude Code needs your Claude Code key." in r.stderr
     assert settings.read_bytes() == before
@@ -580,7 +580,7 @@ def test_off_opencode_says_it_kept_the_key(stub, home):
 # ---------- claude-gateway off: rejects unknown arguments, including the --opencode typo (review finding 4) ----------
 
 def test_off_rejects_a_typo_instead_of_falling_through_to_claude_code_off(stub, home):
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     settings = home / ".claude" / "settings.json"
     before = settings.read_text()
     r = cg(home, "off", "--opencdoe")
@@ -728,7 +728,7 @@ def test_gclaude_off_undoes_its_setup_but_keeps_history(stub, home):
 
 
 def test_gclaude_and_global_mode_keep_separate_records(stub, home):
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     assert cg(home, "on", "--gclaude").returncode == 0
     assert cg(home, "off", "--gclaude").returncode == 0
     settings = home / ".claude" / "settings.json"
@@ -920,7 +920,7 @@ def test_keys_never_appear_in_curls_arguments(stub, home, tmp_path):
     tmp = home / "tmp"
     tmp.mkdir(exist_ok=True)
     env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "TMPDIR": str(tmp)}
-    for args in (["on", "--url", stub.url, "--key", "sk-proxy-fullsecret"],
+    for args in (["on", "--global", "--url", stub.url, "--key", "sk-proxy-fullsecret"],
                  ["on", "--gclaude"],
                  ["status"],
                  ["on", "--opencode", "--routes-key", "sk-proxy-r-routesecret"]):
@@ -954,7 +954,7 @@ def test_opencode_off_keeps_an_agents_folder_that_was_already_there(stub, home):
 
 def test_opencode_off_keeps_client_json_that_still_has_claude_code_settings(stub, home):
     stub.models = MODELS
-    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     assert cg(home, "on", "--opencode", "--routes-key", "sk-proxy-r-k").returncode == 0
     assert cg(home, "off", "--opencode").returncode == 0
     assert json.loads((home / ".config" / "claude-gateway" / "client.json").read_text())["key"] == "sk-proxy-full"
@@ -1220,3 +1220,53 @@ def test_off_gclaude_finishes_even_when_unsync_fails(stub, home):
         (gdir / "projects").chmod(0o700)
     assert r.returncode == 0
     assert not launcher.exists() and "ANTHROPIC_AUTH_TOKEN" not in gsettings.read_text()
+
+
+# ---------- gclaude is the default; global mode is --global ----------
+
+def test_on_sets_up_gclaude_by_default(stub, home):
+    settings = own_claude(home)
+    before = settings.read_bytes()
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, r.stderr
+    assert gc_paths(home)[2].exists() and settings.read_bytes() == before
+
+
+def test_bare_on_keeps_refreshing_global_mode_where_it_is_on(stub, home):
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    r = cg(home, "on")
+    assert r.returncode == 0 and "global mode" in r.stdout
+    assert not gc_paths(home)[2].exists()
+    assert json.loads((home / ".claude" / "settings.json").read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-full"
+
+
+def test_key_only_means_global_mode(stub, home):
+    assert cg(home, "on", "--key-only", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert "ANTHROPIC_AUTH_TOKEN" in json.loads((home / ".claude" / "settings.json").read_text())["env"]
+    assert not gc_paths(home)[2].exists()
+
+
+def test_gclaude_and_global_together_are_refused(stub, home):
+    r = cg(home, "on", "--gclaude", "--global", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 1 and "Choose one" in r.stderr
+    assert not (home / ".config" / "claude-gateway" / "client.json").exists()
+
+
+def test_bare_off_removes_whichever_is_set_up(stub, home):
+    assert cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0      # gclaude
+    r = cg(home, "off")
+    assert r.returncode == 0 and "gclaude is removed" in r.stdout and not gc_paths(home)[2].exists()
+    assert cg(home, "on", "--global").returncode == 0
+    r = cg(home, "off")
+    assert r.returncode == 0 and "own login again" in r.stdout
+    assert "env" not in json.loads((home / ".claude" / "settings.json").read_text())
+    r = cg(home, "off")
+    assert r.returncode == 0 and "nothing to undo" in r.stdout
+
+
+def test_bare_off_asks_which_when_both_are_set_up(stub, home):
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--gclaude").returncode == 0
+    r = cg(home, "off")
+    assert r.returncode == 1 and "off --global, or off --gclaude" in r.stderr
+    assert gc_paths(home)[2].exists()

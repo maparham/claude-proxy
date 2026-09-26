@@ -2,7 +2,7 @@
 # Install or update claude-gateway, the client side of claude-proxy, for this user:
 #
 #   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --gclaude --url https://claude.example.com --key sk-proxy-...
+#   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://claude.example.com --key sk-proxy-...   # and set up gclaude
 #
 # It puts claude-gateway and the files it installs from (statusline.sh, gclaude-sync.py, examples/opencode) in
 # ~/.local/share/claude-gateway, replacing an earlier copy, and links ~/.local/bin/claude-gateway to it. Anything
@@ -46,4 +46,4 @@ case ":$PATH:" in *":$bin:"*) ;; *) echo "Add $bin to your PATH to run claude-ga
 if [ $# -gt 0 ]; then
   exec "$link" "$@"
 fi
-echo "After an update, run 'claude-gateway on' (or 'on --gclaude', 'on --opencode') again to refresh what it set up."
+echo "After an update, run 'claude-gateway on' (and 'on --opencode' if you use it) again to refresh what it set up."
