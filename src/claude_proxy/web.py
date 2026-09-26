@@ -613,17 +613,13 @@ def _user_rejected_by(r):
 
 
 def _resets(s) -> str:
-    # A share limit follows the account's bucket, which resets all at once; the others are rolling windows.
-    if not s.reset_in:
-        return ""
-    return f" ({'resets' if s.kind in limits.SHARE_BUCKETS else 'frees'} in {limits.human(s.reset_in)})"
+    return f" (resets in {limits.human(s.reset_in)})" if s.reset_in else ""
 
 
 def _status_line(user, states, account) -> str:
-    """e.g. `maya · daily $61/$100 (frees in 3.2 h) · plan 5h 8% (yours 6%) · week 10%`: the user's limits as
-    used/limit, each with when its oldest counted usage leaves the rolling window (when over the limit: when enough has
-    left to be under it), then, for an admin (`account` given), the shared subscription's quota and the estimated part
-    their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`."""
+    """e.g. `maya · daily $61/$100 (resets in 3.2 h) · plan 5h 8% (yours 6%) · week 10%`: the user's limits as
+    used/limit, each with when its window resets, then, for an admin (`account` given), the shared subscription's quota
+    and the estimated part their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`."""
     parts = [user["name"]]
     for s in states:
         if s.kind == "allowed_models":

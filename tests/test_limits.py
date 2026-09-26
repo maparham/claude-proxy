@@ -41,7 +41,7 @@ def test_requests_daily_rejects_at_limit_with_retry_after(env):
     req(conn, uid, NOW - 100)
     d = check(conn, cfg, uid)
     assert d.status == 429 and d.kind == "requests_daily"
-    assert d.retry_after == 86400 - 5000       # the oldest request leaves the window first
+    assert d.retry_after == 86400 - 5000       # the window opened with the first request
     assert d.body["error"]["type"] == "rate_limit_error"
     assert "requests_daily" in d.body["error"]["message"]
 
@@ -204,7 +204,7 @@ def test_exact_scope_matches_requested_model_even_if_upstream_renames_it(env):
     assert check(conn, cfg, uid, model="muse-spark").kind == "requests_daily"
 
 
-def test_nothing_to_free_when_nothing_counted(env):
+def test_no_window_before_a_request_for_a_model(env):
     conn, cfg, uid = env
     set_limit(conn, uid, "cost_daily", 100, "usd")
     req(conn, uid, NOW - 60, model=None, path="/v1/models")              # listing models costs nothing
@@ -212,9 +212,44 @@ def test_nothing_to_free_when_nothing_counted(env):
     assert (s.current, s.reset_in) == (0, None)
 
 
-def test_room_frees_from_the_oldest_usage_that_counts(env):
+def test_window_opens_with_the_first_request_for_a_model(env):
     conn, cfg, uid = env
     set_limit(conn, uid, "cost_daily", 100, "usd")
     req(conn, uid, NOW - 7200, model=None, path="/v1/models")            # free, and older
     req(conn, uid, NOW - 3600, model="claude-opus-5", i=100_000)         # $0.50
     assert limits.states(conn, cfg, uid, now=NOW)[0].reset_in == 86400 - 3600
+
+
+def test_window_resets_to_zero_and_the_next_request_opens_a_new_one(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "requests_daily", 2, "count")
+    req(conn, uid, NOW - 20 * 3600)
+    req(conn, uid, NOW - 3600)
+    s = limits.states(conn, cfg, uid, now=NOW)[0]
+    assert (s.current, s.reset_in, s.exceeded) == (2, 4 * 3600, True)
+    assert check(conn, cfg, uid).retry_after == 4 * 3600
+    # Once the window ends, nothing counts, not even the request from an hour before it ended.
+    later = NOW + 4 * 3600
+    s = limits.states(conn, cfg, uid, now=later)[0]
+    assert (s.current, s.reset_in, s.exceeded) == (0, None, False)
+    req(conn, uid, later + 600)
+    s = limits.states(conn, cfg, uid, now=later + 3600)[0]
+    assert (s.current, s.reset_in) == (1, 86400 - 3000)
+
+
+def test_reset_time_stays_put_as_requests_come_in(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "cost_daily", 100, "usd")
+    req(conn, uid, NOW - 3600, model="claude-opus-5", i=100_000)
+    assert limits.states(conn, cfg, uid, now=NOW)[0].reset_in == 86400 - 3600
+    req(conn, uid, NOW + 60, model="claude-opus-5", i=100_000)
+    assert limits.states(conn, cfg, uid, now=NOW + 120)[0].reset_in == 86400 - 3600 - 120
+
+
+def test_scoped_window_opens_with_a_matching_request(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "requests_daily", 5, "count", scope="claude-opus-*")
+    req(conn, uid, NOW - 7200, model="claude-sonnet-5")
+    req(conn, uid, NOW - 3600, model="claude-opus-5")
+    s = limits.states(conn, cfg, uid, now=NOW)[0]
+    assert (s.current, s.reset_in) == (1, 86400 - 3600)

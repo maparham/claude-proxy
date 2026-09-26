@@ -157,7 +157,7 @@ async def test_me_status_for_statusline(env):
     assert d["user"]["name"] == "alice"
     assert d["limits"][0]["kind"] == "requests_daily" and d["limits"][0]["current"] == 2
     assert "account" not in d and "credential_healthy" not in d
-    assert d["line"] == "alice · daily 2/10 req (frees in 24.0 h)"
+    assert d["line"] == "alice · daily 2/10 req (resets in 24.0 h)"
     async with asgi_client(create_dashboard_app(gw)) as c:
         d = (await c.get("/api/me/status", headers=bearer(keys["admin"]))).json()
     assert d["account"]["5h"]["utilization_pct"] == 14 and d["line"].startswith("admin · plan 5h 14%")
@@ -202,19 +202,19 @@ async def test_me_status_plain_text_for_statusline_script(env):
     assert r.text == "bob\n"
 
 
-async def test_status_line_says_when_a_rolling_limit_frees_up(env):
+async def test_status_line_says_when_each_limit_resets(env):
     gw, conn, ids, keys = env
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "requests_daily", "*", "5", "count"))
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "tokens_weekly", "*", "1000", "raw"))
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
-    # bob's one request was 100 s ago: it leaves the 24-hour window in 86300 s, and the weekly one in 7 days.
-    assert r.text == "bob · daily 1/5 req (frees in 24.0 h) · weekly 350/1K tok (frees in 7.0 days)\n"
-    # A share limit follows the account's 5-hour bucket, which resets all at once, in an hour here.
+    # bob's one request, 100 s ago, opened a 24-hour window that resets in 86300 s, and a 7-day one.
+    assert r.text == "bob · daily 1/5 req (resets in 24.0 h) · weekly 350/1K tok (resets in 7.0 days)\n"
+    # A share limit follows the account's 5-hour bucket, which resets in an hour here.
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "share_5h", "*", "50", "pct"))
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
-    assert re.fullmatch(r"bob · daily 1/5 req \(frees in 24\.0 h\) · 5h \d+% \(resets in (59|60) min\) · weekly .*\n", r.text), r.text
+    assert re.fullmatch(r"bob · daily 1/5 req \(resets in 24\.0 h\) · 5h \d+% \(resets in (59|60) min\) · weekly .*\n", r.text), r.text
 
 
 async def test_delete_only_revoked_users_and_their_history(env):

@@ -1,8 +1,9 @@
 """Per-user limits, evaluated before forwarding (spec sections 8 and 17.2).
 
-Usage limits count only forwarded requests (never rejections) in a rolling window, optionally
-restricted to models matching a glob `scope`. Share limits compare the user's estimated share of an
-account bucket (quota.attribution) with an allocation in percentage points.
+Usage limits count only forwarded requests (never rejections) in a window that opens with the first request and
+then resets all at once, like Claude's own 5-hour limit, optionally restricted to models matching a glob `scope`.
+Share limits compare the user's estimated share of an account bucket (quota.attribution) with an allocation in
+percentage points.
 """
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from dataclasses import dataclass
 from . import quota
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
-from .usage import SUMS, Totals, price_totals, priced_sql, raw_tokens_sql
+from .usage import SUMS, Totals, price_totals
 
 MINUTE, HOUR, DAY = 60, 3600, 86400
 
@@ -108,50 +109,47 @@ def _amount(kind: str, unit: str, t: Totals) -> float:
     return t.cost_usd if kind.startswith("cost_") else t.weighted
 
 
-def _amount_sql(cfg: Config, kind: str, unit: str, models) -> tuple[str, list]:
-    """SQL for what one request adds toward `kind`, as `_amount` computes it."""
-    if kind.startswith("requests_"):
-        return "1.0", []
-    if unit == "raw":
-        return raw_tokens_sql(), []
-    return priced_sql(cfg.pricing, models, 1e6 if kind.startswith("cost_") else cfg.pricing.reference_input())
+def _window_start(conn, user_id, row, now, where, params) -> float | None:
+    """When the limit's current window opened, or None while none is open. A window opens at the first request
+    for a model (in scope) after the previous one ended and lasts its length; then the count starts again from zero."""
+    kind, scope = row["kind"], row["scope"]
+    window = WINDOWS[kind]
+    stored = conn.execute("SELECT started_at FROM limit_windows WHERE user_id=? AND kind=? AND scope=?",
+                          (user_id, kind, scope)).fetchone()
+    if stored and stored[0] + window > now:
+        return stored[0]
+    since = max(now - window, stored[0] + window) if stored else now - window
+    firsts = conn.execute(f"SELECT requested_model AS rm, model, MIN(started_at) AS first FROM requests WHERE {where} "
+                          f"AND started_at>=? AND COALESCE(requested_model, model) IS NOT NULL GROUP BY rm, model",
+                          (*params, since)).fetchall()
+    if scope != "*":
+        firsts = [g for g in firsts if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
+    if not firsts:
+        return None
+    start = min(g["first"] for g in firsts)
+    conn.execute("INSERT OR REPLACE INTO limit_windows(user_id, kind, scope, started_at) VALUES(?,?,?,?)",
+                 (user_id, kind, scope, start))
+    return start
 
 
 def _window_state(conn, cfg, user_id, row, now) -> LimitState:
     # Aggregated in SQL: this runs before every request, on the event loop that serves every stream.
     kind, scope, unit = row["kind"], row["scope"], row["unit"]
-    window = WINDOWS[kind]
     limit = float(row["value"])
-    where = "user_id=? AND started_at>? AND rejected_by IS NULL AND path!=?"
-    params: list = [user_id, now - window, COUNT_TOKENS_PATH]
-    groups = conn.execute(f"SELECT requested_model AS rm, model, {SUMS}, MIN(started_at) AS first FROM requests "
-                          f"WHERE {where} GROUP BY rm, model", params).fetchall()
+    where = "user_id=? AND rejected_by IS NULL AND path!=?"
+    params = [user_id, COUNT_TOKENS_PATH]
+    start = _window_start(conn, user_id, row, now, where, params)
+    if start is None:
+        return LimitState(kind, scope, row["value"], unit, current=0.0, limit=limit, remaining=limit, exceeded=limit <= 0)
+    groups = conn.execute(f"SELECT requested_model AS rm, model, {SUMS} FROM requests "
+                          f"WHERE {where} AND started_at>=? GROUP BY rm, model", (*params, start)).fetchall()
     if scope != "*":
         # A scope names what clients ask for; providers may answer with a longer model id.
         groups = [g for g in groups if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
-    amounts = [_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
-               for g in groups]
-    current = sum(amounts)
-    exceeded = current >= limit
-    reset_in = None
-    counted = [g for g, a in zip(groups, amounts) if a > 0]   # a request that adds nothing frees nothing when it leaves
-    if counted and not exceeded:
-        reset_in = min(g["first"] for g in counted) + window - now
-    elif exceeded and groups:
-        # When enough of the oldest requests have left the window for the rest to be under the limit.
-        if scope != "*":
-            pairs = [(g["rm"], g["model"]) for g in groups]
-            where += " AND (" + " OR ".join("(requested_model IS ? AND model IS ?)" for _ in pairs) + ")"
-            params += [v for pair in pairs for v in pair]
-        amount, args = _amount_sql(cfg, kind, unit, {g["model"] for g in groups})
-        r = conn.execute(f"SELECT started_at FROM (SELECT started_at, SUM({amount}) OVER (ORDER BY started_at, id) AS cum "
-                         f"FROM requests WHERE {where}) WHERE ? - cum < ? ORDER BY started_at LIMIT 1",
-                         (*args, *params, current, limit)).fetchone()
-        reset_in = r[0] + window - now if r else None
-    if reset_in is not None:
-        reset_in = max(1, int(round(reset_in)))
-    return LimitState(kind, scope, row["value"], unit, current=current, limit=limit,
-                      remaining=max(0.0, limit - current), reset_in=reset_in, exceeded=exceeded)
+    current = sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
+                  for g in groups)
+    return LimitState(kind, scope, row["value"], unit, current=current, limit=limit, remaining=max(0.0, limit - current),
+                      reset_in=max(1, int(round(start + WINDOWS[kind] - now))), exceeded=current >= limit)
 
 
 def _share_state(conn, cfg, user_id, row, now) -> LimitState:

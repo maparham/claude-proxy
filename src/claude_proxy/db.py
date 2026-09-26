@@ -107,6 +107,14 @@ SCHEMA = [
         created_at INTEGER NOT NULL,
         expires_at INTEGER NOT NULL
     )""",
+    # When each usage limit's current window opened (limits.py): at the first request after the previous one ended.
+    """CREATE TABLE IF NOT EXISTS limit_windows (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        scope TEXT NOT NULL,
+        started_at REAL NOT NULL,
+        PRIMARY KEY (user_id, kind, scope)
+    )""",
 ]
 
 
