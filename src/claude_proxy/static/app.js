@@ -778,7 +778,11 @@ async function clerkExchange() {
 function mountClerk() {
   if (S.clerkMounted) return;
   S.clerkMounted = true;
-  window.Clerk.mountSignIn($("#clerk-signin"), { withSignUp: true, routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href });
+  window.Clerk.mountSignIn($("#clerk-signin"), {
+    withSignUp: true, routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href,
+    // Inside our own card: full width, no second card around it.
+    appearance: { elements: { rootBox: { width: "100%" }, cardBox: { width: "100%", boxShadow: "none", border: "none" }, card: { boxShadow: "none", padding: "8px 0" }, footer: { background: "transparent" } } },
+  });
 }
 async function showClerk() {
   const clerk = await setupClerk();
