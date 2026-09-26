@@ -7,13 +7,16 @@
 <own dir> is ~/.claude. What is shared:
 - commands: each entry of <own>/commands is linked into gclaude's own commands/ folder (which also holds gclaude's
   /usage), and links whose target is gone are dropped.
-- plugins: <gclaude>/plugins is a link to <own>/plugins, so plugins are installed once for both, and the
-  enabledPlugins and extraKnownMarketplaces entries of <own>/settings.json are copied into gclaude's settings.json.
-  Those win over gclaude's own entries of the same name; entries only gclaude has are kept.
+- plugins: <gclaude>/plugins is a link to <own>/plugins, so plugins are installed once for both: installing,
+  updating or removing one in gclaude does it for plain `claude` too, and `off --gclaude` does not undo that.
+  The enabledPlugins and extraKnownMarketplaces entries of <own>/settings.json follow into gclaude's settings.json:
+  each sync copies only what plain `claude` changed since the last one (kept in .gclaude-sync.json), so a plugin
+  turned on or off in gclaude stays that way until plain `claude` changes the same one.
 - memory: projects/<project>/memory is a link to <own>/projects/<project>/memory for every project that has
   memories there, and for the current project once plain `claude` has been used in it. Session history stays
   separate. A gclaude memory folder that already holds memories is left alone.
-Nothing in <own> is changed, except that the current project's memory folder is created there to link to.
+This script itself changes nothing in <own>, except that it creates the current project's memory folder there to
+link to. Memories and plugin changes made in gclaude land in <own>: that is the point of sharing them.
 """
 import json
 import os
@@ -24,6 +27,7 @@ import sys
 import tempfile
 
 PLUGIN_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
+SNAPSHOT = ".gclaude-sync.json"   # in the gclaude dir: <own>'s plugin entries as of the last sync
 
 
 def load(path):
@@ -37,32 +41,53 @@ def load(path):
 
 def write_json(path, data):
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
-    with os.fdopen(fd, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
-    os.chmod(tmp, os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o600)
-    os.replace(tmp, path)
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.chmod(tmp, os.stat(path).st_mode & 0o777 if os.path.exists(path) else 0o600)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
 
 
 def points_to(link, target):
     return os.path.islink(link) and os.readlink(link) == target
 
 
+def inside(path, own):
+    """Whether path, through any links, is in <own>: never remove or link anything there."""
+    real, own = os.path.realpath(path), os.path.realpath(own)
+    return real == own or real.startswith(own + os.sep)
+
+
+def each(items, step, notes):
+    for item in items:   # one entry failing never stops the rest
+        try:
+            step(item)
+        except OSError as e:
+            notes.append(f"gclaude-sync: {e}")
+
+
 # ---------- commands ----------
 
-def sync_commands(gdir, own):
+def sync_commands(gdir, own, notes):
     src, dst = os.path.join(own, "commands"), os.path.join(gdir, "commands")
-    if not os.path.isdir(dst) or os.path.islink(dst):   # only gclaude's own real folder
+    if not os.path.isdir(dst) or os.path.islink(dst) or inside(dst, own):   # only gclaude's own real folder
         return
-    if os.path.isdir(src):
-        for name in os.listdir(src):
-            link = os.path.join(dst, name)
-            if not os.path.lexists(link):
-                os.symlink(os.path.join(src, name), link)
-    for name in os.listdir(dst):
+
+    def add(name):
+        if not os.path.lexists(os.path.join(dst, name)):
+            os.symlink(os.path.join(src, name), os.path.join(dst, name))
+
+    def prune(name):
         link = os.path.join(dst, name)
         if os.path.islink(link) and not os.path.exists(link) and os.path.dirname(os.readlink(link)) == src:
             os.remove(link)
+
+    each(os.listdir(src) if os.path.isdir(src) else [], add, notes)
+    each(os.listdir(dst), prune, notes)
 
 
 def unsync_commands(gdir, own):
@@ -78,8 +103,12 @@ def unsync_commands(gdir, own):
 
 def untouched_plugins_dir(path):
     """The folder Claude Code makes on its first start: the official marketplace list, nothing installed."""
-    return os.path.isdir(path) and not os.path.islink(path) and \
-        set(os.listdir(path)) <= {"known_marketplaces.json", "marketplaces"}
+    if not os.path.isdir(path) or os.path.islink(path) or not set(os.listdir(path)) <= {"known_marketplaces.json",
+                                                                                            "marketplaces"}:
+        return False
+    known = load(os.path.join(path, "known_marketplaces.json"))
+    listed = os.listdir(os.path.join(path, "marketplaces")) if os.path.isdir(os.path.join(path, "marketplaces")) else []
+    return set(known or {}) <= {"claude-plugins-official"} and set(listed) <= {"claude-plugins-official"}
 
 
 def sync_plugins(gdir, own, notes):
@@ -92,37 +121,51 @@ def sync_plugins(gdir, own, notes):
         else:
             os.symlink(src, dst)
     own_settings = load(os.path.join(own, "settings.json"))
-    settings_path = os.path.join(gdir, "settings.json")
+    settings_path, snap_path = os.path.join(gdir, "settings.json"), os.path.join(gdir, SNAPSHOT)
     settings = load(settings_path)
     if own_settings is None or settings is None:
         return
+    snap = load(snap_path) or {}
     changed = False
     for key in PLUGIN_KEYS:
-        theirs = own_settings.get(key)
-        if isinstance(theirs, dict) and theirs:
-            mine = settings.get(key) if isinstance(settings.get(key), dict) else {}
-            merged = {**mine, **theirs}
-            if settings.get(key) != merged:
-                settings[key] = merged
-                changed = True
+        theirs = own_settings.get(key) if isinstance(own_settings.get(key), dict) else {}
+        last = snap.get(key) if isinstance(snap.get(key), dict) else {}
+        mine = dict(settings[key]) if isinstance(settings.get(key), dict) else {}
+        for name, value in theirs.items():
+            if name not in last or last[name] != value:   # new or changed in plain claude since the last sync
+                mine[name] = value
+        for name, value in last.items():
+            if name not in theirs and mine.get(name) == value:   # dropped in plain claude, untouched in gclaude
+                del mine[name]
+        if mine != (settings.get(key) or {}):
+            changed = True
+            if mine:
+                settings[key] = mine
+            else:
+                settings.pop(key, None)
+        snap[key] = theirs
     if changed:
         write_json(settings_path, settings)
+    if snap != load(snap_path):
+        write_json(snap_path, snap)
 
 
 def unsync_plugins(gdir, own):
     src, dst = os.path.join(own, "plugins"), os.path.join(gdir, "plugins")
     if points_to(dst, src):
         os.remove(dst)
-    own_settings = load(os.path.join(own, "settings.json")) or {}
-    settings_path = os.path.join(gdir, "settings.json")
+    settings_path, snap_path = os.path.join(gdir, "settings.json"), os.path.join(gdir, SNAPSHOT)
+    snap = load(snap_path) or {}
     settings = load(settings_path)
+    if os.path.exists(snap_path):
+        os.remove(snap_path)
     if settings is None:
         return
     changed = False
     for key in PLUGIN_KEYS:
-        mine, theirs = settings.get(key), own_settings.get(key)
-        if isinstance(mine, dict) and isinstance(theirs, dict):
-            kept = {k: v for k, v in mine.items() if not (k in theirs and theirs[k] == v)}   # gclaude's own stay
+        mine, synced = settings.get(key), snap.get(key)
+        if isinstance(mine, dict) and isinstance(synced, dict):
+            kept = {k: v for k, v in mine.items() if not (k in synced and synced[k] == v)}   # gclaude's own stay
             if kept != mine:
                 changed = True
                 if kept:
@@ -136,13 +179,20 @@ def unsync_plugins(gdir, own):
 # ---------- memory ----------
 
 def project_name(cwd):
-    """Claude Code's folder name for the project at cwd: its main git checkout (so worktrees share it), else cwd."""
+    """Claude Code's folder name for the project at cwd: its main git checkout (so worktrees share it), else cwd.
+    (Claude Code also shortens names over 200 characters; such a project just isn't prepared ahead.)"""
     root = cwd
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}   # the repository at cwd, not an inherited one
+
+    def git(*args):
+        return subprocess.run(["git", "-C", cwd, *args], capture_output=True, text=True, timeout=5,
+                              env=env).stdout.strip()
     try:
-        common = subprocess.run(["git", "-C", cwd, "rev-parse", "--path-format=absolute", "--git-common-dir"],
-                                capture_output=True, text=True, timeout=5).stdout.strip()
-        if common:
-            root = os.path.dirname(common) if os.path.basename(common) == ".git" else common
+        common = git("rev-parse", "--path-format=absolute", "--git-common-dir")
+        if os.path.basename(common) == ".git":
+            root = os.path.dirname(common)
+        elif common:   # a submodule (.git/modules/<name>) or similar: its own checkout
+            root = git("rev-parse", "--show-toplevel") or cwd
     except (OSError, subprocess.SubprocessError):
         pass
     return re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(root))
@@ -153,56 +203,68 @@ def link_memory(gdir, own, name, notes):
     dst = os.path.join(gdir, "projects", name, "memory")
     if points_to(dst, src):
         return
+    if inside(os.path.dirname(dst), own):   # gclaude's projects/ linked into <own>: it is already shared
+        return
     if os.path.isdir(dst) and not os.path.islink(dst) and not os.listdir(dst):
         os.rmdir(dst)   # Claude Code makes it empty on the first session there
     if os.path.lexists(dst):
         notes.append(f"{dst} already holds gclaude's own memories, so it is not shared with plain claude.")
         return
-    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    os.makedirs(os.path.dirname(dst), mode=0o700, exist_ok=True)
     os.symlink(src, dst)
 
 
 def sync_memory(gdir, own, cwd, notes):
-    projects = os.path.join(own, "projects")
+    projects, mine = os.path.join(own, "projects"), os.path.join(gdir, "projects")
+    if os.path.isdir(mine) and not inside(mine, own):
+        def prune(name):   # links whose project is gone from <own>
+            dst = os.path.join(mine, name, "memory")
+            if points_to(dst, os.path.join(projects, name, "memory")) and not os.path.exists(dst):
+                os.remove(dst)
+        each(os.listdir(mine), prune, notes)
     if not os.path.isdir(projects):
         return
     current = project_name(cwd)
-    for name in sorted(os.listdir(projects)):
+
+    def share(name):
         memory = os.path.join(projects, name, "memory")
         if name == current and os.path.isdir(os.path.join(projects, name)):
-            os.makedirs(memory, exist_ok=True)   # the one change in <own>: a folder to link to
+            os.makedirs(memory, mode=0o700, exist_ok=True)   # the one change in <own>: a folder to link to
         if os.path.isdir(memory) and not os.path.islink(memory):
             link_memory(gdir, own, name, notes)
+    each(sorted(os.listdir(projects)), share, notes)
 
 
 def unsync_memory(gdir, own):
     projects = os.path.join(gdir, "projects")
-    if not os.path.isdir(projects):
+    if not os.path.isdir(projects) or inside(projects, own):
         return
     for name in os.listdir(projects):
         dst = os.path.join(projects, name, "memory")
         if points_to(dst, os.path.join(own, "projects", name, "memory")):
             os.remove(dst)
+            if not os.listdir(os.path.join(projects, name)):
+                os.rmdir(os.path.join(projects, name))   # made by sync just to hold the link
 
 
 def main():
     mode, gdir, own = sys.argv[1:4]
     if mode == "sync":
-        notes = []
-        for step in (lambda: sync_commands(gdir, own), lambda: sync_plugins(gdir, own, notes),
-                     lambda: sync_memory(gdir, own, os.getcwd(), notes)):
-            try:
-                step()
-            except OSError as e:   # one step failing never stops the others, or gclaude
-                notes.append(f"gclaude-sync: {e}")
-        for note in notes:
-            print(note, file=sys.stderr)
+        steps = (lambda: sync_commands(gdir, own, notes), lambda: sync_plugins(gdir, own, notes),
+                 lambda: sync_memory(gdir, own, os.getcwd(), notes))
     elif mode == "unsync":
-        unsync_commands(gdir, own)
-        unsync_plugins(gdir, own)
-        unsync_memory(gdir, own)
+        steps = (lambda: unsync_commands(gdir, own), lambda: unsync_plugins(gdir, own),
+                 lambda: unsync_memory(gdir, own))
     else:
         sys.exit(__doc__)
+    notes = []
+    for step in steps:
+        try:
+            step()
+        except Exception as e:   # one step failing never stops the others, gclaude, or `off --gclaude`
+            notes.append(f"gclaude-sync: {e}")
+    for note in notes:
+        print(note, file=sys.stderr)
 
 
 if __name__ == "__main__":

@@ -103,8 +103,10 @@ limit warning), and shares the rest of your own setup in `~/.claude`, refreshed 
 (`scripts/gclaude-sync.py`):
 
 - `CLAUDE.md`, `agents`, `skills` and each of your `commands`;
-- plugins: installed once for both, and gclaude follows plain `claude`'s list of enabled plugins (a plugin you
-  enable only in gclaude stays enabled there);
+- plugins: installed once for both, so installing, updating or removing one in gclaude does it for plain
+  `claude` too (and `off --gclaude` doesn't undo that). gclaude follows the changes you make to plain `claude`'s
+  list of enabled plugins; a plugin you turn on or off in gclaude stays that way until you change the same one
+  in plain `claude`;
 - memory: each project's `memory` folder, once plain `claude` has been used in that project, so a memory saved in
   either shows up in both. A gclaude memory folder that already holds memories of its own is left alone.
 

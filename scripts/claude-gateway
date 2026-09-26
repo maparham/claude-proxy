@@ -493,14 +493,14 @@ gclaude_on() {
   chmod 600 "$GCLAUDE_DIR/settings.json" "$GCLAUDE_DIR/settings.json.bak-claude-gateway"
   cp "$(src_dir)/gclaude-sync.py" "$GCLAUDE_SYNC"
   gclaude_files on
-  python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")"   # now, so the first start already has it all
+  python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
   case ":$PATH:" in *":$(dirname "$GCLAUDE"):"*) ;; *) echo "Add $(dirname "$GCLAUDE") to your PATH to run gclaude." ;; esac
 }
 
 gclaude_off() {
   if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then echo "gclaude was not set up; nothing to undo."; return; fi
-  python3 "$(src_dir)/gclaude-sync.py" unsync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")"
+  python3 "$(src_dir)/gclaude-sync.py" unsync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # the rest of off still runs
   rm -f "$GCLAUDE_SYNC"
   if [ -f "$GCLAUDE_DIR/settings.json" ]; then
     edit_settings off "$GCLAUDE_DIR/settings.json" gclaude
