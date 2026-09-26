@@ -109,6 +109,9 @@ limit warning), and shares the rest of your own setup in `~/.claude`, refreshed 
   either shows up in both. A gclaude memory folder that already holds memories of its own is left alone.
 
 Settings, login, history and sessions stay separate, so both commands can run at once in the same terminal.
+The gateway's `ANTHROPIC_BASE_URL` and key live only in the `"env"` block of gclaude's `settings.json`, which
+Claude Code applies to its own process, and `CLAUDE_CONFIG_DIR` is set only for the `claude` that gclaude starts.
+Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and uses this machine's login.
 `off --gclaude` removes the command, the links, `/usage` and the gateway settings, and keeps gclaude's history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
