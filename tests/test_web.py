@@ -185,7 +185,7 @@ async def test_dashboard_assets_are_versioned_so_caches_pick_up_deploys(env):
     gw, *_ = env
     async with asgi_client(create_dashboard_app(gw)) as c:
         page = await c.get("/dashboard")
-        assert page.headers["cache-control"] == "no-cache"
+        assert page.headers["cache-control"] == "no-cache, no-transform"
         urls = re.findall(r'"(/static/app\.(?:js|css)\?v=[0-9a-f]{12})"', page.text)
         assert len(urls) == 2
         for u in urls:

@@ -50,6 +50,8 @@ _ph = PasswordHasher()
 _DUMMY_HASH = _ph.hash("not-a-real-password")
 
 
+# no-transform: Cloudflare leaves the page alone, so it doesn't inject its analytics script, which the CSP would block.
+PAGE_HEADERS = {"Cache-Control": "no-cache, no-transform"}
 USER_CODE_LETTERS = "BCDFGHJKLMNPQRSTVWXZ"   # no vowels (no words), no look-alikes of digits
 DEVICE_TTL_S, DEVICE_INTERVAL_S = 600, 3
 
@@ -770,13 +772,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         for name in ("app.js", "app.css"):
             v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
             html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
-        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(html, headers=PAGE_HEADERS)
 
     @app.get("/privacy")
     async def privacy():
         # Linked from the Google sign-in consent screen, which requires a privacy policy.
         html = (STATIC / "privacy.html").read_text().replace("after 180 days", f"after {cfg.retention_days} days")
-        return HTMLResponse(html, headers={"Cache-Control": "no-cache"})
+        return HTMLResponse(html, headers=PAGE_HEADERS)
 
     @app.get("/static/{name}")
     async def static(name: str, v: str | None = None):
