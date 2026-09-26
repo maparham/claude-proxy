@@ -15,4 +15,5 @@ path = "/data/claude_proxy.db"
 [signup]
 enabled = true
 credit_usd = 5.0
+free_daily_cap_usd = 20.0   # all accounts still on their credit, together, in any 24 h
 clerk_publishable_key = "pk_live_Y2xlcmsuY2xhdWRlLWRhc2gucmFoa2FyLnBybyQ"

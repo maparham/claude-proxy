@@ -82,6 +82,7 @@ curl -fsSL <signup.installer_url> | sh -s -- on --url <public_url> --dashboard <
 - **What it is.** A new limit kind, `cost_total` (usd): the user's estimated cost over all forwarded requests kept in the database, optionally scoped to models. Retention (180 days) bounds it. It has no window, so `reset_in` is always empty.
 - **Where it counts.** It is enforced like the others and shows as `credit $1.20/$5.00 24%` in the status line and in `/usage`. The dashboard calls it "credit".
 - **When it runs out.** The rejection is a 403 `permission_error`, since it never frees up and a client shouldn't retry: "Your gateway credit is used up ($5.00 of $5.00). Ask the gateway admin for more."
+- **Shared cap.** `signup.free_daily_cap_usd` (0: off) is a rolling 24-hour ceiling on what all accounts with a `cost_total` limit spend together. When it is reached, their requests get a 429 (`free_credit_cap`) with the time until enough spending has left the window; accounts without a credit are not affected.
 - **Upgrading.** Limits apply together, so a real limit only helps once the credit is gone. The Users page gets an **Upgrade** action, which removes `cost_total` and sets `cost_daily` to an amount the admin picks (default $100). Removing or raising the limit in the Limits dialog works too.
 
 ## 6. `claude-gateway on` without a key

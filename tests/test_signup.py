@@ -412,3 +412,25 @@ async def test_privacy_page(env):
     async with app(gw) as c:
         r = await c.get("/privacy")
     assert r.status_code == 200 and "after 90 days" in r.text and "not stored" in r.text
+
+
+def test_credit_accounts_share_a_daily_cap(env):
+    gw, conn, _ = env
+    gw.cfg.signup.free_daily_cap_usd = 3.0
+    a, _ = create_user(conn, "a"); b, _ = create_user(conn, "b"); paid, _ = create_user(conn, "paid")
+    for uid in (a, b):
+        conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (uid, "cost_total", "*", "5", "usd"))
+    spend(conn, a, 2.0)
+    spend(conn, paid, 50.0)   # accounts without a credit neither count nor are held back
+    assert limits.evaluate(conn, gw.cfg, b, "claude-sonnet-5", "/v1/messages") is None
+    spend(conn, b, 1.5)
+    d = limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages")
+    assert d.status == 429 and d.kind == limits.FREE_CAP
+    assert "Try again in" in d.body["error"]["message"] and 80000 < d.retry_after <= 86400
+    assert limits.evaluate(conn, gw.cfg, paid, "claude-sonnet-5", "/v1/messages") is None
+    assert limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages/count_tokens") is None
+    conn.execute("UPDATE requests SET started_at=started_at-86400")   # a day later it has room again
+    assert limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages") is None
+    gw.cfg.signup.free_daily_cap_usd = 0
+    spend(conn, a, 1.0); spend(conn, b, 2.9)
+    assert limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages") is None   # 0: no cap
