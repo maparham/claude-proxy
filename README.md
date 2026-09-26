@@ -117,6 +117,8 @@ People can create their own account and connect their computers without the admi
   `claude-gateway on`, which shows a code and opens `…/dashboard#authorize/<code>`. **Authorize** there gives that
   computer a key of its own (the `keys` table), listed and removable under **Your computers**.
 - **Upgrade**: limits apply together, so the admin's **Upgrade** swaps the credit for a daily allowance.
+- **Shared cap**: `signup.free_daily_cap_usd` limits what all accounts still on their credit spend together in any
+  24 hours, so many sign-ups can't use up the subscription even if each stays within its own credit.
 
 ```toml
 [listener]
@@ -126,6 +128,7 @@ dashboard_url = "https://claude-dash.example.com"    # and the dashboard
 [signup]
 enabled = true
 credit_usd = 5.0
+free_daily_cap_usd = 20.0                            # all credit accounts together, any 24 h; 0: no cap
 clerk_publishable_key = "pk_live_..."                # CLERK_SECRET_KEY goes in the environment (gateway.env)
 ```
 
