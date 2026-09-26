@@ -31,8 +31,9 @@
 # is kept in ~/.config/claude-gateway/routes.key (mode 600) and opencode.json only refers to that file.
 # --gclaude leaves ~/.claude alone and installs a `gclaude` command in ~/.local/bin instead: it runs Claude Code with
 # CLAUDE_CONFIG_DIR=~/.config/claude-gateway/claude, whose settings.json gets the key-only setup above, so `claude`
-# keeps this machine's own login and both can run at once. CLAUDE.md, agents, commands and skills from ~/.claude
-# are linked in (commands one by one, each time gclaude starts); settings, login, history and sessions stay separate.
+# keeps this machine's own login and both can run at once. CLAUDE.md, agents, commands, skills, plugins (with the
+# list of enabled ones) and each project's memory from ~/.claude are shared, refreshed each time gclaude starts
+# (gclaude-sync.py); settings, login, history and sessions stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
 # gclaude uses the same saved URL and key as plain `on`: --url/--key given with --gclaude replace them for both.
@@ -47,6 +48,7 @@ OPENCODE_DIR=${CLAUDE_GATEWAY_OPENCODE_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/op
 GCLAUDE_DIR=${CLAUDE_GATEWAY_GCLAUDE_DIR:-$(dirname "$CLIENT")/claude}   # gclaude's CLAUDE_CONFIG_DIR
 GCLAUDE=${CLAUDE_GATEWAY_BIN:-$HOME/.local/bin}/gclaude
 GCLAUDE_MARK="# Installed by claude-gateway on --gclaude."
+GCLAUDE_SYNC=$(dirname "$CLIENT")/gclaude-sync.py   # a copy, like statusline.sh, so the repository can move
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
@@ -388,9 +390,9 @@ gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE
 gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
 gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage command, and a first-run state file
-  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" <<'EOF'
+  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" <<'EOF'
 import atexit, json, os, shlex, sys, tempfile
-mode, client, gdir, launcher, mark, shared, own_state = sys.argv[1:]
+mode, client, gdir, launcher, mark, shared, own_state, sync = sys.argv[1:]
 SHARED = ("CLAUDE.md", "agents", "skills")   # commands/ is gclaude's own folder: see USAGE below
 c = json.load(open(client)) if os.path.exists(client) else {}
 rec = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
@@ -408,9 +410,6 @@ The claude-gateway hook that answers /usage did not run. Tell the user, in one s
 are on the status line and on the dashboard, and that `claude-gateway on --gclaude` reinstalls the hook. Use no tools.
 """
 ours_usage = lambda: os.path.isfile(usage) and not os.path.islink(usage) and mark in open(usage).read()
-
-def linked_here(p):   # a link the launcher made to one of ~/.claude/commands
-    return os.path.islink(p) and os.path.dirname(os.readlink(p)) == own_cmds
 
 @atexit.register   # the record is written even when a step below fails, so `off --gclaude` can undo what was done
 def save():
@@ -463,12 +462,8 @@ if mode == "on":
                 "command -v claude >/dev/null 2>&1 || { echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127; }\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
-                "# Your commands from ~/.claude/commands, linked one by one beside gclaude's own /usage.\n"
-                f"src={shlex.quote(own_cmds)} dst={shlex.quote(cmds)}\n"
-                'if [ -d "$dst" ] && [ ! -L "$dst" ]; then\n'
-                '  for f in "$src"/*; do [ -e "$f" ] && [ ! -e "$dst/${f##*/}" ] && [ ! -L "$dst/${f##*/}" ] && ln -s "$f" "$dst/"; done 2>/dev/null\n'
-                '  for f in "$dst"/*; do [ -L "$f" ] && [ ! -e "$f" ] && [ "$(dirname "$(readlink "$f")")" = "$src" ] && rm -f "$f"; done\n'
-                'fi\n'
+                "# Share commands, plugins and memory from ~/.claude (see gclaude-sync.py); never stops gclaude.\n"
+                f"python3 {shlex.quote(sync)} sync \"$CLAUDE_CONFIG_DIR\" {shlex.quote(shared)} 2>/dev/null\n"
                 'exec claude "$@"\n')
     os.chmod(tmp, 0o755)
     os.replace(tmp, launcher)
@@ -480,9 +475,6 @@ else:
     if os.path.isdir(cmds) and not os.path.islink(cmds):
         if ours_usage():
             os.remove(usage)
-        for name in os.listdir(cmds):
-            if linked_here(os.path.join(cmds, name)):
-                os.remove(os.path.join(cmds, name))
         if not os.listdir(cmds):
             os.rmdir(cmds)
     c.pop("gclaude", None)
@@ -499,13 +491,17 @@ gclaude_on() {
   [ -f "$GCLAUDE_DIR/settings.json" ] || ( umask 077; echo '{}' > "$GCLAUDE_DIR/settings.json" )
   edit_settings on "$GCLAUDE_DIR/settings.json" gclaude
   chmod 600 "$GCLAUDE_DIR/settings.json" "$GCLAUDE_DIR/settings.json.bak-claude-gateway"
+  cp "$(src_dir)/gclaude-sync.py" "$GCLAUDE_SYNC"
   gclaude_files on
+  python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
   case ":$PATH:" in *":$(dirname "$GCLAUDE"):"*) ;; *) echo "Add $(dirname "$GCLAUDE") to your PATH to run gclaude." ;; esac
 }
 
 gclaude_off() {
   if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then echo "gclaude was not set up; nothing to undo."; return; fi
+  python3 "$(src_dir)/gclaude-sync.py" unsync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # the rest of off still runs
+  rm -f "$GCLAUDE_SYNC"
   if [ -f "$GCLAUDE_DIR/settings.json" ]; then
     edit_settings off "$GCLAUDE_DIR/settings.json" gclaude
     rm -f "$GCLAUDE_DIR/settings.json.bak-claude-gateway"   # the copy from before `off` still holds the key
