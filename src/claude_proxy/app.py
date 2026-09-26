@@ -113,7 +113,8 @@ def create_app(gw: Gateway) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        return {"ok": True}
+        # Unauthenticated, so only a yes/no about the subscription login; the detail stays on the dashboard.
+        return {"ok": True, "credential": gw.backend.describe().healthy}
 
     @app.api_route("/{path:path}", methods=METHODS)
     async def proxy(request: Request, path: str):
