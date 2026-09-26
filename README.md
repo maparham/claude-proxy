@@ -78,7 +78,8 @@ one; then it says how to add them to it). Setting it up by hand instead:
 "statusLine": { "type": "command", "command": "/path/to/scripts/statusline.sh", "refreshInterval": 30 }
 ```
 
-It prints each of their limits, e.g. `maya · daily $61/$100 · 5h 30%`, in cyan with a leading `◆`; a
+It prints each of their limits, e.g. `maya · daily $61/$100 61% · 5h 30%` (a used/limit figure gets its percentage,
+rounded down), in cyan with a leading `◆`; a
 figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
 see only their own data.
 
@@ -118,7 +119,7 @@ Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
 In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
-model and shows a fresh gateway line, e.g. `Gateway: maya · daily $61/$100 · details: https://…/dashboard`,
+model and shows a fresh gateway line, e.g. `Gateway: maya · daily $61/$100 61% · details: https://…/dashboard`,
 so it costs nothing. Plain `claude` keeps the real `/usage`.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
