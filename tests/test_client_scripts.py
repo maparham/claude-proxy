@@ -85,7 +85,7 @@ def test_warn_at_80_percent(stub, warn_env):
     stub.status_line = "alice · daily 80/100 req"
     r = warn(warn_env)
     assert r.returncode == 0
-    assert json.loads(r.stdout) == {"systemMessage": "Gateway: alice · daily 80/100 req"}
+    assert json.loads(r.stdout) == {"systemMessage": "Gateway: alice · daily 80/100 req 80%"}
 
 
 def test_warn_silent_at_79_percent(stub, warn_env):
@@ -108,7 +108,7 @@ def test_warn_once_per_band_then_again_at_100(stub, warn_env):
     assert warn(warn_env).stdout == ""                     # same band within 15 minutes
     fresh(warn_env)
     stub.status_line = "alice · daily $100/$100"
-    assert json.loads(warn(warn_env).stdout)["systemMessage"].endswith("$100/$100")
+    assert json.loads(warn(warn_env).stdout)["systemMessage"].endswith("$100/$100 100%")
 
 
 def test_warn_again_after_15_minutes(stub, warn_env):
@@ -148,14 +148,38 @@ def test_warn_silent_without_dashboard_but_statusline_mode_complains(warn_env):
 
 def test_warn_message_is_valid_json_whatever_the_name(stub, warn_env):
     stub.status_line = 'a"b\\c · daily 90/100 req'
-    assert json.loads(warn(warn_env).stdout) == {"systemMessage": 'Gateway: a"b\\c · daily 90/100 req'}
+    assert json.loads(warn(warn_env).stdout) == {"systemMessage": 'Gateway: a"b\\c · daily 90/100 req 90%'}
 
 
 def test_statusline_mode_still_colours_figures(stub, warn_env):
     stub.status_line = "alice · daily 90/100 req"
     r = run(["sh", str(STATUSLINE)], warn_env)
     assert r.returncode == 0
-    assert "\033[33m90/100\033[36m" in r.stdout and r.stdout.startswith("\033[36m◆ alice")
+    assert "\033[33m90/100 req 90%\033[36m" in r.stdout and r.stdout.startswith("\033[36m◆ alice")
+
+
+def plain(text):
+    import re
+    return re.sub(r"\033\[[0-9;]*m", "", text)
+
+
+def test_statusline_shows_each_used_limit_pair_as_a_percentage(stub, warn_env):
+    stub.status_line = "alice · daily $305/$500 · weekly 4.2M/5.0M tok (frees in 7.0 days) · 5h 30% · x 996/1000 req"
+    r = run(["sh", str(STATUSLINE)], warn_env)
+    assert plain(r.stdout) == ("◆ alice · daily $305/$500 61% · weekly 4.2M/5.0M tok 84% (frees in 7.0 days) · 5h 30%"
+                               " · x 996/1000 req 99%\n")                  # rounded down: 100% only once reached
+
+
+def test_statusline_skips_the_percentage_of_a_zero_limit(stub, warn_env):
+    stub.status_line = "alice · daily $0/$0"
+    assert plain(run(["sh", str(STATUSLINE)], warn_env).stdout) == "◆ alice · daily $0/$0\n"
+
+
+def test_warning_and_usage_carry_the_percentage_too(stub, warn_env):
+    stub.status_line = "alice · daily 90/100 req"
+    assert json.loads(warn(warn_env).stdout)["systemMessage"] == "Gateway: alice · daily 90/100 req 90%"
+    fresh(warn_env)
+    assert json.loads(usage_prompt(warn_env).stdout)["reason"].startswith("Gateway: alice · daily 90/100 req 90% ·")
 
 
 # ---------- statusline.sh --warn answers gclaude's /usage (the hook blocks the prompt; no model call) ----------
@@ -192,7 +216,7 @@ def test_usage_prompt_is_blocked_with_the_gateway_line_at_any_level(stub, warn_e
     assert r.returncode == 0
     out = json.loads(r.stdout)
     assert out["decision"] == "block"
-    assert out["reason"] == f'Gateway: a"b · daily 10/100 req · details: {stub.url}/dashboard'
+    assert out["reason"] == f'Gateway: a"b · daily 10/100 req 10% · details: {stub.url}/dashboard'
     assert not list(Path(warn_env["TMPDIR"]).glob("*.warned"))   # not a warning: the 80% bands are untouched
 
 

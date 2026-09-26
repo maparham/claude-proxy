@@ -35,21 +35,27 @@ function num(t) { gsub(/[$,%]/, "", t); return t ~ /M$/ ? t * 1e6 : t ~ /K$/ ? t
 function pct(tok,  ab) { if (split(tok, ab, "/") == 2) return num(ab[2]) ? 100 * num(ab[1]) / num(ab[2]) : 0; return num(tok) }
 BEGIN { RE = "[$]?[0-9][0-9,.]*[KM]?/[$]?[0-9][0-9,.]*[KM]?%?|[0-9]+([.][0-9]+)?%" }
 '
-# Cyan with a leading diamond, so it stands apart from Claude Code's own items; a figure turns yellow at 80%
-# and red at 100%. The cache keeps the plain line.
-show() {
-  printf '%s\n' "$1" | awk "$FIGURES"'
+# figures LINE [colour]: each used/limit pair (with its " req"/" tok" unit) followed by its percentage, rounded
+# down so 100% means reached: `daily $305/$500 61%`. With colour: cyan with a leading diamond, so it stands apart
+# from Claude Code's own items, and a figure turns yellow at 80% and red at 100%. The cache keeps the server's line.
+figures() {
+  printf '%s\n' "$1" | awk -v colour="${2:-}" "$FIGURES"'
   {
     out = ""; rest = $0
     while (match(rest, RE)) {
-      tok = substr(rest, RSTART, RLENGTH); v = pct(tok)
-      c = v >= 100 ? "\033[31m" : v >= 80 ? "\033[33m" : ""
-      out = out substr(rest, 1, RSTART - 1) (c ? c tok "\033[36m" : tok)
+      pre = substr(rest, 1, RSTART - 1); tok = substr(rest, RSTART, RLENGTH); v = pct(tok)
       rest = substr(rest, RSTART + RLENGTH)
+      if (split(tok, ab, "/") == 2) {
+        if (rest ~ /^ (req|tok)/) { tok = tok substr(rest, 1, 4); rest = substr(rest, 5) }
+        if (num(ab[2])) tok = tok " " int(v + 1e-9) "%"   # 4.2M/5.0M is 84%, not 83.99999...
+      }
+      c = colour == "" ? "" : v >= 100 ? "\033[31m" : v >= 80 ? "\033[33m" : ""
+      out = out pre (c ? c tok "\033[36m" : tok)
     }
-    printf "\033[36m\342\227\206 %s%s\033[0m\n", out, rest
+    printf (colour == "" ? "%s%s\n" : "\033[36m\342\227\206 %s%s\033[0m\n"), out, rest
   }'
 }
+show() { figures "$1" colour; }
 peak() {   # the highest figure on the line, as a whole percentage (0 when there is none)
   printf '%s\n' "$1" | awk "$FIGURES"'
   {
@@ -80,7 +86,7 @@ fi
 
 if [ -n "$usage" ]; then
   [ -n "$line" ] || block "Gateway status unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
-  block "Gateway: $line · details: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+  block "Gateway: $(figures "$line") · details: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
 fi
 
 # --warn: band 1 from 80%, band 2 from 100%. The state file holds the band last warned about; its age is the time since.
@@ -99,5 +105,5 @@ if [ "$band" -le "$last" ] && [ "$(age "$state")" -lt 900 ]; then
   exit 0
 fi
 printf '%s\n' "$band" > "$state"
-printf '{"systemMessage": "%s"}\n' "$(json_str "Gateway: $line")"
+printf '{"systemMessage": "%s"}\n' "$(json_str "Gateway: $(figures "$line")")"
 exit 0
