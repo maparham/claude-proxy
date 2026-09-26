@@ -9,6 +9,7 @@
 #   "hooks": {"UserPromptSubmit": [{"hooks": [{"type": "command", "command": "/path/to/statusline.sh --warn"}]}]}
 # The same hook answers gclaude's /usage command (commands/usage.md there; Claude Code's own /usage can't see the
 # gateway): it blocks that prompt, so no model call is made, and gives a fresh line with the dashboard link as the reason.
+# Only where that usage.md is claude-gateway's, so another /usage command (plain claude's, or your own) runs as usual.
 # Environment (e.g. in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
@@ -16,7 +17,9 @@
 warn= usage=
 [ "${1:-}" = --warn ] && warn=1
 input=$(cat)   # Claude Code sends session or prompt JSON on stdin; only --warn looks at it, for a /usage prompt
-[ -n "$warn" ] && printf '%s' "$input" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"/usage([[:space:]][^"]*)?"' && usage=1
+[ -n "$warn" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ] &&
+  grep -qF '# Installed by claude-gateway on --gclaude.' "$CLAUDE_CONFIG_DIR/commands/usage.md" 2>/dev/null &&
+  printf '%s' "$input" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"/usage([[:space:]][^"]*)?"' && usage=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then

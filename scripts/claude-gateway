@@ -35,6 +35,7 @@
 # are linked in (commands one by one, each time gclaude starts); settings, login, history and sessions stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
+# gclaude uses the same saved URL and key as plain `on`: --url/--key given with --gclaude replace them for both.
 set -euo pipefail
 
 SETTINGS=${CLAUDE_SETTINGS:-$HOME/.claude/settings.json}
@@ -369,12 +370,12 @@ opencode_state() {
   fi
 }
 
-gclaude_ours() { [ -f "$GCLAUDE" ] && grep -qxF "$GCLAUDE_MARK" "$GCLAUDE"; }
-gclaude_free() { gclaude_ours || [ ! -e "$GCLAUDE" ] || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
+gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE_MARK" "$GCLAUDE"; }
+gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
 gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage command, and a first-run state file
   python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" <<'EOF'
-import json, os, shlex, sys
+import atexit, json, os, shlex, sys, tempfile
 mode, client, gdir, launcher, mark, shared, own_state = sys.argv[1:]
 SHARED = ("CLAUDE.md", "agents", "skills")   # commands/ is gclaude's own folder: see USAGE below
 c = json.load(open(client)) if os.path.exists(client) else {}
@@ -397,18 +398,26 @@ ours_usage = lambda: os.path.isfile(usage) and not os.path.islink(usage) and mar
 def linked_here(p):   # a link the launcher made to one of ~/.claude/commands
     return os.path.islink(p) and os.path.dirname(os.readlink(p)) == own_cmds
 
+@atexit.register   # the record is written even when a step below fails, so `off --gclaude` can undo what was done
+def save():
+    if isinstance(rec.get("links"), set):
+        rec["links"] = sorted(rec["links"])
+    if c or os.path.exists(client):
+        json.dump(c, open(client, "w"), indent=2)
+
 if mode == "on":
-    links = set(rec.get("links", []))
+    links = rec["links"] = set(rec.get("links", []))
     if "commands" in links:   # an older gclaude linked the whole folder; it is gclaude's own folder now
         if os.path.islink(cmds) and os.readlink(cmds) == own_cmds:
             os.remove(cmds)
         links.discard("commands")
     for name in SHARED:
         src, dst = os.path.join(shared, name), os.path.join(gdir, name)
-        if os.path.exists(src) and not os.path.lexists(dst):   # never replace what the gclaude dir already has
-            os.symlink(src, dst)
+        if os.path.islink(dst) and os.readlink(dst) == src:   # ours, perhaps from a run that failed before recording it
             links.add(name)
-    rec["links"] = sorted(links)
+        elif os.path.exists(src) and not os.path.lexists(dst):   # never replace what the gclaude dir already has
+            links.add(name)
+            os.symlink(src, dst)
     if os.path.islink(cmds):
         print(f"{cmds} is a link, so gclaude's /usage was not added there.", file=sys.stderr)
     elif os.path.lexists(usage) and not ours_usage():
@@ -430,10 +439,11 @@ if mode == "on":
         with open(state, "w") as f:
             json.dump(seed, f)
     os.makedirs(os.path.dirname(launcher), exist_ok=True)
-    with open(launcher, "w") as f:
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(launcher))   # replaced, never written through a link
+    with os.fdopen(fd, "w") as f:
         f.write("#!/bin/sh\n"
-                "# gclaude: Claude Code through the claude-proxy gateway, with its own settings and history in\n"
-                f"# {gdir}. Plain `claude` keeps this machine's own login.\n"
+                "# gclaude: Claude Code through the claude-proxy gateway, with its own settings and history in the\n"
+                "# CLAUDE_CONFIG_DIR below. Plain `claude` keeps this machine's own login.\n"
                 f"{mark}\n"
                 "# Remove it with: claude-gateway off --gclaude\n"
                 "command -v claude >/dev/null 2>&1 || { echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127; }\n"
@@ -441,10 +451,13 @@ if mode == "on":
                 "export CLAUDE_CONFIG_DIR\n"
                 "# Your commands from ~/.claude/commands, linked one by one beside gclaude's own /usage.\n"
                 f"src={shlex.quote(own_cmds)} dst={shlex.quote(cmds)}\n"
-                'for f in "$src"/*; do [ -e "$f" ] && [ ! -e "$dst/${f##*/}" ] && [ ! -L "$dst/${f##*/}" ] && ln -s "$f" "$dst/"; done 2>/dev/null\n'
-                'for f in "$dst"/*; do [ -L "$f" ] && [ ! -e "$f" ] && [ "$(dirname "$(readlink "$f")")" = "$src" ] && rm -f "$f"; done\n'
+                'if [ -d "$dst" ] && [ ! -L "$dst" ]; then\n'
+                '  for f in "$src"/*; do [ -e "$f" ] && [ ! -e "$dst/${f##*/}" ] && [ ! -L "$dst/${f##*/}" ] && ln -s "$f" "$dst/"; done 2>/dev/null\n'
+                '  for f in "$dst"/*; do [ -L "$f" ] && [ ! -e "$f" ] && [ "$(dirname "$(readlink "$f")")" = "$src" ] && rm -f "$f"; done\n'
+                'fi\n'
                 'exec claude "$@"\n')
-    os.chmod(launcher, 0o755)
+    os.chmod(tmp, 0o755)
+    os.replace(tmp, launcher)
 else:
     for name in rec.get("links", []):
         dst = os.path.join(gdir, name)
@@ -459,8 +472,6 @@ else:
         if not os.listdir(cmds):
             os.rmdir(cmds)
     c.pop("gclaude", None)
-if c or os.path.exists(client):
-    json.dump(c, open(client, "w"), indent=2)
 EOF
 }
 
@@ -481,10 +492,17 @@ gclaude_on() {
 
 gclaude_off() {
   if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then echo "gclaude was not set up; nothing to undo."; return; fi
-  [ -f "$GCLAUDE_DIR/settings.json" ] && edit_settings off "$GCLAUDE_DIR/settings.json" gclaude
+  if [ -f "$GCLAUDE_DIR/settings.json" ]; then
+    edit_settings off "$GCLAUDE_DIR/settings.json" gclaude
+    rm -f "$GCLAUDE_DIR/settings.json.bak-claude-gateway"   # the copy from before `off` still holds the key
+  fi
   gclaude_files off
-  if gclaude_ours; then rm -f "$GCLAUDE"; fi
-  echo "gclaude is removed. Its history and sessions are still in $GCLAUDE_DIR; delete that folder to drop them."
+  if gclaude_ours; then
+    rm -f "$GCLAUDE"
+    echo "gclaude is removed. Its history and sessions are still in $GCLAUDE_DIR; delete that folder to drop them."
+  else
+    echo "gclaude's gateway settings are removed. $GCLAUDE was not installed by claude-gateway, so it was left as it is."
+  fi
 }
 
 gclaude_state() {

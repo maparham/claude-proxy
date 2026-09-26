@@ -160,9 +160,30 @@ def test_statusline_mode_still_colours_figures(stub, warn_env):
 
 # ---------- statusline.sh --warn answers gclaude's /usage (the hook blocks the prompt; no model call) ----------
 
-def usage_prompt(env, prompt="/usage"):
-    return run(["sh", str(STATUSLINE), "--warn"], env, stdin=json.dumps({"hook_event_name": "UserPromptSubmit",
-                                                                         "prompt": prompt}))
+def gclaude_config(env, usage_text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
+    """A config folder like gclaude's: CLAUDE_CONFIG_DIR with its commands/usage.md."""
+    cfg = Path(env["HOME"]) / "gcfg"
+    (cfg / "commands").mkdir(parents=True, exist_ok=True)
+    (cfg / "commands" / "usage.md").write_text(usage_text)
+    return {**env, "CLAUDE_CONFIG_DIR": str(cfg)}
+
+
+def usage_prompt(env, prompt="/usage", config=True):
+    return run(["sh", str(STATUSLINE), "--warn"], gclaude_config(env) if config else env,
+               stdin=json.dumps({"hook_event_name": "UserPromptSubmit", "prompt": prompt}))
+
+
+def test_usage_prompt_is_left_alone_outside_gclaude(stub, warn_env):
+    stub.status_line = "alice · daily 10/100 req"
+    r = usage_prompt(warn_env, config=False)                         # plain claude, e.g. global mode
+    assert (r.returncode, r.stdout) == (0, "")
+
+
+def test_usage_prompt_is_left_alone_when_gclaude_has_its_own_usage_command(stub, warn_env):
+    stub.status_line = "alice · daily 10/100 req"
+    env = gclaude_config(warn_env, usage_text="my own usage command\n")
+    r = run(["sh", str(STATUSLINE), "--warn"], env, stdin=json.dumps({"prompt": "/usage"}))
+    assert (r.returncode, r.stdout) == (0, "")
 
 
 def test_usage_prompt_is_blocked_with_the_gateway_line_at_any_level(stub, warn_env):
@@ -791,3 +812,67 @@ def test_gclaude_off_removes_its_usage_command_and_command_links(stub, home):
     assert cg(home, "off", "--gclaude").returncode == 0
     assert not (gdir / "commands").exists()
     assert (own_cmds / "mine.md").read_text() == "mine\n"
+
+
+
+# ---------- gclaude review fixes ----------
+
+def test_gclaude_off_removes_links_left_by_a_failed_on(stub, home):
+    own_claude(home)
+    gdir, _, _ = gc_paths(home)
+    gdir.mkdir(parents=True)
+    (gdir / "commands").write_text("a file where the folder goes")      # makes `on` fail after linking
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode != 0
+    assert (gdir / "agents").is_symlink()
+    (gdir / "commands").unlink()
+    assert cg(home, "on", "--gclaude").returncode == 0
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not (gdir / "agents").is_symlink() and not (gdir / "CLAUDE.md").is_symlink()
+
+
+def test_gclaude_refuses_a_dangling_symlink_where_the_command_goes(stub, home, tmp_path):
+    _, _, launcher = gc_paths(home)
+    launcher.parent.mkdir(parents=True)
+    target = tmp_path / "elsewhere" / "mytool"
+    launcher.symlink_to(target)
+    r = cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 1 and str(launcher) in r.stderr
+    assert launcher.is_symlink() and not target.exists()
+
+
+def test_gclaude_launcher_leaves_a_linked_commands_folder_alone(stub, home, tmp_path):
+    own_claude(home)
+    own_cmds = home / ".claude" / "commands"
+    own_cmds.mkdir()
+    (own_cmds / "mine.md").write_text("mine\n")
+    team = tmp_path / "team-commands"
+    team.mkdir()
+    gdir, _, launcher = gc_paths(home)
+    gdir.mkdir(parents=True)
+    (gdir / "commands").symlink_to(team)
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert run_gclaude(home, launcher).returncode == 0
+    assert list(team.iterdir()) == []
+
+
+def test_gclaude_off_drops_the_settings_backup_that_holds_the_key(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, _ = gc_paths(home)
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not (gdir / "settings.json.bak-claude-gateway").exists()
+    assert "sk-proxy-full" not in "".join(p.read_text(errors="ignore") for p in gdir.rglob("*") if p.is_file())
+
+
+def test_gclaude_launcher_never_puts_its_folder_path_in_a_comment(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, launcher = gc_paths(home)
+    assert not [l for l in launcher.read_text().splitlines() if l.startswith("#") and str(gdir) in l]
+
+
+def test_off_gclaude_says_when_the_command_is_not_ours(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    launcher.write_text("#!/bin/sh\necho mine\n")
+    r = cg(home, "off", "--gclaude")
+    assert r.returncode == 0 and "not installed by claude-gateway" in r.stdout
+    assert launcher.read_text() == "#!/bin/sh\necho mine\n"
