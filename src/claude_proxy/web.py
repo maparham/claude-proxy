@@ -612,10 +612,18 @@ def _user_rejected_by(r):
     return limits.USER_KINDS.get(r, r)
 
 
+def _resets(s) -> str:
+    # A share limit follows the account's bucket, which resets all at once; the others are rolling windows.
+    if not s.reset_in:
+        return ""
+    return f" ({'resets' if s.kind in limits.SHARE_BUCKETS else 'frees'} in {limits.human(s.reset_in)})"
+
+
 def _status_line(user, states, account) -> str:
-    """e.g. `maya · daily $61/$100 · plan 5h 8% (yours 6%) · week 10%`: the user's limits as used/limit, then,
-    for an admin (`account` given), the shared subscription's quota and the estimated part their requests used.
-    A non-admin's share limits read as their own allowance: `5h 30%`."""
+    """e.g. `maya · daily $61/$100 (frees in 3.2 h) · plan 5h 8% (yours 6%) · week 10%`: the user's limits as
+    used/limit, each with when its oldest counted usage leaves the rolling window (when over the limit: when enough has
+    left to be under it), then, for an admin (`account` given), the shared subscription's quota and the estimated part
+    their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`."""
     parts = [user["name"]]
     for s in states:
         if s.kind == "allowed_models":
@@ -623,7 +631,7 @@ def _status_line(user, states, account) -> str:
         base, _, period = s.kind.partition("_")
         if base == "share" and account is None:
             label = "5h" if period == "5h" else "week"
-            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%")
+            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{_resets(s)}")
             continue
         if base == "share":
             label, used = f"{'5h' if period == '5h' else 'week'} share", lambda v: f"{v:.0f}"
@@ -633,7 +641,7 @@ def _status_line(user, states, account) -> str:
             parts.append(f"{label} n/a")
             continue
         suffix = {"requests": " req", "tokens": " tok", "share": "%"}.get(base, "")
-        parts.append(f"{label} {used(s.current)}/{used(s.limit)}{suffix}")
+        parts.append(f"{label} {used(s.current)}/{used(s.limit)}{suffix}{_resets(s)}")
     if account is None:
         return " · ".join(parts)
     a5, a7 = account["5h"], account["7d"]

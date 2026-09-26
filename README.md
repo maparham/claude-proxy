@@ -90,9 +90,10 @@ one; then it says how to add them to it). Setting it up by hand instead:
 "statusLine": { "type": "command", "command": "/path/to/scripts/statusline.sh", "refreshInterval": 30 }
 ```
 
-It prints each of their limits, e.g. `maya · daily $61/$100 61% · 5h 30%` (a used/limit figure gets its percentage,
-rounded down), in cyan with a leading `◆`; a
-figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
+It prints each of their limits, e.g. `maya · daily $61/$100 61% (frees in 3.2 h) · 5h 30% (resets in 2.1 h)`: a
+used/limit figure gets its percentage, rounded down, and each limit says when room comes back (a rolling limit
+"frees" as its oldest counted usage leaves the window; a share limit "resets" with the account's bucket). It is
+cyan with a leading `◆`, and a figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
 see only their own data.
 
 `claude-gateway on` also adds a prompt hook (`statusline.sh --warn`): when any of those figures reaches 80%,
