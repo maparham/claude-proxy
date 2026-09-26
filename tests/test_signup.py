@@ -412,6 +412,7 @@ async def test_privacy_page(env):
     async with app(gw) as c:
         r = await c.get("/privacy")
     assert r.status_code == 200 and "after 90 days" in r.text and "not stored" in r.text
+    assert "no-transform" in r.headers["cache-control"]
 
 
 def test_credit_accounts_share_a_daily_cap(env):
