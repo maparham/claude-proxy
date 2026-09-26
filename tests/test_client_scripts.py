@@ -1329,3 +1329,50 @@ def test_bare_off_asks_which_when_both_are_set_up(stub, home):
     r = cg(home, "off")
     assert r.returncode == 1 and "off --global, or off --gclaude" in r.stderr
     assert gc_paths(home)[2].exists()
+
+
+# ---------- gclaude shares user-scope MCP servers (gclaude-sync.py) ----------
+
+def own_mcp(home, servers):
+    (home / ".claude").mkdir(exist_ok=True)
+    (home / ".claude.json").write_text(json.dumps({"oauthAccount": {"email": "me@x"}, "mcpServers": servers}))
+
+
+def gclaude_json(home):
+    return gc_paths(home)[0] / ".claude.json"
+
+
+def test_sync_shares_mcp_servers_and_keeps_gclaudes_own(home):
+    own_mcp(home, {"a": {"command": "a"}, "b": {"command": "b"}})
+    gdir = gc_paths(home)[0]
+    gdir.mkdir(parents=True)
+    gclaude_json(home).write_text(json.dumps({"numStartups": 3, "mcpServers": {"mine": {"command": "m"}}}))
+    assert sync(home).returncode == 0
+    g = json.loads(gclaude_json(home).read_text())
+    assert g["mcpServers"] == {"a": {"command": "a"}, "b": {"command": "b"}, "mine": {"command": "m"}}
+    assert g["numStartups"] == 3 and "oauthAccount" not in g          # nothing else of plain claude's follows
+    g["mcpServers"]["b"] = {"command": "b2"}                            # changed in gclaude: gclaude's own now
+    gclaude_json(home).write_text(json.dumps(g))
+    own_mcp(home, {"a": {"command": "a2"}, "c": {"command": "c"}})      # plain claude changes a, drops b, adds c
+    assert sync(home).returncode == 0
+    assert json.loads(gclaude_json(home).read_text())["mcpServers"] == \
+        {"a": {"command": "a2"}, "b": {"command": "b2"}, "c": {"command": "c"}, "mine": {"command": "m"}}
+    assert sync(home, "unsync").returncode == 0
+    assert json.loads(gclaude_json(home).read_text()) == \
+        {"numStartups": 3, "mcpServers": {"b": {"command": "b2"}, "mine": {"command": "m"}}}
+
+
+def test_sync_makes_gclaudes_claude_json_for_mcp_servers_before_its_first_start(home):
+    own_mcp(home, {"a": {"command": "a"}})
+    gc_paths(home)[0].mkdir(parents=True)
+    assert sync(home).returncode == 0
+    assert json.loads(gclaude_json(home).read_text()) == {"mcpServers": {"a": {"command": "a"}}}
+    assert gclaude_json(home).stat().st_mode & 0o777 == 0o600
+
+
+def test_sync_leaves_an_unreadable_gclaude_claude_json_alone(home):
+    own_mcp(home, {"a": {"command": "a"}})
+    gc_paths(home)[0].mkdir(parents=True)
+    gclaude_json(home).write_text("{not json")
+    assert sync(home).returncode == 0
+    assert gclaude_json(home).read_text() == "{not json"

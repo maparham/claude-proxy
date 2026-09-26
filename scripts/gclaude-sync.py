@@ -12,6 +12,9 @@
   The enabledPlugins and extraKnownMarketplaces entries of <own>/settings.json follow into gclaude's settings.json:
   each sync copies only what plain `claude` changed since the last one (kept in .gclaude-sync.json), so a plugin
   turned on or off in gclaude stays that way until plain `claude` changes the same one.
+- MCP servers: the user-scope mcpServers of ~/.claude.json follow into gclaude's .claude.json the same way, so a
+  server added, changed or removed in plain `claude` is in gclaude at its next start, and one gclaude changed or
+  added itself stays. Project and local-scope servers are not shared (.mcp.json is read by both anyway).
 - memory: projects/<project>/memory is a link to <own>/projects/<project>/memory for every project that has
   memories there, and for the current project once plain `claude` has been used in it. Session history stays
   separate. A gclaude memory folder that already holds memories is left alone.
@@ -27,7 +30,8 @@ import sys
 import tempfile
 
 PLUGIN_KEYS = ("enabledPlugins", "extraKnownMarketplaces")
-SNAPSHOT = ".gclaude-sync.json"   # in the gclaude dir: <own>'s plugin entries as of the last sync
+MCP_KEYS = ("mcpServers",)
+SNAPSHOT = ".gclaude-sync.json"   # in the gclaude dir: <own>'s plugin and MCP entries as of the last sync
 
 
 def load(path):
@@ -121,59 +125,93 @@ def sync_plugins(gdir, own, notes):
         else:
             os.symlink(src, dst)
     own_settings = load(os.path.join(own, "settings.json"))
-    settings_path, snap_path = os.path.join(gdir, "settings.json"), os.path.join(gdir, SNAPSHOT)
+    settings_path = os.path.join(gdir, "settings.json")
     settings = load(settings_path)
     if own_settings is None or settings is None:
         return
-    snap = load(snap_path) or {}
-    changed = False
-    for key in PLUGIN_KEYS:
-        theirs = own_settings.get(key) if isinstance(own_settings.get(key), dict) else {}
-        last = snap.get(key) if isinstance(snap.get(key), dict) else {}
-        mine = dict(settings[key]) if isinstance(settings.get(key), dict) else {}
-        for name, value in theirs.items():
-            if name not in last or last[name] != value:   # new or changed in plain claude since the last sync
-                mine[name] = value
-        for name, value in last.items():
-            if name not in theirs and mine.get(name) == value:   # dropped in plain claude, untouched in gclaude
-                del mine[name]
-        if mine != (settings.get(key) or {}):
-            changed = True
-            if mine:
-                settings[key] = mine
-            else:
-                settings.pop(key, None)
-        snap[key] = theirs
-    if changed:
-        write_json(settings_path, settings)
-    if snap != load(snap_path):
-        write_json(snap_path, snap)
+    follow(own_settings, settings, settings_path, PLUGIN_KEYS, gdir)
 
 
 def unsync_plugins(gdir, own):
     src, dst = os.path.join(own, "plugins"), os.path.join(gdir, "plugins")
     if points_to(dst, src):
         os.remove(dst)
-    settings_path, snap_path = os.path.join(gdir, "settings.json"), os.path.join(gdir, SNAPSHOT)
-    snap = load(snap_path) or {}
-    settings = load(settings_path)
-    if os.path.exists(snap_path):
-        os.remove(snap_path)
-    if settings is None:
+    unfollow(os.path.join(gdir, "settings.json"), PLUGIN_KEYS, gdir)
+
+
+# ---------- MCP servers ----------
+
+def mcp_paths(gdir, own):
+    """Plain claude keeps its user-scope MCP servers in ~/.claude.json, next to <own>; gclaude in <gclaude>/.claude.json."""
+    return os.path.join(os.path.dirname(os.path.abspath(own)), ".claude.json"), os.path.join(gdir, ".claude.json")
+
+
+def sync_mcp(gdir, own, notes):
+    own_path, path = mcp_paths(gdir, own)
+    own_data = load(own_path)
+    data = load(path) if os.path.exists(path) else {}   # gclaude's first start makes the rest of it
+    if own_data is None or data is None:
         return
+    follow(own_data, data, path, MCP_KEYS, gdir)
+
+
+def unsync_mcp(gdir, own):
+    unfollow(mcp_paths(gdir, own)[1], MCP_KEYS, gdir)
+
+
+# ---------- entries that follow plain claude (plugins, MCP servers) ----------
+
+def follow(own_data, data, path, keys, gdir):
+    """Copy into data (saved at path) what plain claude changed in each keys dict of own_data since the last sync."""
+    snap_path = os.path.join(gdir, SNAPSHOT)
+    snap = load(snap_path) or {}
     changed = False
-    for key in PLUGIN_KEYS:
-        mine, synced = settings.get(key), snap.get(key)
-        if isinstance(mine, dict) and isinstance(synced, dict):
-            kept = {k: v for k, v in mine.items() if not (k in synced and synced[k] == v)}   # gclaude's own stay
-            if kept != mine:
-                changed = True
-                if kept:
-                    settings[key] = kept
-                else:
-                    del settings[key]
+    for key in keys:
+        theirs = own_data.get(key) if isinstance(own_data.get(key), dict) else {}
+        last = snap.get(key) if isinstance(snap.get(key), dict) else {}
+        mine = dict(data[key]) if isinstance(data.get(key), dict) else {}
+        for name, value in theirs.items():
+            if name not in last or last[name] != value:   # new or changed in plain claude since the last sync
+                mine[name] = value
+        for name, value in last.items():
+            if name not in theirs and mine.get(name) == value:   # dropped in plain claude, untouched in gclaude
+                del mine[name]
+        if mine != (data.get(key) or {}):
+            changed = True
+            if mine:
+                data[key] = mine
+            else:
+                data.pop(key, None)
+        snap[key] = theirs
     if changed:
-        write_json(settings_path, settings)
+        write_json(path, data)
+    if snap != load(snap_path):
+        write_json(snap_path, snap)
+
+
+def unfollow(path, keys, gdir):
+    """Drop from the file at path the keys entries a sync copied and gclaude left as they were."""
+    snap_path = os.path.join(gdir, SNAPSHOT)
+    snap, data = load(snap_path) or {}, load(path)
+    if data is not None:
+        changed = False
+        for key in keys:
+            mine, synced = data.get(key), snap.get(key)
+            if isinstance(mine, dict) and isinstance(synced, dict):
+                kept = {k: v for k, v in mine.items() if not (k in synced and synced[k] == v)}   # gclaude's own stay
+                if kept != mine:
+                    changed = True
+                    if kept:
+                        data[key] = kept
+                    else:
+                        del data[key]
+        if changed:
+            write_json(path, data)
+    rest = {k: v for k, v in snap.items() if k not in keys}   # what the other unsync steps still need
+    if rest:
+        write_json(snap_path, rest)
+    elif os.path.exists(snap_path):
+        os.remove(snap_path)
 
 
 # ---------- memory ----------
@@ -251,10 +289,10 @@ def main():
     mode, gdir, own = sys.argv[1:4]
     if mode == "sync":
         steps = (lambda: sync_commands(gdir, own, notes), lambda: sync_plugins(gdir, own, notes),
-                 lambda: sync_memory(gdir, own, os.getcwd(), notes))
+                 lambda: sync_mcp(gdir, own, notes), lambda: sync_memory(gdir, own, os.getcwd(), notes))
     elif mode == "unsync":
         steps = (lambda: unsync_commands(gdir, own), lambda: unsync_plugins(gdir, own),
-                 lambda: unsync_memory(gdir, own))
+                 lambda: unsync_mcp(gdir, own), lambda: unsync_memory(gdir, own))
     else:
         sys.exit(__doc__)
     notes = []
