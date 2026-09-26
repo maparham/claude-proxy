@@ -202,3 +202,19 @@ def test_exact_scope_matches_requested_model_even_if_upstream_renames_it(env):
     conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, requested_model) "
                  "VALUES(?,?,?,?,?,?,?,?)", (uid, NOW - 10, NOW - 9, "POST", "/v1/messages", "meta", "muse-spark-1.3", "muse-spark"))
     assert check(conn, cfg, uid, model="muse-spark").kind == "requests_daily"
+
+
+def test_nothing_to_free_when_nothing_counted(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "cost_daily", 100, "usd")
+    req(conn, uid, NOW - 60, model=None, path="/v1/models")              # listing models costs nothing
+    s = limits.states(conn, cfg, uid, now=NOW)[0]
+    assert (s.current, s.reset_in) == (0, None)
+
+
+def test_room_frees_from_the_oldest_usage_that_counts(env):
+    conn, cfg, uid = env
+    set_limit(conn, uid, "cost_daily", 100, "usd")
+    req(conn, uid, NOW - 7200, model=None, path="/v1/models")            # free, and older
+    req(conn, uid, NOW - 3600, model="claude-opus-5", i=100_000)         # $0.50
+    assert limits.states(conn, cfg, uid, now=NOW)[0].reset_in == 86400 - 3600

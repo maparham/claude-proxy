@@ -129,13 +129,15 @@ def _window_state(conn, cfg, user_id, row, now) -> LimitState:
     if scope != "*":
         # A scope names what clients ask for; providers may answer with a longer model id.
         groups = [g for g in groups if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
-    current = sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
-                  for g in groups)
+    amounts = [_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
+               for g in groups]
+    current = sum(amounts)
     exceeded = current >= limit
     reset_in = None
-    if groups and not exceeded:
-        reset_in = min(g["first"] for g in groups) + window - now
-    elif groups:
+    counted = [g for g, a in zip(groups, amounts) if a > 0]   # a request that adds nothing frees nothing when it leaves
+    if counted and not exceeded:
+        reset_in = min(g["first"] for g in counted) + window - now
+    elif exceeded and groups:
         # When enough of the oldest requests have left the window for the rest to be under the limit.
         if scope != "*":
             pairs = [(g["rm"], g["model"]) for g in groups]
