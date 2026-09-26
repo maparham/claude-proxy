@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Move the running gateway (its subscription grant, users, limits and history) from this Mac to the box.
-# Run from the repo root:  deploy/lightsail/migrate-from-mac.sh ec2-user@3.139.146.5
+# Run from the repo root:  deploy/lightsail/migrate-from-mac.sh ec2-user@<server-ip>
 # Only one process may ever refresh the grant, so the Mac gateway is stopped first and its data
 # directory is retired at the end.
 set -euo pipefail

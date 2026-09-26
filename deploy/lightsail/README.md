@@ -1,9 +1,10 @@
 # Deploying on a shared Lightsail host behind a Cloudflare tunnel
 
-From the repo root on the Mac that currently runs the gateway:
+From the repo root on the Mac that currently runs the gateway (`<server-ip>` here and below is the
+instance's public address, shown in the Lightsail console):
 
 ```sh
-deploy/lightsail/migrate-from-mac.sh ec2-user@3.139.146.5     # moves grant + data, starts the container
+deploy/lightsail/migrate-from-mac.sh ec2-user@<server-ip>     # moves grant + data, starts the container
 ```
 
 Then publish the two listeners through the tunnel. The `aws-vps` tunnel on this box is **managed from
@@ -49,10 +50,10 @@ One-time setup, and again after changing `claude-gateway-deploy` or `docker-comp
 the key:
 
 ```sh
-deploy/lightsail/install-deploy-key.sh ec2-user@3.139.146.5
+deploy/lightsail/install-deploy-key.sh ec2-user@<server-ip>
 ```
 
-Roll back by hand: `ssh ec2-user@3.139.146.5`, `cd claude-gateway/deploy/lightsail`, list tags with
+Roll back by hand: `ssh ec2-user@<server-ip>`, `cd claude-gateway/deploy/lightsail`, list tags with
 `docker image ls claude-proxy`, write the one you want to `.env` as `GATEWAY_TAG=<tag>`, then run
 `docker compose up -d --no-build`. `update.sh` still ships the local checkout, built on the box as
 `claude-proxy:manual-<time>`.

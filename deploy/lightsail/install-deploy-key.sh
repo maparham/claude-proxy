@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # One-time setup (rerun to update the deploy script or rotate the key) for the GitHub Actions deploy.
-# Run from the repo root:  deploy/lightsail/install-deploy-key.sh ec2-user@3.139.146.5
+# Run from the repo root:  deploy/lightsail/install-deploy-key.sh ec2-user@<server-ip>
 #
 # Installs claude-gateway-deploy and the compose file on the box, adds a fresh deploy key to
 # authorized_keys that can run only that script, and stores DEPLOY_SSH_KEY, DEPLOY_KNOWN_HOSTS and

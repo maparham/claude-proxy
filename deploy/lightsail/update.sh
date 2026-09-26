@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Ship this checkout's source to the box and restart the gateway. The box's data volume (grant, users,
 # history), config.toml and gateway.env are left as they are.
-# Run from the repo root:  deploy/lightsail/update.sh ec2-user@3.139.146.5
+# Run from the repo root:  deploy/lightsail/update.sh ec2-user@<server-ip>
 set -euo pipefail
 HOST=${1:?usage: $0 user@host}
 REMOTE=claude-gateway/deploy/lightsail
