@@ -819,6 +819,13 @@ async function showClerk() {
   else mountClerk();
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.clerkMounted && !$("#login").classList.contains("hidden")) mountClerk(); });
+$("#signin-copy").onclick = async (e) => {
+  const b = e.currentTarget;
+  try { await navigator.clipboard.writeText($("#signin-install").textContent); } catch { return; /* clipboard blocked */ }
+  b.classList.add("copied"); b.setAttribute("aria-label", "Copied"); b.title = "Copied";
+  clearTimeout(b.timer);
+  b.timer = setTimeout(() => { b.classList.remove("copied"); b.setAttribute("aria-label", "Copy command"); b.title = "Copy command"; }, 1600);
+};
 $("#other-ways").onclick = (e) => {
   e.preventDefault();
   S.otherWays = !S.otherWays;
