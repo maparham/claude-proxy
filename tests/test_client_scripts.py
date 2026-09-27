@@ -22,6 +22,7 @@ class Stub:
         self.models: dict = {"data": [], "has_more": False}
         self.models_status = 200
         self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
+        self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
         self.install: str | None = None   # GET /install, the dashboard's installer; None: 404
         self.requests: list[tuple[str, dict]] = []
         stub = self
@@ -51,7 +52,15 @@ class Stub:
 
             def do_POST(self):
                 stub.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}))
-                code, body = stub.logout if self.path == "/api/me/logout" else (404, {})
+                if self.path == "/api/me/logout":
+                    code, body = stub.logout
+                elif self.path == "/api/device/start":
+                    code, body = 200, {"device_code": "dc-1", "user_code": "ABCD-EFGH", "interval": 0.1, "expires_in": 20,
+                                       "verification_uri_complete": f"{stub.url}/dashboard#authorize/ABCD-EFGH"}
+                elif self.path == "/api/device/token":
+                    code, body = stub.tokens.pop(0) if stub.tokens else (400, {"error": "authorization_pending"})
+                else:
+                    code, body = 404, {}
                 data = json.dumps(body, separators=(",", ":")).encode()   # as FastAPI writes it
                 self.send_response(code)
                 self.send_header("content-type", "application/json")
@@ -357,7 +366,7 @@ def signed_out(env):
 def test_logout_prompt_revokes_this_computers_key_and_removes_it(stub, warn_env):
     out = json.loads(logout_prompt(warn_env).stdout)
     assert out["continue"] is False and "revoked on the gateway" in out["stopReason"]
-    assert "claude-gateway on --login" in out["stopReason"]
+    assert "run gclaude again" in out["stopReason"]
     path, headers = stub.requests[-1]
     assert path == "/api/me/logout" and headers["authorization"] == "Bearer sk-proxy-k"
     assert signed_out(warn_env)
@@ -942,12 +951,15 @@ def test_gclaude_rerun_tightens_a_readable_settings_file(stub, home):
 
 # ---------- claude-gateway --gclaude: /usage and per-command links ----------
 
-def run_gclaude(home, launcher):
+def run_gclaude(home, launcher, *args):
     fake = home / "fakebin"
     fake.mkdir(exist_ok=True)
-    (fake / "claude").write_text("#!/bin/sh\nexit 0\n")
-    (fake / "claude").chmod(0o755)
-    return run([str(launcher)], {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home)})
+    (fake / "claude").write_text('#!/bin/sh\necho "claude started $*"\n')
+    (fake / "claude-gateway").write_text(f'#!/bin/sh\nexec bash {GATEWAY} "$@"\n')   # this checkout's, not the machine's
+    for f in ("claude", "claude-gateway"):
+        (fake / f).chmod(0o755)
+    return run([str(launcher), *args], {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home),
+                                        "TMPDIR": str(home / "tmp"), "CLAUDE_GATEWAY_OPEN": ""})   # no browser
 
 
 def test_gclaude_gets_a_usage_command_that_plain_claude_never_sees(stub, home):
@@ -969,7 +981,8 @@ def test_gclaude_gets_a_usage_command_that_plain_claude_never_sees(stub, home):
     assert os.readlink(cmds / "mine.md") == str(own_cmds / "mine.md")
 
 
-def test_gclaude_logout_signs_out_until_on_login(stub, home):
+def logged_out(stub, home):
+    """gclaude set up, then signed out with its /logout: the key is gone from settings.json and client.json."""
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     gdir, gsettings, launcher = gc_paths(home)
     env = {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_CONFIG_DIR": str(gdir),
@@ -979,9 +992,31 @@ def test_gclaude_logout_signs_out_until_on_login(stub, home):
     assert out["continue"] is False
     assert "sk-proxy-full" not in gsettings.read_text()
     assert "sk-proxy-full" not in (home / ".config" / "claude-gateway" / "client.json").read_text()
+    return gsettings, launcher
+
+
+def test_gclaude_signs_in_again_in_the_browser_when_started_signed_out(stub, home):
+    """Like plain claude's login: no separate command; the next gclaude authorizes this computer, then starts."""
+    gsettings, launcher = logged_out(stub, home)
+    stub.tokens = [(400, {"error": "authorization_pending"}), (200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0, r.stderr
+    assert f"{stub.url}/dashboard#authorize/ABCD-EFGH" in r.stderr and "Authorized as ana" in r.stderr
+    assert "Next:" not in r.stdout   # it is starting gclaude already
+    assert r.stdout.strip().endswith("claude started -p hi")
+    assert json.loads(gsettings.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
+    r = run_gclaude(home, launcher)   # signed in now: no authorization
+    assert r.returncode == 0 and "authorize" not in r.stderr, r.stderr
+
+
+def test_gclaude_does_not_start_when_the_sign_in_is_cancelled(stub, home):
+    gsettings, launcher = logged_out(stub, home)
+    stub.tokens = [(400, {"error": "access_denied"})]
     r = run_gclaude(home, launcher)
-    assert r.returncode == 1 and "claude-gateway on --login" in r.stderr
-    assert cg(home, "on", "--gclaude", "--key", "sk-proxy-new").returncode == 0
+    assert r.returncode == 1 and "Cancelled in the browser" in r.stderr, r.stderr
+    assert "claude started" not in r.stdout
+    assert "ANTHROPIC_AUTH_TOKEN" not in gsettings.read_text()
+    assert cg(home, "on", "--gclaude", "--key", "sk-proxy-new").returncode == 0   # the old way still works
     assert run_gclaude(home, launcher).returncode == 0
 
 

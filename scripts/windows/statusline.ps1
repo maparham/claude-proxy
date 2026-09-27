@@ -13,7 +13,7 @@
 # It also answers gclaude's /logout (commands\logout.md there, in place of Claude Code's own): it revokes the key on
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
-# signed-out file in CLAUDE_CONFIG_DIR, so gclaude.cmd won't start until `claude-gateway on` removes it.
+# signed-out file in CLAUDE_CONFIG_DIR, so the next gclaude.cmd signs in again (`claude-gateway on --login`, which removes it) before it starts.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -79,7 +79,7 @@ try {
         }
       }
     } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. claude-gateway off removes it." }
-    $again = 'Exit gclaude now (/exit); to sign in again: claude-gateway on --login'
+    $again = 'Exit gclaude now (/exit); run gclaude again to sign in.'
     if ($code -eq 200 -and $revoked) { Stop-Prompt "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" }
     if ($code -eq 200) { Stop-Prompt "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" }
     if ($code -eq 401 -or $code -eq 403) { Stop-Prompt "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" }

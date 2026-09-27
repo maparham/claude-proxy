@@ -40,7 +40,7 @@
 # login, prompt history and the sessions started in gclaude stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself. Its /logout signs this computer out: it revokes the key when it is this computer's own and removes it here;
-# gclaude then refuses to start until `claude-gateway on --login`. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
+# the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
 # Without --key (and none saved for that URL), `on` authorizes in the browser: it opens the dashboard (--dashboard,
 # else the URL with claude. replaced by claude-dash.) at a code, and once you click Authorize there the dashboard
 # hands this computer a key of its own. Over SSH it only prints the link and the code, to open on any device.
@@ -468,9 +468,9 @@ gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE
 gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
 gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage, /account and /logout commands, and a first-run state file
-  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" <<'EOF'
+  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
 import atexit, json, os, shlex, sys, tempfile
-mode, client, gdir, launcher, mark, shared, own_state, sync, statusline = sys.argv[1:]
+mode, client, gdir, launcher, mark, shared, own_state, sync, statusline, self_path = sys.argv[1:]
 SHARED = ("CLAUDE.md", "agents", "skills")   # commands/ is gclaude's own folder: see USAGE below
 c = json.load(open(client)) if os.path.exists(client) else {}
 rec = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
@@ -572,8 +572,15 @@ if mode == "on":
                 "fi\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
-                "grep -q '\"ANTHROPIC_AUTH_TOKEN\"' \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null ||"
-                " { echo 'gclaude: signed out (/logout); to sign in again: claude-gateway on --login' >&2; exit 1; }\n"
+                "# Signed out (/logout): sign this computer in again first, as plain claude's login would, with the\n"
+                "# claude-gateway installed beside this command, else the one on PATH or the one that wrote this file.\n"
+                "if ! grep -q '\"ANTHROPIC_AUTH_TOKEN\"' \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null; then\n"
+                '  gw=$(dirname "$0")/claude-gateway\n'
+                f'  [ -x "$gw" ] || gw=$(command -v claude-gateway 2>/dev/null) || gw={shlex.quote(self_path)}\n'
+                "  echo 'gclaude: signed out (/logout); signing this computer in again.' >&2\n"
+                '  CLAUDE_GATEWAY_FROM_GCLAUDE=1 "$gw" on --gclaude --login ||'
+                " { echo 'gclaude: not signed in, so Claude Code was not started' >&2; exit 1; }\n"
+                "fi\n"
                 "# Share commands, plugins, MCP servers, memory and sessions from ~/.claude (see gclaude-sync.py); never stops gclaude.\n"
                 f"python3 {shlex.quote(sync)} sync \"$CLAUDE_CONFIG_DIR\" {shlex.quote(shared)} 2>/dev/null\n"
                 'exec claude "$@"\n')
@@ -609,6 +616,7 @@ gclaude_on() {
   python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
   if [ -t 1 ]; then b=$(printf '\033[1;32m'); r=$(printf '\033[0m'); else b=; r=; fi   # bold green on a terminal
+  [ -z "${CLAUDE_GATEWAY_FROM_GCLAUDE:-}" ] || return 0   # gclaude is signing in and about to start
   case ":$PATH:" in
     *":$(dirname "$GCLAUDE"):"*) echo "${b}Next: run 'gclaude' instead of 'claude'.${r}" ;;
     *) echo "${b}Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'.${r}" ;;
