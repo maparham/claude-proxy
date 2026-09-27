@@ -547,27 +547,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/install")
     async def install():
         need_urls()
-        q = shlex.quote
-        script = ("#!/bin/sh\n"
-                  f"# Installs claude-gateway and connects this computer to {cfg.listener.dashboard_url}: it opens the\n"
-                  "# browser to authorize it, then sets up gclaude.\n"
-                  "set -eu\n"
-                  f"curl -fsSL {q(cfg.signup.installer_url)} | sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
-                  f"--dashboard {q(cfg.listener.dashboard_url.rstrip('/'))} \"$@\"\n")
-        return PlainTextResponse(script, media_type="text/x-shellscript", headers={"Cache-Control": "no-cache"})
+        return PlainTextResponse(install_sh(cfg), media_type="text/x-shellscript", headers={"Cache-Control": "no-cache"})
 
     @app.get("/install.ps1")
-    async def install_ps1():   # Windows PowerShell 5.1: `irm <dashboard>/install.ps1 | iex` (Windows client design section 4)
+    async def install_ps1_():
         need_urls()
-        q = lambda s: "'" + s.replace("'", "''") + "'"
-        dash = cfg.listener.dashboard_url.rstrip("/")
-        script = (f"# Installs claude-gateway and connects this computer to {dash}: it opens the browser to authorize it,\n"
-                  "# then sets up gclaude.\n"
-                  "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor "
-                  "[Net.SecurityProtocolType]::Tls12\n"
-                  f"& ([scriptblock]::Create((Invoke-RestMethod {q(cfg.signup.installer_ps1_url)}))) on "
-                  f"--url {q(cfg.listener.public_url.rstrip('/'))} --dashboard {q(dash)}\n")
-        return PlainTextResponse(script, headers={"Cache-Control": "no-cache"})
+        return PlainTextResponse(install_ps1(cfg), headers={"Cache-Control": "no-cache"})
 
     def browser_user(request: Request, write: bool = False):
         """Someone signed in to this dashboard in the browser, the only one who may authorize a computer. Not a key
@@ -813,6 +798,29 @@ async def _json(request: Request) -> dict:
     if not isinstance(body, dict):
         fail(400, "Expected a JSON object.")
     return body
+
+
+def install_sh(cfg) -> str:
+    """What `curl -fsSL <dashboard>/install | sh` runs: install.sh, then `claude-gateway on` for this gateway."""
+    q = shlex.quote
+    return ("#!/bin/sh\n"
+            f"# Installs claude-gateway and connects this computer to {cfg.listener.dashboard_url}: it opens the\n"
+            "# browser to authorize it, then sets up gclaude.\n"
+            "set -eu\n"
+            f"curl -fsSL {q(cfg.signup.installer_url)} | sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
+            f"--dashboard {q(cfg.listener.dashboard_url.rstrip('/'))} \"$@\"\n")
+
+
+def install_ps1(cfg) -> str:
+    """What `irm <dashboard>/install.ps1 | iex` runs in Windows PowerShell 5.1 (Windows client design section 4)."""
+    q = lambda s: "'" + s.replace("'", "''") + "'"
+    dash = cfg.listener.dashboard_url.rstrip("/")
+    return (f"# Installs claude-gateway and connects this computer to {dash}: it opens the browser to authorize it,\n"
+            "# then sets up gclaude.\n"
+            "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor "
+            "[Net.SecurityProtocolType]::Tls12\n"
+            f"& ([scriptblock]::Create((Invoke-RestMethod {q(cfg.signup.installer_ps1_url)}))) on "
+            f"--url {q(cfg.listener.public_url.rstrip('/'))} --dashboard {q(dash)}\n")
 
 
 def _public_user(u) -> dict:
