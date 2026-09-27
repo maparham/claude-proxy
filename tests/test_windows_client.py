@@ -161,10 +161,12 @@ class Win:
                        " catch { Write-Output \"install.ps1 threw: $_\" }; Write-Output 'session still open'", **env)
 
     def install_command(self, *args, **env):
-        """install.ps1 as `powershell -Command "irm ... | iex"` runs it (gclaude update): nothing after it, so the
-        process exit code is the installer's."""
+        """install.ps1 the way gclaude.cmd's update runs it: `irm ... | iex` inside the try/catch that Gclaude-On
+        writes, since Windows PowerShell's -Command exits 0 when a throw happens inside iex. The arguments go through
+        $args, as the script ends in `Install-ClaudeGateway -Rest $args`."""
         quoted = " ".join("'" + a.replace("'", "''") + "'" for a in args)
-        return self.ps(f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}'))) {quoted}", **env)
+        return self.ps(f"try {{ & {{ Get-Content -Raw -LiteralPath '{INSTALL}' | iex }} {quoted} }}"
+                       " catch { [Console]::Error.WriteLine($_); exit 1 }", **env)
 
     def cg(self, *args, **env):
         return self.run(["cmd.exe", "/d", "/c", "claude-gateway", *args], **env)
