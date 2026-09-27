@@ -393,10 +393,12 @@ def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude
     assert "ANTHROPIC_AUTH_TOKEN" not in s["env"] and s["env"]["ANTHROPIC_BASE_URL"] == stub.url
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("--warn")   # arrays stay arrays
     assert "key" not in win.client() and win.client()["url"] == stub.url
+    assert (win.gdir / "signed-out").is_file()
     fake = fake_claude(win, tmp_path)
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 1 and "claude-gateway on --login" in r.out, r.out
     assert win.cg("on", "--key", "sk-proxy-new").returncode == 0
+    assert not (win.gdir / "signed-out").exists()
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 0, r.out
 

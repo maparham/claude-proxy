@@ -12,7 +12,8 @@
 # Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
 # It also answers gclaude's /logout (commands\logout.md there, in place of Claude Code's own): it revokes the key on
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
-# it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT).
+# it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
+# signed-out file in CLAUDE_CONFIG_DIR, so gclaude.cmd won't start until `claude-gateway on` removes it.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -64,6 +65,7 @@ try {
     $settings = Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'
     $client = if ($env:CLAUDE_GATEWAY_CLIENT) { $env:CLAUDE_GATEWAY_CLIENT } else { Join-Path $PSScriptRoot 'client.json' }
     try {   # rewritten in place, so each file keeps its owner-only permissions
+      [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'signed-out'), "/logout`n", $utf8)
       $s = [IO.File]::ReadAllText($settings) | ConvertFrom-Json
       if (($s.env -is [psobject]) -and ($s.env.PSObject.Properties.Name -contains 'ANTHROPIC_AUTH_TOKEN')) {
         $s.env.PSObject.Properties.Remove('ANTHROPIC_AUTH_TOKEN')
