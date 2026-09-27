@@ -669,6 +669,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         row = conn.execute("SELECT user_id FROM keys WHERE id=?", (key_id,)).fetchone()
         if row is None or (row["user_id"] != user["id"] and not is_admin(user)):
             fail(404, "No such machine.")
+        # A computer's own key (sent as Bearer, or the session made from it) may sign that computer out and
+        # nothing more: a leaked laptop key must not sign the owner's other computers out.
+        own = user.get("machine_key_id") or user.get("session_key_id")
+        if own and own != key_id:
+            fail(403, "A computer's key can only remove that computer. Sign in with your first key to manage "
+                      "the others.")
         return {"ok": True, "removed": db.remove_machine_key(conn, row["user_id"], key_id, user["id"])}
 
     # ---------- admin actions ----------

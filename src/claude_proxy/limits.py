@@ -122,8 +122,7 @@ def _window_start(conn, user_id, row, now, where, params) -> float | None:
         return stored[0]
     since = max(now - window, stored[0] + window) if stored else now - window
     firsts = conn.execute(f"SELECT requested_model AS rm, model, MIN(started_at) AS first FROM requests WHERE {where} "
-                          f"AND started_at>=? AND COALESCE(requested_model, model) IS NOT NULL GROUP BY rm, model",
-                          (*params, since)).fetchall()
+                          f"AND started_at>=? GROUP BY rm, model", (*params, since)).fetchall()
     if scope != "*":
         firsts = [g for g in firsts if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
     if not firsts:
@@ -134,22 +133,28 @@ def _window_start(conn, user_id, row, now, where, params) -> float | None:
     return start
 
 
-def _window_state(conn, cfg, user_id, row, now) -> LimitState:
+def _window_state(conn, cfg, user_id, row, now, inflight: int = 0) -> LimitState:
+    """`inflight`: the user's requests being served right now, not yet recorded; they count as requests, but their
+    tokens and cost are unknown until they finish."""
     # Aggregated in SQL: this runs before every request, on the event loop that serves every stream.
     kind, scope, unit = row["kind"], row["scope"], row["unit"]
     limit = float(row["value"])
-    where = "user_id=? AND rejected_by IS NULL AND path!=?"
+    # The rows a usage limit sees, for opening its window and for filling it alike: forwarded requests for a model.
+    # A model-less request (GET /v1/models) costs nothing and is neither.
+    where = "user_id=? AND rejected_by IS NULL AND path!=? AND COALESCE(requested_model, model) IS NOT NULL"
     params = [user_id, COUNT_TOKENS_PATH]
     start = _window_start(conn, user_id, row, now, where, params)
+    pending = float(inflight) if kind.startswith("requests_") else 0.0
     if start is None:
-        return LimitState(kind, scope, row["value"], unit, current=0.0, limit=limit, remaining=limit, exceeded=limit <= 0)
+        return LimitState(kind, scope, row["value"], unit, current=pending, limit=limit, remaining=max(0.0, limit - pending),
+                          exceeded=pending >= limit)
     groups = conn.execute(f"SELECT requested_model AS rm, model, {SUMS} FROM requests "
                           f"WHERE {where} AND started_at>=? GROUP BY rm, model", (*params, start)).fetchall()
     if scope != "*":
         # A scope names what clients ask for; providers may answer with a longer model id.
         groups = [g for g in groups if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
-    current = sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
-                  for g in groups)
+    current = pending + sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
+                            for g in groups)
     return LimitState(kind, scope, row["value"], unit, current=current, limit=limit, remaining=max(0.0, limit - current),
                       reset_in=max(1, int(round(start + WINDOWS[kind] - now))), exceeded=current >= limit)
 
@@ -258,12 +263,21 @@ def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tupl
     return spent, max(1, int(round(r[0] + DAY - now))) if r else None
 
 
+MAX_INFLIGHT = "max_inflight"   # rejected_by for [limits] max_inflight, the per-user concurrency cap
+
+
 def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | None, path: str,
-             now: float | None = None) -> Decision | None:
-    """None to allow, or the rejection to send."""
+             now: float | None = None, inflight: int = 0) -> Decision | None:
+    """None to allow, or the rejection to send. `inflight`: how many of the user's metered requests are being served
+    right now; recorded only when they finish, they would otherwise slip past every limit."""
     now = time.time() if now is None else now
     is_count_tokens = path == COUNT_TOKENS_PATH
     third_party = cfg.route_for(model) is not None
+    if not is_count_tokens and inflight >= cfg.limits.max_inflight:
+        # Bounds how far a token or cost limit can be overshot: at most max_inflight requests are ever unaccounted for.
+        return Decision(429, MAX_INFLIGHT, {"type": "error", "error": {"type": "rate_limit_error", "message":
+                        f"Gateway limit max_inflight reached: {inflight} of {cfg.limits.max_inflight} requests in "
+                        "flight; wait for one to finish."}}, 1)
     rows = _rows(conn, user_id)
     for row in rows:
         kind = row["kind"]
@@ -277,7 +291,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         if row["scope"] != "*" and not fnmatch.fnmatchcase(model or "", row["scope"]):
             continue
         if kind in WINDOWS:
-            st = _window_state(conn, cfg, user_id, row, now)
+            st = _window_state(conn, cfg, user_id, row, now, inflight)
         elif kind in TOTALS:
             st = _total_state(conn, cfg, user_id, row)
         elif kind in SHARE_BUCKETS:

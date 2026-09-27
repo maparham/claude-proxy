@@ -95,7 +95,7 @@ const TIPS = {
   key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
   act_limits: `View or change this user's limits.`,
   act_upgrade: `Replace their one-time sign-up credit with a daily allowance.`,
-  act_rotate: `Issue a new key and stop the old one immediately. Usage history is kept.`,
+  act_rotate: `Issue a new key and stop the old one immediately, along with every computer authorized under it. Usage history is kept.`,
   act_routes_key: `Issue a key for OpenCode that works only for third-party models (such as Muse), never Claude. Issuing again replaces it.`,
   act_routes_key_remove: `Delete this user's OpenCode key. Their Claude Code key keeps working.`,
   act_disable: `Block the key until re-enabled. Nothing is deleted.`,

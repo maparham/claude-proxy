@@ -122,7 +122,8 @@ def cmd_user_list(args, cfg):
 def cmd_user_rotate(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
-    print(f"New gateway key for {u['name']}, shown once:\n{db.rotate_key(conn, u['id'])}")
+    key = db.rotate_key(conn, u['id'])
+    print(f"New gateway key for {u['name']}, shown once (the old key and every computer authorized under it are signed out):\n{key}")
 
 
 def cmd_user_routes_key(args, cfg):

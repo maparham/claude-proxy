@@ -26,6 +26,9 @@ on:
     - cron: "17 6 * * 1"   # Mondays: GitHub's archive and raw URLs still work the way the installers use them
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   windows:
     runs-on: windows-latest
