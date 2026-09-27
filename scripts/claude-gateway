@@ -220,8 +220,7 @@ if mode == "on":
                 s["statusLine"].setdefault("refreshInterval", 30)
             st["added_statusline"] = True
         elif not ours_line(s["statusLine"]):
-            print("You already have a statusline, so it was left as it is. To show your gateway limits in it too,\n"
-                  "add the output of this command to it: " + line_cmd)
+            print("Kept your own statusline. To show your gateway limits in it too, add the output of: " + line_cmd)
         hooks = s.setdefault("hooks", {})
         if isinstance(hooks, dict) and isinstance(hooks.setdefault("UserPromptSubmit", []), list):
             if not any(ours_hook(g) for g in hooks["UserPromptSubmit"]):
@@ -610,7 +609,10 @@ gclaude_on() {
   gclaude_files on
   python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
-  case ":$PATH:" in *":$(dirname "$GCLAUDE"):"*) ;; *) echo "Add $(dirname "$GCLAUDE") to your PATH to run gclaude." ;; esac
+  case ":$PATH:" in
+    *":$(dirname "$GCLAUDE"):"*) echo "Next: run 'gclaude' instead of 'claude'." ;;
+    *) echo "Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'." ;;
+  esac
 }
 
 gclaude_off() {

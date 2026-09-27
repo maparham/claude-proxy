@@ -189,7 +189,7 @@ def test_the_dashboards_one_liner_installs_and_authorizes(dash, home, tmp_path, 
             {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"),
              "CLAUDE_GATEWAY_TARBALL": f"file://{tarball}", "CLAUDE_GATEWAY_OPEN": str(path)})
     assert r.returncode == 0, r.stdout + r.stderr
-    assert "claude-gateway is installed" in r.stdout and "Authorized as maya" in r.stderr
+    assert "Installed claude-gateway" in r.stdout and "Authorized as maya" in r.stderr
     assert log.read_text().strip() == f"{dash.url}/dashboard#authorize/{CODE}"
     c = client(home)
     assert (c["url"], c["key"], c["dashboard"]) == (dash.url, "sk-proxy-machine", dash.url)
