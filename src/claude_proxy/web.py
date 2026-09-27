@@ -535,6 +535,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
         return out
 
+    @app.post("/api/me/logout")
+    async def me_logout(request: Request):
+        """gclaude's /logout: revokes the key that asked when it is one computer's own (authorized from the browser).
+        The first key is left alone, since other computers may use it; the client drops its copy either way."""
+        if not (request.headers.get("authorization") or request.headers.get("x-api-key")):
+            fail(401, "Send the gateway key to sign it out.")
+        user = principal(request)
+        revoked = bool(user.get("machine_key_id")) and db.remove_machine_key(conn, user["id"], user["machine_key_id"], user["id"])
+        return {"ok": True, "revoked": revoked}
+
     # ---------- browser authorization for `claude-gateway on` (sign-up design section 4) ----------
 
     def install_command(windows: bool = False) -> str | None:

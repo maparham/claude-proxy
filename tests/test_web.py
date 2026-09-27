@@ -280,3 +280,15 @@ async def test_me_status_account_names_the_key_that_asked(env):
     assert own == f"alice · alice@example.com · user · key {first}… (your first key)\n"
     assert mac.startswith("alice · alice@example.com · user · key sk-proxy-")
     assert mac.endswith("… for MacBook, authorized 2026-09-20\n")
+
+
+async def test_me_logout_revokes_only_a_machine_key(env):
+    gw, conn, ids, keys = env
+    machine = db.add_machine_key(conn, ids["alice"], "MacBook")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.post("/api/me/logout", headers=bearer(machine))).json() == {"ok": True, "revoked": True}
+        assert (await c.get("/api/me/status", headers=bearer(machine))).status_code == 401
+        # The first key may be in use on other computers: gclaude only drops its own copy.
+        assert (await c.post("/api/me/logout", headers=bearer(keys["alice"]))).json() == {"ok": True, "revoked": False}
+        assert (await c.get("/api/me/status", headers=bearer(keys["alice"]))).status_code == 200
+        assert (await c.post("/api/me/logout")).status_code == 401

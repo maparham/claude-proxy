@@ -21,6 +21,7 @@ class Stub:
         self.account_line: str | None = "alice · user · key sk-proxy-ab1… (your first key)"   # ?format=account
         self.models: dict = {"data": [], "has_more": False}
         self.models_status = 200
+        self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -44,6 +45,16 @@ class Stub:
                 self.send_header("content-length", str(len(body)))
                 self.end_headers()
                 self.wfile.write(body)
+
+            def do_POST(self):
+                stub.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}))
+                code, body = stub.logout if self.path == "/api/me/logout" else (404, {})
+                data = json.dumps(body, separators=(",", ":")).encode()   # as FastAPI writes it
+                self.send_response(code)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
 
         self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
         self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
@@ -315,6 +326,64 @@ def test_account_prompt_is_answered_by_the_hook_when_the_gateway_is_down(stub, w
 def test_other_account_prompts_are_left_alone(stub, warn_env, prompt, text):
     r = account_prompt(warn_env, prompt, **({"text": text} if text else {}))
     assert (r.returncode, r.stdout) == (0, "")
+
+
+def logout_prompt(env, prompt="/logout", text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
+    """/logout in a gclaude-like folder whose settings.json and client.json hold the key sk-proxy-k."""
+    env = gclaude_config(env)
+    cfg = Path(env["CLAUDE_CONFIG_DIR"])
+    (cfg / "commands" / "logout.md").write_text(text)
+    settings = {"env": {"ANTHROPIC_BASE_URL": "https://gw", "ANTHROPIC_AUTH_TOKEN": "sk-proxy-k"}, "model": "opus"}
+    for name in ("settings.json", "settings.json.bak-claude-gateway"):
+        (cfg / name).write_text(json.dumps(settings))
+    client = Path(env["HOME"]) / "client.json"
+    client.write_text(json.dumps({"url": "https://gw", "key": "sk-proxy-k", "gclaude": {"links": []}}))
+    return run(["sh", str(STATUSLINE), "--warn"], {**env, "CLAUDE_GATEWAY_CLIENT": str(client)},
+               stdin=json.dumps({"prompt": prompt}))
+
+
+def signed_out(env):
+    """The key is gone from every file that held it; the rest of each file stays."""
+    cfg = Path(env["HOME"]) / "gcfg"
+    assert json.loads((cfg / "settings.json").read_text()) == {"env": {"ANTHROPIC_BASE_URL": "https://gw"}, "model": "opus"}
+    assert not (cfg / "settings.json.bak-claude-gateway").exists()
+    assert json.loads((Path(env["HOME"]) / "client.json").read_text()) == {"url": "https://gw", "gclaude": {"links": []}}
+    return True
+
+
+def test_logout_prompt_revokes_this_computers_key_and_removes_it(stub, warn_env):
+    out = json.loads(logout_prompt(warn_env).stdout)
+    assert out["continue"] is False and "revoked on the gateway" in out["stopReason"]
+    assert "claude-gateway on --login" in out["stopReason"]
+    path, headers = stub.requests[-1]
+    assert path == "/api/me/logout" and headers["authorization"] == "Bearer sk-proxy-k"
+    assert signed_out(warn_env)
+
+
+def test_logout_prompt_with_the_first_key_says_it_still_works_elsewhere(stub, warn_env):
+    stub.logout = (200, {"ok": True, "revoked": False})
+    out = json.loads(logout_prompt(warn_env).stdout)
+    assert "your first key" in out["stopReason"] and signed_out(warn_env)
+
+
+def test_logout_prompt_with_a_key_the_gateway_no_longer_takes(stub, warn_env):
+    stub.logout = (401, {"error": "Invalid or revoked gateway key."})
+    out = json.loads(logout_prompt(warn_env).stdout)
+    assert "no longer accepted it" in out["stopReason"] and signed_out(warn_env)
+
+
+def test_logout_prompt_still_signs_out_here_when_the_gateway_is_down(stub, warn_env):
+    stub.logout = (502, {})
+    out = json.loads(logout_prompt(warn_env).stdout)
+    assert "could not be reached" in out["stopReason"] and f"{stub.url}/dashboard" in out["stopReason"]
+    assert signed_out(warn_env)
+
+
+@pytest.mark.parametrize("prompt,text", [("/logout", "my own logout command\n"), ("/logouts", None), ("how do I /logout", None)])
+def test_other_logout_prompts_are_left_alone(stub, warn_env, prompt, text):
+    r = logout_prompt(warn_env, prompt, **({"text": text} if text else {}))
+    assert (r.returncode, r.stdout) == (0, "")
+    assert json.loads((Path(warn_env["HOME"]) / "client.json").read_text())["key"] == "sk-proxy-k"
 
 
 # ---------- claude-gateway ----------
@@ -712,7 +781,7 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("statusline.sh --warn")
     assert os.readlink(gdir / "CLAUDE.md") == str(home / ".claude" / "CLAUDE.md")
     assert os.readlink(gdir / "agents") == str(home / ".claude" / "agents")
-    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "usage.md"]   # gclaude's own only
+    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "logout.md", "usage.md"]   # gclaude's own only
     assert json.loads((gdir / ".claude.json").read_text()) == {"hasCompletedOnboarding": True, "theme": "light"}
     assert os.access(launcher, os.X_OK)
 
@@ -897,6 +966,22 @@ def test_gclaude_gets_a_usage_command_that_plain_claude_never_sees(stub, home):
     assert os.readlink(cmds / "mine.md") == str(own_cmds / "mine.md")
 
 
+def test_gclaude_logout_signs_out_until_on_login(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, gsettings, launcher = gc_paths(home)
+    env = {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_CONFIG_DIR": str(gdir),
+           **json.loads(gsettings.read_text())["env"]}
+    hook = json.loads(gsettings.read_text())["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+    out = json.loads(run(["sh", "-c", hook], env, stdin=json.dumps({"prompt": "/logout"})).stdout)
+    assert out["continue"] is False
+    assert "sk-proxy-full" not in gsettings.read_text()
+    assert "sk-proxy-full" not in (home / ".config" / "claude-gateway" / "client.json").read_text()
+    r = run_gclaude(home, launcher)
+    assert r.returncode == 1 and "claude-gateway on --login" in r.stderr
+    assert cg(home, "on", "--gclaude", "--key", "sk-proxy-new").returncode == 0
+    assert run_gclaude(home, launcher).returncode == 0
+
+
 def test_gclaude_launcher_follows_later_command_changes(stub, home):
     own_claude(home)
     own_cmds = home / ".claude" / "commands"
@@ -911,7 +996,7 @@ def test_gclaude_launcher_follows_later_command_changes(stub, home):
     (own_cmds / "new.md").write_text("new\n")
     (own_cmds / "usage.md").write_text("my own usage\n")          # gclaude's /usage wins in gclaude
     assert run_gclaude(home, launcher).returncode == 0
-    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "new.md", "usage.md"]
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "logout.md", "new.md", "usage.md"]
     assert "disable-model-invocation" in (cmds / "usage.md").read_text()
 
 

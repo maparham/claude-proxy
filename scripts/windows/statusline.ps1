@@ -10,6 +10,9 @@
 # With --account it prints who the key belongs to, which key it is and the dashboard link, for gclaude's /account
 # (commands\account.md there runs it, and the model repeats the line: a hook's reply would read as an error).
 # Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
+# It also answers gclaude's /logout (commands\logout.md there, in place of Claude Code's own): it revokes the key on
+# the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
+# it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT).
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -23,6 +26,8 @@ try {
   try { [Console]::OutputEncoding = $utf8 } catch { }   # the diamond and the colour codes as they are
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+  # Windows PowerShell 5.1 would write arrays as {"value": [...], "Count": n}; see claude-gateway.ps1.
+  Remove-TypeData System.Array -ErrorAction SilentlyContinue
 
   $stdin = ''
   if (-not $accountMode) { try { $stdin = [Console]::In.ReadToEnd() } catch { } }   # session or prompt JSON; only --warn looks at it, for /usage
@@ -41,6 +46,44 @@ try {
 
   function Emit([string]$s) { [Console]::Out.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
+  function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
+
+  if (Ours 'logout') {   # gclaude's /logout: revoke this computer's key on the gateway, then drop every copy of it here
+    $key = [string]$env:ANTHROPIC_AUTH_TOKEN
+    $code = 0; $revoked = $false
+    if ($key -and $dash) {
+      try {
+        $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Method Post -Uri "$dash/api/me/logout" -Headers @{ Authorization = "Bearer $key" }
+        $body = $r.Content
+        if ($body -is [byte[]]) { $body = $utf8.GetString($body) }
+        $code = [int]$r.StatusCode; $revoked = [bool]($body | ConvertFrom-Json).revoked
+      } catch {
+        try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+      }
+    }
+    $settings = Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'
+    $client = if ($env:CLAUDE_GATEWAY_CLIENT) { $env:CLAUDE_GATEWAY_CLIENT } else { Join-Path $PSScriptRoot 'client.json' }
+    try {   # rewritten in place, so each file keeps its owner-only permissions
+      $s = [IO.File]::ReadAllText($settings) | ConvertFrom-Json
+      if (($s.env -is [psobject]) -and ($s.env.PSObject.Properties.Name -contains 'ANTHROPIC_AUTH_TOKEN')) {
+        $s.env.PSObject.Properties.Remove('ANTHROPIC_AUTH_TOKEN')
+        [IO.File]::WriteAllText($settings, (ConvertTo-Json -InputObject $s -Depth 20) + "`n", $utf8)
+      }
+      if ($key -and (Test-Path -LiteralPath $client)) {
+        $c = [IO.File]::ReadAllText($client) | ConvertFrom-Json
+        if ([string]$c.key -eq $key) {
+          $c.PSObject.Properties.Remove('key')
+          [IO.File]::WriteAllText($client, (ConvertTo-Json -InputObject $c -Depth 20) + "`n", $utf8)
+        }
+      }
+    } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. claude-gateway off removes it." }
+    $again = 'Exit gclaude now (/exit); to sign in again: claude-gateway on --login'
+    if ($code -eq 200 -and $revoked) { Stop-Prompt "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" }
+    if ($code -eq 200) { Stop-Prompt "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" }
+    if ($code -eq 401 -or $code -eq 403) { Stop-Prompt "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" }
+    $where = if ($dash) { " ($dash/dashboard)" } else { '' }
+    Stop-Prompt "Signed out here: the key is removed from gclaude, but the gateway could not be reached to revoke it; remove this computer in the dashboard$where. $again"
+  }
 
   if (-not $dash) {
     if ($accountMode) { Emit 'Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).'; exit 0 }

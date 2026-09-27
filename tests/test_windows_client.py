@@ -57,6 +57,7 @@ class Stub:
         self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
         self.account_line = "maya · user · key sk-proxy-ab1… for PC, authorized 2026-09-20"   # ?format=account
         self.models_status = 200
+        self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
         self.files: dict[str, bytes] = {}   # GET path -> body, e.g. the dashboard's /install.ps1
         self.requests: list[tuple[str, dict, dict]] = []
         d = self
@@ -94,6 +95,8 @@ class Stub:
                                      "verification_uri_complete": f"{d.url}/dashboard#authorize/{CODE}"})
                 elif self.path == "/api/device/token":
                     self.reply(*(d.tokens.pop(0) if d.tokens else (400, {"error": "authorization_pending"})))
+                elif self.path == "/api/me/logout":
+                    self.reply(*d.logout)
                 else:
                     self.reply(404, {})
 
@@ -248,7 +251,7 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert "\\" not in line and s["statusLine"]["refreshInterval"] == 30
     assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": line + " --warn", "timeout": 10}]}]
     assert (win.config / "statusline.ps1").is_file()
-    for name in "usage", "account":
+    for name in "usage", "account", "logout":
         assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / f"{name}.md").read_text()
     assert json.loads((win.gdir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake_claude(win, tmp_path))
@@ -378,6 +381,24 @@ def test_account_prints_the_line_and_the_hook_answers_only_at_a_limit(gclaude, i
     stub.status_line = "maya \u00b7 credit $5/$5"
     out = json.loads(gclaude(" --warn", '{"prompt": "/account"}').stdout)
     assert out["decision"] == "block" and "for PC" in out["reason"] and "limit reached" in out["reason"]
+
+
+@on_windows
+def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude, installed, stub, tmp_path):
+    win = installed
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}').stdout)
+    assert out["continue"] is False and "revoked on the gateway" in out["stopReason"], out
+    assert [h["authorization"] for p, h, _ in stub.requests if p == "/api/me/logout"] == ["Bearer sk-proxy-k"]
+    s = win.settings()
+    assert "ANTHROPIC_AUTH_TOKEN" not in s["env"] and s["env"]["ANTHROPIC_BASE_URL"] == stub.url
+    assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("--warn")   # arrays stay arrays
+    assert "key" not in win.client() and win.client()["url"] == stub.url
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 1 and "claude-gateway on --login" in r.out, r.out
+    assert win.cg("on", "--key", "sk-proxy-new").returncode == 0
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0, r.out
 
 
 @on_windows

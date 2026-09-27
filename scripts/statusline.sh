@@ -17,11 +17,14 @@
 # With --account it prints who the key belongs to, which key it is and the dashboard link, for gclaude's /account
 # (commands/account.md there runs it, and the model repeats the line: a hook's reply would read as an error).
 # Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
+# It also answers gclaude's /logout (commands/logout.md there, in place of Claude Code's own): it revokes the key on
+# the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
+# it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT).
 # Environment (e.g. in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL, e.g. http://gateway.lan:8081
-warn= usage= account= account_prompt= then=
+warn= usage= account= account_prompt= logout= then=
 case "${1:-}" in --warn) warn=1 ;; --account) account=1 ;; --then) then=${2:-} ;; esac
 [ -z "$warn$account" ] && [ -n "${CLAUDE_GATEWAY_STATUS_INNER:-}" ] && exit 0
 input=
@@ -33,9 +36,46 @@ ours() {   # name: the prompt is /name and gclaude's commands/name.md is claude-
 }
 ours usage && usage=1
 ours account && account_prompt=1
+ours logout && logout=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
+stop() { printf '{"continue": false, "stopReason": "%s"}\n' "$(json_str "$1")"; exit 0; }   # ends the prompt with no model call, like block
+gateway_key() { printf '%s' "${ANTHROPIC_AUTH_TOKEN:-$(printf '%s\n' "${ANTHROPIC_CUSTOM_HEADERS:-}" | sed -n 's/^[Xx]-[Gg]ateway-[Kk]ey: *//p' | head -n 1)}"; }
 own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNER=1 sh -c "$then" 2>/dev/null; }
+if [ -n "$logout" ]; then   # gclaude's /logout: revoke this computer's key on the gateway, then drop every copy of it here
+  key=$(gateway_key) reply=
+  if [ -n "$key" ] && [ -n "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
+    reply=$(printf 'Authorization: Bearer %s\n' "$key" | curl -sS --max-time 5 -X POST -H @- -w '\n%{http_code}' \
+      "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/logout" 2>/dev/null | tr -d " ")
+  fi
+  python3 - "$CLAUDE_CONFIG_DIR/settings.json" "${CLAUDE_GATEWAY_CLIENT:-$(dirname "$0")/client.json}" "$key" <<'EOF' ||
+import json, os, sys
+settings, client, key = sys.argv[1:]
+def edit(path, change):
+    try:
+        data = json.load(open(path))
+    except FileNotFoundError:
+        return
+    if change(data):
+        tmp = path + ".logout"
+        with open(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp, path)
+edit(settings, lambda s: isinstance(s.get("env"), dict) and s["env"].pop("ANTHROPIC_AUTH_TOKEN", None) is not None)
+edit(client, lambda c: bool(key) and c.get("key") == key and c.pop("key") is not None)
+if os.path.exists(settings + ".bak-claude-gateway"):   # claude-gateway's copy from before its last edit holds the key too
+    os.remove(settings + ".bak-claude-gateway")
+EOF
+    stop "Sign-out failed: the key could not be removed from $CLAUDE_CONFIG_DIR/settings.json. claude-gateway off --gclaude removes it."
+  again="Exit gclaude now (/exit); to sign in again: claude-gateway on --login"
+  case "$reply" in
+    *'"revoked":true'*200) stop "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" ;;
+    *'"revoked":false'*200) stop "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" ;;
+    *401|*403) stop "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" ;;
+    *) stop "Signed out here: the key is removed from gclaude, but the gateway could not be reached to revoke it; remove this computer in the dashboard${CLAUDE_GATEWAY_DASHBOARD:+ (${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard)}. $again" ;;
+  esac
+fi
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
   [ -n "$account" ] && { echo "Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."; exit 0; }
   [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
@@ -83,7 +123,7 @@ peak() {   # the highest figure on the line, as a whole percentage (0 when there
 age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1") )); }
 
 status() {   # format: /api/me/status as text, with this key
-  key=${ANTHROPIC_AUTH_TOKEN:-$(printf '%s\n' "${ANTHROPIC_CUSTOM_HEADERS:-}" | sed -n 's/^[Xx]-[Gg]ateway-[Kk]ey: *//p' | head -n 1)}
+  key=$(gateway_key)
   # The key goes to curl on stdin: in its arguments, `ps` would show it to every local user.
   printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 3 -H @- \
     "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=$1" 2>/dev/null
