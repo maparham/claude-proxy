@@ -22,6 +22,7 @@ class Stub:
         self.models: dict = {"data": [], "has_more": False}
         self.models_status = 200
         self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
+        self.install: str | None = None   # GET /install, the dashboard's installer; None: 404
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -36,6 +37,8 @@ class Stub:
                     code, body, ctype = (200 if line is not None else 503), ((line or "") + "\n").encode(), "text/plain; charset=utf-8"
                 elif self.path.startswith("/v1/models"):
                     code, body, ctype = stub.models_status, json.dumps(stub.models).encode(), "application/json"
+                elif self.path == "/install" and stub.install is not None:
+                    code, body, ctype = 200, stub.install.encode(), "text/x-shellscript"
                 elif self.path == "/health":
                     code, body, ctype = 200, b'{"ok": true}', "application/json"
                 else:
@@ -980,6 +983,37 @@ def test_gclaude_logout_signs_out_until_on_login(stub, home):
     assert r.returncode == 1 and "claude-gateway on --login" in r.stderr
     assert cg(home, "on", "--gclaude", "--key", "sk-proxy-new").returncode == 0
     assert run_gclaude(home, launcher).returncode == 0
+
+
+def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    fake = home / "fakebin"
+    fake.mkdir()
+    (fake / "claude").write_text('#!/bin/sh\necho "claude [${CLAUDE_CONFIG_DIR:-own config}] $*"\n')
+    (fake / "claude").chmod(0o755)
+    env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home)}
+    stub.install = "echo installer ran\n"
+    r = run([str(launcher), "update"], env)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.splitlines() == ["installer ran", "claude [own config] update"]   # plain claude's own update
+    stub.install = "exit 3\n"
+    r = run([str(launcher), "update"], env)
+    assert r.returncode == 1 and "Claude Code was not updated" in r.stderr and "claude [" not in r.stdout
+    stub.install = None                                                           # the dashboard can't be reached
+    r = run([str(launcher), "update"], env)
+    assert r.returncode == 1 and "claude [" not in r.stdout
+
+
+def test_gclaude_update_works_after_logout(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, launcher = gc_paths(home)
+    gsettings.write_text("{}")   # as /logout leaves it
+    stub.install = "echo installer ran\n"
+    r = run_gclaude(home, launcher)
+    assert r.returncode == 1
+    r = run([str(launcher), "update"], {"PATH": f"{home / 'fakebin'}:{os.environ['PATH']}", "HOME": str(home)})
+    assert r.returncode == 0 and "installer ran" in r.stdout
 
 
 def test_gclaude_launcher_follows_later_command_changes(stub, home):
