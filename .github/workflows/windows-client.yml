@@ -1,0 +1,20 @@
+# The Windows client (install.ps1, scripts/windows) under Windows PowerShell 5.1, the one every Windows PC has:
+# tests/test_windows_client.py against a stub dashboard. It doesn't gate the deploy; "Run workflow" runs it on demand.
+name: windows client
+
+on:
+  push:
+    branches: [master]
+    paths: [install.ps1, "scripts/windows/**", tests/test_windows_client.py, .github/workflows/windows-client.yml]
+  pull_request:
+    paths: [install.ps1, "scripts/windows/**", tests/test_windows_client.py, .github/workflows/windows-client.yml]
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --python 3.12 pytest -q -rs tests/test_windows_client.py
