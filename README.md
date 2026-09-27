@@ -169,13 +169,17 @@ through `statusline.sh --then`), and shares the rest of your own setup in `~/.cl
   start, and one you add or change in gclaude stays gclaude's. Project-scope servers (`.mcp.json`) work in both
   already;
 - memory: each project's `memory` folder, once plain `claude` has been used in that project, so a memory saved in
-  either shows up in both. A gclaude memory folder that already holds memories of its own is left alone.
+  either shows up in both. A gclaude memory folder that already holds memories of its own is left alone;
+- sessions: gclaude's `/resume` (and `gclaude --resume <id>`) lists your plain `claude` sessions too. Each is a
+  hard link to the same file (the picker skips symbolic links), so a session you resume in gclaude goes on in
+  plain `claude`'s history as well, with its new requests going through the gateway. Sessions started in gclaude
+  stay gclaude's, and a session plain `claude` cleans up stays in gclaude until gclaude's own cleanup.
 
-Settings, login, history and sessions stay separate, so both commands can run at once in the same terminal.
+Settings, login and prompt history stay separate, so both commands can run at once in the same terminal.
 The gateway's `ANTHROPIC_BASE_URL` and key live only in the `"env"` block of gclaude's `settings.json`, which
 Claude Code applies to its own process, and `CLAUDE_CONFIG_DIR` is set only for the `claude` that gclaude starts.
 Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and uses this machine's login.
-`off --gclaude` removes the command, the links, `/usage` and the gateway settings, and keeps gclaude's history.
+`off --gclaude` removes the command, the links, `/usage` and the gateway settings, and keeps gclaude's own history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
 In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
