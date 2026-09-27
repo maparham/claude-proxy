@@ -19,7 +19,9 @@
 # Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
 # It also answers gclaude's /logout (commands/logout.md there, in place of Claude Code's own): it revokes the key on
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
-# it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT).
+# it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). Then, like
+# Claude Code's own /logout, the session ends: a second later the hook sends the claude that ran it two SIGINTs, the
+# same as pressing Ctrl-C twice, so it exits the usual way, saving the session, after showing the reason.
 # Environment (e.g. in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
@@ -40,6 +42,21 @@ ours logout && logout=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 stop() { printf '{"continue": false, "stopReason": "%s"}\n' "$(json_str "$1")"; exit 0; }   # ends the prompt with no model call, like block
+quit_claude() {   # the claude that runs this hook (its parent, or grandparent through a shell), only when one does
+  [ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 0   # set by Claude Code for its hooks
+  p=$PPID found=
+  for _ in 1 2; do
+    case "$(ps -o comm= -p "$p" 2>/dev/null)" in
+      claude|*/claude) found=1 ;;
+      node|*/node) case "$(ps -o args= -p "$p" 2>/dev/null)" in *claude*) found=1 ;; esac ;;   # an npm install
+    esac
+    [ -n "$found" ] && break
+    p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    [ "${p:-1}" -gt 1 ] 2>/dev/null || return 0
+  done
+  [ -n "$found" ] || return 0
+  nohup sh -c "sleep 1; kill -INT $p; sleep 0.3; kill -INT $p" </dev/null >/dev/null 2>&1 &
+}
 gateway_key() { printf '%s' "${ANTHROPIC_AUTH_TOKEN:-$(printf '%s\n' "${ANTHROPIC_CUSTOM_HEADERS:-}" | sed -n 's/^[Xx]-[Gg]ateway-[Kk]ey: *//p' | head -n 1)}"; }
 own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNER=1 sh -c "$then" 2>/dev/null; }
 if [ -n "$logout" ]; then   # gclaude's /logout: revoke this computer's key on the gateway, then drop every copy of it here
@@ -70,7 +87,8 @@ if os.path.exists(settings + ".bak-claude-gateway"):   # claude-gateway's copy f
     os.remove(settings + ".bak-claude-gateway")
 EOF
     stop "Sign-out failed: the key could not be removed from $CLAUDE_CONFIG_DIR/settings.json. claude-gateway off --gclaude removes it."
-  again="Exit gclaude now (/exit); to sign in again: claude-gateway on --login"
+  quit_claude
+  again="gclaude is closing; to sign in again: claude-gateway on --login"
   case "$reply" in
     *'"revoked":true'*200) stop "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" ;;
     *'"revoked":false'*200) stop "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" ;;
