@@ -188,10 +188,10 @@ def test_install_puts_the_scripts_and_the_launcher_in_place(installed):
 @on_windows
 def test_install_leaves_a_foreign_launcher_alone(win):
     win.bin.mkdir(parents=True)
-    (win.bin / "claude-gateway.cmd").write_text("@echo mine\r\n")
+    (win.bin / "claude-gateway.cmd").write_bytes(b"@echo mine\r\n")
     r = win.install()
     assert "session still open" in r.out and "left as it is" in r.out, r.out
-    assert (win.bin / "claude-gateway.cmd").read_text() == "@echo mine\r\n"
+    assert (win.bin / "claude-gateway.cmd").read_bytes() == b"@echo mine\r\n"
     assert not (win.home / ".local" / "share" / "claude-gateway").exists()
 
 
@@ -294,10 +294,10 @@ def test_a_key_the_gateway_refuses_changes_nothing(installed, stub):
 @on_windows
 def test_on_leaves_a_foreign_gclaude_alone(installed, stub):
     win = installed
-    (win.bin / "gclaude.cmd").write_text("@echo mine\r\n")
+    (win.bin / "gclaude.cmd").write_bytes(b"@echo mine\r\n")
     r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
     assert r.returncode != 0 and "did not install it" in r.out, r.out
-    assert (win.bin / "gclaude.cmd").read_text() == "@echo mine\r\n"
+    assert (win.bin / "gclaude.cmd").read_bytes() == b"@echo mine\r\n"
     assert not stub.requests
 
 
@@ -306,3 +306,52 @@ def test_on_leaves_a_foreign_gclaude_alone(installed, stub):
 def test_modes_not_on_windows_yet_point_at_the_issue(installed, flag):
     r = installed.cg("on", flag)
     assert r.returncode != 0 and "issues/22" in r.out, r.out
+
+
+# ---------- statusline.ps1, run the way Claude Code runs gclaude's settings ----------
+
+@pytest.fixture
+def gclaude(installed, stub):
+    win = installed
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    s = win.settings()
+    env = {**s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
+    line = s["statusLine"]["command"]
+    return lambda extra="", stdin="{}": win.run(f"cmd.exe /d /c {line}{extra}", stdin=stdin, **env)
+
+
+@on_windows
+def test_the_statusline_shows_the_figures(gclaude, stub):
+    stub.status_line = "maya \u00b7 daily $85/$100 \u00b7 5h 10%"
+    r = gclaude()
+    assert r.returncode == 0, r.out
+    assert "\u25c6" in r.stdout and "\x1b[33m$85/$100 85%" in r.stdout and "5h 10%" in r.stdout, r.out
+    assert [h["authorization"] for p, h, _ in stub.requests if p.startswith("/api/me/status")][-1] == "Bearer sk-proxy-k"
+
+
+@on_windows
+def test_the_statusline_says_so_when_the_gateway_is_down(gclaude, stub):
+    stub.status_line = None
+    r = gclaude()
+    assert r.returncode == 0 and "gateway status unavailable" in r.stdout, r.out
+
+
+@on_windows
+def test_the_warning_hook_warns_once_and_answers_usage(gclaude, stub):
+    stub.status_line = "maya \u00b7 daily $85/$100"
+    r = gclaude(" --warn", '{"prompt": "hi"}')
+    assert r.returncode == 0, r.out
+    assert json.loads(r.stdout)["systemMessage"].startswith("Gateway: maya \u00b7 daily $85/$100 85%")
+    r = gclaude(" --warn", '{"prompt": "hi"}')
+    assert r.returncode == 0 and not r.stdout.strip(), r.out   # once per band, not on every prompt
+    r = gclaude(" --warn", '{"prompt": "/usage"}')
+    out = json.loads(r.stdout)
+    assert out["decision"] == "block" and "$85/$100 85%" in out["reason"] and f"{stub.url}/dashboard" in out["reason"]
+
+
+@on_windows
+def test_the_warning_hook_is_quiet_below_80_percent(gclaude, stub):
+    stub.status_line = "maya \u00b7 daily $50/$100"
+    r = gclaude(" --warn", '{"prompt": "hi"}')
+    assert r.returncode == 0 and not r.stdout.strip(), r.out
