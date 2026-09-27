@@ -42,10 +42,8 @@ rm -rf "$share"
 mv "$share.new" "$share"
 ln -sfn "$share/scripts/claude-gateway" "$link"
 
-tilde() { case $1 in "$HOME"/*) echo "~${1#"$HOME"}" ;; *) echo "$1" ;; esac; }   # ~/... in messages, not /Users/you/...
-echo "Installed claude-gateway to $(tilde "$share") (command: $(tilde "$link"))."
-case ":$PATH:" in *":$bin:"*) ;; *) echo "Add $(tilde "$bin") to your PATH to run claude-gateway and gclaude." ;; esac
+case ":$PATH:" in *":$bin:"*) ;; *) echo "Add ~/.local/bin to your PATH to run claude-gateway and gclaude." ;; esac
 if [ $# -gt 0 ]; then
   exec "$link" "$@"
 fi
-echo "Next: run 'claude-gateway on' (and 'on --opencode' if you use it) to refresh what it set up."
+echo "Installed claude-gateway. Next: run 'claude-gateway on' (and 'on --opencode' if you use it) to refresh what it set up."

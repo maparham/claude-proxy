@@ -23,8 +23,8 @@
 # ANTHROPIC_BASE_URL and sends the gateway key in ANTHROPIC_CUSTOM_HEADERS, so Claude Code keeps its own
 # login for Claude in Chrome and connectors while requests still go through, and are metered by, the gateway.
 # `on` also installs a UserPromptSubmit hook (statusline.sh --warn) that shows a warning when a limit is at 80%,
-# and a statusline showing the user's gateway limits, unless one is already set; then it prints
-# how to add them to that one instead. gclaude's statusline shows the limits and then the user's own statusline
+# and a statusline showing the user's gateway limits, unless one is already set (that one is left alone;
+# its output can be extended with statusline.sh's). gclaude's statusline shows the limits and then the user's own statusline
 # from ~/.claude, if they have one (statusline.sh --then). `off` removes exactly what `on` added and leaves every other setting
 # alone. The URL, key, mode and a copy of statusline.sh are kept in ~/.config/claude-gateway/ (client.json is
 # mode 600). Start a new Claude Code session after switching.
@@ -63,10 +63,11 @@ usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' 
 
 save_client() {   # url key [dashboard]
   mkdir -p "$(dirname "$CLIENT")"
-  ( umask 077; python3 - "$CLIENT" "$@" <<'EOF'
+  # The key goes in CG_KEY, set for python3 alone (stdin carries the program): in its arguments, `ps` would show it.
+  ( umask 077; CG_KEY=$2 python3 - "$CLIENT" "$1" "${3:-}" <<'EOF'
 import json, os, sys
-path, url, key = sys.argv[1], sys.argv[2].rstrip("/"), sys.argv[3]
-dash = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] else url.replace("://claude.", "://claude-dash.", 1)
+path, url, key = sys.argv[1], sys.argv[2].rstrip("/"), os.environ["CG_KEY"]
+dash = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] else url.replace("://claude.", "://claude-dash.", 1)
 c = json.load(open(path)) if os.path.exists(path) else {}
 c.update({"url": url, "key": key, "dashboard": dash.rstrip("/")})
 json.dump(c, open(path, "w"), indent=2)
@@ -219,8 +220,6 @@ if mode == "on":
                 s["statusLine"] = {**own, "command": line_cmd + " --then " + shlex.quote(own["command"])}
                 s["statusLine"].setdefault("refreshInterval", 30)
             st["added_statusline"] = True
-        elif not ours_line(s["statusLine"]):
-            print("Kept your own statusline. To show your gateway limits in it too, add the output of: " + line_cmd)
         hooks = s.setdefault("hooks", {})
         if isinstance(hooks, dict) and isinstance(hooks.setdefault("UserPromptSubmit", []), list):
             if not any(ours_hook(g) for g in hooks["UserPromptSubmit"]):
@@ -609,9 +608,10 @@ gclaude_on() {
   gclaude_files on
   python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
+  if [ -t 1 ]; then b=$(printf '\033[1;32m'); r=$(printf '\033[0m'); else b=; r=; fi   # bold green on a terminal
   case ":$PATH:" in
-    *":$(dirname "$GCLAUDE"):"*) echo "Next: run 'gclaude' instead of 'claude'." ;;
-    *) echo "Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'." ;;
+    *":$(dirname "$GCLAUDE"):"*) echo "${b}Next: run 'gclaude' instead of 'claude'.${r}" ;;
+    *) echo "${b}Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'.${r}" ;;
   esac
 }
 
