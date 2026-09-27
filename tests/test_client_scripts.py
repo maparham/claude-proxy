@@ -382,6 +382,27 @@ def test_logout_prompt_still_signs_out_here_when_the_gateway_is_down(stub, warn_
     assert signed_out(warn_env)
 
 
+def test_logout_prompt_ends_the_claude_session_that_ran_it(stub, warn_env, tmp_path):
+    """Two SIGINTs, as Ctrl-C twice: Claude Code then exits the usual way. Only to a claude running the hook."""
+    fake = tmp_path / "bin" / "claude"
+    fake.parent.mkdir()
+    fake.symlink_to("/bin/sh")   # a process named claude (a copy would lose its code signature on macOS)
+    log = tmp_path / "signals"
+    env = gclaude_config(warn_env)
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json").write_text("{}")
+    prompt = tmp_path / "prompt.json"
+    prompt.write_text(json.dumps({"prompt": "/logout"}))
+    script = (f"trap 'echo INT >> {log}' INT; sh {STATUSLINE} --warn < {prompt}; "
+              "i=0; while [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done")
+    r = run([str(fake), "-c", script], {**env, "CLAUDE_PROJECT_DIR": str(tmp_path)})
+    assert json.loads(r.stdout)["stopReason"].startswith("Signed out") and "gclaude is closing" in r.stdout
+    assert log.read_text() == "INT\nINT\n"
+    log.unlink()
+    run([str(fake), "-c", script], env)   # not run by Claude Code (no CLAUDE_PROJECT_DIR): nothing is signalled
+    assert not log.exists()
+
+
 @pytest.mark.parametrize("prompt,text", [("/logout", "my own logout command\n"), ("/logouts", None), ("how do I /logout", None)])
 def test_other_logout_prompts_are_left_alone(stub, warn_env, prompt, text):
     r = logout_prompt(warn_env, prompt, **({"text": text} if text else {}))
