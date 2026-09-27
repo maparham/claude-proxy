@@ -1156,6 +1156,47 @@ def test_keys_never_appear_in_curls_arguments(stub, home, tmp_path):
     assert "Bearer sk-proxy-fullsecret" in sent and "sk-proxy-r-routesecret" in sent
 
 
+def logging_python3(where):
+    """A python3 first on PATH that records each of its arguments (one per line), then runs the real one."""
+    import shutil
+    fake = Path(where) / "py-argvbin"
+    fake.mkdir(exist_ok=True)
+    log = Path(where) / "python3-argv.log"
+    (fake / "python3").write_text(f'#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a" >> {log}; done\n'
+                                  f'exec {shutil.which("python3")} "$@"\n')
+    (fake / "python3").chmod(0o755)
+    return fake, log
+
+
+def test_keys_never_appear_in_python3s_arguments(stub, home):
+    stub.models = MODELS
+    fake, log = logging_python3(home)
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "TMPDIR": str(tmp)}
+    for args in (["on", "--global", "--url", stub.url, "--key", "sk-proxy-fullsecret"],
+                 ["on", "--gclaude"],
+                 ["on", "--gclaude", "--key", "sk-proxy-newsecret", "--dashboard", stub.url],
+                 ["on", "--opencode", "--routes-key", "sk-proxy-r-routesecret"]):
+        r = run(["bash", str(GATEWAY), *args], env)
+        assert r.returncode == 0, (args, r.stderr)
+    argv = log.read_text().splitlines()
+    assert len(argv) >= 6 and not [a for a in argv if "secret" in a]
+    client = json.loads((home / ".config" / "claude-gateway" / "client.json").read_text())   # and the key still lands
+    assert client["key"] == "sk-proxy-newsecret" and client["dashboard"] == stub.url
+    assert json.loads(gc_paths(home)[1].read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-newsecret"
+
+
+def test_logout_keeps_the_key_out_of_python3s_arguments(stub, warn_env):
+    fake, log = logging_python3(warn_env["HOME"])
+    env = {**warn_env, "PATH": f"{fake}:{warn_env['PATH']}"}
+    out = json.loads(logout_prompt(env).stdout)
+    assert out["continue"] is False and "revoked on the gateway" in out["stopReason"]
+    argv = log.read_text().splitlines()
+    assert argv and not [a for a in argv if "sk-proxy-k" in a]
+    assert signed_out(env)
+
+
 def test_opencode_off_removes_the_agents_folder_it_created_and_an_empty_client_json(stub, home):
     stub.models = MODELS
     assert cg(home, "on", "--opencode", "--url", stub.url, "--routes-key", "sk-proxy-r-k").returncode == 0

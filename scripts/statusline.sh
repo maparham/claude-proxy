@@ -48,9 +48,11 @@ if [ -n "$logout" ]; then   # gclaude's /logout: revoke this computer's key on t
     reply=$(printf 'Authorization: Bearer %s\n' "$key" | curl -sS --max-time 5 -X POST -H @- -w '\n%{http_code}' \
       "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/logout" 2>/dev/null | tr -d " ")
   fi
-  python3 - "$CLAUDE_CONFIG_DIR/settings.json" "${CLAUDE_GATEWAY_CLIENT:-$(dirname "$0")/client.json}" "$key" <<'EOF' ||
+  # The key goes in CG_KEY, set for python3 alone (stdin carries the program): in its arguments, `ps` would show it.
+  CG_KEY=$key python3 - "$CLAUDE_CONFIG_DIR/settings.json" "${CLAUDE_GATEWAY_CLIENT:-$(dirname "$0")/client.json}" <<'EOF' ||
 import json, os, sys
-settings, client, key = sys.argv[1:]
+settings, client = sys.argv[1:]
+key = os.environ.get("CG_KEY", "")
 def edit(path, change):
     try:
         data = json.load(open(path))
