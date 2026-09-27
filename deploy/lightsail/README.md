@@ -76,3 +76,67 @@ Details:
   `... user add <name>`, `... limit set ...`.
 - Only one process may hold the subscription grant. When moving it from another host, stop that
   gateway first, copy the database with `sqlite3 <db> ".backup <copy>"`, and retire the old copy.
+
+## Off-box backups
+
+The copies in `/data/backups` die with the box, so a daily job in the private
+[maparham/claude-proxy-backups](https://github.com/maparham/claude-proxy-backups) repo pulls one more:
+
+1. At 03:23 UTC Actions SSHes in with a key that can run only `claude-gateway-backup`, which takes a
+   consistent copy with SQLite's backup API, gzips it and encrypts it with `age` to the public key in
+   `/usr/local/etc/claude-gateway-backup.age.pub`, all before it leaves the box. The box has no private
+   key and no credential for the backups repo, and the caller can't pick the recipient.
+2. The job decrypts the copy with the `AGE_KEY` secret and runs `PRAGMA integrity_check`, checks there
+   are users and that the newest request or quota reading is under 24 h old. Only a copy that passes is
+   stored, as a release asset `claude_proxy-<UTC time>.db.gz.age`, then read back and compared.
+3. The newest 30 releases are kept. Older ones are deleted only after a good copy is stored, so failing
+   backups never eat the good ones.
+
+A failed run (box unreachable, no copy, won't decrypt, corrupt, no users, stale) makes GitHub email you.
+"Run workflow" there takes a copy now. The whole thing is about 470 KB and a minute of Actions a day.
+
+One-time setup, and again after changing `claude-gateway-backup` or to rotate the SSH key:
+
+```sh
+brew install age                                        # age-keygen, the first time only
+deploy/lightsail/install-backup-key.sh ec2-user@<server-ip>
+```
+
+It installs `age` (pinned, checksum-verified) and the script on the box, locks the new key to that script
+in `authorized_keys`, and sets `BACKUP_SSH_KEY`, `BACKUP_KNOWN_HOSTS`, `BACKUP_HOST` in the backups repo.
+The first run also makes the age key pair: the private key goes to the `AGE_KEY` secret and is printed
+once for your password manager, and is kept nowhere else. Reruns keep it; `--new-age-key` replaces it,
+after which older copies need the old key. Keep `CLAUDE_PROXY_CREDENTIAL_KEY` from `gateway.env` in the
+password manager too: the subscription grant in the database is encrypted with it, and it isn't backed up.
+
+### Restore
+
+On the Mac, with the age private key from the password manager:
+
+```sh
+cd "$(mktemp -d)"
+gh release download -R maparham/claude-proxy-backups           # newest copy; add a tag (db-<time>) for an older one
+age -d -i - claude_proxy-*.db.gz.age | gunzip >claude_proxy.db   # paste the AGE-SECRET-KEY-... line, then Ctrl-D
+python3 -c 'import sqlite3; c = sqlite3.connect("claude_proxy.db"); print(c.execute("PRAGMA integrity_check").fetchone(), c.execute("SELECT count(*) FROM users").fetchone())'
+scp claude_proxy.db ec2-user@<server-ip>:claude-gateway/restore.db && rm claude_proxy.db*
+```
+
+On the box (a new one is first set up as at the top, with the same `CLAUDE_PROXY_CREDENTIAL_KEY` in
+`gateway.env`), put it in the volume as the container's user, moving the current database and its WAL
+files aside:
+
+```sh
+cd ~/claude-gateway/deploy/lightsail
+docker compose stop gateway
+docker run --rm -i --network none -v claude-gateway_data:/data "claude-proxy:$(sed -n 's/^GATEWAY_TAG=//p' .env)" sh -c '
+  cd /data && mkdir -p backups && t=$(date -u +%Y%m%dT%H%M%SZ)
+  for f in claude_proxy.db claude_proxy.db-wal claude_proxy.db-shm; do [ ! -e $f ] || mv $f backups/before-restore-$t.$f; done
+  cat >claude_proxy.db && chmod 600 claude_proxy.db' <../../restore.db
+rm ../../restore.db
+docker compose up -d --no-build
+docker compose exec gateway claude-proxy status
+```
+
+If `status` shows the credential broken, the refresh token rotated after the copy was taken (or the
+credential key differs): run `docker compose exec -it gateway claude-proxy login`. Everything written
+since the copy (new sign-ups, keys, usage) is lost.
