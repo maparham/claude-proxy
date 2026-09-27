@@ -694,7 +694,9 @@ function machinesCard(keys, install, owner) {
     <td><button class="btn small danger" data-key-remove="${k.id}" data-label="${esc(k.label)}">Remove</button></td></tr>`).join("");
   return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? "Computers" : "Your computers"}</h3>
     ${install ? `<p class="sub">To set up a computer, run this in its terminal. It opens this page to authorize it, then sets up <code>gclaude</code>.</p>
-      <div class="copy-row"><code class="key">${esc(install)}</code><button class="btn small" data-copy="${esc(install)}">Copy</button></div>` : ""}
+      ${[["macOS / Linux", install.unix], ["Windows (PowerShell)", install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
+        `<p class="muted install-os">${os}</p>
+      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">Copy</button></div>`).join("")}` : ""}
     ${keys.length ? `<table class="data"><thead><tr><th>Computer</th><th>Key</th><th>Authorized</th><th>Last used</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="muted">${owner ? "No computers authorized in the browser." : "None authorized in the browser yet."}</p>`}</div>`;
 }
@@ -1171,7 +1173,7 @@ function showLogin() {
 async function boot() {
   try {
     const s = await api("/api/session");
-    S.user = s.user; S.csrf = s.csrf; S.install = s.install;
+    S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows };
     if (s.settings) S.settings = { ...S.settings, ...s.settings };
     Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
     $("#cred-pill").hidden = !s.credential;

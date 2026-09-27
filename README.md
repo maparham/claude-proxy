@@ -73,6 +73,12 @@ Without `--key`, `claude-gateway on --url …` authorizes in the browser instead
 and once you click **Authorize** there, the dashboard gives this computer a key of its own. With sign-up set up
 (below), a teammate's whole setup is `curl -fsSL https://<dashboard>/install | sh`.
 
+On Windows, `irm https://<dashboard>/install.ps1 | iex` in PowerShell does the same with no Python, Git or admin
+rights (`install.ps1`, `scripts/windows`). It sets up gclaude only (`gclaude.cmd`, with the limits statusline, the
+80% warning and `/usage`); global mode, OpenCode and sharing `~/.claude` with gclaude are
+[not on Windows yet](https://github.com/maparham/claude-proxy/issues/22). CI's `windows client` workflow tests it
+under Windows PowerShell 5.1.
+
 By default `claude-gateway on` sets up **gclaude** (below): a second command that runs Claude Code through the
 gateway while `claude` keeps this machine's own login. For a machine where plain `claude` itself should use the
 gateway, global mode edits `~/.claude/settings.json` and switches back cleanly. From a checkout,
@@ -113,7 +119,7 @@ People can create their own account and connect their computers without the admi
   sign-in links an existing user whose name or email is that address; otherwise, with `signup.enabled`, it creates
   one with a one-time credit (`cost_total`, `signup.credit_usd`). Clerk only proves who someone is; the dashboard
   then uses its own session, and requests never touch Clerk.
-- **Computers**: `curl -fsSL https://<dashboard>/install | sh` installs claude-gateway and runs
+- **Computers**: `curl -fsSL https://<dashboard>/install | sh` (Windows: `irm https://<dashboard>/install.ps1 | iex`) installs claude-gateway and runs
   `claude-gateway on`, which shows a code and opens `…/dashboard#authorize/<code>`. **Authorize** there gives that
   computer a key of its own (the `keys` table), listed and removable under **Your computers**.
 - **Upgrade**: limits apply together, so the admin's **Upgrade** swaps the credit for a daily allowance.

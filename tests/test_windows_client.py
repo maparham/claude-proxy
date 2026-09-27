@@ -1,0 +1,424 @@
+"""The Windows client (install.ps1, scripts/windows), run under Windows PowerShell 5.1 against a stub gateway and
+dashboard (Windows client design section 5). Everything but the static checks runs only on Windows: CI's
+windows-client workflow."""
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import zipfile
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+import pytest
+
+ROOT = Path(__file__).resolve().parents[1]
+INSTALL = ROOT / "install.ps1"
+WINDOWS = ROOT / "scripts" / "windows"
+CODE = "BCDF-GHJK"
+on_windows = pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell 5.1 runs only on Windows")
+
+
+# ---------- static checks, on any OS ----------
+
+def test_the_installer_never_exits_the_callers_powershell():
+    """irm | iex runs install.ps1 in the user's own session, where `exit` would close their window."""
+    code = "\n".join(l.split("#", 1)[0] for l in INSTALL.read_text().splitlines())
+    assert not re.search(r"(?im)(^|[;{}]\s*|\s)exit\b", code)
+
+
+def pwsh():
+    return shutil.which("powershell") or shutil.which("pwsh")
+
+
+@pytest.mark.skipif(not pwsh(), reason="no PowerShell here")
+@pytest.mark.parametrize("script", [INSTALL, *sorted(WINDOWS.glob("*.ps1"))], ids=lambda p: p.name)
+def test_the_scripts_parse(script):
+    path = str(script).replace("'", "''")
+    check = (f"$e = $null; [System.Management.Automation.Language.Parser]::ParseFile('{path}', [ref]$null, [ref]$e) | Out-Null;"
+             " $e | ForEach-Object { $_.ToString() }")
+    r = subprocess.run([pwsh(), "-NoProfile", "-Command", check], capture_output=True, text=True, timeout=60)
+    assert r.returncode == 0 and not r.stdout.strip(), r.stdout + r.stderr
+
+
+# ---------- a stub gateway + dashboard ----------
+
+class Stub:
+    """The dashboard's device endpoints and /api/me/status, and the proxy's /v1/models, on one port."""
+
+    def __init__(self):
+        self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
+        self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
+        self.models_status = 200
+        self.requests: list[tuple[str, dict, dict]] = []
+        d = self
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def reply(self, code, body, ctype="application/json"):
+                data = body if isinstance(body, bytes) else json.dumps(body).encode()
+                self.send_response(code)
+                self.send_header("content-type", ctype)
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def do_GET(self):
+                d.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, {}))
+                if self.path.startswith("/v1/models"):
+                    self.reply(d.models_status, {"data": [], "has_more": False})
+                elif self.path.startswith("/api/me/status"):
+                    ok = d.status_line is not None
+                    self.reply(200 if ok else 503, ((d.status_line or "") + "\n").encode(), "text/plain; charset=utf-8")
+                else:
+                    self.reply(404, {})
+
+            def do_POST(self):
+                body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+                d.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, body))
+                if self.path == "/api/device/start":
+                    self.reply(200, {"device_code": "dc-1", "user_code": CODE, "interval": 0.1, "expires_in": 20,
+                                     "verification_uri": f"{d.url}/dashboard#authorize",
+                                     "verification_uri_complete": f"{d.url}/dashboard#authorize/{CODE}"})
+                elif self.path == "/api/device/token":
+                    self.reply(*(d.tokens.pop(0) if d.tokens else (400, {"error": "authorization_pending"})))
+                else:
+                    self.reply(404, {})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.url = f"http://127.0.0.1:{self.server.server_address[1]}"
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def paths(self):
+        return [p for p, *_ in self.requests]
+
+
+@pytest.fixture
+def stub():
+    s = Stub()
+    yield s
+    s.server.shutdown()
+
+
+@pytest.fixture(scope="session")
+def source_zip(tmp_path_factory):
+    """The repository's Windows scripts as GitHub's zip has them: under one top-level folder."""
+    path = tmp_path_factory.mktemp("zip") / "claude-proxy-test.zip"
+    with zipfile.ZipFile(path, "w") as z:
+        z.write(INSTALL, "claude-proxy-test/install.ps1")
+        for f in WINDOWS.iterdir():
+            z.write(f, f"claude-proxy-test/scripts/windows/{f.name}")
+    return path
+
+
+class Win:
+    """A sandboxed Windows user: its own USERPROFILE and TEMP, the source zip, and no browser."""
+
+    def __init__(self, tmp_path, source_zip, home="home"):
+        self.home = tmp_path / home
+        self.temp = tmp_path / "temp"
+        self.bin = self.home / ".local" / "bin"
+        for p in (self.home, self.temp):
+            p.mkdir(parents=True, exist_ok=True)
+        self.env = {k: v for k, v in os.environ.items() if k != "SSH_CONNECTION"}
+        self.env.update({"USERPROFILE": str(self.home), "TEMP": str(self.temp), "TMP": str(self.temp),
+                         "CLAUDE_GATEWAY_ZIP": str(source_zip), "CLAUDE_GATEWAY_BIN": str(self.bin),
+                         "CLAUDE_GATEWAY_OPEN": "none", "PATH": f"{self.bin};{os.environ['PATH']}"})
+        self.config = self.home / ".config" / "claude-gateway"
+        self.gdir = self.config / "claude"
+
+    def run(self, argv, stdin=None, **env):
+        r = subprocess.run(argv, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                           env={**self.env, **env}, timeout=120)
+        r.out = r.stdout + r.stderr
+        return r
+
+    def ps(self, command, **env):
+        return self.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], **env)
+
+    def install(self, *args, **env):
+        """install.ps1 the way the dashboard's /install.ps1 runs it: a scriptblock in the caller's own session."""
+        quoted = " ".join("'" + a.replace("'", "''") + "'" for a in args)
+        return self.ps(f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}'))) {quoted};"
+                       " Write-Output 'session still open'", **env)
+
+    def cg(self, *args, **env):
+        return self.run(["cmd.exe", "/d", "/c", "claude-gateway", *args], **env)
+
+    def client(self):
+        return json.loads((self.config / "client.json").read_text(encoding="utf-8"))
+
+    def settings(self):
+        raw = (self.gdir / "settings.json").read_bytes()
+        assert not raw.startswith(b"\xef\xbb\xbf"), "settings.json has a BOM"
+        return json.loads(raw)
+
+
+@pytest.fixture
+def win(tmp_path, source_zip):
+    return Win(tmp_path, source_zip)
+
+
+@pytest.fixture
+def installed(win):
+    r = win.install()
+    assert r.returncode == 0 and "session still open" in r.out, r.out
+    return win
+
+
+# ---------- install.ps1 ----------
+
+@on_windows
+def test_install_puts_the_scripts_and_the_launcher_in_place(installed):
+    win = installed
+    share = win.home / ".local" / "share" / "claude-gateway" / "scripts" / "windows"
+    assert (share / "claude-gateway.ps1").is_file()
+    assert "rem Installed by claude-gateway install.ps1." in (win.bin / "claude-gateway.cmd").read_text()
+    r = win.cg("help")
+    assert r.returncode == 0 and "claude-gateway (Windows)" in r.out, r.out
+    again = win.install()   # an update replaces the copy and the launcher
+    assert again.returncode == 0 and "session still open" in again.out, again.out
+    assert not (win.home / ".local" / "share" / "claude-gateway.new").exists()
+
+
+@on_windows
+def test_install_leaves_a_foreign_launcher_alone(win):
+    win.bin.mkdir(parents=True)
+    (win.bin / "claude-gateway.cmd").write_bytes(b"@echo mine\r\n")
+    r = win.install()
+    assert "session still open" in r.out and "left as it is" in r.out, r.out
+    assert (win.bin / "claude-gateway.cmd").read_bytes() == b"@echo mine\r\n"
+    assert not (win.home / ".local" / "share" / "claude-gateway").exists()
+
+
+@on_windows
+def test_install_reports_a_bad_archive_without_closing_the_session(win, tmp_path):
+    r = win.install(CLAUDE_GATEWAY_ZIP=str(tmp_path / "missing.zip"))
+    assert "session still open" in r.out and "could not get" in r.out, r.out
+
+
+# ---------- claude-gateway on / off / status ----------
+
+def fake_claude(win, tmp_path):
+    """A claude.cmd first on PATH that records, as UTF-8, the config dir gclaude gave it and its arguments. Not
+    with echo: cmd would split a folder name with & in it, and print in the console's code page."""
+    d = tmp_path / "fakebin"
+    d.mkdir()
+    (d / "saw.ps1").write_text("[IO.File]::WriteAllText($env:GW_OUT, $env:CLAUDE_CONFIG_DIR + '|' + ($args -join ' '))\n")
+    (d / "claude.cmd").write_text('@powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0saw.ps1" %*\r\n')
+    return {"PATH": f"{d};{win.env['PATH']}", "GW_OUT": str(tmp_path / "claude-saw.txt")}
+
+
+def claude_saw(tmp_path):
+    return (tmp_path / "claude-saw.txt").read_text(encoding="utf-8")
+
+
+@on_windows
+def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_path):
+    win = installed
+    stub.tokens = [(400, {"error": "authorization_pending"}), (400, {"error": "authorization_pending"}),
+                   (200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = win.cg("on", "--url", stub.url + "/", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    assert f"{stub.url}/dashboard#authorize/{CODE}" in r.out and CODE in r.out and "Authorized as ana" in r.out
+    assert "sk-proxy-new" not in r.out
+    start = next(b for p, _, b in stub.requests if p == "/api/device/start")
+    assert start == {"label": os.environ["COMPUTERNAME"]}
+    assert [h["authorization"] for p, h, _ in stub.requests if p.startswith("/v1/models")] == ["Bearer sk-proxy-new"]
+    c = win.client()
+    assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-new", stub.url)
+    s = win.settings()
+    assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url}
+    assert s["disableClaudeAiConnectors"] is True
+    line = s["statusLine"]["command"]
+    assert line.startswith("powershell -NoProfile -ExecutionPolicy Bypass -File \"") and line.endswith("/statusline.ps1\"")
+    assert "\\" not in line and s["statusLine"]["refreshInterval"] == 30
+    assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": line + " --warn", "timeout": 10}]}]
+    assert (win.config / "statusline.ps1").is_file()
+    assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / "usage.md").read_text()
+    assert json.loads((win.gdir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake_claude(win, tmp_path))
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
+    r = win.cg("status")
+    assert r.returncode == 0 and f"gateway: {stub.url}" in r.out and "gclaude: installed" in r.out, r.out
+    assert "status: maya" in r.out
+    # Again with the saved key: no new authorization, and nothing added twice.
+    stub.requests.clear()
+    r = win.cg("on")
+    assert r.returncode == 0, r.out
+    assert "/api/device/start" not in stub.paths()
+    assert win.settings() == s
+
+
+@on_windows
+def test_on_with_a_key_keeps_the_users_settings_and_off_gives_them_back(installed, stub):
+    win = installed
+    mine = {"model": "opus", "statusLine": {"type": "command", "command": "mine"},
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "beep"}]}]}}
+    win.gdir.mkdir(parents=True)
+    (win.gdir / "settings.json").write_text(json.dumps(mine))
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    assert "/api/device/start" not in stub.paths() and "already has a statusline" in r.out
+    s = win.settings()
+    assert s["model"] == "opus" and s["statusLine"] == mine["statusLine"] and s["hooks"]["Stop"] == mine["hooks"]["Stop"]
+    assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("--warn")
+    r = win.cg("off")
+    assert r.returncode == 0 and "gclaude is removed" in r.out, r.out
+    assert win.settings() == mine
+    assert not (win.bin / "gclaude.cmd").exists() and not (win.gdir / "commands").exists()
+    assert (win.gdir / ".claude.json").exists()   # gclaude's own state and history stay
+    assert "gclaude" not in win.client() and win.client()["key"] == "sk-proxy-k"
+    assert "gclaude: not set up" in win.cg("status").out
+
+
+@on_windows
+@pytest.mark.parametrize("error, message", [("access_denied", "Cancelled in the browser"),
+                                            ("expired_token", "The code expired")])
+def test_a_refused_authorization_changes_nothing(installed, stub, error, message):
+    win = installed
+    stub.tokens = [(400, {"error": error})]
+    r = win.cg("on", "--url", stub.url, "--dashboard", stub.url)
+    assert r.returncode != 0 and message in r.out, r.out
+    assert not (win.config / "client.json").exists() and not (win.gdir / "settings.json").exists()
+    assert not (win.bin / "gclaude.cmd").exists()
+
+
+@on_windows
+def test_a_key_the_gateway_refuses_changes_nothing(installed, stub):
+    win = installed
+    stub.models_status = 401
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-bad", "--dashboard", stub.url)
+    assert r.returncode != 0 and "did not accept the key (HTTP 401)" in r.out, r.out
+    assert not (win.config / "client.json").exists() and not (win.gdir / "settings.json").exists()
+
+
+@on_windows
+def test_on_leaves_a_foreign_gclaude_alone(installed, stub):
+    win = installed
+    (win.bin / "gclaude.cmd").write_bytes(b"@echo mine\r\n")
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode != 0 and "did not install it" in r.out, r.out
+    assert (win.bin / "gclaude.cmd").read_bytes() == b"@echo mine\r\n"
+    assert not stub.requests
+
+
+@on_windows
+@pytest.mark.parametrize("flag", ["--global", "--opencode", "--own-login"])
+def test_modes_not_on_windows_yet_point_at_the_issue(installed, flag):
+    r = installed.cg("on", flag)
+    assert r.returncode != 0 and "issues/22" in r.out, r.out
+
+
+# ---------- statusline.ps1, run the way Claude Code runs gclaude's settings ----------
+
+@pytest.fixture
+def gclaude(installed, stub):
+    win = installed
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    s = win.settings()
+    env = {**s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
+    line = s["statusLine"]["command"]
+    return lambda extra="", stdin="{}": win.run(f"cmd.exe /d /c {line}{extra}", stdin=stdin, **env)
+
+
+@on_windows
+def test_the_statusline_shows_the_figures(gclaude, stub):
+    stub.status_line = "maya \u00b7 daily $85/$100 \u00b7 5h 10%"
+    r = gclaude()
+    assert r.returncode == 0, r.out
+    assert "\u25c6" in r.stdout and "\x1b[33m$85/$100 85%" in r.stdout and "5h 10%" in r.stdout, r.out
+    assert [h["authorization"] for p, h, _ in stub.requests if p.startswith("/api/me/status")][-1] == "Bearer sk-proxy-k"
+
+
+@on_windows
+def test_the_statusline_says_so_when_the_gateway_is_down(gclaude, stub):
+    stub.status_line = None
+    r = gclaude()
+    assert r.returncode == 0 and "gateway status unavailable" in r.stdout, r.out
+
+
+@on_windows
+def test_the_warning_hook_warns_once_and_answers_usage(gclaude, stub):
+    stub.status_line = "maya \u00b7 daily $85/$100"
+    r = gclaude(" --warn", '{"prompt": "hi"}')
+    assert r.returncode == 0, r.out
+    assert json.loads(r.stdout)["systemMessage"].startswith("Gateway: maya \u00b7 daily $85/$100 85%")
+    r = gclaude(" --warn", '{"prompt": "hi"}')
+    assert r.returncode == 0 and not r.stdout.strip(), r.out   # once per band, not on every prompt
+    r = gclaude(" --warn", '{"prompt": "/usage"}')
+    out = json.loads(r.stdout)
+    assert out["decision"] == "block" and "$85/$100 85%" in out["reason"] and f"{stub.url}/dashboard" in out["reason"]
+
+
+@on_windows
+def test_the_warning_hook_is_quiet_below_80_percent(gclaude, stub):
+    stub.status_line = "maya \u00b7 daily $50/$100"
+    r = gclaude(" --warn", '{"prompt": "hi"}')
+    assert r.returncode == 0 and not r.stdout.strip(), r.out
+
+
+# ---------- a profile folder with spaces, cmd metacharacters and non-ASCII letters ----------
+
+GIT_BASH = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+
+
+@on_windows
+def test_everything_works_from_a_profile_folder_like_ivan_and_co(tmp_path, source_zip, stub):
+    """cmd.exe reads .cmd files in the console's code page, not UTF-8, and expands % in them; Claude Code may run
+    the statusline through cmd, PowerShell or Git Bash."""
+    win = Win(tmp_path, source_zip, home="Иван Müller & 100%x")
+    r = win.install()
+    assert r.returncode == 0 and "session still open" in r.out, r.out
+    assert win.cg("help").returncode == 0
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    for f in (win.bin / "claude-gateway.cmd", win.bin / "gclaude.cmd"):
+        f.read_bytes().decode("ascii")   # nothing a code page could garble
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude"], **fake_claude(win, tmp_path))
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|", r.out
+    s = win.settings()
+    env = {**s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
+    line = s["statusLine"]["command"]
+    stub.status_line = "maya \u00b7 daily $85/$100"
+    shells = [["cmd.exe", "/d", "/s", "/c", f'"{line}"'], ["powershell.exe", "-NoProfile", "-Command", line]]
+    if GIT_BASH.exists():
+        shells.append([str(GIT_BASH), "-c", line])
+    for argv in shells:
+        r = win.run(argv if argv[0] != "cmd.exe" else " ".join(argv), stdin="{}", **env)
+        assert r.returncode == 0 and "$85/$100 85%" in r.stdout, (argv[0], r.out)
+
+
+@on_windows
+def test_adding_to_path_keeps_its_variables(win):
+    r"""The user's PATH is REG_EXPAND_SZ with entries like %USERPROFILE%\...\WindowsApps; rewriting it must not
+    freeze them to today's values."""
+    import winreg
+    k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+    try:
+        before = winreg.QueryValueEx(k, "Path")
+    except FileNotFoundError:
+        before = None
+    try:
+        winreg.SetValueEx(k, "Path", 0, winreg.REG_EXPAND_SZ, r"%SystemRoot%\gw-test;C:\gw-plain")
+        env = {k2: v for k2, v in win.env.items() if k2 != "CLAUDE_GATEWAY_BIN"}   # the default bin: PATH is ours to edit
+        install = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                   f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}')))"]
+        r = subprocess.run(install, capture_output=True, text=True, env=env, timeout=120)
+        assert r.returncode == 0, r.stdout + r.stderr
+        value, kind = winreg.QueryValueEx(k, "Path")
+        assert kind == winreg.REG_EXPAND_SZ
+        assert value == r"%SystemRoot%\gw-test;C:\gw-plain;" + str(win.bin)
+        subprocess.run(install, capture_output=True, text=True, env=env, timeout=120)
+        assert winreg.QueryValueEx(k, "Path")[0] == value   # not added twice
+    finally:
+        if before is None:
+            winreg.DeleteValue(k, "Path")
+        else:
+            winreg.SetValueEx(k, "Path", 0, before[1], before[0])
+        winreg.CloseKey(k)

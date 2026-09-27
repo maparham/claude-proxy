@@ -273,7 +273,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out = {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
                # Configurable values the dashboard's explanations quote.
                "settings": {"reference_model": cfg.pricing.reference_model},
-               "install": install_command()}
+               "install": install_command(), "install_windows": install_command(windows=True)}
         if is_admin(user):
             be = gw.backend.describe()
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
@@ -534,9 +534,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     # ---------- browser authorization for `claude-gateway on` (sign-up design section 4) ----------
 
-    def install_command() -> str | None:
-        ready = cfg.listener.public_url and cfg.listener.dashboard_url
-        return f"curl -fsSL {cfg.listener.dashboard_url.rstrip('/')}/install | sh" if ready else None
+    def install_command(windows: bool = False) -> str | None:
+        if not (cfg.listener.public_url and cfg.listener.dashboard_url):
+            return None
+        dash = cfg.listener.dashboard_url.rstrip("/")
+        return f"irm {dash}/install.ps1 | iex" if windows else f"curl -fsSL {dash}/install | sh"
 
     def need_urls():
         if not (cfg.listener.public_url and cfg.listener.dashboard_url):
@@ -553,6 +555,19 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                   f"curl -fsSL {q(cfg.signup.installer_url)} | sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
                   f"--dashboard {q(cfg.listener.dashboard_url.rstrip('/'))} \"$@\"\n")
         return PlainTextResponse(script, media_type="text/x-shellscript", headers={"Cache-Control": "no-cache"})
+
+    @app.get("/install.ps1")
+    async def install_ps1():   # Windows PowerShell 5.1: `irm <dashboard>/install.ps1 | iex` (Windows client design section 4)
+        need_urls()
+        q = lambda s: "'" + s.replace("'", "''") + "'"
+        dash = cfg.listener.dashboard_url.rstrip("/")
+        script = (f"# Installs claude-gateway and connects this computer to {dash}: it opens the browser to authorize it,\n"
+                  "# then sets up gclaude.\n"
+                  "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor "
+                  "[Net.SecurityProtocolType]::Tls12\n"
+                  f"& ([scriptblock]::Create((Invoke-RestMethod {q(cfg.signup.installer_ps1_url)}))) on "
+                  f"--url {q(cfg.listener.public_url.rstrip('/'))} --dashboard {q(dash)}\n")
+        return PlainTextResponse(script, headers={"Cache-Control": "no-cache"})
 
     def browser_user(request: Request, write: bool = False):
         """Someone signed in to this dashboard in the browser, the only one who may authorize a computer. Not a key
