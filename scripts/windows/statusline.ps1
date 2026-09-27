@@ -10,7 +10,7 @@
 # With --account it prints who the key belongs to, which key it is and the dashboard link, for gclaude's /account
 # (commands\account.md there runs it, and the model repeats the line: a hook's reply would read as an error).
 # Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
-# It also answers gclaude's /logout (commands\logout.md there, in place of Claude Code's own): it revokes the key on
+# It also answers gclaude's /logout_gclaude (commands\logout_gclaude.md there): it revokes the key on
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
 # signed-out file in CLAUDE_CONFIG_DIR, so gclaude.cmd won't start until `claude-gateway on` removes it.
@@ -49,7 +49,7 @@ try {
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
   function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
 
-  if (Ours 'logout') {   # gclaude's /logout: revoke this computer's key on the gateway, then drop every copy of it here
+  if (Ours 'logout_gclaude') {   # gclaude's /logout_gclaude: revoke this computer's key on the gateway, then drop every copy of it here
     $key = [string]$env:ANTHROPIC_AUTH_TOKEN
     $code = 0; $revoked = $false; $odd = $false   # code 0: no answer at all; odd: a 2xx whose body isn't the JSON expected
     if ($key -and $dash) {
@@ -72,7 +72,7 @@ try {
     $settings = Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'
     $client = if ($env:CLAUDE_GATEWAY_CLIENT) { $env:CLAUDE_GATEWAY_CLIENT } else { Join-Path $PSScriptRoot 'client.json' }
     try {   # rewritten in place, so each file keeps its owner-only permissions
-      [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'signed-out'), "/logout`n", $utf8)
+      [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'signed-out'), "/logout_gclaude`n", $utf8)
       $s = [IO.File]::ReadAllText($settings) | ConvertFrom-Json
       if (($s.env -is [psobject]) -and ($s.env.PSObject.Properties.Name -contains 'ANTHROPIC_AUTH_TOKEN')) {
         $s.env.PSObject.Properties.Remove('ANTHROPIC_AUTH_TOKEN')

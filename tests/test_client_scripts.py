@@ -331,11 +331,11 @@ def test_other_account_prompts_are_left_alone(stub, warn_env, prompt, text):
     assert (r.returncode, r.stdout) == (0, "")
 
 
-def logout_prompt(env, prompt="/logout", text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
-    """/logout in a gclaude-like folder whose settings.json and client.json hold the key sk-proxy-k."""
+def logout_prompt(env, prompt="/logout_gclaude", text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
+    """/logout_gclaude in a gclaude-like folder whose settings.json and client.json hold the key sk-proxy-k."""
     env = gclaude_config(env)
     cfg = Path(env["CLAUDE_CONFIG_DIR"])
-    (cfg / "commands" / "logout.md").write_text(text)
+    (cfg / "commands" / "logout_gclaude.md").write_text(text)
     settings = {"env": {"ANTHROPIC_BASE_URL": "https://gw", "ANTHROPIC_AUTH_TOKEN": "sk-proxy-k"}, "model": "opus"}
     for name in ("settings.json", "settings.json.bak-claude-gateway"):
         (cfg / name).write_text(json.dumps(settings))
@@ -389,10 +389,10 @@ def test_logout_prompt_ends_the_claude_session_that_ran_it(stub, warn_env, tmp_p
     fake.symlink_to("/bin/sh")   # a process named claude (a copy would lose its code signature on macOS)
     log = tmp_path / "signals"
     env = gclaude_config(warn_env)
-    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "logout_gclaude.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
     (Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json").write_text("{}")
     prompt = tmp_path / "prompt.json"
-    prompt.write_text(json.dumps({"prompt": "/logout"}))
+    prompt.write_text(json.dumps({"prompt": "/logout_gclaude"}))
     script = (f"trap 'echo INT >> {log}' INT; sh {STATUSLINE} --warn < {prompt}; "
               "i=0; while [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done")
     r = run([str(fake), "-c", script], {**env, "CLAUDE_PROJECT_DIR": str(tmp_path)})
@@ -403,7 +403,7 @@ def test_logout_prompt_ends_the_claude_session_that_ran_it(stub, warn_env, tmp_p
     assert not log.exists()
 
 
-@pytest.mark.parametrize("prompt,text", [("/logout", "my own logout command\n"), ("/logouts", None), ("how do I /logout", None)])
+@pytest.mark.parametrize("prompt,text", [("/logout_gclaude", "my own command\n"), ("/logout", None), ("/logout_gclauded", None), ("how do I /logout_gclaude", None)])
 def test_other_logout_prompts_are_left_alone(stub, warn_env, prompt, text):
     r = logout_prompt(warn_env, prompt, **({"text": text} if text else {}))
     assert (r.returncode, r.stdout) == (0, "")
@@ -805,7 +805,7 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("statusline.sh --warn")
     assert os.readlink(gdir / "CLAUDE.md") == str(home / ".claude" / "CLAUDE.md")
     assert os.readlink(gdir / "agents") == str(home / ".claude" / "agents")
-    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "logout.md", "usage.md"]   # gclaude's own only
+    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "logout_gclaude.md", "usage.md"]   # gclaude's own only
     assert json.loads((gdir / ".claude.json").read_text()) == {"hasCompletedOnboarding": True, "theme": "light"}
     assert os.access(launcher, os.X_OK)
 
@@ -990,13 +990,33 @@ def test_gclaude_gets_a_usage_command_that_plain_claude_never_sees(stub, home):
     assert os.readlink(cmds / "mine.md") == str(own_cmds / "mine.md")
 
 
+def test_gclaude_on_replaces_the_older_logout_command_and_off_removes_it(stub, home):
+    """An older gclaude named /logout_gclaude /logout, beside the built-in /logout it can't hide."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    cmds = gc_paths(home)[0] / "commands"
+    (cmds / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    assert cg(home, "on", "--gclaude").returncode == 0
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "logout_gclaude.md", "usage.md"]
+    (cmds / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not cmds.exists()
+
+
+def test_gclaude_on_leaves_the_users_own_logout_command_alone(stub, home):
+    cmds = gc_paths(home)[0] / "commands"
+    cmds.mkdir(parents=True)
+    (cmds / "logout.md").write_text("mine\n")
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert (cmds / "logout.md").read_text() == "mine\n"
+
+
 def test_gclaude_logout_signs_out_until_on_login(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     gdir, gsettings, launcher = gc_paths(home)
     env = {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_CONFIG_DIR": str(gdir),
            **json.loads(gsettings.read_text())["env"]}
     hook = json.loads(gsettings.read_text())["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
-    out = json.loads(run(["sh", "-c", hook], env, stdin=json.dumps({"prompt": "/logout"})).stdout)
+    out = json.loads(run(["sh", "-c", hook], env, stdin=json.dumps({"prompt": "/logout_gclaude"})).stdout)
     assert out["continue"] is False
     assert "sk-proxy-full" not in gsettings.read_text()
     assert "sk-proxy-full" not in (home / ".config" / "claude-gateway" / "client.json").read_text()
@@ -1029,7 +1049,7 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
 def test_gclaude_update_works_after_logout(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, gsettings, launcher = gc_paths(home)
-    gsettings.write_text("{}")   # as /logout leaves it
+    gsettings.write_text("{}")   # as /logout_gclaude leaves it
     stub.install = "echo installer ran\n"
     r = run_gclaude(home, launcher)
     assert r.returncode == 1
@@ -1051,7 +1071,7 @@ def test_gclaude_launcher_follows_later_command_changes(stub, home):
     (own_cmds / "new.md").write_text("new\n")
     (own_cmds / "usage.md").write_text("my own usage\n")          # gclaude's /usage wins in gclaude
     assert run_gclaude(home, launcher).returncode == 0
-    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "logout.md", "new.md", "usage.md"]
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "logout_gclaude.md", "new.md", "usage.md"]
     assert "disable-model-invocation" in (cmds / "usage.md").read_text()
 
 
