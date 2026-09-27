@@ -21,7 +21,8 @@
 - sessions: each of plain `claude`'s sessions (projects/<project>/<id>.jsonl) is a hard link in gclaude's projects
   folder, so gclaude's /resume lists it: the picker skips symbolic links, and Claude Code appends to the file in
   place, so a session resumed in gclaude goes on in <own> too. Its <id> folder (subagents, tool results) is a
-  symbolic link. Sessions started in gclaude stay gclaude's, and prompt history (history.jsonl) stays separate.
+  symbolic link, and so is its file-history/<id> folder of rewind checkpoints, so /rewind can restore the files it
+  changed. Sessions started in gclaude stay gclaude's, and prompt history (history.jsonl) stays separate.
 This script itself changes nothing in <own>, except that it creates the current project's memory folder there to
 link to. Memories, plugin changes and the turns of a resumed session made in gclaude land in <own>: that is
 the point of sharing them.
@@ -324,6 +325,34 @@ def sync_sessions(gdir, own, notes):
     each(sorted(os.listdir(projects)), share, notes)
 
 
+def sync_file_history(gdir, own, notes):
+    theirs, mine = os.path.join(own, "file-history"), os.path.join(gdir, "file-history")
+    if not os.path.isdir(theirs) or not os.path.isdir(gdir) or inside(mine, own):
+        return
+    if os.path.isdir(mine):
+        def prune(entry):   # links whose session is gone from <own>
+            dst = os.path.join(mine, entry)
+            if points_to(dst, os.path.join(theirs, entry)) and not os.path.exists(dst):
+                os.remove(dst)
+        each(os.listdir(mine), prune, notes)
+
+    def link(entry):
+        src, dst = os.path.join(theirs, entry), os.path.join(mine, entry)
+        if SESSION_ID.fullmatch(entry) and os.path.isdir(src) and not os.path.islink(src) \
+                and not os.path.lexists(dst):   # else a session gclaude has already, linked or its own
+            os.makedirs(mine, exist_ok=True)
+            os.symlink(src, dst)
+    each(sorted(os.listdir(theirs)), link, notes)
+
+
+def unsync_file_history(gdir, own):
+    theirs, mine = os.path.join(own, "file-history"), os.path.join(gdir, "file-history")
+    if os.path.isdir(mine) and not inside(mine, own):
+        for entry in os.listdir(mine):
+            if points_to(os.path.join(mine, entry), os.path.join(theirs, entry)):
+                os.remove(os.path.join(mine, entry))
+
+
 def unsync_projects(gdir, own):
     """Remove the memory and session links sync made; gclaude's own sessions and memories stay."""
     projects = os.path.join(gdir, "projects")
@@ -350,10 +379,11 @@ def main():
     if mode == "sync":
         steps = (lambda: sync_commands(gdir, own, notes), lambda: sync_plugins(gdir, own, notes),
                  lambda: sync_mcp(gdir, own, notes), lambda: sync_memory(gdir, own, os.getcwd(), notes),
-                 lambda: sync_sessions(gdir, own, notes))
+                 lambda: sync_sessions(gdir, own, notes), lambda: sync_file_history(gdir, own, notes))
     elif mode == "unsync":
         steps = (lambda: unsync_commands(gdir, own), lambda: unsync_plugins(gdir, own),
-                 lambda: unsync_mcp(gdir, own), lambda: unsync_projects(gdir, own))
+                 lambda: unsync_mcp(gdir, own), lambda: unsync_projects(gdir, own),
+                 lambda: unsync_file_history(gdir, own))
     else:
         sys.exit(__doc__)
     notes = []

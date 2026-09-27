@@ -172,8 +172,9 @@ through `statusline.sh --then`), and shares the rest of your own setup in `~/.cl
   either shows up in both. A gclaude memory folder that already holds memories of its own is left alone;
 - sessions: gclaude's `/resume` (and `gclaude --resume <id>`) lists your plain `claude` sessions too. Each is a
   hard link to the same file (the picker skips symbolic links), so a session you resume in gclaude goes on in
-  plain `claude`'s history as well, with its new requests going through the gateway. Sessions started in gclaude
-  stay gclaude's, and a session plain `claude` cleans up stays in gclaude until gclaude's own cleanup.
+  plain `claude`'s history as well, with its new requests going through the gateway. Its rewind checkpoints are
+  shared too, so `/rewind` in gclaude can restore the files it changed. Sessions started in gclaude stay
+  gclaude's, and a session plain `claude` cleans up stays in gclaude until gclaude's own cleanup.
 
 Settings, login and prompt history stay separate, so both commands can run at once in the same terminal.
 The gateway's `ANTHROPIC_BASE_URL` and key live only in the `"env"` block of gclaude's `settings.json`, which
