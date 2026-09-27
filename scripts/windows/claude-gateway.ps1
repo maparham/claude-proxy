@@ -196,16 +196,28 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
 }
 
 function Command-Text([string]$name) {
-  $desc, $what = 'Your gateway limits and usage', 'gateway limits are on the status line and'
-  if ($name -eq 'account') { $desc, $what = 'Your gateway account and a link to the dashboard', 'account details' }
-  return @"
+  if ($name -eq 'account') {   # statusline.ps1 --account, repeated by a small model call; see statusline.ps1
+    return @"
 ---
-description: $desc
+description: Your gateway account and a link to the dashboard
+allowed-tools: Bash($LineCmd --account)
+model: haiku
 disable-model-invocation: true
 ---
 <!-- $UsageMark -->
-The claude-gateway hook that answers /$name did not run. Tell the user, in one sentence, that their $what
-are on the dashboard, and that ``claude-gateway on`` reinstalls the hook. Use no tools.
+!``$LineCmd --account``
+
+Repeat the line above to the user exactly as it is, and nothing else. Use no tools.
+"@
+  }
+  return @"
+---
+description: Your gateway limits and usage
+disable-model-invocation: true
+---
+<!-- $UsageMark -->
+The claude-gateway hook that answers /usage did not run. Tell the user, in one sentence, that their gateway limits
+are on the status line and on the dashboard, and that ``claude-gateway on`` reinstalls the hook. Use no tools.
 "@
 }
 
@@ -247,7 +259,7 @@ function Gclaude-On($c) {
   Write-Json $Settings $s -Private   # it holds the key
   Write-Json $Client $c -Private
 
-  # Claude Code's own /usage can't see the gateway; the --warn hook answers this one, and /account, instead.
+  # Claude Code's own /usage can't see the gateway; the --warn hook answers this one instead. /account: Command-Text.
   foreach ($name in 'usage', 'account') {
     $file = Join-Path $GDir "commands\$name.md"
     if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {

@@ -283,19 +283,32 @@ def account_prompt(env, prompt="/account", text="<!-- # Installed by claude-gate
     return run(["sh", str(STATUSLINE), "--warn"], env, stdin=json.dumps({"prompt": prompt}))
 
 
-def test_account_prompt_is_blocked_with_the_account_and_dashboard_link(stub, warn_env):
-    stub.status_line = "alice · daily 99/100 req"
+def test_account_mode_prints_the_account_and_dashboard_link(stub, warn_env):
+    r = run(["sh", str(STATUSLINE), "--account"], warn_env)
+    assert r.stdout == f"Gateway account: alice · user · key sk-proxy-ab1… (your first key) · dashboard: {stub.url}/dashboard\n"
+    assert "format=account" in stub.requests[-1][0]
+    stub.account_line = None
+    r = run(["sh", str(STATUSLINE), "--account"], warn_env)
+    assert r.stdout == f"Gateway account unavailable; see {stub.url}/dashboard\n"
+
+
+def test_account_prompt_goes_to_the_model_while_it_can_answer(stub, warn_env):
+    stub.status_line = "alice · daily 50/100 req"
+    r = account_prompt(warn_env)
+    assert (r.returncode, r.stdout) == (0, "")
+
+
+def test_account_prompt_is_answered_by_the_hook_when_a_limit_is_reached(stub, warn_env):
+    stub.status_line = "alice · credit $5.00/$5.00"
     out = json.loads(account_prompt(warn_env).stdout)
     assert out == {"decision": "block", "reason": f"Gateway account: alice · user · key sk-proxy-ab1… (your first key) · "
-                                                  f"dashboard: {stub.url}/dashboard"}
-    assert "format=account" in stub.requests[-1][0]
-    assert not list(Path(warn_env["TMPDIR"]).glob("*.warned"))   # not a warning, though a limit is at 99%
+                                                  f"dashboard: {stub.url}/dashboard · limit reached: alice · credit $5.00/$5.00 100%"}
 
 
-def test_account_prompt_says_when_the_gateway_is_down(stub, warn_env):
-    stub.account_line = None
+def test_account_prompt_is_answered_by_the_hook_when_the_gateway_is_down(stub, warn_env):
+    stub.status_line = stub.account_line = None
     out = json.loads(account_prompt(warn_env).stdout)
-    assert out["decision"] == "block" and out["reason"] == f"Gateway account unavailable; see {stub.url}/dashboard"
+    assert out == {"decision": "block", "reason": f"Gateway account unavailable; see {stub.url}/dashboard"}
 
 
 @pytest.mark.parametrize("prompt,text", [("/account", "my own account command\n"), ("/accounts", None), ("my /account", None)])
@@ -876,6 +889,9 @@ def test_gclaude_gets_a_usage_command_that_plain_claude_never_sees(stub, home):
     assert cmds.is_dir() and not cmds.is_symlink()
     usage = cmds / "usage.md"
     assert "disable-model-invocation: true" in usage.read_text()
+    account = (cmds / "account.md").read_text()
+    line = f"sh {home}/.config/claude-gateway/statusline.sh --account"
+    assert f"!`{line}`" in account and f"allowed-tools: Bash({line})" in account and "model: haiku" in account
     assert sorted(p.name for p in own_cmds.iterdir()) == ["mine.md"]
     assert run_gclaude(home, launcher).returncode == 0
     assert os.readlink(cmds / "mine.md") == str(own_cmds / "mine.md")
