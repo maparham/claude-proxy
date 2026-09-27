@@ -76,8 +76,7 @@ and once you click **Authorize** there, the dashboard gives this computer a key 
 On Windows, `irm https://<dashboard>/install.ps1 | iex` in PowerShell does the same with no Python, Git or admin
 rights (`install.ps1`, `scripts/windows`). It sets up gclaude only (`gclaude.cmd`, with the limits statusline, the
 80% warning and `/usage`); global mode, OpenCode and sharing `~/.claude` with gclaude are
-[not on Windows yet](https://github.com/maparham/claude-proxy/issues/22). CI's `windows client` workflow tests it
-under Windows PowerShell 5.1.
+[not on Windows yet](https://github.com/maparham/claude-proxy/issues/22).
 
 By default `claude-gateway on` sets up **gclaude** (below): a second command that runs Claude Code through the
 gateway while `claude` keeps this machine's own login. For a machine where plain `claude` itself should use the
@@ -286,3 +285,9 @@ back to zero, and the next request opens a new window. A user over a limit waits
 pip install -e . pytest pytest-asyncio
 pytest
 ```
+
+CI runs every test on Linux before each deploy. The `client scripts` workflow adds the client side where people run
+it: Windows (`tests/test_windows_client.py` under Windows PowerShell 5.1) and macOS (the installer and
+`claude-gateway` under the Mac's own bash 3.2), and installs from GitHub itself on all three, the way the
+one-liners do. The one-liners the dashboard serves are tested end to end against a stand-in dashboard; only the
+click on **Authorize** in a real browser is left to a person.

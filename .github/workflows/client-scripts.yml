@@ -1,0 +1,79 @@
+# The client side on the systems people run it on. The test-and-deploy workflow already runs every test on Linux;
+# these add Windows (install.ps1, scripts/windows, under Windows PowerShell 5.1, the one every Windows PC has) and
+# macOS (install.sh, scripts/claude-gateway and statusline.sh under the Mac's own bash 3.2). They don't gate the
+# deploy. `real-install` also installs from GitHub itself, the way the one-liners do; weekly too.
+# "Run workflow" runs it all on demand.
+name: client scripts
+
+on:
+  push:
+    branches: [master]
+    paths: &paths
+      - install.sh
+      - install.ps1
+      - "scripts/**"
+      - "examples/**"
+      - tests/test_install.py
+      - tests/test_client_scripts.py
+      - tests/test_device_cli.py
+      - tests/test_windows_client.py
+      - src/claude_proxy/web.py
+      - src/claude_proxy/config.py
+      - .github/workflows/client-scripts.yml
+  pull_request:
+    paths: *paths
+  schedule:
+    - cron: "17 6 * * 1"   # Mondays: GitHub's archive and raw URLs still work the way the installers use them
+  workflow_dispatch:
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - run: uv run --python 3.12 pytest -q -rs tests/test_windows_client.py
+
+  macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Use the Mac's own bash 3.2, not the runner's newer one
+        run: |
+          mkdir -p "$RUNNER_TEMP/bash32" && ln -s /bin/bash "$RUNNER_TEMP/bash32/bash"
+          echo "$RUNNER_TEMP/bash32" >> "$GITHUB_PATH"
+      - run: bash --version | head -1
+      - run: uv run --python 3.12 pytest -q -rs tests/test_install.py tests/test_client_scripts.py tests/test_device_cli.py tests/test_windows_client.py
+
+  real-install:
+    # From raw.githubusercontent.com and codeload.github.com at this commit, as `curl … | sh` and `irm … | iex` do.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    env:
+      CLAUDE_GATEWAY_REPO: ${{ github.repository }}
+      CLAUDE_GATEWAY_REF: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: curl … | sh
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          curl -fsSL "https://raw.githubusercontent.com/$CLAUDE_GATEWAY_REPO/$CLAUDE_GATEWAY_REF/install.sh" | sh
+          "$HOME/.local/bin/claude-gateway" --help | grep 'claude-gateway on --gclaude' >/dev/null   # not -q: it would stop reading early
+          "$HOME/.local/bin/claude-gateway" status
+      - name: irm … | iex
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm "https://raw.githubusercontent.com/$env:CLAUDE_GATEWAY_REPO/$env:CLAUDE_GATEWAY_REF/install.ps1" | iex
+          $bin = Join-Path $env:USERPROFILE '.local\bin'
+          $out = & (Join-Path $bin 'claude-gateway.cmd') help | Out-String
+          if ($out -notmatch 'claude-gateway \(Windows\)') { throw "claude-gateway help said: $out" }
+          if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -notcontains $bin) { throw "$bin is not on the user's PATH" }
+          & (Join-Path $bin 'claude-gateway.cmd') status

@@ -1,6 +1,6 @@
 """The Windows client (install.ps1, scripts/windows), run under Windows PowerShell 5.1 against a stub gateway and
 dashboard (Windows client design section 5). Everything but the static checks runs only on Windows: CI's
-windows-client workflow."""
+client-scripts workflow."""
 import json
 import os
 import re
@@ -8,11 +8,15 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import zipfile
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
+
+from claude_proxy.config import Config
+from claude_proxy.web import install_ps1
 
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.ps1"
@@ -52,6 +56,7 @@ class Stub:
         self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
         self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
         self.models_status = 200
+        self.files: dict[str, bytes] = {}   # GET path -> body, e.g. the dashboard's /install.ps1
         self.requests: list[tuple[str, dict, dict]] = []
         d = self
 
@@ -69,7 +74,9 @@ class Stub:
 
             def do_GET(self):
                 d.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, {}))
-                if self.path.startswith("/v1/models"):
+                if self.path in d.files:
+                    self.reply(200, d.files[self.path], "text/plain; charset=utf-8")
+                elif self.path.startswith("/v1/models"):
                     self.reply(d.models_status, {"data": [], "has_more": False})
                 elif self.path.startswith("/api/me/status"):
                     ok = d.status_line is not None
@@ -131,9 +138,10 @@ class Win:
         self.config = self.home / ".config" / "claude-gateway"
         self.gdir = self.config / "claude"
 
-    def run(self, argv, stdin=None, **env):
+    def run(self, argv, stdin=None, **env):   # a variable given as None is left out
+        full = {k: v for k, v in {**self.env, **env}.items() if v is not None}
         r = subprocess.run(argv, input=stdin, capture_output=True, text=True, encoding="utf-8", errors="replace",
-                           env={**self.env, **env}, timeout=120)
+                           env=full, timeout=120)
         r.out = r.stdout + r.stderr
         return r
 
@@ -422,3 +430,86 @@ def test_adding_to_path_keeps_its_variables(win):
         else:
             winreg.SetValueEx(k, "Path", 0, before[1], before[0])
         winreg.CloseKey(k)
+
+
+# ---------- the dashboard's one-liner, end to end ----------
+
+@on_windows
+def test_the_dashboards_one_liner_installs_and_authorizes(win, stub):
+    """`irm <dashboard>/install.ps1 | iex` in the user's own PowerShell, as the dashboard serves it: install.ps1, which
+    hands `on --url … --dashboard …` to claude-gateway in a child PowerShell, then gclaude."""
+    c = Config()
+    c.listener.public_url = c.listener.dashboard_url = stub.url
+    c.signup.installer_ps1_url = f"{stub.url}/raw/install.ps1"
+    stub.files = {"/install.ps1": install_ps1(c).encode(), "/raw/install.ps1": INSTALL.read_bytes()}
+    stub.tokens = [(400, {"error": "authorization_pending"}), (200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = win.ps(f"irm {stub.url}/install.ps1 | iex; Write-Output 'session still open'")
+    assert "session still open" in r.out and "claude-gateway is installed" in r.out, r.out
+    assert "Authorized as ana" in r.out and "gclaude now runs Claude Code" in r.out, r.out
+    c = win.client()
+    assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-new", stub.url)
+    assert win.settings()["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
+    assert (win.bin / "gclaude.cmd").is_file()
+
+
+# ---------- authorizing: the paths the macOS/Linux tests cover too ----------
+
+def opener(tmp_path):
+    """A stand-in browser that records the link it was asked to open."""
+    log = tmp_path / "opened.txt"
+    (tmp_path / "opener.cmd").write_text(f'@echo %~1> "{log}"\r\n')
+    return str(tmp_path / "opener.cmd"), log
+
+
+@on_windows
+def test_slow_down_and_a_gateway_restart_while_waiting_are_not_fatal(installed, stub, tmp_path):
+    win = installed
+    stub.tokens = [(400, {"error": "slow_down"}), (503, {}), (502, {}), (429, {}),
+                   (200, {"key": "sk-proxy-new", "user": "ana"})]
+    path, log = opener(tmp_path)
+    r = win.cg("on", "--url", stub.url, "--dashboard", stub.url, CLAUDE_GATEWAY_OPEN=path)
+    assert r.returncode == 0 and "Authorized as ana" in r.out, r.out
+    assert win.client()["key"] == "sk-proxy-new"
+    for _ in range(50):   # Start-Process doesn't wait for the browser
+        if log.exists():
+            break
+        time.sleep(0.1)
+    assert log.read_text().strip() == f"{stub.url}/dashboard#authorize/{CODE}"
+
+
+@on_windows
+def test_over_ssh_it_only_prints_the_link(installed, stub):
+    stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = installed.cg("on", "--url", stub.url, "--dashboard", stub.url, CLAUDE_GATEWAY_OPEN=None,
+                     SSH_CONNECTION="10.0.0.1 5000 10.0.0.2 22")
+    assert r.returncode == 0, r.out
+    assert f"{stub.url}/dashboard#authorize/{CODE}" in r.out and "open in your browser" not in r.out
+
+
+@on_windows
+def test_an_unreachable_or_wrong_dashboard_says_so(installed, stub):
+    win = installed
+    r = win.cg("on", "--url", "http://127.0.0.1:9", "--dashboard", "http://127.0.0.1:9")
+    assert r.returncode != 0 and "Can't reach the dashboard at http://127.0.0.1:9" in r.out, r.out
+    r = win.cg("on", "--url", stub.url, "--dashboard", f"{stub.url}/nope")
+    assert r.returncode != 0 and "Give it with --dashboard" in r.out, r.out
+    r = win.cg("on", "--url", "https://claude.invalid")   # the dashboard follows the gateway's naming
+    assert r.returncode != 0 and "https://claude-dash.invalid" in r.out, r.out
+    assert not (win.config / "client.json").exists()
+
+
+@on_windows
+def test_login_authorizes_again_and_a_key_alone_keeps_the_saved_gateway(installed, stub):
+    win = installed
+    stub.tokens = [(200, {"key": "sk-proxy-one", "user": "ana"})]
+    assert win.cg("on", "--url", stub.url, "--dashboard", stub.url).returncode == 0
+    stub.requests.clear()
+    stub.tokens = [(200, {"key": "sk-proxy-two", "user": "ana"})]
+    r = win.cg("on", "--login")
+    assert r.returncode == 0 and "/api/device/start" in stub.paths(), r.out
+    assert win.client()["key"] == "sk-proxy-two" and win.settings()["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-two"
+    stub.requests.clear()
+    r = win.cg("on", "--key", "sk-proxy-three")
+    assert r.returncode == 0 and "/api/device/start" not in stub.paths(), r.out
+    c = win.client()
+    assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-three", stub.url)
