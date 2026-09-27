@@ -7,6 +7,7 @@
 # figure reaches 100%. Nothing else ever goes to stdout in that mode: a hook's plain output joins the prompt.
 # The same hook answers gclaude's /usage command (commands\usage.md there; Claude Code's own /usage can't see the
 # gateway): it blocks that prompt, so no model call is made, and gives a fresh line with the dashboard link as the reason.
+# gclaude's /account (commands\account.md) is answered the same way, with who the key belongs to and which key it is.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -24,21 +25,22 @@ try {
   try { $stdin = [Console]::In.ReadToEnd() } catch { }   # session or prompt JSON; only --warn looks at it, for /usage
   $dash = ([string]$env:CLAUDE_GATEWAY_DASHBOARD).TrimEnd('/')
 
-  $usage = $false
-  if ($warn -and $env:CLAUDE_CONFIG_DIR) {
-    $cmdFile = Join-Path $env:CLAUDE_CONFIG_DIR 'commands\usage.md'
-    if ((Test-Path -LiteralPath $cmdFile) -and (Select-String -LiteralPath $cmdFile -SimpleMatch '# Installed by claude-gateway on --gclaude.' -Quiet)) {
-      $prompt = ''
-      try { $prompt = [string]($stdin | ConvertFrom-Json).prompt } catch { }
-      $usage = $prompt -match '^/usage(\s|$)'
-    }
+  function Ours([string]$name) {   # the prompt is /name and gclaude's commands\name.md is claude-gateway's
+    if (-not ($warn -and $env:CLAUDE_CONFIG_DIR)) { return $false }
+    $cmdFile = Join-Path $env:CLAUDE_CONFIG_DIR "commands\$name.md"
+    if (-not ((Test-Path -LiteralPath $cmdFile) -and (Select-String -LiteralPath $cmdFile -SimpleMatch '# Installed by claude-gateway on --gclaude.' -Quiet))) { return $false }
+    $prompt = ''
+    try { $prompt = [string]($stdin | ConvertFrom-Json).prompt } catch { }
+    return $prompt -match "^/$name(\s|$)"
   }
+  $usage = Ours 'usage'
+  $account = Ours 'account'
 
   function Emit([string]$s) { [Console]::Out.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
 
   if (-not $dash) {
-    if ($usage) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).' }
+    if ($usage -or $account) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).' }
     if (-not $warn) { [Console]::Error.WriteLine('statusline.ps1: set CLAUDE_GATEWAY_DASHBOARD') }
     exit 0
   }
@@ -87,19 +89,28 @@ try {
   }
   function Age([string]$path) { return ((Get-Date) - (Get-Item -LiteralPath $path).LastWriteTime).TotalSeconds }
 
+  function Status([string]$format) {   # /api/me/status as text, with this key; '' when it fails
+    try {
+      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$dash/api/me/status?format=$format" -Headers @{ Authorization = "Bearer $env:ANTHROPIC_AUTH_TOKEN" }
+      $body = $r.Content
+      if ($body -is [byte[]]) { $body = $utf8.GetString($body) }
+      return ([string]$body).Trim()
+    } catch { return '' }
+  }
+
+  if ($account) {
+    $line = Status 'account'
+    if (-not $line) { Block "Gateway account unavailable; see $dash/dashboard" }
+    Block ('Gateway account: ' + $line + ' ' + [char]0x00B7 + " dashboard: $dash/dashboard")
+  }
+
   $cache = Join-Path ([IO.Path]::GetTempPath()) 'claude-gateway-status.txt'
   $line = ''
   if (-not $usage -and (Test-Path -LiteralPath $cache) -and (Age $cache) -lt 30) {
     $line = ([IO.File]::ReadAllText($cache)).Trim()
   } else {
-    $key = $env:ANTHROPIC_AUTH_TOKEN
-    try {
-      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$dash/api/me/status?format=text" -Headers @{ Authorization = "Bearer $key" }
-      $body = $r.Content
-      if ($body -is [byte[]]) { $body = $utf8.GetString($body) }
-      $line = ([string]$body).Trim()
-      [IO.File]::WriteAllText($cache, $line + "`n", $utf8)
-    } catch { $line = '' }
+    $line = Status 'text'
+    if ($line) { [IO.File]::WriteAllText($cache, $line + "`n", $utf8) }
   }
 
   if (-not $warn) {

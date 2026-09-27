@@ -55,6 +55,7 @@ class Stub:
     def __init__(self):
         self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
         self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
+        self.account_line = "maya · user · key sk-proxy-ab1… for PC, authorized 2026-09-20"   # ?format=account
         self.models_status = 200
         self.files: dict[str, bytes] = {}   # GET path -> body, e.g. the dashboard's /install.ps1
         self.requests: list[tuple[str, dict, dict]] = []
@@ -79,8 +80,8 @@ class Stub:
                 elif self.path.startswith("/v1/models"):
                     self.reply(d.models_status, {"data": [], "has_more": False})
                 elif self.path.startswith("/api/me/status"):
-                    ok = d.status_line is not None
-                    self.reply(200 if ok else 503, ((d.status_line or "") + "\n").encode(), "text/plain; charset=utf-8")
+                    line = d.account_line if "format=account" in self.path else d.status_line
+                    self.reply(200 if line is not None else 503, ((line or "") + "\n").encode(), "text/plain; charset=utf-8")
                 else:
                     self.reply(404, {})
 
@@ -247,7 +248,8 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert "\\" not in line and s["statusLine"]["refreshInterval"] == 30
     assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": line + " --warn", "timeout": 10}]}]
     assert (win.config / "statusline.ps1").is_file()
-    assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / "usage.md").read_text()
+    for name in "usage", "account":
+        assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / f"{name}.md").read_text()
     assert json.loads((win.gdir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake_claude(win, tmp_path))
     assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
@@ -362,6 +364,14 @@ def test_the_warning_hook_warns_once_and_answers_usage(gclaude, stub):
     r = gclaude(" --warn", '{"prompt": "/usage"}')
     out = json.loads(r.stdout)
     assert out["decision"] == "block" and "$85/$100 85%" in out["reason"] and f"{stub.url}/dashboard" in out["reason"]
+
+
+@on_windows
+def test_the_warning_hook_answers_account(gclaude, stub):
+    r = gclaude(" --warn", '{"prompt": "/account"}')
+    assert r.returncode == 0, r.out
+    assert json.loads(r.stdout) == {"decision": "block", "reason": "Gateway account: maya \u00b7 user \u00b7 key sk-proxy-ab1\u2026 "
+                                    f"for PC, authorized 2026-09-20 \u00b7 dashboard: {stub.url}/dashboard"}
 
 
 @on_windows

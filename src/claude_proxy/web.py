@@ -525,6 +525,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
                 account[b] = {"utilization_pct": att["utilization_pct"], "resets_at": att["resets_at"], "stale": att["stale"],
                               "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
+        if format == "account":   # gclaude's /account (statusline.sh --warn)
+            return PlainTextResponse(_account_line(conn, user) + "\n")
         line = _status_line(user, states, account)
         if format == "text":
             return PlainTextResponse(line + "\n")
@@ -879,6 +881,22 @@ def _user_rejected_by(r):
 
 def _resets(s) -> str:
     return f" (resets in {limits.human(s.reset_in)})" if s.reset_in else ""
+
+
+def _account_line(conn, user) -> str:
+    """e.g. `maya · maya@example.com · user · key sk-proxy-ab12… for MacBook, authorized 2026-09-20`: who the key
+    that asked belongs to, and which key it is."""
+    parts = [user["name"]] + ([user["email"]] if user["email"] and user["email"] != user["name"] else []) + [user["role"]]
+    if "csrf_token" in user:   # a browser session, not a key
+        pass
+    elif user.get("machine_key_id"):
+        k = conn.execute("SELECT key_prefix, label, created_at FROM keys WHERE id=?", (user["machine_key_id"],)).fetchone()
+        parts.append(f"key {k['key_prefix']}… for {k['label']}, authorized {time.strftime('%Y-%m-%d', time.gmtime(k['created_at']))}")
+    elif user.get("key_scope") == "routes":
+        parts.append(f"routes-only key {user['routes_key_prefix']}…")
+    elif user.get("key_scope") == "full":
+        parts.append(f"key {user['key_prefix']}… (your first key)")
+    return " · ".join(parts)
 
 
 def _status_line(user, states, account) -> str:

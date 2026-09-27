@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import pytest
 from argon2 import PasswordHasher
 
+from claude_proxy import db
 from claude_proxy.db import create_user
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client, make_gateway, seed_oauth
@@ -265,3 +266,17 @@ async def test_audit_names_the_user_even_for_old_id_entries(env):
         entries = (await c.get("/api/audit")).json()["entries"]
     got = [(e["action"], e["target"]) for e in entries if e["action"] != "login"][:3]
     assert got == [("disable", "alice"), ("disable", "bob"), ("revoke", "user #9999 (deleted)")]
+
+
+async def test_me_status_account_names_the_key_that_asked(env):
+    gw, conn, ids, keys = env
+    conn.execute("UPDATE users SET email='alice@example.com' WHERE id=?", (ids["alice"],))
+    machine = db.add_machine_key(conn, ids["alice"], "MacBook")
+    conn.execute("UPDATE keys SET created_at=? WHERE user_id=?", (1789862400, ids["alice"]))   # 2026-09-20 UTC
+    first = conn.execute("SELECT key_prefix FROM users WHERE id=?", (ids["alice"],)).fetchone()[0]
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        own = (await c.get("/api/me/status?format=account", headers=bearer(keys["alice"]))).text
+        mac = (await c.get("/api/me/status?format=account", headers=bearer(machine))).text
+    assert own == f"alice · alice@example.com · user · key {first}… (your first key)\n"
+    assert mac.startswith("alice · alice@example.com · user · key sk-proxy-")
+    assert mac.endswith("… for MacBook, authorized 2026-09-20\n")

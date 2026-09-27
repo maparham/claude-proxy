@@ -6,7 +6,7 @@
 
 <own dir> is ~/.claude. What is shared:
 - commands: each entry of <own>/commands is linked into gclaude's own commands/ folder (which also holds gclaude's
-  /usage), and links whose target is gone are dropped.
+  /usage and /account), and links whose target is gone are dropped.
 - plugins: <gclaude>/plugins is a link to <own>/plugins, so plugins are installed once for both: installing,
   updating or removing one in gclaude does it for plain `claude` too, and `off --gclaude` does not undo that.
   The enabledPlugins and extraKnownMarketplaces entries of <own>/settings.json follow into gclaude's settings.json:
