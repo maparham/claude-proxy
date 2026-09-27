@@ -1039,7 +1039,7 @@ def test_opencode_on_warns_when_the_muse_agent_is_missing(stub, home, tmp_path):
     assert "muse agent" in r.stderr and not oc_paths(home)[2].exists()
 
 
-# ---------- gclaude shares plugins and memory with plain claude (gclaude-sync.py) ----------
+# ---------- gclaude shares plugins, memory and sessions with plain claude (gclaude-sync.py) ----------
 
 def own_plugins_and_memory(home):
     own = home / ".claude"
@@ -1097,7 +1097,7 @@ def test_gclaude_replaces_the_untouched_plugins_folder_claude_code_made_but_keep
     assert not (gdir / "plugins").is_symlink() and (gdir / "plugins" / "installed_plugins.json").exists()
 
 
-def test_gclaude_shares_memory_per_project_but_not_history(stub, home):
+def test_gclaude_shares_memory_per_project_and_keeps_its_own_history(stub, home):
     own = own_plugins_and_memory(home)
     gdir, _, launcher = gc_paths(home)
     (gdir / "projects" / "-p1").mkdir(parents=True)
@@ -1279,6 +1279,82 @@ def test_off_gclaude_finishes_even_when_unsync_fails(stub, home):
         (gdir / "projects").chmod(0o700)
     assert r.returncode == 0
     assert not launcher.exists() and "ANTHROPIC_AUTH_TOKEN" not in gsettings.read_text()
+
+
+S1, S2, S3 = ("11111111-1111-4111-8111-111111111111", "22222222-2222-4222-8222-222222222222",
+              "33333333-3333-4333-8333-333333333333")
+
+
+def own_sessions(own):
+    folder = own / "projects" / "-p1"
+    (folder / f"{S1}.jsonl").write_text('{"n": 1}\n')
+    (folder / S1 / "subagents").mkdir(parents=True)
+    (folder / f"{S3}.jsonl").write_text('{"plain": 3}\n')
+    (folder / "notes.txt").write_text("not a session\n")
+    (own / "projects" / "-sessions-only").mkdir()
+    (own / "projects" / "-sessions-only" / f"{S2}.jsonl").write_text('{"n": 2}\n')
+    return folder
+
+
+def test_gclaude_lists_plain_claudes_sessions_and_resuming_one_goes_on_in_plain_claude(stub, home):
+    own = own_plugins_and_memory(home)
+    folder = own_sessions(own)
+    gdir, _, launcher = gc_paths(home)
+    mine = gdir / "projects" / "-p1"
+    mine.mkdir(parents=True)
+    (mine / f"{S2}.jsonl").write_text('{"gclaude": 2}\n')                 # a session started in gclaude
+    (mine / f"{S3}.jsonl").write_text('{"gclaude": 3}\n')                 # same name, gclaude's own: left alone
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    linked = mine / f"{S1}.jsonl"
+    assert not linked.is_symlink() and os.path.samefile(linked, folder / f"{S1}.jsonl")   # the picker skips symlinks
+    assert os.readlink(mine / S1) == str(folder / S1)
+    assert not (mine / "notes.txt").exists()
+    assert (mine / f"{S3}.jsonl").read_text() == '{"gclaude": 3}\n'
+    assert os.path.samefile(gdir / "projects" / "-sessions-only" / f"{S2}.jsonl",
+                            own / "projects" / "-sessions-only" / f"{S2}.jsonl")
+    assert (gdir / "projects" / "-sessions-only").stat().st_mode & 0o777 == 0o700
+    with open(linked, "a") as f:                                           # gclaude resumes it: appends in place
+        f.write('{"n": "from gclaude"}\n')
+    assert "from gclaude" in (folder / f"{S1}.jsonl").read_text()
+    assert run_gclaude(home, launcher).returncode == 0                     # a second start changes nothing
+    assert os.path.samefile(linked, folder / f"{S1}.jsonl")
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not os.path.lexists(linked) and not os.path.lexists(mine / S1)
+    assert not (gdir / "projects" / "-sessions-only").exists()
+    assert (mine / f"{S2}.jsonl").read_text() == '{"gclaude": 2}\n'
+    assert (mine / f"{S3}.jsonl").read_text() == '{"gclaude": 3}\n'
+    assert "from gclaude" in (folder / f"{S1}.jsonl").read_text() and (folder / S1 / "subagents").is_dir()
+    assert (own / "projects" / "-sessions-only" / f"{S2}.jsonl").exists()
+
+
+def test_sync_keeps_a_session_plain_claude_dropped_and_prunes_its_folder_link(home):
+    import shutil
+    own = own_plugins_and_memory(home)
+    folder = own_sessions(own)
+    gdir = gc_paths(home)[0]
+    gdir.mkdir(parents=True)
+    assert sync(home).returncode == 0
+    (folder / f"{S1}.jsonl").unlink()                                      # plain claude's cleanup
+    shutil.rmtree(folder / S1)
+    assert sync(home).returncode == 0
+    mine = gdir / "projects" / "-p1"
+    assert (mine / f"{S1}.jsonl").read_text() == '{"n": 1}\n'             # gclaude's copy now
+    assert not os.path.lexists(mine / S1)
+    assert sync(home, "unsync").returncode == 0
+    assert (mine / f"{S1}.jsonl").exists()                                 # can't be told from gclaude's own
+
+
+def test_sync_shares_no_sessions_through_a_linked_projects_folder(home):
+    own = own_plugins_and_memory(home)
+    own_sessions(own)
+    gdir = gc_paths(home)[0]
+    gdir.mkdir(parents=True)
+    (gdir / "projects").symlink_to(own / "projects")
+    assert sync(home).returncode == 0
+    assert sorted(p.name for p in (own / "projects" / "-p1").iterdir()) == \
+        sorted([f"{S1}.jsonl", S1, f"{S3}.jsonl", "notes.txt", "memory"])
+    assert sync(home, "unsync").returncode == 0
+    assert (own / "projects" / "-p1" / f"{S1}.jsonl").exists()
 
 
 # ---------- gclaude is the default; global mode is --global ----------

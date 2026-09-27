@@ -16,10 +16,15 @@
   server added, changed or removed in plain `claude` is in gclaude at its next start, and one gclaude changed or
   added itself stays. Project and local-scope servers are not shared (.mcp.json is read by both anyway).
 - memory: projects/<project>/memory is a link to <own>/projects/<project>/memory for every project that has
-  memories there, and for the current project once plain `claude` has been used in it. Session history stays
-  separate. A gclaude memory folder that already holds memories is left alone.
+  memories there, and for the current project once plain `claude` has been used in it. A gclaude memory folder that
+  already holds memories is left alone.
+- sessions: each of plain `claude`'s sessions (projects/<project>/<id>.jsonl) is a hard link in gclaude's projects
+  folder, so gclaude's /resume lists it: the picker skips symbolic links, and Claude Code appends to the file in
+  place, so a session resumed in gclaude goes on in <own> too. Its <id> folder (subagents, tool results) is a
+  symbolic link. Sessions started in gclaude stay gclaude's, and prompt history (history.jsonl) stays separate.
 This script itself changes nothing in <own>, except that it creates the current project's memory folder there to
-link to. Memories and plugin changes made in gclaude land in <own>: that is the point of sharing them.
+link to. Memories, plugin changes and the turns of a resumed session made in gclaude land in <own>: that is
+the point of sharing them.
 """
 import json
 import os
@@ -273,26 +278,82 @@ def sync_memory(gdir, own, cwd, notes):
     each(sorted(os.listdir(projects)), share, notes)
 
 
-def unsync_memory(gdir, own):
+# ---------- sessions ----------
+
+SESSION_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def sync_sessions(gdir, own, notes):
+    projects, mine = os.path.join(own, "projects"), os.path.join(gdir, "projects")
+    if not os.path.isdir(projects) or inside(mine, own):
+        return
+    if os.path.isdir(mine):
+        def prune(name):   # folder links whose session is gone from <own>
+            folder = os.path.join(mine, name)
+            for entry in os.listdir(folder) if os.path.isdir(folder) and not os.path.islink(folder) else []:
+                dst = os.path.join(folder, entry)
+                if SESSION_ID.fullmatch(entry) and points_to(dst, os.path.join(projects, name, entry)) \
+                        and not os.path.exists(dst):
+                    os.remove(dst)
+        each(os.listdir(mine), prune, notes)
+    if not os.path.isdir(gdir):
+        return
+    if os.stat(projects).st_dev != os.stat(gdir).st_dev:   # a hard link can't cross disks
+        notes.append(f"{projects} is on another disk than {gdir}, so your sessions are not shared with gclaude.")
+        return
+
+    def share(name):
+        theirs, folder = os.path.join(projects, name), os.path.join(mine, name)
+        if not os.path.isdir(theirs) or os.path.islink(theirs) or inside(folder, own):
+            return
+
+        def link(entry):
+            stem, ext = os.path.splitext(entry)
+            src, dst = os.path.join(theirs, entry), os.path.join(folder, entry)
+            if not SESSION_ID.fullmatch(stem) or os.path.islink(src) or os.path.lexists(dst):
+                return   # a session gclaude has already, linked or its own
+            if ext == ".jsonl" and os.path.isfile(src):
+                make = os.link
+            elif ext == "" and os.path.isdir(src):
+                make = os.symlink
+            else:
+                return
+            os.makedirs(folder, mode=0o700, exist_ok=True)
+            make(src, dst)
+        each(sorted(os.listdir(theirs)), link, notes)
+    each(sorted(os.listdir(projects)), share, notes)
+
+
+def unsync_projects(gdir, own):
+    """Remove the memory and session links sync made; gclaude's own sessions and memories stay."""
     projects = os.path.join(gdir, "projects")
     if not os.path.isdir(projects) or inside(projects, own):
         return
     for name in os.listdir(projects):
-        dst = os.path.join(projects, name, "memory")
-        if points_to(dst, os.path.join(own, "projects", name, "memory")):
-            os.remove(dst)
-            if not os.listdir(os.path.join(projects, name)):
-                os.rmdir(os.path.join(projects, name))   # made by sync just to hold the link
+        folder, theirs = os.path.join(projects, name), os.path.join(own, "projects", name)
+        if not os.path.isdir(folder) or os.path.islink(folder):
+            continue
+        removed = False
+        for entry in os.listdir(folder):
+            dst, src = os.path.join(folder, entry), os.path.join(theirs, entry)
+            hard_link = entry.endswith(".jsonl") and not os.path.islink(dst) and os.path.isfile(src) \
+                and os.path.samefile(dst, src)
+            if points_to(dst, src) or hard_link:
+                os.remove(dst)
+                removed = True
+        if removed and not os.listdir(folder):
+            os.rmdir(folder)   # made by sync just to hold the links
 
 
 def main():
     mode, gdir, own = sys.argv[1:4]
     if mode == "sync":
         steps = (lambda: sync_commands(gdir, own, notes), lambda: sync_plugins(gdir, own, notes),
-                 lambda: sync_mcp(gdir, own, notes), lambda: sync_memory(gdir, own, os.getcwd(), notes))
+                 lambda: sync_mcp(gdir, own, notes), lambda: sync_memory(gdir, own, os.getcwd(), notes),
+                 lambda: sync_sessions(gdir, own, notes))
     elif mode == "unsync":
         steps = (lambda: unsync_commands(gdir, own), lambda: unsync_plugins(gdir, own),
-                 lambda: unsync_mcp(gdir, own), lambda: unsync_memory(gdir, own))
+                 lambda: unsync_mcp(gdir, own), lambda: unsync_projects(gdir, own))
     else:
         sys.exit(__doc__)
     notes = []

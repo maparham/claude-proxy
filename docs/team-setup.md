@@ -12,7 +12,8 @@ has their own account, limits and usage.
 | `opencode` | the open-source OpenCode client, with a separate OpenCode key | Muse and other non-Claude models |
 
 `gclaude` and `claude` can run at the same time in the same terminal. `gclaude` uses the same `CLAUDE.md`,
-agents, commands, skills, plugins and project memories as your `claude`. Its settings, history and sessions are
+agents, commands, skills, plugins and project memories as your `claude`, and its `/resume` lists your `claude`
+sessions too: one you resume in `gclaude` goes on in both. Its settings and the sessions you start in it are
 separate.
 
 Claude models only work in Claude Code (`gclaude`): Anthropic accepts the subscription from Claude Code only, so
