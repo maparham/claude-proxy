@@ -179,6 +179,9 @@ Settings, login and prompt history stay separate, so both commands can run at on
 The gateway's `ANTHROPIC_BASE_URL` and key live only in the `"env"` block of gclaude's `settings.json`, which
 Claude Code applies to its own process, and `CLAUDE_CONFIG_DIR` is set only for the `claude` that gclaude starts.
 Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and uses this machine's login.
+Without a claude.ai login Claude Code gives `fable`, `opus` and `sonnet` a 200K context window, so the key-only
+setup (gclaude's, and global `--key-only`) points them at their 1M forms (`ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1[1m]`
+and the like) unless you set those yourself. `/model fable` then gets the 1M window with no `[1m]` to type.
 `off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout_gclaude` and the gateway settings, and keeps gclaude's own history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.

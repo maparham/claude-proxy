@@ -162,6 +162,8 @@ edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its ow
   python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" "$SETTINGS" <<'EOF'
 import json, os, shlex, sys, tempfile
 mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
+ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}   # the newest of each; update when one ships
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
@@ -179,6 +181,10 @@ if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
 if st.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
+added = st.pop("added_models", None)
+for k, v in (added.items() if isinstance(added, dict) else ()):
+    if env.get(k) == v:   # still ours: the user has not picked another model for that alias since
+        del env[k]
 line_cmd = shlex.quote(statusline)
 ours_line = lambda v: isinstance(v, dict) and isinstance(v.get("command"), str) and (
     v["command"] == line_cmd or v["command"].startswith(line_cmd + " --then "))
@@ -208,6 +214,12 @@ if mode == "on":
         if "disableClaudeAiConnectors" not in s:
             s["disableClaudeAiConnectors"] = True
             st["added_disable_connectors"] = True
+        # Without a claude.ai login Claude Code gives fable, opus and sonnet a 200K context window; only their
+        # [1m] forms get 1M. So the aliases (and the /model picker) name those, unless the user chose a model already.
+        for k, v in ONE_M_MODELS.items():
+            if k not in env:
+                env[k] = v
+                st.setdefault("added_models", {})[k] = v
     if os.path.exists(statusline):
         if "statusLine" not in s:
             s["statusLine"] = {"type": "command", "command": line_cmd, "refreshInterval": 30}

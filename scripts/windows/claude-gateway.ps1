@@ -39,6 +39,10 @@ $Statusline = Join-Path $ClientDir 'statusline.ps1'   # a copy, so the installed
 # How Claude Code runs it: forward slashes and double quotes read the same in cmd, PowerShell and Git Bash.
 $LineCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + ($Statusline -replace '\\', '/') + '"'
 $WarnCmd = "$LineCmd --warn"
+# Without a claude.ai login Claude Code gives fable, opus and sonnet a 200K context window; only their [1m] forms get 1M.
+# So gclaude's aliases (and its /model picker) name those. The newest of each; update when one ships.
+$OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
+                          ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5[1m]' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 
 function Say([string]$m) { [Console]::Error.WriteLine($m) }
@@ -188,6 +192,10 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
   $envBlock = Field $s 'env'
   if ($envBlock -is [psobject]) {
     foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD') { Remove-Field $envBlock $k }
+    $added = Field $rec 'added_models'
+    if ($added -is [psobject]) {   # only while still ours: the user has not picked another model for that alias since
+      foreach ($p in $added.PSObject.Properties) { if ((Field $envBlock $p.Name) -eq $p.Value) { Remove-Field $envBlock $p.Name } }
+    }
     if (Is-Empty $envBlock) { Remove-Field $s 'env' }
   }
   if (Field $rec 'added_disable_connectors') { Remove-Field $s 'disableClaudeAiConnectors' }
@@ -198,7 +206,7 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
     if ($groups.Count) { Set-Field $hooks 'UserPromptSubmit' $groups } else { Remove-Field $hooks 'UserPromptSubmit' }
     if (Is-Empty $hooks) { Remove-Field $s 'hooks' }
   }
-  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook') { Remove-Field $rec $k }
+  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook', 'added_models') { Remove-Field $rec $k }
 }
 
 function Command-Text([string]$name) {
@@ -253,6 +261,11 @@ function Gclaude-On($c) {
   Set-Field $envBlock 'ANTHROPIC_BASE_URL' $c.url
   Set-Field $envBlock 'ANTHROPIC_AUTH_TOKEN' $c.key
   Set-Field $envBlock 'CLAUDE_GATEWAY_DASHBOARD' $c.dashboard
+  $added = New-Object psobject
+  foreach ($k in $OneMModels.Keys) {
+    if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $OneMModels[$k]; Set-Field $added $k $OneMModels[$k] }
+  }
+  if (-not (Is-Empty $added)) { Set-Field $rec 'added_models' $added }
   if (-not (Has $s 'disableClaudeAiConnectors')) {   # no claude.ai login in gclaude: silence its connectors warning
     Set-Field $s 'disableClaudeAiConnectors' $true
     Set-Field $rec 'added_disable_connectors' $true
