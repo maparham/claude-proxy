@@ -270,6 +270,7 @@ function Gclaude-On($c) {
     Set-Field $rec 'added_warn_hook' $true
   }
   Write-Json $Settings $s -Private   # it holds the key
+  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout
   Write-Json $Client $c -Private
 
   # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers these
@@ -301,7 +302,8 @@ function Gclaude-On($c) {
     'setlocal',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
-    'findstr /c:"ANTHROPIC_AUTH_TOKEN" "%CLAUDE_CONFIG_DIR%\settings.json" >nul 2>nul || (echo gclaude: signed out ^(/logout^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
+    # /logout leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't
+    'if exist "%CLAUDE_CONFIG_DIR%\signed-out" (echo gclaude: signed out ^(/logout^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
     'claude %*'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
@@ -318,6 +320,7 @@ function Gclaude-Off {
   if (-not ($rec -is [psobject])) { $rec = New-Object psobject }
   $s = Read-Json $Settings
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
+  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue
   $cmds = Join-Path $GDir 'commands'
   foreach ($name in 'usage', 'account', 'logout') {
     $file = Join-Path $cmds "$name.md"
