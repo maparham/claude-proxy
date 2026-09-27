@@ -285,11 +285,11 @@ def account_prompt(env, prompt="/account", text="<!-- # Installed by claude-gate
 
 def test_account_mode_prints_the_account_and_dashboard_link(stub, warn_env):
     r = run(["sh", str(STATUSLINE), "--account"], warn_env)
-    assert r.stdout == f"Gateway account: alice · user · key sk-proxy-ab1… (your first key) · dashboard: {stub.url}/dashboard\n"
+    assert r.stdout == f"Account: alice · user · key sk-proxy-ab1… (your first key) · dashboard: {stub.url}/dashboard\n"
     assert "format=account" in stub.requests[-1][0]
     stub.account_line = None
     r = run(["sh", str(STATUSLINE), "--account"], warn_env)
-    assert r.stdout == f"Gateway account unavailable; see {stub.url}/dashboard\n"
+    assert r.stdout == f"Account details unavailable; see {stub.url}/dashboard\n"
 
 
 def test_account_prompt_goes_to_the_model_while_it_can_answer(stub, warn_env):
@@ -301,14 +301,14 @@ def test_account_prompt_goes_to_the_model_while_it_can_answer(stub, warn_env):
 def test_account_prompt_is_answered_by_the_hook_when_a_limit_is_reached(stub, warn_env):
     stub.status_line = "alice · credit $5.00/$5.00"
     out = json.loads(account_prompt(warn_env).stdout)
-    assert out == {"decision": "block", "reason": f"Gateway account: alice · user · key sk-proxy-ab1… (your first key) · "
+    assert out == {"decision": "block", "reason": f"Account: alice · user · key sk-proxy-ab1… (your first key) · "
                                                   f"dashboard: {stub.url}/dashboard · limit reached: alice · credit $5.00/$5.00 100%"}
 
 
 def test_account_prompt_is_answered_by_the_hook_when_the_gateway_is_down(stub, warn_env):
     stub.status_line = stub.account_line = None
     out = json.loads(account_prompt(warn_env).stdout)
-    assert out == {"decision": "block", "reason": f"Gateway account unavailable; see {stub.url}/dashboard"}
+    assert out == {"decision": "block", "reason": f"Account details unavailable; see {stub.url}/dashboard"}
 
 
 @pytest.mark.parametrize("prompt,text", [("/account", "my own account command\n"), ("/accounts", None), ("my /account", None)])

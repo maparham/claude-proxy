@@ -37,7 +37,7 @@ json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNER=1 sh -c "$then" 2>/dev/null; }
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
-  [ -n "$account" ] && { echo "Gateway account unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."; exit 0; }
+  [ -n "$account" ] && { echo "Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."; exit 0; }
   [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
   [ -n "$warn" ] && exit 0
   [ -n "$then" ] && { own_line; exit 0; }
@@ -91,9 +91,9 @@ status() {   # format: /api/me/status as text, with this key
 
 account_line() {
   if line=$(status account) && [ -n "$line" ]; then
-    echo "Gateway account: $line · dashboard: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+    echo "Account: $line · dashboard: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
   else
-    echo "Gateway account unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+    echo "Account details unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
   fi
 }
 if [ -n "$account" ]; then

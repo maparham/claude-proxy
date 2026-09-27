@@ -43,7 +43,7 @@ try {
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
 
   if (-not $dash) {
-    if ($accountMode) { Emit 'Gateway account unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).'; exit 0 }
+    if ($accountMode) { Emit 'Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).'; exit 0 }
     if ($usage) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).' }
     if (-not $warn) { [Console]::Error.WriteLine('statusline.ps1: set CLAUDE_GATEWAY_DASHBOARD') }
     exit 0
@@ -104,8 +104,8 @@ try {
 
   function Account-Line {
     $a = Status 'account'
-    if (-not $a) { return "Gateway account unavailable; see $dash/dashboard" }
-    return 'Gateway account: ' + $a + ' ' + [char]0x00B7 + " dashboard: $dash/dashboard"
+    if (-not $a) { return "Account details unavailable; see $dash/dashboard" }
+    return 'Account: ' + $a + ' ' + [char]0x00B7 + " dashboard: $dash/dashboard"
   }
   if ($accountMode) { Emit (Account-Line); exit 0 }
 
