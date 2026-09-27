@@ -118,8 +118,8 @@ def source_zip(tmp_path_factory):
 class Win:
     """A sandboxed Windows user: its own USERPROFILE and TEMP, the source zip, and no browser."""
 
-    def __init__(self, tmp_path, source_zip):
-        self.home = tmp_path / "home"
+    def __init__(self, tmp_path, source_zip, home="home"):
+        self.home = tmp_path / home
         self.temp = tmp_path / "temp"
         self.bin = self.home / ".local" / "bin"
         for p in (self.home, self.temp):
@@ -127,7 +127,7 @@ class Win:
         self.env = {k: v for k, v in os.environ.items() if k != "SSH_CONNECTION"}
         self.env.update({"USERPROFILE": str(self.home), "TEMP": str(self.temp), "TMP": str(self.temp),
                          "CLAUDE_GATEWAY_ZIP": str(source_zip), "CLAUDE_GATEWAY_BIN": str(self.bin),
-                         "CLAUDE_GATEWAY_OPEN": "none"})
+                         "CLAUDE_GATEWAY_OPEN": "none", "PATH": f"{self.bin};{os.environ['PATH']}"})
         self.config = self.home / ".config" / "claude-gateway"
         self.gdir = self.config / "claude"
 
@@ -147,7 +147,7 @@ class Win:
                        " Write-Output 'session still open'", **env)
 
     def cg(self, *args, **env):
-        return self.run(["cmd.exe", "/d", "/c", str(self.bin / "claude-gateway.cmd"), *args], **env)
+        return self.run(["cmd.exe", "/d", "/c", "claude-gateway", *args], **env)
 
     def client(self):
         return json.loads((self.config / "client.json").read_text(encoding="utf-8"))
@@ -208,7 +208,7 @@ def fake_claude(win, tmp_path):
     d = tmp_path / "fakebin"
     d.mkdir()
     (d / "claude.cmd").write_text("@echo CONFIG=%CLAUDE_CONFIG_DIR% ARGS=%*\r\n")
-    return {"PATH": f"{d};{win.bin};{os.environ['PATH']}"}
+    return {"PATH": f"{d};{win.env['PATH']}"}
 
 
 @on_windows
@@ -355,3 +355,64 @@ def test_the_warning_hook_is_quiet_below_80_percent(gclaude, stub):
     stub.status_line = "maya \u00b7 daily $50/$100"
     r = gclaude(" --warn", '{"prompt": "hi"}')
     assert r.returncode == 0 and not r.stdout.strip(), r.out
+
+
+# ---------- a profile folder with spaces, cmd metacharacters and non-ASCII letters ----------
+
+GIT_BASH = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+
+
+@on_windows
+def test_everything_works_from_a_profile_folder_like_ivan_and_co(tmp_path, source_zip, stub):
+    """cmd.exe reads .cmd files in the console's code page, not UTF-8, and expands % in them; Claude Code may run
+    the statusline through cmd, PowerShell or Git Bash."""
+    win = Win(tmp_path, source_zip, home="Иван Müller & 100%x")
+    r = win.install()
+    assert r.returncode == 0 and "session still open" in r.out, r.out
+    assert win.cg("help").returncode == 0
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    for f in (win.bin / "claude-gateway.cmd", win.bin / "gclaude.cmd"):
+        f.read_bytes().decode("ascii")   # nothing a code page could garble
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude"], **fake_claude(win, tmp_path))
+    assert r.returncode == 0 and f"CONFIG={win.gdir}" in r.out, r.out
+    s = win.settings()
+    env = {**s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
+    line = s["statusLine"]["command"]
+    stub.status_line = "maya \u00b7 daily $85/$100"
+    shells = [["cmd.exe", "/d", "/s", "/c", f'"{line}"'], ["powershell.exe", "-NoProfile", "-Command", line]]
+    if GIT_BASH.exists():
+        shells.append([str(GIT_BASH), "-c", line])
+    for argv in shells:
+        r = win.run(argv if argv[0] != "cmd.exe" else " ".join(argv), stdin="{}", **env)
+        assert r.returncode == 0 and "$85/$100 85%" in r.stdout, (argv[0], r.out)
+
+
+@on_windows
+def test_adding_to_path_keeps_its_variables(win):
+    r"""The user's PATH is REG_EXPAND_SZ with entries like %USERPROFILE%\...\WindowsApps; rewriting it must not
+    freeze them to today's values."""
+    import winreg
+    k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment", 0, winreg.KEY_ALL_ACCESS)
+    try:
+        before = winreg.QueryValueEx(k, "Path")
+    except FileNotFoundError:
+        before = None
+    try:
+        winreg.SetValueEx(k, "Path", 0, winreg.REG_EXPAND_SZ, r"%SystemRoot%\gw-test;C:\gw-plain")
+        env = {k2: v for k2, v in win.env.items() if k2 != "CLAUDE_GATEWAY_BIN"}   # the default bin: PATH is ours to edit
+        install = ["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command",
+                   f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}')))"]
+        r = subprocess.run(install, capture_output=True, text=True, env=env, timeout=120)
+        assert r.returncode == 0, r.stdout + r.stderr
+        value, kind = winreg.QueryValueEx(k, "Path")
+        assert kind == winreg.REG_EXPAND_SZ
+        assert value == r"%SystemRoot%\gw-test;C:\gw-plain;" + str(win.bin)
+        subprocess.run(install, capture_output=True, text=True, env=env, timeout=120)
+        assert winreg.QueryValueEx(k, "Path")[0] == value   # not added twice
+    finally:
+        if before is None:
+            winreg.DeleteValue(k, "Path")
+        else:
+            winreg.SetValueEx(k, "Path", 0, before[1], before[0])
+        winreg.CloseKey(k)
