@@ -290,5 +290,17 @@ pytest
 CI runs every test on Linux before each deploy. The `client scripts` workflow adds the client side where people run
 it: Windows (`tests/test_windows_client.py` under Windows PowerShell 5.1) and macOS (the installer and
 `claude-gateway` under the Mac's own bash 3.2), and installs from GitHub itself on all three, the way the
-one-liners do. The one-liners the dashboard serves are tested end to end against a stand-in dashboard; only the
-click on **Authorize** in a real browser is left to a person.
+one-liners do. The one-liners the dashboard serves are tested end to end against a stand-in dashboard.
+
+`e2e/run.py` goes further, as the `e2e` workflow on Linux (the Docker image the deploy ships), macOS and Windows: a
+gateway starts in the job, a clean user account runs the dashboard's one-liner, a real browser (Playwright) signs
+in and clicks **Authorize**, and real Claude Code runs `gclaude -p` and must answer "pong". With the
+`E2E_GATEWAY_KEY` secret, a key of the production user `ci-e2e` (limit $1 a day), the job's gateway sends that
+request on to claude.rahkar.pro, so Claude itself answers; without it, `e2e/fake_anthropic.py` does. Locally:
+
+```sh
+uv run --with playwright python -m playwright install chromium   # once
+uv run --with playwright python e2e/run.py [--docker]             # needs claude on PATH; touches only a temp folder
+```
+
+Only Clerk's own sign-in (Google, GitHub, an emailed code) is left to a person.

@@ -1,0 +1,59 @@
+# End to end on Linux, macOS and Windows: e2e/run.py. A gateway starts in the job (on Linux, the Docker image the
+# deploy ships), a clean user account runs the dashboard's one-liner, a real browser clicks Authorize, and real
+# Claude Code asks Claude for "pong" through gclaude.
+#
+# With the E2E_GATEWAY_KEY secret, the job's gateway sends its Claude requests on to https://claude.rahkar.pro as
+# the user ci-e2e (limit: $1 a day), so the answer is Claude's own; without it, a stand-in answers. The gateway's
+# subscription login itself is never used here. It doesn't gate the deploy.
+name: e2e
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  schedule:
+    - cron: "41 5 * * *"   # daily, so a change on Anthropic's, Claude Code's or GitHub's side shows up
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, args: --docker }
+          - { os: macos-latest, args: "" }
+          - { os: windows-latest, args: "" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    env:
+      E2E_UPSTREAM: ${{ secrets.E2E_GATEWAY_KEY != '' && 'https://claude.rahkar.pro' || '' }}
+      E2E_UPSTREAM_TOKEN: ${{ secrets.E2E_GATEWAY_KEY }}
+      E2E_ARTIFACTS: ${{ runner.temp }}/e2e
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v7
+      - name: Install Claude Code
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+      - name: Install Claude Code
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          irm https://claude.ai/install.ps1 | iex
+          Add-Content $env:GITHUB_PATH (Join-Path $env:USERPROFILE '.local\bin')
+      - run: claude --version
+      - run: uv run --python 3.12 --with playwright python -m playwright install ${{ runner.os == 'Linux' && '--with-deps' || '' }} chromium
+      - run: uv run --python 3.12 --with playwright python e2e/run.py ${{ matrix.args }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: e2e-${{ matrix.os }}
+          path: ${{ runner.temp }}/e2e
+          if-no-files-found: ignore
