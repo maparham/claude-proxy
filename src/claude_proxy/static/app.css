@@ -138,7 +138,8 @@ details.tableview summary { cursor: pointer; color: var(--ink-2); font-size: 12p
 .btn.primary { background: var(--ink); color: var(--surface); border-color: var(--ink); }
 .btn.danger { color: var(--critical-text); }
 .btn.small { padding: 3px 8px; font-size: 12px; }
-input[type=text], input[type=password], input[type=number], select {
+/* :where() keeps this at zero specificity, so it doesn't restyle the inputs inside Clerk's sign-in. */
+:where(input[type=text], input[type=password], input[type=number], select) {
   border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px; min-width: 0; }
 /* tipSelect: a <select> drawn as a button and a listbox, so each option can carry a tip. */
 .tsel { border: 1px solid var(--border); background: var(--surface); padding: 6px 26px 6px 8px; border-radius: 8px; min-width: 0;
@@ -162,7 +163,6 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .banner.warning { border-color: var(--warning); }
 
 .login { max-width: 460px; margin: 10vh auto; padding: 0 16px; }
-#clerk-signin { margin-top: 8px; }
 .authorize { max-width: 560px; margin: 6vh auto 0; padding: 24px; }
 .authorize h2 { margin: 0 0 8px; }
 .user-code { font: 650 30px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; margin: 8px 0 16px; }
@@ -171,8 +171,82 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .install-os { margin: 4px 0; font-size: 12px; }
 .login .card { padding: 24px; }
 .login h2 { margin: 0 0 4px; }
-.login form { display: grid; gap: 10px; margin-top: 14px; }
-.login .switch { margin-top: 14px; font-size: 13px; }
+
+/* Sign-in page: what the gateway is and how a computer joins on the left, the sign-in on a panel to the right. */
+.signin {
+  min-height: 100vh; min-height: 100dvh; display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(400px, 38%);
+  grid-template-rows: auto 1fr auto auto 1fr auto;
+  grid-template-areas: "brand panel" ". panel" "intro panel" "steps panel" ". panel" "foot panel";
+  column-gap: clamp(32px, 6vw, 96px); padding-left: clamp(24px, 7vw, 112px);
+}
+.signin-brand { grid-area: brand; margin: 28px 0 0; font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
+.signin-intro { grid-area: intro; max-width: 34rem; }
+.signin-intro h1 { font-size: clamp(30px, 3.6vw, 44px); line-height: 1.08; letter-spacing: -0.028em; font-weight: 680;
+                   margin: 0 0 14px; text-wrap: balance; }
+.signin-lede { margin: 0; font-size: 16px; line-height: 1.5; color: var(--ink-2); max-width: 30rem; }
+.signin-code { font: 650 clamp(34px, 4.4vw, 52px)/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em;
+               margin: 28px 0 0; font-variant-numeric: tabular-nums; }
+.signin-steps { grid-area: steps; list-style: none; margin: 40px 0 0; padding: 0; max-width: 34rem; display: grid; gap: 20px;
+                font-size: 14.5px; line-height: 1.5; color: var(--ink-2); }
+.signin-steps li { display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: baseline; }
+.signin-steps b { color: var(--ink); font-weight: 600; }
+.signin-steps code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+.step-n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.signin-cmd { margin: 10px 0 0; padding: 11px 14px; border-radius: 8px; background: var(--wash); border: 1px solid var(--border);
+              font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.signin-cmd .prompt { color: var(--muted); margin-right: 1ch; user-select: none; }
+.signin-cmd code { color: var(--ink); }
+.signin-foot { grid-area: foot; margin: 32px 0 28px; font-size: 13px; }
+.signin-foot a { color: var(--muted); }
+.signin-foot a:hover { color: var(--ink); }
+.signin-panel { grid-area: panel; background: var(--surface); border-left: 1px solid var(--border);
+                display: flex; align-items: center; justify-content: center; padding: 48px clamp(24px, 4vw, 56px); }
+.signin-box { width: 100%; max-width: 360px; }
+.signin-box h2 { font-size: 22px; letter-spacing: -0.015em; font-weight: 650; margin: 0 0 4px; }
+.signin-sub { margin: 0 0 4px; color: var(--ink-2); font-size: 13.5px; }
+#clerk-signin { margin-top: 20px; }
+#clerk-signin :is(.cl-socialButtonsBlockButton, .cl-formFieldInput, .cl-formButtonPrimary):focus-visible { outline: none; }   /* ring below instead */
+/* Clerk's own title repeats ours on the first step; its later steps (the emailed code) keep theirs. */
+#clerk-signin .cl-signIn-start .cl-header { display: none; }
+/* Clerk's fields and buttons drawn like the dashboard's own: one plain border, no shading. Its card sits a pixel outside a box that clips it, which cut the fields' top corners. */
+#clerk-signin .cl-cardBox { overflow: visible; }
+#clerk-signin .cl-card { margin: 0; }
+#clerk-signin .cl-socialButtonsBlockButton, #clerk-signin .cl-formFieldInput, #clerk-signin .cl-formButtonPrimary { height: 40px; max-height: none; box-shadow: none; }
+#clerk-signin .cl-socialButtonsBlockButton, #clerk-signin .cl-formFieldInput { border: 1px solid var(--axis); background: var(--surface); }
+#clerk-signin .cl-socialButtonsBlockButton:hover { background: var(--wash); }
+#clerk-signin .cl-formFieldInput:focus { border-color: var(--ink-2); }
+#clerk-signin .cl-socialButtonsBlockButton:focus-visible, #clerk-signin .cl-formFieldInput:focus,
+#clerk-signin .cl-formButtonPrimary:focus-visible { box-shadow: 0 0 0 3px color-mix(in srgb, var(--s1) 60%, transparent); }
+#clerk-signin .cl-formButtonPrimary { background: var(--ink); color: var(--surface); }
+#clerk-signin .cl-formButtonPrimary::after { display: none; }
+#clerk-signin .cl-formButtonPrimary:hover { background: color-mix(in srgb, var(--ink) 86%, var(--surface)); }
+#clerk-signin .cl-dividerLine { background: var(--border); }
+.signin-more, .signin .switch a { margin-top: 20px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--ink-2);
+               text-decoration: underline; text-decoration-color: var(--axis); text-underline-offset: 3px; }
+.signin-more:hover, .signin .switch a:hover { color: var(--ink); text-decoration-color: currentColor; }
+#classic { margin-top: 16px; }
+#clerk-area:not(.hidden) + #classic { padding-top: 16px; border-top: 1px solid var(--border); }
+#classic form { display: grid; gap: 10px; margin-top: 12px; }
+#classic form input { padding: 9px 10px; border-color: var(--axis); }
+#classic form .btn { padding: 9px 12px; font-weight: 600; }
+.signin .switch { margin-top: 12px; font-size: 13px; }
+.for-authorize .signin-steps { display: none; }
+.signin .error { margin-top: 12px; }
+
+@media (max-width: 880px) {
+  .signin { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; padding-left: 0;
+            grid-template-areas: "brand" "intro" "panel" "steps" "foot"; }
+  .signin-brand, .signin-intro, .signin-steps, .signin-foot { padding: 0 20px; }
+  .signin-brand { margin-top: 20px; }
+  .signin-intro { margin-top: 28px; }
+  .signin-intro h1 { font-size: 28px; }
+  .signin-lede { font-size: 15px; }
+  .signin-code { font-size: 32px; margin-top: 20px; }
+  .signin-panel { border-left: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+                  margin-top: 28px; padding: 28px 20px; }
+  .signin-box { max-width: 420px; }
+}
 .error { color: var(--critical-text); font-size: 13px; min-height: 1.2em; }
 
 dialog { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); color: var(--ink);

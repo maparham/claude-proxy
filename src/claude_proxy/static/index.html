@@ -9,27 +9,48 @@
 <script src="/static/app.js" defer></script>
 </head>
 <body>
-<div id="login" class="login hidden">
-  <div class="card">
-    <h2>Claude Gateway</h2>
-    <p class="muted hidden" id="authorize-hint">Sign in to connect your computer.</p>
-    <div id="clerk-area" class="hidden"><div id="clerk-signin"></div>
-      <div class="switch"><a href="#" id="other-ways">Other ways to sign in</a></div></div>
-    <div id="classic" class="hidden">
-    <p class="muted" id="login-hint">Sign in as the admin, or with your own gateway key to see your usage.<span class="tip-i" tabindex="0" role="button" aria-label="About gateway keys" data-tip="login_key">?</span></p>
-    <form id="form-admin">
-      <input type="text" name="username" placeholder="Admin username" autocomplete="username" value="admin" required>
-      <input type="password" name="password" placeholder="Password" autocomplete="current-password" required>
-      <button class="btn primary" type="submit">Sign in</button>
-    </form>
-    <form id="form-key" class="hidden">
-      <input type="password" name="key" placeholder="sk-proxy-…" autocomplete="off" required>
-      <button class="btn primary" type="submit">Sign in with key</button>
-    </form>
-    <div class="switch"><a href="#" id="login-switch">Use my gateway key instead</a></div>
+<div id="login" class="signin hidden">
+  <p class="signin-brand">Claude Gateway</p>
+  <section class="signin-intro">
+    <div id="signin-about">
+      <h1>Use Claude Code on your team’s Claude subscription.</h1>
+      <p class="signin-lede">Sign in to connect a computer and see your own usage.</p>
     </div>
-    <div class="error" id="login-error" role="alert"></div>
-  </div>
+    <div id="authorize-hint" class="hidden">
+      <h1>Sign in to connect your computer.</h1>
+      <p class="signin-lede">The link you opened carries this code. After you sign in, you check that your terminal shows the same one, then approve it.</p>
+      <p class="signin-code" id="authorize-code"></p>
+    </div>
+  </section>
+  <ol class="signin-steps hidden" id="signin-steps">
+    <li><span class="step-n">1</span><div><b>Sign in</b> with Google, GitHub or a code sent to your email.</div></li>
+    <li><span class="step-n">2</span><div><b>Run one command</b> in the computer’s terminal.
+      <pre class="signin-cmd"><span class="prompt" aria-hidden="true" id="signin-prompt">$</span><code id="signin-install"></code></pre></div></li>
+    <li><span class="step-n">3</span><div><b>Approve the computer</b> when this page opens. Then start Claude Code with <code>gclaude</code>.</div></li>
+  </ol>
+  <p class="signin-foot"><a href="/privacy">Privacy</a></p>
+  <section class="signin-panel">
+    <div class="signin-box">
+      <h2>Sign in</h2>
+      <p class="signin-sub hidden" id="signup-hint">New here? The same buttons create your account.</p>
+      <div id="clerk-area" class="hidden"><div id="clerk-signin"></div>
+        <button type="button" class="signin-more" id="other-ways" aria-expanded="false" aria-controls="classic">Other ways to sign in</button></div>
+      <div id="classic" class="hidden">
+      <p class="signin-sub" id="login-hint">Sign in as the admin, or with your own gateway key to see your usage.<span class="tip-i" tabindex="0" role="button" aria-label="About gateway keys" data-tip="login_key">?</span></p>
+      <form id="form-admin">
+        <input type="text" name="username" placeholder="Admin username" aria-label="Admin username" autocomplete="username" value="admin" required>
+        <input type="password" name="password" placeholder="Password" aria-label="Password" autocomplete="current-password" required>
+        <button class="btn primary" type="submit">Sign in</button>
+      </form>
+      <form id="form-key" class="hidden">
+        <input type="password" name="key" placeholder="sk-proxy-…" aria-label="Gateway key" autocomplete="off" required>
+        <button class="btn primary" type="submit">Sign in with key</button>
+      </form>
+      <div class="switch"><a href="#" id="login-switch">Use my gateway key instead</a></div>
+      </div>
+      <div class="error" id="login-error" role="alert"></div>
+    </div>
+  </section>
 </div>
 
 <div id="app" class="hidden">

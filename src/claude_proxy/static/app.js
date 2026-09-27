@@ -759,6 +759,7 @@ function loadScript(src, attrs = {}) {
 function setupClerk() {
   clerkReady ??= (async () => {
     const cfg = await api("/api/auth-config");
+    signinSteps(cfg);
     if (!cfg.clerk) return null;
     const npm = `https://${cfg.clerk.frontend_api}/npm`;
     await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
@@ -777,13 +778,34 @@ async function clerkExchange() {
     if (!ok) { const msg = $("#login-error").textContent; await window.Clerk.signOut(); $("#login-error").textContent = msg; mountClerk(); }   // refused: let them try another account
   } finally { S.exchanging = false; }
 }
+// The how-to-join steps, when a sign-up can go all the way to a connected computer; the install command suits the visitor's system.
+function signinSteps(cfg) {
+  $("#signup-hint").classList.toggle("hidden", !cfg.signup);
+  const win = /Win/.test(navigator.userAgentData?.platform ?? navigator.platform), cmd = (win && cfg.install_windows) || cfg.install;
+  $("#signin-steps").classList.toggle("hidden", !(cfg.clerk && cmd));
+  $("#signin-install").textContent = cmd || "";
+  $("#signin-prompt").textContent = win && cfg.install_windows ? "PS>" : "$";
+}
+// Clerk's colours from the page's own tokens, read when it mounts: the theme can be the system's or one the viewer picked.
+function clerkAppearance() {
+  const css = getComputedStyle(document.documentElement), v = (n) => css.getPropertyValue(n).trim();
+  return {
+    variables: { colorPrimary: v("--ink"), colorPrimaryForeground: v("--surface"), colorForeground: v("--ink"), colorMutedForeground: v("--ink-2"),
+                 colorBackground: v("--surface"), colorInput: v("--surface"), colorInputForeground: v("--ink"), colorNeutral: v("--ink"),
+                 colorDanger: v("--critical-text"), colorRing: v("--s1"), borderRadius: "8px", fontFamily: "inherit", fontSize: "14px" },
+    // Inside our own panel: full width, no second card around it.
+    elements: { rootBox: { width: "100%" }, cardBox: { width: "100%", boxShadow: "none", border: "none", borderRadius: 0, background: "transparent" },
+                card: { boxShadow: "none", border: "none", padding: 0, background: "transparent", gap: "24px" },
+                footer: { background: "transparent" } },
+  };
+}
+// Mounted afresh each time the sign-in shows, so its colours follow a theme picked since.
 function mountClerk() {
-  if (S.clerkMounted) return;
+  if (S.clerkMounted) window.Clerk.unmountSignIn($("#clerk-signin"));
   S.clerkMounted = true;
   window.Clerk.mountSignIn($("#clerk-signin"), {
     withSignUp: true, routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href,
-    // Inside our own card: full width, no second card around it.
-    appearance: { elements: { rootBox: { width: "100%" }, cardBox: { width: "100%", boxShadow: "none", border: "none" }, card: { boxShadow: "none", padding: "8px 0" }, footer: { background: "transparent" } } },
+    appearance: clerkAppearance(),
   });
 }
 async function showClerk() {
@@ -796,10 +818,12 @@ async function showClerk() {
   if (clerk.session) clerkExchange();   // signed in to Clerk already, e.g. back from Google: just trade it in
   else mountClerk();
 }
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.clerkMounted && !$("#login").classList.contains("hidden")) mountClerk(); });
 $("#other-ways").onclick = (e) => {
   e.preventDefault();
   S.otherWays = !S.otherWays;
   $("#classic").classList.toggle("hidden", !S.otherWays);
+  e.target.setAttribute("aria-expanded", S.otherWays);
   e.target.textContent = S.otherWays ? "Hide other ways to sign in" : "Other ways to sign in";
 };
 
@@ -1167,7 +1191,11 @@ function showLogin() {
   disposeCharts();
   const m = /^#authorize\/([A-Za-z-]+)$/.exec(location.hash);
   if (m) rememberAuthorize(m[1]);
-  $("#authorize-hint").classList.toggle("hidden", !rememberedAuthorize());
+  const code = rememberedAuthorize();
+  $("#authorize-hint").classList.toggle("hidden", !code);
+  $("#signin-about").classList.toggle("hidden", !!code);
+  $("#login").classList.toggle("for-authorize", !!code);
+  $("#authorize-code").textContent = code || "";
   showClerk();
 }
 async function boot() {

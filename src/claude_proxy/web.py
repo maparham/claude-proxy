@@ -196,9 +196,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/auth-config")
     async def auth_config():
-        # Before sign-in: whether to offer Clerk's sign-in, and with which (public) key.
+        # Before sign-in: whether to offer Clerk's sign-in, and with which (public) key; the install commands, for the how-to-join steps.
         return {"clerk": {"publishable_key": cfg.signup.clerk_publishable_key, "frontend_api": verifier.fapi} if verifier else None,
-                "signup": bool(verifier and cfg.signup.enabled)}
+                "signup": bool(verifier and cfg.signup.enabled),
+                "install": install_command(), "install_windows": install_command(windows=True)}
 
     @app.post("/api/login/clerk")
     async def login_clerk(request: Request):
