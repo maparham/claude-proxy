@@ -220,7 +220,8 @@ if mode == "on":
                 s["statusLine"].setdefault("refreshInterval", 30)
             st["added_statusline"] = True
         elif not ours_line(s["statusLine"]):
-            print("Kept your own statusline. To show your gateway limits in it too, add the output of: " + line_cmd)
+            shown = statusline.replace(os.path.expanduser("~") + "/", "~/", 1) if statusline.startswith(os.path.expanduser("~") + "/") else statusline
+            print("Kept your own statusline. To show your gateway limits in it too, add the output of: " + shown)
         hooks = s.setdefault("hooks", {})
         if isinstance(hooks, dict) and isinstance(hooks.setdefault("UserPromptSubmit", []), list):
             if not any(ours_hook(g) for g in hooks["UserPromptSubmit"]):
@@ -609,9 +610,10 @@ gclaude_on() {
   gclaude_files on
   python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
+  if [ -t 1 ]; then b=$(printf '\033[1;32m'); r=$(printf '\033[0m'); else b=; r=; fi   # bold green on a terminal
   case ":$PATH:" in
-    *":$(dirname "$GCLAUDE"):"*) echo "Next: run 'gclaude' instead of 'claude'." ;;
-    *) echo "Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'." ;;
+    *":$(dirname "$GCLAUDE"):"*) echo "${b}Next: run 'gclaude' instead of 'claude'.${r}" ;;
+    *) echo "${b}Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'.${r}" ;;
   esac
 }
 
