@@ -308,17 +308,22 @@ function Gclaude-On($c) {
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
     'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
     'rem install.ps1 throws when it fails. Windows PowerShell exits 0 all the same when the throw happens inside iex,',
-    'rem so the try/catch turns it into exit 1: the || branch runs and Claude Code is left alone.',
+    'rem so the try/catch turns it into exit 1. The failure then goes to :updatefailed (a label is found by name, so',
+    'rem the rewritten file serves; keep the name), whose top-level exit /b 1 reaches cmd /c where one in a nested',
+    'rem block would not, and Claude Code is left alone.',
     ('if /i "%~1"=="update" (' + "`r`n" +
-     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" ||" +
-     ' (echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2 & exit /b 1)' + "`r`n" +
+     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
      '  claude %*' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
     # /logout leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" (echo gclaude: signed out ^(/logout^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
-    'claude %*'
+    'claude %*',
+    'exit /b',
+    ':updatefailed',
+    'echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2',
+    'exit /b 1'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
 

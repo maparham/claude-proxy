@@ -161,12 +161,12 @@ class Win:
                        " catch { Write-Output \"install.ps1 threw: $_\" }; Write-Output 'session still open'", **env)
 
     def install_command(self, *args, **env):
-        """install.ps1 the way gclaude.cmd's update runs it: `irm ... | iex` inside the try/catch that Gclaude-On
-        writes, since Windows PowerShell's -Command exits 0 when a throw happens inside iex. The arguments go through
-        $args, as the script ends in `Install-ClaudeGateway -Rest $args`."""
+        """install.ps1 the way gclaude.cmd's update runs it: the dashboard's /install.ps1 wrapper (web.install_ps1),
+        `& ([scriptblock]::Create((irm <installer>))) <args>`, piped into iex inside the try/catch that Gclaude-On
+        writes, since Windows PowerShell's -Command exits 0 when a throw happens inside iex."""
         quoted = " ".join("'" + a.replace("'", "''") + "'" for a in args)
-        return self.ps(f"try {{ & {{ Get-Content -Raw -LiteralPath '{INSTALL}' | iex }} {quoted} }}"
-                       " catch { [Console]::Error.WriteLine($_); exit 1 }", **env)
+        wrapper = f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}'))) {quoted}"
+        return self.ps("try { '" + wrapper.replace("'", "''") + "' | iex } catch { [Console]::Error.WriteLine($_); exit 1 }", **env)
 
     def cg(self, *args, **env):
         return self.run(["cmd.exe", "/d", "/c", "claude-gateway", *args], **env)
@@ -476,8 +476,8 @@ def test_a_key_file_that_cannot_be_made_private_gets_a_warning(win, tmp_path):
 
 @on_windows
 def test_gclaude_update_stops_when_the_gateway_update_fails(gclaude, installed, stub, tmp_path):
-    """install.ps1 throws, so `powershell -Command "irm ... | iex"` exits 1 and gclaude.cmd's || branch runs instead
-    of `claude update`."""
+    """install.ps1 throws, the try/catch in gclaude.cmd exits 1, and its :updatefailed path exits 1 instead of running
+    `claude update`."""
     win = installed
     stub.files["/install.ps1"] = INSTALL.read_bytes()
     fake = fake_claude(win, tmp_path)
