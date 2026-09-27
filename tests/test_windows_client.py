@@ -204,11 +204,17 @@ def test_install_reports_a_bad_archive_without_closing_the_session(win, tmp_path
 # ---------- claude-gateway on / off / status ----------
 
 def fake_claude(win, tmp_path):
-    """A claude.cmd first on PATH that shows which config dir gclaude gave it."""
+    """A claude.cmd first on PATH that records, as UTF-8, the config dir gclaude gave it and its arguments. Not
+    with echo: cmd would split a folder name with & in it, and print in the console's code page."""
     d = tmp_path / "fakebin"
     d.mkdir()
-    (d / "claude.cmd").write_text("@echo CONFIG=%CLAUDE_CONFIG_DIR% ARGS=%*\r\n")
-    return {"PATH": f"{d};{win.env['PATH']}"}
+    (d / "saw.ps1").write_text("[IO.File]::WriteAllText($env:GW_OUT, $env:CLAUDE_CONFIG_DIR + '|' + ($args -join ' '))\n")
+    (d / "claude.cmd").write_text('@powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0saw.ps1" %*\r\n')
+    return {"PATH": f"{d};{win.env['PATH']}", "GW_OUT": str(tmp_path / "claude-saw.txt")}
+
+
+def claude_saw(tmp_path):
+    return (tmp_path / "claude-saw.txt").read_text(encoding="utf-8")
 
 
 @on_windows
@@ -236,7 +242,7 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / "usage.md").read_text()
     assert json.loads((win.gdir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake_claude(win, tmp_path))
-    assert r.returncode == 0 and f"CONFIG={win.gdir}" in r.out and "ARGS=-p hi" in r.out, r.out
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
     r = win.cg("status")
     assert r.returncode == 0 and f"gateway: {stub.url}" in r.out and "gclaude: installed" in r.out, r.out
     assert "status: maya" in r.out
@@ -375,7 +381,7 @@ def test_everything_works_from_a_profile_folder_like_ivan_and_co(tmp_path, sourc
     for f in (win.bin / "claude-gateway.cmd", win.bin / "gclaude.cmd"):
         f.read_bytes().decode("ascii")   # nothing a code page could garble
     r = win.run(["cmd.exe", "/d", "/c", "gclaude"], **fake_claude(win, tmp_path))
-    assert r.returncode == 0 and f"CONFIG={win.gdir}" in r.out, r.out
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|", r.out
     s = win.settings()
     env = {**s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
     line = s["statusLine"]["command"]

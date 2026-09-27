@@ -78,6 +78,21 @@ function Remove-Field($o, [string]$n) { if (Has $o $n) { $o.PSObject.Properties.
 function Field($o, [string]$n) { if (Has $o $n) { return $o.$n } return $null }
 function Is-Empty($o) { return @($o.PSObject.Properties).Count -eq 0 }
 
+function Cmd-Path([string]$Path) {
+  # How a .cmd file should spell a path: the profile folder as %USERPROFILE%, since its name may hold letters the
+  # console's code page lacks, or & % ^, and the rest with % doubled.
+  $h = ([string]$env:USERPROFILE).TrimEnd('\')
+  if ($h -and $Path.StartsWith($h + '\', [StringComparison]::OrdinalIgnoreCase)) { return '%USERPROFILE%' + $Path.Substring($h.Length).Replace('%', '%%') }
+  return $Path.Replace('%', '%%')
+}
+
+function Write-Cmd([string]$Path, [string]$Text) {   # cmd.exe reads a .cmd file in the console's code page, not UTF-8
+  $enc = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+  $bytes = $enc.GetBytes($Text)
+  if ($enc.GetString($bytes) -ne $Text) { throw "$Path would need letters this console's code page lacks; set CLAUDE_GATEWAY_BIN or CLAUDE_GATEWAY_GCLAUDE_DIR to a plainer folder" }
+  [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
 # ---------- HTTP ----------
 
 function Invoke-Json([string]$Method, [string]$Uri, $Body, [hashtable]$Headers = @{}) {
@@ -255,10 +270,10 @@ function Gclaude-On($c) {
     'rem Remove it with: claude-gateway off',
     'setlocal',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
-    "set `"CLAUDE_CONFIG_DIR=$GDir`"",
+    "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
     'claude %*'
   ) -join "`r`n"
-  [IO.File]::WriteAllText($Launcher, $cmd + "`r`n", (New-Object Text.UTF8Encoding $false))
+  try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
 
   Write-Output "gclaude now runs Claude Code through the gateway at $($c.url); plain 'claude' is unchanged."
   if (($env:Path -split ';') -notcontains $Bin) { Write-Output "Open a new terminal (or add $Bin to your PATH) to run gclaude." }

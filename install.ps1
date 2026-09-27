@@ -12,6 +12,36 @@
 # folder for claude-gateway.cmd (then PATH is left to you).
 # It runs inside the caller's own PowerShell (irm | iex), so it never calls exit: that would close their window.
 
+function Cmd-Path([string]$Path) {
+  # How a .cmd file should spell a path: the profile folder as %USERPROFILE%, since its name may hold letters the
+  # console's code page lacks, or & % ^, and the rest with % doubled.
+  $h = ([string]$env:USERPROFILE).TrimEnd('\')
+  if ($h -and $Path.StartsWith($h + '\', [StringComparison]::OrdinalIgnoreCase)) { return '%USERPROFILE%' + $Path.Substring($h.Length).Replace('%', '%%') }
+  return $Path.Replace('%', '%%')
+}
+
+function Write-Cmd([string]$Path, [string]$Text) {   # cmd.exe reads a .cmd file in the console's code page, not UTF-8
+  $enc = [Text.Encoding]::GetEncoding([Globalization.CultureInfo]::CurrentCulture.TextInfo.OEMCodePage)
+  $bytes = $enc.GetBytes($Text)
+  if ($enc.GetString($bytes) -ne $Text) { throw "$Path would need letters this console's code page lacks; set CLAUDE_GATEWAY_BIN to a plainer folder" }
+  [IO.File]::WriteAllBytes($Path, $bytes)
+}
+
+function Add-UserPath([string]$Dir) {
+  # Straight from the registry and back as REG_EXPAND_SZ: [Environment]'s Path comes expanded, and writing that back
+  # would freeze entries like %USERPROFILE%\AppData\Local\Microsoft\WindowsApps to today's values.
+  $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('Environment', $true)
+  try {
+    $raw = [string]$key.GetValue('Path', '', [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $parts = @($raw -split ';' | Where-Object { $_ })
+    $known = @($parts | ForEach-Object { [Environment]::ExpandEnvironmentVariables($_).TrimEnd('\') })
+    if ($known -contains $Dir.TrimEnd('\')) { return $false }
+    $key.SetValue('Path', (@($parts) + $Dir) -join ';', [Microsoft.Win32.RegistryValueKind]::ExpandString)
+  } finally { $key.Close() }
+  [Environment]::SetEnvironmentVariable('ClaudeGatewayPathChanged', $null, 'User')   # tells Explorer, so new terminals see it
+  return $true
+}
+
 function Install-ClaudeGateway {
   param([string[]]$Rest)
   $ErrorActionPreference = 'Stop'
@@ -66,17 +96,12 @@ function Install-ClaudeGateway {
   $script = Join-Path $share 'scripts\windows\claude-gateway.ps1'
   New-Item -ItemType Directory -Path $bin -Force | Out-Null
   $cmd = "@echo off`r`n$mark`r`nrem Runs claude-gateway.ps1, which the execution policy would otherwise block.`r`n" +
-         "powershell -NoProfile -ExecutionPolicy Bypass -File `"$script`" %*`r`nexit /b %ERRORLEVEL%`r`n"
-  [IO.File]::WriteAllText($launcher, $cmd, (New-Object Text.UTF8Encoding $false))
+         "powershell -NoProfile -ExecutionPolicy Bypass -File `"$(Cmd-Path $script)`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+  try { Write-Cmd $launcher $cmd } catch { Write-Host "install.ps1: $($_.Exception.Message)" -ForegroundColor Red; return }
   Write-Host "claude-gateway is installed in $share ($launcher)."
 
   if (-not $env:CLAUDE_GATEWAY_BIN) {
-    $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $parts = @(); if ($userPath) { $parts = $userPath -split ';' | Where-Object { $_ } }
-    if ($parts -notcontains $bin) {
-      [Environment]::SetEnvironmentVariable('Path', (@($parts) + $bin) -join ';', 'User')
-      Write-Host "Added $bin to your PATH; other terminals see it once reopened."
-    }
+    if (Add-UserPath $bin) { Write-Host "Added $bin to your PATH; other terminals see it once reopened." }
     if (($env:Path -split ';') -notcontains $bin) { $env:Path = "$env:Path;$bin" }
   }
 
