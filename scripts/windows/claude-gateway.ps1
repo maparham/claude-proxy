@@ -44,12 +44,12 @@ $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 function Say([string]$m) { [Console]::Error.WriteLine($m) }
 function Fail([string]$m) { Say $m; exit 1 }
 
-function Usage {
+function Usage {   # the comment block at the top of this file, up to its first blank line
   Write-Output 'claude-gateway (Windows)'
-  Get-Content -LiteralPath $PSCommandPath | Select-Object -Skip 1 | ForEach-Object {
-    if ($_ -notmatch '^#') { return }
-    $_ -replace '^# ?', ''
-  } | Select-Object -First 17
+  foreach ($line in @(Get-Content -LiteralPath $PSCommandPath | Select-Object -Skip 1)) {
+    if ($line -notmatch '^#') { break }
+    Write-Output ($line -replace '^# ?', '')
+  }
 }
 
 # ---------- JSON files ----------
@@ -61,9 +61,12 @@ function Read-Json([string]$Path) {
   return ($text | ConvertFrom-Json)
 }
 
-function Protect([string]$Path) {   # this user alone may read it: the Windows form of chmod 600
+function Protect([string]$Path, [string]$Shown = $Path) {   # this user alone may read it: the Windows form of chmod 600
+  # icacls can't on a FAT/exFAT drive or some shared folders; the file is already written, so warn rather than stop.
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-  & icacls.exe $Path /inheritance:r /grant:r "${me}:F" | Out-Null
+  $ok = $false
+  try { & icacls.exe $Path /inheritance:r /grant:r "${me}:F" | Out-Null; $ok = ($LASTEXITCODE -eq 0) } catch { }
+  if (-not $ok) { Write-Warning "$Shown holds your gateway key but could not be made readable by you alone (icacls failed; is this a FAT/exFAT or shared drive?). Keep it where only you can read it." }
 }
 
 function Write-Json([string]$Path, $Object, [switch]$Private) {
@@ -71,7 +74,7 @@ function Write-Json([string]$Path, $Object, [switch]$Private) {
   if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
   $tmp = "$Path.tmp-claude-gateway"
   [IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject $Object -Depth 20) + "`n", (New-Object Text.UTF8Encoding $false))
-  if ($Private) { Protect $tmp }
+  if ($Private) { Protect $tmp $Path }
   Move-Item -LiteralPath $tmp -Destination $Path -Force
 }
 
@@ -304,6 +307,7 @@ function Gclaude-On($c) {
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
     'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
+    'rem install.ps1 throws when it fails, so that powershell exits 1 and Claude Code is left alone.',
     ('if /i "%~1"=="update" (' + "`r`n" +
      "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex`" ||" +
      ' (echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2 & exit /b 1)' + "`r`n" +

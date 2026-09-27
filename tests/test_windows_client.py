@@ -153,10 +153,18 @@ class Win:
         return self.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command], **env)
 
     def install(self, *args, **env):
-        """install.ps1 the way the dashboard's /install.ps1 runs it: a scriptblock in the caller's own session."""
+        """install.ps1 the way the dashboard's /install.ps1 runs it: a scriptblock in the caller's own session. A
+        failure is a throw, which the session catches and goes on from; an `exit` would end it (try can't catch
+        that), so 'session still open' never prints."""
         quoted = " ".join("'" + a.replace("'", "''") + "'" for a in args)
-        return self.ps(f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}'))) {quoted};"
-                       " Write-Output 'session still open'", **env)
+        return self.ps(f"try {{ & ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}'))) {quoted} }}"
+                       " catch { Write-Output \"install.ps1 threw: $_\" }; Write-Output 'session still open'", **env)
+
+    def install_command(self, *args, **env):
+        """install.ps1 as `powershell -Command "irm ... | iex"` runs it (gclaude update): nothing after it, so the
+        process exit code is the installer's."""
+        quoted = " ".join("'" + a.replace("'", "''") + "'" for a in args)
+        return self.ps(f"& ([scriptblock]::Create((Get-Content -Raw -LiteralPath '{INSTALL}'))) {quoted}", **env)
 
     def cg(self, *args, **env):
         return self.run(["cmd.exe", "/d", "/c", "claude-gateway", *args], **env)
@@ -211,6 +219,33 @@ def test_install_leaves_a_foreign_launcher_alone(win):
 def test_install_reports_a_bad_archive_without_closing_the_session(win, tmp_path):
     r = win.install(CLAUDE_GATEWAY_ZIP=str(tmp_path / "missing.zip"))
     assert "session still open" in r.out and "could not get" in r.out, r.out
+
+
+@on_windows
+def test_a_failed_install_fails_the_command_that_ran_it(win, tmp_path):
+    """`powershell -Command "irm ... | iex"` (gclaude update) must exit non-zero when install.ps1 fails: a bad
+    archive, a foreign launcher, or the chained `on` failing after a good install."""
+    r = win.install_command(CLAUDE_GATEWAY_ZIP=str(tmp_path / "missing.zip"))
+    assert r.returncode != 0 and "could not get" in r.out, r.out
+    win.bin.mkdir(parents=True)
+    (win.bin / "claude-gateway.cmd").write_bytes(b"@echo mine\r\n")
+    r = win.install_command()
+    assert r.returncode != 0 and "left as it is" in r.out, r.out
+    (win.bin / "claude-gateway.cmd").unlink()
+    r = win.install_command("on", "--url", "http://127.0.0.1:9", "--dashboard", "http://127.0.0.1:9")
+    assert r.returncode != 0 and "Can't reach the dashboard" in r.out and "claude-gateway on failed" in r.out, r.out
+    assert (win.bin / "claude-gateway.cmd").is_file()   # the install itself went through
+    assert win.install_command().returncode == 0
+
+
+@on_windows
+def test_help_prints_the_whole_header(installed):
+    r = installed.cg("help")
+    assert r.returncode == 0, r.out
+    header = WINDOWS / "claude-gateway.ps1"
+    lines = header.read_text(encoding="utf-8").splitlines()[1:]
+    comment = [l[2:] if l.startswith("# ") else l[1:] for l in lines[:next(i for i, l in enumerate(lines) if not l.startswith("#"))]]
+    assert comment[-1].startswith("Installed by install.ps1") and all(l in r.out for l in comment), r.out
 
 
 # ---------- claude-gateway on / off / status ----------
@@ -337,7 +372,7 @@ def gclaude(installed, stub):
     s = win.settings()
     env = {**s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
     line = s["statusLine"]["command"]
-    return lambda extra="", stdin="{}": win.run(f"cmd.exe /d /c {line}{extra}", stdin=stdin, **env)
+    return lambda extra="", stdin="{}", **more: win.run(f"cmd.exe /d /c {line}{extra}", stdin=stdin, **{**env, **more})
 
 
 @on_windows
@@ -401,6 +436,52 @@ def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude
     assert not (win.gdir / "signed-out").exists()
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 0, r.out
+
+
+@on_windows
+@pytest.mark.parametrize("body", [b"", b"<html>maintenance</html>"], ids=["empty", "html"])
+def test_logout_after_a_200_with_an_odd_reply_still_signs_out_and_says_so(gclaude, installed, stub, body):
+    """A 2xx whose body isn't the JSON expected is not 'the gateway could not be reached'."""
+    stub.logout = (200, body)
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}').stdout)
+    assert out["continue"] is False, out
+    assert "unexpected reply" in out["stopReason"] and "HTTP 200" in out["stopReason"], out
+    assert "could not be reached" not in out["stopReason"] and "revoked on the gateway" not in out["stopReason"], out
+    assert "ANTHROPIC_AUTH_TOKEN" not in installed.settings()["env"] and "key" not in installed.client()
+    assert (installed.gdir / "signed-out").is_file()
+
+
+@on_windows
+def test_logout_tells_a_refusal_and_an_unreachable_gateway_apart(gclaude, installed, stub):
+    stub.logout = (500, {"error": "boom"})
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}').stdout)
+    assert "refused to revoke it (HTTP 500)" in out["stopReason"] and "could not be reached" not in out["stopReason"], out
+    assert "ANTHROPIC_AUTH_TOKEN" not in installed.settings()["env"]
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}', CLAUDE_GATEWAY_DASHBOARD="http://127.0.0.1:9").stdout)
+    assert "could not be reached" in out["stopReason"] and "HTTP" not in out["stopReason"], out
+
+
+@on_windows
+def test_a_key_file_that_cannot_be_made_private_gets_a_warning(win, tmp_path):
+    """icacls fails on FAT/exFAT and some shared drives; the file is written all the same, and the warning names it."""
+    script = str(WINDOWS / "claude-gateway.ps1").replace("'", "''")
+    real, shown = tmp_path / "ok.tmp", tmp_path / "client.json"
+    real.write_text("{}")
+    r = win.ps(f". '{script}'; Protect '{real}' '{shown}'; Protect '{tmp_path / 'missing.tmp'}' '{shown}'; Write-Output done",
+               CLAUDE_GATEWAY_CLIENT=str(tmp_path / "none.json"))
+    assert "done" in r.out and r.out.count("WARNING") == 1 and "client.json" in r.out and "icacls" in r.out, r.out
+
+
+@on_windows
+def test_gclaude_update_stops_when_the_gateway_update_fails(gclaude, installed, stub, tmp_path):
+    """install.ps1 throws, so `powershell -Command "irm ... | iex"` exits 1 and gclaude.cmd's || branch runs instead
+    of `claude update`."""
+    win = installed
+    stub.files["/install.ps1"] = INSTALL.read_bytes()
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "update"], CLAUDE_GATEWAY_ZIP=str(tmp_path / "missing.zip"), **fake)
+    assert r.returncode == 1 and "could not get" in r.out and "gateway update failed" in r.out, r.out
+    assert not (tmp_path / "claude-saw.txt").exists()   # Claude Code's own update did not run
 
 
 @on_windows

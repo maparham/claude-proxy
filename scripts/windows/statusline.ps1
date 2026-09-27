@@ -51,15 +51,22 @@ try {
 
   if (Ours 'logout') {   # gclaude's /logout: revoke this computer's key on the gateway, then drop every copy of it here
     $key = [string]$env:ANTHROPIC_AUTH_TOKEN
-    $code = 0; $revoked = $false
+    $code = 0; $revoked = $false; $odd = $false   # code 0: no answer at all; odd: a 2xx whose body isn't the JSON expected
     if ($key -and $dash) {
-      try {
+      $r = $null
+      try {   # the call alone: what fails here is the transport or a non-2xx status
         $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 5 -Method Post -Uri "$dash/api/me/logout" -Headers @{ Authorization = "Bearer $key" }
-        $body = $r.Content
-        if ($body -is [byte[]]) { $body = $utf8.GetString($body) }
-        $code = [int]$r.StatusCode; $revoked = [bool]($body | ConvertFrom-Json).revoked
+        $code = [int]$r.StatusCode
       } catch {
         try { $code = [int]$_.Exception.Response.StatusCode } catch { }
+      }
+      if ($code -ge 200 -and $code -lt 300) {   # the body apart, so an empty or non-JSON reply can't hide the 2xx
+        try {
+          $body = $r.Content
+          if ($body -is [byte[]]) { $body = $utf8.GetString($body) }
+          $j = [string]$body | ConvertFrom-Json   # {"ok": true, "revoked": bool}
+          if (($j -is [psobject]) -and $j.PSObject.Properties['revoked']) { $revoked = [bool]$j.revoked } else { $odd = $true }
+        } catch { $odd = $true }
       }
     }
     $settings = Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'
@@ -80,11 +87,14 @@ try {
       }
     } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. claude-gateway off removes it." }
     $again = 'Exit gclaude now (/exit); to sign in again: claude-gateway on --login'
-    if ($code -eq 200 -and $revoked) { Stop-Prompt "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" }
-    if ($code -eq 200) { Stop-Prompt "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" }
-    if ($code -eq 401 -or $code -eq 403) { Stop-Prompt "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" }
     $where = if ($dash) { " ($dash/dashboard)" } else { '' }
-    Stop-Prompt "Signed out here: the key is removed from gclaude, but the gateway could not be reached to revoke it; remove this computer in the dashboard$where. $again"
+    $accepted = $code -ge 200 -and $code -lt 300
+    if ($accepted -and $odd) { Stop-Prompt "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP $code) but gave an unexpected reply; check in the dashboard that this computer is gone$where. $again" }
+    if ($accepted -and $revoked) { Stop-Prompt "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" }
+    if ($accepted) { Stop-Prompt "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" }
+    if ($code -eq 401 -or $code -eq 403) { Stop-Prompt "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" }
+    $why = if ($code) { "refused to revoke it (HTTP $code)" } else { 'could not be reached to revoke it' }
+    Stop-Prompt "Signed out here: the key is removed from gclaude, but the gateway $why; remove this computer in the dashboard$where. $again"
   }
 
   if (-not $dash) {
