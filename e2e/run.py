@@ -263,6 +263,8 @@ def authorize_in_the_browser(link: str, code: str, key: str, label: str, shots: 
 
 
 def main() -> int:
+    for stream in (sys.stdout, sys.stderr):   # the status line's diamond, on a Windows console's code page too
+        stream.reconfigure(encoding="utf-8", errors="replace")
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--docker", action="store_true", help="run the gateway as the Docker image the deploy ships")
     args = ap.parse_args()
