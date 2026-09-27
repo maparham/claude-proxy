@@ -10,6 +10,8 @@
 # gclaude runs Claude Code with CLAUDE_CONFIG_DIR=%USERPROFILE%\.config\claude-gateway\claude, whose settings.json
 # sends requests to the gateway with this computer's key, shows your gateway limits on the status line, warns at
 # 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
+# gclaude's /logout signs this computer out: it revokes the key when it is this computer's own and removes it here;
+# gclaude then refuses to start until `claude-gateway on --login`.
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
 # replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
 # its own. Over SSH it only prints the link and the code. The URL and key are kept in
@@ -196,6 +198,17 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
 }
 
 function Command-Text([string]$name) {
+  if ($name -eq 'logout') {   # answered by the --warn hook, as the key it removes is the one a model call would need
+    return @"
+---
+description: Sign this computer out of the gateway
+disable-model-invocation: true
+---
+<!-- $UsageMark -->
+The claude-gateway hook that signs gclaude out did not run, so nothing was changed. Tell the user, in one sentence,
+that ``claude-gateway on`` reinstalls the hook and ``claude-gateway off`` removes gclaude with its key. Use no tools.
+"@
+  }
   if ($name -eq 'account') {   # statusline.ps1 --account, repeated by a small model call; see statusline.ps1
     return @"
 ---
@@ -259,8 +272,9 @@ function Gclaude-On($c) {
   Write-Json $Settings $s -Private   # it holds the key
   Write-Json $Client $c -Private
 
-  # Claude Code's own /usage can't see the gateway; the --warn hook answers this one instead. /account: Command-Text.
-  foreach ($name in 'usage', 'account') {
+  # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers these
+  # instead. /account: Command-Text.
+  foreach ($name in 'usage', 'account', 'logout') {
     $file = Join-Path $GDir "commands\$name.md"
     if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {
       Write-Output "$file is your own, so it was left as it is; /$name in gclaude runs it instead of the gateway's."
@@ -287,6 +301,7 @@ function Gclaude-On($c) {
     'setlocal',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
+    'findstr /c:"ANTHROPIC_AUTH_TOKEN" "%CLAUDE_CONFIG_DIR%\settings.json" >nul 2>nul || (echo gclaude: signed out ^(/logout^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
     'claude %*'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
@@ -304,7 +319,7 @@ function Gclaude-Off {
   $s = Read-Json $Settings
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   $cmds = Join-Path $GDir 'commands'
-  foreach ($name in 'usage', 'account') {
+  foreach ($name in 'usage', 'account', 'logout') {
     $file = Join-Path $cmds "$name.md"
     if ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $file -Force }
   }
