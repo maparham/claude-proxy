@@ -468,7 +468,7 @@ opencode_state() {
 gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE_MARK" "$GCLAUDE"; }
 gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
-gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage command, and a first-run state file
+gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage and /account commands, and a first-run state file
   python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" <<'EOF'
 import atexit, json, os, shlex, sys, tempfile
 mode, client, gdir, launcher, mark, shared, own_state, sync = sys.argv[1:]
@@ -476,19 +476,20 @@ SHARED = ("CLAUDE.md", "agents", "skills")   # commands/ is gclaude's own folder
 c = json.load(open(client)) if os.path.exists(client) else {}
 rec = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
 cmds, own_cmds = os.path.join(gdir, "commands"), os.path.join(shared, "commands")
-usage = os.path.join(cmds, "usage.md")
-# Claude Code's own /usage can't see the gateway. This command takes its place in gclaude only; the limit-warning
-# hook (statusline.sh --warn) blocks the prompt and shows the gateway line, so the text below reaches the model
+# Claude Code's own /usage can't see the gateway. This command takes its place in gclaude only, beside /account; the
+# limit-warning hook (statusline.sh --warn) blocks either prompt and answers it, so the text below reaches the model
 # only if that hook is missing.
-USAGE = f"""---
-description: Your gateway limits and usage
+COMMANDS = {name: f"""---
+description: {desc}
 disable-model-invocation: true
 ---
 <!-- {mark} -->
-The claude-gateway hook that answers /usage did not run. Tell the user, in one sentence, that their gateway limits
-are on the status line and on the dashboard, and that `claude-gateway on --gclaude` reinstalls the hook. Use no tools.
-"""
-ours_usage = lambda: os.path.isfile(usage) and not os.path.islink(usage) and mark in open(usage).read()
+The claude-gateway hook that answers /{name} did not run. Tell the user, in one sentence, that their {what}
+are on the dashboard, and that `claude-gateway on --gclaude` reinstalls the hook. Use no tools.
+""" for name, desc, what in (("usage", "Your gateway limits and usage", "gateway limits are on the status line and"),
+                             ("account", "Your gateway account and a link to the dashboard", "account details"))}
+cmd_file = lambda name: os.path.join(cmds, name + ".md")
+ours_cmd = lambda name: os.path.isfile(cmd_file(name)) and not os.path.islink(cmd_file(name)) and mark in open(cmd_file(name)).read()
 
 @atexit.register   # the record is written even when a step below fails, so `off --gclaude` can undo what was done
 def save():
@@ -510,15 +511,17 @@ if mode == "on":
         elif os.path.exists(src) and not os.path.lexists(dst):   # never replace what the gclaude dir already has
             links.add(name)
             os.symlink(src, dst)
-    if os.path.islink(cmds):
-        print(f"{cmds} is a link, so gclaude's /usage was not added there.", file=sys.stderr)
-    elif os.path.lexists(usage) and not ours_usage():
-        print(f"{usage} is your own, so it was left as it is; /usage in gclaude runs it instead of showing gateway usage.",
-              file=sys.stderr)
-    else:
-        os.makedirs(cmds, exist_ok=True)
-        with open(usage, "w") as f:
-            f.write(USAGE)
+    for name, text in COMMANDS.items():
+        path = cmd_file(name)
+        if os.path.islink(cmds):
+            print(f"{cmds} is a link, so gclaude's /{name} was not added there.", file=sys.stderr)
+        elif os.path.lexists(path) and not ours_cmd(name):
+            print(f"{path} is your own, so it was left as it is; /{name} in gclaude runs it instead of the gateway's.",
+                  file=sys.stderr)
+        else:
+            os.makedirs(cmds, exist_ok=True)
+            with open(path, "w") as f:
+                f.write(text)
     state = os.path.join(gdir, ".claude.json")   # Claude Code's own state; seeded once so it skips its welcome screens
     if not os.path.lexists(state):
         seed = {"hasCompletedOnboarding": True}
@@ -552,8 +555,9 @@ else:
         if os.path.islink(dst) and os.readlink(dst) == os.path.join(shared, name):
             os.remove(dst)
     if os.path.isdir(cmds) and not os.path.islink(cmds):
-        if ours_usage():
-            os.remove(usage)
+        for name in COMMANDS:
+            if ours_cmd(name):
+                os.remove(cmd_file(name))
         if not os.listdir(cmds):
             os.rmdir(cmds)
     c.pop("gclaude", None)

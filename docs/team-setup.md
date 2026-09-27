@@ -67,6 +67,7 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 - **Warning**: from 80% of a limit, Claude Code shows `Gateway: …` above its reply (again every 15 minutes, and at
   once at 100%). It never blocks you; the gateway refuses requests only once a limit is reached.
 - **`/usage`** in `gclaude` shows the same line with a link to the dashboard, without using a request.
+- **`/account`** in `gclaude` shows your account and key with a link to the dashboard, also without a request.
 - **Dashboard**: `https://claude-dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
 - **Terminal**: `claude-gateway status`.
 

@@ -14,22 +14,27 @@
 # The same hook answers gclaude's /usage command (commands/usage.md there; Claude Code's own /usage can't see the
 # gateway): it blocks that prompt, so no model call is made, and gives a fresh line with the dashboard link as the reason.
 # Only where that usage.md is claude-gateway's, so another /usage command (plain claude's, or your own) runs as usual.
+# gclaude's /account (commands/account.md) is answered the same way, with who the key belongs to and which key it is.
 # Environment (e.g. in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL, e.g. http://gateway.lan:8081
-warn= usage= then=
+warn= usage= account= then=
 case "${1:-}" in --warn) warn=1 ;; --then) then=${2:-} ;; esac
 [ -z "$warn" ] && [ -n "${CLAUDE_GATEWAY_STATUS_INNER:-}" ] && exit 0
-input=$(cat)   # Claude Code sends session or prompt JSON on stdin; only --warn looks at it, for a /usage prompt
-[ -n "$warn" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ] &&
-  grep -qF '# Installed by claude-gateway on --gclaude.' "$CLAUDE_CONFIG_DIR/commands/usage.md" 2>/dev/null &&
-  printf '%s' "$input" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"/usage([[:space:]][^"]*)?"' && usage=1
+input=$(cat)   # Claude Code sends session or prompt JSON on stdin; only --warn looks at it, for /usage and /account
+ours() {   # name: the prompt is /name and gclaude's commands/name.md is claude-gateway's
+  [ -n "$warn" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ] &&
+    grep -qF '# Installed by claude-gateway on --gclaude.' "$CLAUDE_CONFIG_DIR/commands/$1.md" 2>/dev/null &&
+    printf '%s' "$input" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"/'"$1"'([[:space:]][^"]*)?"'
+}
+ours usage && usage=1
+ours account && account=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNER=1 sh -c "$then" 2>/dev/null; }
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
-  [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
+  [ -n "$usage$account" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
   [ -n "$warn" ] && exit 0
   [ -n "$then" ] && { own_line; exit 0; }
   echo "statusline.sh: set CLAUDE_GATEWAY_DASHBOARD" >&2
@@ -73,17 +78,25 @@ peak() {   # the highest figure on the line, as a whole percentage (0 when there
 }
 age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1") )); }
 
-if [ -z "$usage" ] && [ -f "$cache" ] && [ "$(age "$cache")" -lt 30 ]; then
-  line=$(cat "$cache")
-else
+status() {   # format: /api/me/status as text, with this key
   key=${ANTHROPIC_AUTH_TOKEN:-$(printf '%s\n' "${ANTHROPIC_CUSTOM_HEADERS:-}" | sed -n 's/^[Xx]-[Gg]ateway-[Kk]ey: *//p' | head -n 1)}
   # The key goes to curl on stdin: in its arguments, `ps` would show it to every local user.
-  if line=$(printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 3 -H @- \
-            "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=text" 2>/dev/null); then
-    printf '%s\n' "$line" > "$cache"
-  else
-    line=
-  fi
+  printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 3 -H @- \
+    "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=$1" 2>/dev/null
+}
+
+if [ -n "$account" ]; then
+  line=$(status account) && [ -n "$line" ] ||
+    block "Gateway account unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+  block "Gateway account: $line · dashboard: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+fi
+
+if [ -z "$usage" ] && [ -f "$cache" ] && [ "$(age "$cache")" -lt 30 ]; then
+  line=$(cat "$cache")
+elif line=$(status text); then
+  printf '%s\n' "$line" > "$cache"
+else
+  line=
 fi
 
 if [ -z "$warn" ]; then

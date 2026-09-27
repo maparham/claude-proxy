@@ -18,6 +18,7 @@ class Stub:
 
     def __init__(self):
         self.status_line: str | None = "alice · daily 10/100 req"     # None: /api/me/status fails (gateway down)
+        self.account_line: str | None = "alice · user · key sk-proxy-ab1… (your first key)"   # ?format=account
         self.models: dict = {"data": [], "has_more": False}
         self.models_status = 200
         self.requests: list[tuple[str, dict]] = []
@@ -30,8 +31,8 @@ class Stub:
             def do_GET(self):
                 stub.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}))
                 if self.path.startswith("/api/me/status"):
-                    ok = stub.status_line is not None
-                    code, body, ctype = (200 if ok else 503), ((stub.status_line or "") + "\n").encode(), "text/plain; charset=utf-8"
+                    line = stub.account_line if "format=account" in self.path else stub.status_line
+                    code, body, ctype = (200 if line is not None else 503), ((line or "") + "\n").encode(), "text/plain; charset=utf-8"
                 elif self.path.startswith("/v1/models"):
                     code, body, ctype = stub.models_status, json.dumps(stub.models).encode(), "application/json"
                 elif self.path == "/health":
@@ -273,6 +274,33 @@ def test_usage_prompt_without_dashboard_still_blocks(warn_env):
 def test_other_prompts_mentioning_usage_are_left_alone(stub, warn_env, prompt):
     stub.status_line = "alice · daily 10/100 req"
     r = usage_prompt(warn_env, prompt)
+    assert (r.returncode, r.stdout) == (0, "")
+
+
+def account_prompt(env, prompt="/account", text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
+    env = gclaude_config(env)
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "account.md").write_text(text)
+    return run(["sh", str(STATUSLINE), "--warn"], env, stdin=json.dumps({"prompt": prompt}))
+
+
+def test_account_prompt_is_blocked_with_the_account_and_dashboard_link(stub, warn_env):
+    stub.status_line = "alice · daily 99/100 req"
+    out = json.loads(account_prompt(warn_env).stdout)
+    assert out == {"decision": "block", "reason": f"Gateway account: alice · user · key sk-proxy-ab1… (your first key) · "
+                                                  f"dashboard: {stub.url}/dashboard"}
+    assert "format=account" in stub.requests[-1][0]
+    assert not list(Path(warn_env["TMPDIR"]).glob("*.warned"))   # not a warning, though a limit is at 99%
+
+
+def test_account_prompt_says_when_the_gateway_is_down(stub, warn_env):
+    stub.account_line = None
+    out = json.loads(account_prompt(warn_env).stdout)
+    assert out["decision"] == "block" and out["reason"] == f"Gateway account unavailable; see {stub.url}/dashboard"
+
+
+@pytest.mark.parametrize("prompt,text", [("/account", "my own account command\n"), ("/accounts", None), ("my /account", None)])
+def test_other_account_prompts_are_left_alone(stub, warn_env, prompt, text):
+    r = account_prompt(warn_env, prompt, **({"text": text} if text else {}))
     assert (r.returncode, r.stdout) == (0, "")
 
 
@@ -671,7 +699,7 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("statusline.sh --warn")
     assert os.readlink(gdir / "CLAUDE.md") == str(home / ".claude" / "CLAUDE.md")
     assert os.readlink(gdir / "agents") == str(home / ".claude" / "agents")
-    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["usage.md"]   # gclaude's own /usage only
+    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "usage.md"]   # gclaude's own only
     assert json.loads((gdir / ".claude.json").read_text()) == {"hasCompletedOnboarding": True, "theme": "light"}
     assert os.access(launcher, os.X_OK)
 
@@ -867,7 +895,7 @@ def test_gclaude_launcher_follows_later_command_changes(stub, home):
     (own_cmds / "new.md").write_text("new\n")
     (own_cmds / "usage.md").write_text("my own usage\n")          # gclaude's /usage wins in gclaude
     assert run_gclaude(home, launcher).returncode == 0
-    assert sorted(p.name for p in cmds.iterdir()) == ["gateway-only.md", "new.md", "usage.md"]
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "new.md", "usage.md"]
     assert "disable-model-invocation" in (cmds / "usage.md").read_text()
 
 

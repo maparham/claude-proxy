@@ -9,7 +9,7 @@
 #
 # gclaude runs Claude Code with CLAUDE_CONFIG_DIR=%USERPROFILE%\.config\claude-gateway\claude, whose settings.json
 # sends requests to the gateway with this computer's key, shows your gateway limits on the status line, warns at
-# 80% of a limit, and answers /usage with the gateway's figures. Plain `claude` keeps this machine's own login.
+# 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
 # replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
 # its own. Over SSH it only prints the link and the code. The URL and key are kept in
@@ -195,15 +195,17 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
   foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook') { Remove-Field $rec $k }
 }
 
-function Usage-Text {
+function Command-Text([string]$name) {
+  $desc, $what = 'Your gateway limits and usage', 'gateway limits are on the status line and'
+  if ($name -eq 'account') { $desc, $what = 'Your gateway account and a link to the dashboard', 'account details' }
   return @"
 ---
-description: Your gateway limits and usage
+description: $desc
 disable-model-invocation: true
 ---
 <!-- $UsageMark -->
-The claude-gateway hook that answers /usage did not run. Tell the user, in one sentence, that their gateway limits
-are on the status line and on the dashboard, and that ``claude-gateway on`` reinstalls the hook. Use no tools.
+The claude-gateway hook that answers /$name did not run. Tell the user, in one sentence, that their $what
+are on the dashboard, and that ``claude-gateway on`` reinstalls the hook. Use no tools.
 "@
 }
 
@@ -245,13 +247,15 @@ function Gclaude-On($c) {
   Write-Json $Settings $s -Private   # it holds the key
   Write-Json $Client $c -Private
 
-  # Claude Code's own /usage can't see the gateway; the --warn hook answers this one instead.
-  $usage = Join-Path $GDir 'commands\usage.md'
-  if ((Test-Path -LiteralPath $usage) -and -not (Select-String -LiteralPath $usage -SimpleMatch $UsageMark -Quiet)) {
-    Write-Output "$usage is your own, so it was left as it is; /usage in gclaude runs it instead of showing gateway usage."
-  } else {
-    New-Item -ItemType Directory -Path (Split-Path -Parent $usage) -Force | Out-Null
-    [IO.File]::WriteAllText($usage, ((Usage-Text) -replace "`r`n", "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+  # Claude Code's own /usage can't see the gateway; the --warn hook answers this one, and /account, instead.
+  foreach ($name in 'usage', 'account') {
+    $file = Join-Path $GDir "commands\$name.md"
+    if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {
+      Write-Output "$file is your own, so it was left as it is; /$name in gclaude runs it instead of the gateway's."
+    } else {
+      New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+      [IO.File]::WriteAllText($file, ((Command-Text $name) -replace "`r`n", "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+    }
   }
 
   $state = Join-Path $GDir '.claude.json'   # Claude Code's own state; seeded once so it skips its welcome screens
@@ -288,8 +292,10 @@ function Gclaude-Off {
   $s = Read-Json $Settings
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   $cmds = Join-Path $GDir 'commands'
-  $usage = Join-Path $cmds 'usage.md'
-  if ((Test-Path -LiteralPath $usage) -and (Select-String -LiteralPath $usage -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $usage -Force }
+  foreach ($name in 'usage', 'account') {
+    $file = Join-Path $cmds "$name.md"
+    if ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $file -Force }
+  }
   if ((Test-Path -LiteralPath $cmds) -and -not (Get-ChildItem -LiteralPath $cmds -Force)) { Remove-Item -LiteralPath $cmds -Force }
   Remove-Field $c 'gclaude'
   if (Test-Path -LiteralPath $Client) { Write-Json $Client $c -Private }
