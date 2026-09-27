@@ -75,6 +75,8 @@ class SSEMeter:
 
     - Buffers at most one event (processes as soon as \\n\\n found)
     - Caps line buffer at 1 MiB; on cap sets meter_error and stops metering but forwarding continues
+    - One unparsable event sets meter_error (for observability) but is skipped; later events are still metered,
+      so message_delta's final output_tokens is not lost to a single bad line
     - SSE rule: message_start usage -> input/cache/model/id, message_delta overwrites output (cumulative) and overwrites input/cache if present
     - Missing message_stop -> complete=false
     """
@@ -86,13 +88,24 @@ class SSEMeter:
         self._collect_text = collect_text
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")   # chunks may split a character
         self._streamed_chars = 0
+        self._stopped = False   # set by the size caps only; a bad line does not stop metering
 
     @property
     def meter_error(self) -> bool:
         return self.result.meter_error
 
+    def _flag(self, detail: str) -> None:
+        self.result.meter_error = True
+        if self.result.meter_error_detail is None:   # keep the first cause
+            self.result.meter_error_detail = detail
+
+    def _stop(self, detail: str) -> None:
+        self._flag(detail)
+        self._stopped = True
+        self._buf = ""
+
     def feed(self, chunk: bytes):
-        if self.result.meter_error:
+        if self._stopped:
             return
         self._buf += self._decoder.decode(chunk)
 
@@ -100,10 +113,8 @@ class SSEMeter:
         if len(self._buf.encode("utf-8")) > MAX_LINE_BYTES and "\n\n" not in self._buf and "\r\n\r\n" not in self._buf:
             # Check if any single line already exceeds
             # Simplest: if buffer exceeds cap, flag error and stop metering
-            self.result.meter_error = True
-            self.result.meter_error_detail = "line_cap"
             logger.warning("meter line cap hit (%d bytes) — metering stopped", len(self._buf.encode("utf-8")))
-            self._buf = ""
+            self._stop("line_cap")
             return
 
         # Process at most one event per feed iteration? Spec says ≤1 event buffered — drain all available
@@ -113,10 +124,8 @@ class SSEMeter:
             if idx == -1 and idx2 == -1:
                 # No complete event yet; check if current partial line already over cap
                 if len(self._buf.encode("utf-8")) > MAX_LINE_BYTES:
-                    self.result.meter_error = True
-                    self.result.meter_error_detail = "line_cap"
                     logger.warning("meter line cap hit on partial event — metering stopped")
-                    self._buf = ""
+                    self._stop("line_cap")
                 break
             # choose earliest delimiter
             if idx != -1 and idx2 != -1:
@@ -133,9 +142,8 @@ class SSEMeter:
             self._buf = self._buf[use_idx + delim_len :]
 
             if len(block.encode("utf-8")) > MAX_LINE_BYTES:
-                self.result.meter_error = True
-                self.result.meter_error_detail = "event_cap"
                 logger.warning("meter event cap hit (%d bytes) — metering stopped", len(block.encode("utf-8")))
+                self._stop("event_cap")
                 break
 
             if not block.strip():
@@ -144,13 +152,9 @@ class SSEMeter:
             try:
                 self._process_event_block(block)
             except Exception as e:
+                # Skip this event only; the ones after it (message_delta's final counts) still get metered.
                 logger.warning("meter process block failed: %s", e)
-                self.result.meter_error = True
-                self.result.meter_error_detail = f"parse_error:{e}"
-                break
-
-            if self.result.meter_error:
-                break
+                self._flag(f"parse_error:{e}")
             # continue to drain if multiple events arrived in one chunk
 
     def _process_event_block(self, block: str):
@@ -177,8 +181,8 @@ class SSEMeter:
         try:
             data = json.loads(data_str)
         except Exception as e:
-            self.result.meter_error = True
-            self.result.meter_error_detail = f"json_error:{e}"
+            # Skip this event only; metering continues with the next one.
+            self._flag(f"json_error:{e}")
             logger.warning("meter json error: %s data=%.200s", e, data_str)
             return
 

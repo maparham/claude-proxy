@@ -272,6 +272,9 @@ back to zero, and the next request opens a new window. A user over a limit waits
 - Limits are checked from recorded history before each request. The request that crosses a limit
   is served, and the next one gets a 429 that Claude Code shows verbatim, for example `API Error:
   Request rejected (429) · Gateway limit requests_daily reached: 1 of 1 requests; retry in 24.0 h.`
+- Requests still in flight count toward request-count limits, and each user may have at most
+  `[limits] max_inflight` (default 8) in flight at once; the next gets a 429 (`max_inflight`) with
+  `retry-after: 1`. A token or cost limit can therefore be overshot by at most that many requests.
 
 ## Operations
 

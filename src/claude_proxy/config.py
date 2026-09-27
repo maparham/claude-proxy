@@ -87,6 +87,13 @@ class SignupConfig:
 
 
 @dataclass
+class LimitsConfig:
+    # Requests one user may have in flight at once. Limits see only finished requests plus these, so a cost or token
+    # limit can be overshot by at most this many requests.
+    max_inflight: int = 8
+
+
+@dataclass
 class DBConfig:
     path: str = field(default_factory=_default_db)
 
@@ -207,6 +214,7 @@ class Config:
     upstream: UpstreamConfig = field(default_factory=UpstreamConfig)
     credential: CredentialConfig = field(default_factory=CredentialConfig)
     quota: QuotaConfig = field(default_factory=QuotaConfig)
+    limits: LimitsConfig = field(default_factory=LimitsConfig)
     db: DBConfig = field(default_factory=DBConfig)
     signup: SignupConfig = field(default_factory=SignupConfig)
     pricing: Pricing = field(default_factory=Pricing)
@@ -235,7 +243,7 @@ class Config:
             raise ConfigError(f"{toml_path}: {e}") from e
 
         sections = {"listener": cfg.listener, "upstream": cfg.upstream, "credential": cfg.credential,
-                    "quota": cfg.quota, "db": cfg.db, "signup": cfg.signup}
+                    "quota": cfg.quota, "limits": cfg.limits, "db": cfg.db, "signup": cfg.signup}
         for name, target in sections.items():
             for k, v in data.get(name, {}).items():
                 if not hasattr(target, k):
