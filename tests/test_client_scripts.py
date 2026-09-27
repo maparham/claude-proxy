@@ -1293,6 +1293,10 @@ def own_sessions(own):
     (folder / "notes.txt").write_text("not a session\n")
     (own / "projects" / "-sessions-only").mkdir()
     (own / "projects" / "-sessions-only" / f"{S2}.jsonl").write_text('{"n": 2}\n')
+    for sid in (S1, S2):   # rewind checkpoints
+        (own / "file-history" / sid).mkdir(parents=True)
+        (own / "file-history" / sid / "abc@v1").write_text("before\n")
+    (own / "file-history" / "not-a-session").mkdir()
     return folder
 
 
@@ -1304,6 +1308,7 @@ def test_gclaude_lists_plain_claudes_sessions_and_resuming_one_goes_on_in_plain_
     mine.mkdir(parents=True)
     (mine / f"{S2}.jsonl").write_text('{"gclaude": 2}\n')                 # a session started in gclaude
     (mine / f"{S3}.jsonl").write_text('{"gclaude": 3}\n')                 # same name, gclaude's own: left alone
+    (gdir / "file-history" / S2).mkdir(parents=True)                      # gclaude's own checkpoints for S2
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     linked = mine / f"{S1}.jsonl"
     assert not linked.is_symlink() and os.path.samefile(linked, folder / f"{S1}.jsonl")   # the picker skips symlinks
@@ -1313,6 +1318,8 @@ def test_gclaude_lists_plain_claudes_sessions_and_resuming_one_goes_on_in_plain_
     assert os.path.samefile(gdir / "projects" / "-sessions-only" / f"{S2}.jsonl",
                             own / "projects" / "-sessions-only" / f"{S2}.jsonl")
     assert (gdir / "projects" / "-sessions-only").stat().st_mode & 0o777 == 0o700
+    assert os.readlink(gdir / "file-history" / S1) == str(own / "file-history" / S1)   # so /rewind restores code
+    assert not (gdir / "file-history" / S2).is_symlink() and not (gdir / "file-history" / "not-a-session").exists()
     with open(linked, "a") as f:                                           # gclaude resumes it: appends in place
         f.write('{"n": "from gclaude"}\n')
     assert "from gclaude" in (folder / f"{S1}.jsonl").read_text()
@@ -1320,6 +1327,8 @@ def test_gclaude_lists_plain_claudes_sessions_and_resuming_one_goes_on_in_plain_
     assert os.path.samefile(linked, folder / f"{S1}.jsonl")
     assert cg(home, "off", "--gclaude").returncode == 0
     assert not os.path.lexists(linked) and not os.path.lexists(mine / S1)
+    assert not os.path.lexists(gdir / "file-history" / S1) and (gdir / "file-history" / S2).is_dir()
+    assert (own / "file-history" / S1 / "abc@v1").read_text() == "before\n"
     assert not (gdir / "projects" / "-sessions-only").exists()
     assert (mine / f"{S2}.jsonl").read_text() == '{"gclaude": 2}\n'
     assert (mine / f"{S3}.jsonl").read_text() == '{"gclaude": 3}\n'
@@ -1327,7 +1336,7 @@ def test_gclaude_lists_plain_claudes_sessions_and_resuming_one_goes_on_in_plain_
     assert (own / "projects" / "-sessions-only" / f"{S2}.jsonl").exists()
 
 
-def test_sync_keeps_a_session_plain_claude_dropped_and_prunes_its_folder_link(home):
+def test_sync_keeps_a_session_plain_claude_dropped_and_prunes_its_folder_links(home):
     import shutil
     own = own_plugins_and_memory(home)
     folder = own_sessions(own)
@@ -1336,7 +1345,10 @@ def test_sync_keeps_a_session_plain_claude_dropped_and_prunes_its_folder_link(ho
     assert sync(home).returncode == 0
     (folder / f"{S1}.jsonl").unlink()                                      # plain claude's cleanup
     shutil.rmtree(folder / S1)
+    shutil.rmtree(own / "file-history" / S1)
     assert sync(home).returncode == 0
+    assert not os.path.lexists(gdir / "file-history" / S1)
+    assert (gdir / "file-history" / S2).is_symlink()
     mine = gdir / "projects" / "-p1"
     assert (mine / f"{S1}.jsonl").read_text() == '{"n": 1}\n'             # gclaude's copy now
     assert not os.path.lexists(mine / S1)
