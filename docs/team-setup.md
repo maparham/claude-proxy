@@ -34,6 +34,15 @@ the gateway refuses Claude requests from OpenCode.
 
    If it says to add `~/.local/bin` to your PATH, do that (for zsh: `echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc`)
    and open a new terminal.
+
+   **On Windows**, run this in PowerShell instead (no Python, Git or admin rights needed):
+
+   ```powershell
+   irm https://claude-dash.rahkar.pro/install.ps1 | iex
+   ```
+
+   Then open a new terminal so `gclaude` is on your PATH. On Windows there is gclaude only: no global mode or
+   OpenCode yet, and gclaude doesn't share your `~/.claude` skills and agents yet.
 3. Run `gclaude` in a project. The first time, Claude Code asks whether you trust the folder.
 
 If the admin gave you a key (`sk-proxy-…`) instead, add it: `… | sh -s -- on --url https://claude.rahkar.pro --key sk-proxy-...`
@@ -63,7 +72,7 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 ## Updating and removing
 
 ```sh
-curl -fsSL https://claude-dash.rahkar.pro/install | sh   # update (it keeps this computer's key)
+curl -fsSL https://claude-dash.rahkar.pro/install | sh   # update (it keeps this computer's key); Windows: irm …/install.ps1 | iex
 claude-gateway on --login         # connect this computer again, e.g. after removing it in the dashboard
 claude-gateway off                # remove gclaude (keeps its history)
 claude-gateway off --opencode     # remove the gateway from OpenCode
