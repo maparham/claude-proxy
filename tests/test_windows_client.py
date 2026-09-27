@@ -123,7 +123,7 @@ class Win:
         self.temp = tmp_path / "temp"
         self.bin = self.home / ".local" / "bin"
         for p in (self.home, self.temp):
-            p.mkdir(parents=True)
+            p.mkdir(parents=True, exist_ok=True)
         self.env = {k: v for k, v in os.environ.items() if k != "SSH_CONNECTION"}
         self.env.update({"USERPROFILE": str(self.home), "TEMP": str(self.temp), "TMP": str(self.temp),
                          "CLAUDE_GATEWAY_ZIP": str(source_zip), "CLAUDE_GATEWAY_BIN": str(self.bin),
@@ -199,3 +199,110 @@ def test_install_leaves_a_foreign_launcher_alone(win):
 def test_install_reports_a_bad_archive_without_closing_the_session(win, tmp_path):
     r = win.install(CLAUDE_GATEWAY_ZIP=str(tmp_path / "missing.zip"))
     assert "session still open" in r.out and "could not get" in r.out, r.out
+
+
+# ---------- claude-gateway on / off / status ----------
+
+def fake_claude(win, tmp_path):
+    """A claude.cmd first on PATH that shows which config dir gclaude gave it."""
+    d = tmp_path / "fakebin"
+    d.mkdir()
+    (d / "claude.cmd").write_text("@echo CONFIG=%CLAUDE_CONFIG_DIR% ARGS=%*\r\n")
+    return {"PATH": f"{d};{win.bin};{os.environ['PATH']}"}
+
+
+@on_windows
+def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_path):
+    win = installed
+    stub.tokens = [(400, {"error": "authorization_pending"}), (400, {"error": "authorization_pending"}),
+                   (200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = win.cg("on", "--url", stub.url + "/", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    assert f"{stub.url}/dashboard#authorize/{CODE}" in r.out and CODE in r.out and "Authorized as ana" in r.out
+    assert "sk-proxy-new" not in r.out
+    start = next(b for p, _, b in stub.requests if p == "/api/device/start")
+    assert start == {"label": os.environ["COMPUTERNAME"]}
+    assert [h["authorization"] for p, h, _ in stub.requests if p.startswith("/v1/models")] == ["Bearer sk-proxy-new"]
+    c = win.client()
+    assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-new", stub.url)
+    s = win.settings()
+    assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url}
+    assert s["disableClaudeAiConnectors"] is True
+    line = s["statusLine"]["command"]
+    assert line.startswith("powershell -NoProfile -ExecutionPolicy Bypass -File \"") and line.endswith("/statusline.ps1\"")
+    assert "\\" not in line and s["statusLine"]["refreshInterval"] == 30
+    assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": line + " --warn", "timeout": 10}]}]
+    assert (win.config / "statusline.ps1").is_file()
+    assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / "usage.md").read_text()
+    assert json.loads((win.gdir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake_claude(win, tmp_path))
+    assert r.returncode == 0 and f"CONFIG={win.gdir}" in r.out and "ARGS=-p hi" in r.out, r.out
+    r = win.cg("status")
+    assert r.returncode == 0 and f"gateway: {stub.url}" in r.out and "gclaude: installed" in r.out, r.out
+    assert "status: maya" in r.out
+    # Again with the saved key: no new authorization, and nothing added twice.
+    stub.requests.clear()
+    r = win.cg("on")
+    assert r.returncode == 0, r.out
+    assert "/api/device/start" not in stub.paths()
+    assert win.settings() == s
+
+
+@on_windows
+def test_on_with_a_key_keeps_the_users_settings_and_off_gives_them_back(installed, stub):
+    win = installed
+    mine = {"model": "opus", "statusLine": {"type": "command", "command": "mine"},
+            "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "beep"}]}]}}
+    win.gdir.mkdir(parents=True)
+    (win.gdir / "settings.json").write_text(json.dumps(mine))
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    assert "/api/device/start" not in stub.paths() and "already has a statusline" in r.out
+    s = win.settings()
+    assert s["model"] == "opus" and s["statusLine"] == mine["statusLine"] and s["hooks"]["Stop"] == mine["hooks"]["Stop"]
+    assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("--warn")
+    r = win.cg("off")
+    assert r.returncode == 0 and "gclaude is removed" in r.out, r.out
+    assert win.settings() == mine
+    assert not (win.bin / "gclaude.cmd").exists() and not (win.gdir / "commands").exists()
+    assert (win.gdir / ".claude.json").exists()   # gclaude's own state and history stay
+    assert "gclaude" not in win.client() and win.client()["key"] == "sk-proxy-k"
+    assert "gclaude: not set up" in win.cg("status").out
+
+
+@on_windows
+@pytest.mark.parametrize("error, message", [("access_denied", "Cancelled in the browser"),
+                                            ("expired_token", "The code expired")])
+def test_a_refused_authorization_changes_nothing(installed, stub, error, message):
+    win = installed
+    stub.tokens = [(400, {"error": error})]
+    r = win.cg("on", "--url", stub.url, "--dashboard", stub.url)
+    assert r.returncode != 0 and message in r.out, r.out
+    assert not (win.config / "client.json").exists() and not (win.gdir / "settings.json").exists()
+    assert not (win.bin / "gclaude.cmd").exists()
+
+
+@on_windows
+def test_a_key_the_gateway_refuses_changes_nothing(installed, stub):
+    win = installed
+    stub.models_status = 401
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-bad", "--dashboard", stub.url)
+    assert r.returncode != 0 and "did not accept the key (HTTP 401)" in r.out, r.out
+    assert not (win.config / "client.json").exists() and not (win.gdir / "settings.json").exists()
+
+
+@on_windows
+def test_on_leaves_a_foreign_gclaude_alone(installed, stub):
+    win = installed
+    (win.bin / "gclaude.cmd").write_text("@echo mine\r\n")
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode != 0 and "did not install it" in r.out, r.out
+    assert (win.bin / "gclaude.cmd").read_text() == "@echo mine\r\n"
+    assert not stub.requests
+
+
+@on_windows
+@pytest.mark.parametrize("flag", ["--global", "--opencode", "--own-login"])
+def test_modes_not_on_windows_yet_point_at_the_issue(installed, flag):
+    r = installed.cg("on", flag)
+    assert r.returncode != 0 and "issues/22" in r.out, r.out
