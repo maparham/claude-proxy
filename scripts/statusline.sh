@@ -14,27 +14,31 @@
 # The same hook answers gclaude's /usage command (commands/usage.md there; Claude Code's own /usage can't see the
 # gateway): it blocks that prompt, so no model call is made, and gives a fresh line with the dashboard link as the reason.
 # Only where that usage.md is claude-gateway's, so another /usage command (plain claude's, or your own) runs as usual.
-# gclaude's /account (commands/account.md) is answered the same way, with who the key belongs to and which key it is.
+# With --account it prints who the key belongs to, which key it is and the dashboard link, for gclaude's /account
+# (commands/account.md there runs it, and the model repeats the line: a hook's reply would read as an error).
+# Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
 # Environment (e.g. in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL, e.g. http://gateway.lan:8081
-warn= usage= account= then=
-case "${1:-}" in --warn) warn=1 ;; --then) then=${2:-} ;; esac
-[ -z "$warn" ] && [ -n "${CLAUDE_GATEWAY_STATUS_INNER:-}" ] && exit 0
-input=$(cat)   # Claude Code sends session or prompt JSON on stdin; only --warn looks at it, for /usage and /account
+warn= usage= account= account_prompt= then=
+case "${1:-}" in --warn) warn=1 ;; --account) account=1 ;; --then) then=${2:-} ;; esac
+[ -z "$warn$account" ] && [ -n "${CLAUDE_GATEWAY_STATUS_INNER:-}" ] && exit 0
+input=
+[ -n "$account" ] || input=$(cat)   # Claude Code sends session or prompt JSON on stdin; only --warn looks at it, for /usage
 ours() {   # name: the prompt is /name and gclaude's commands/name.md is claude-gateway's
   [ -n "$warn" ] && [ -n "${CLAUDE_CONFIG_DIR:-}" ] &&
     grep -qF '# Installed by claude-gateway on --gclaude.' "$CLAUDE_CONFIG_DIR/commands/$1.md" 2>/dev/null &&
     printf '%s' "$input" | grep -Eq '"prompt"[[:space:]]*:[[:space:]]*"/'"$1"'([[:space:]][^"]*)?"'
 }
 ours usage && usage=1
-ours account && account=1
+ours account && account_prompt=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNER=1 sh -c "$then" 2>/dev/null; }
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
-  [ -n "$usage$account" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
+  [ -n "$account" ] && { echo "Gateway account unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."; exit 0; }
+  [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
   [ -n "$warn" ] && exit 0
   [ -n "$then" ] && { own_line; exit 0; }
   echo "statusline.sh: set CLAUDE_GATEWAY_DASHBOARD" >&2
@@ -85,13 +89,19 @@ status() {   # format: /api/me/status as text, with this key
     "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=$1" 2>/dev/null
 }
 
+account_line() {
+  if line=$(status account) && [ -n "$line" ]; then
+    echo "Gateway account: $line · dashboard: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+  else
+    echo "Gateway account unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+  fi
+}
 if [ -n "$account" ]; then
-  line=$(status account) && [ -n "$line" ] ||
-    block "Gateway account unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
-  block "Gateway account: $line · dashboard: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+  account_line
+  exit 0
 fi
 
-if [ -z "$usage" ] && [ -f "$cache" ] && [ "$(age "$cache")" -lt 30 ]; then
+if [ -z "$usage$account_prompt" ] && [ -f "$cache" ] && [ "$(age "$cache")" -lt 30 ]; then
   line=$(cat "$cache")
 elif line=$(status text); then
   printf '%s\n' "$line" > "$cache"
@@ -108,6 +118,11 @@ fi
 if [ -n "$usage" ]; then
   [ -n "$line" ] || block "Gateway status unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
   block "Gateway: $(figures "$line") · details: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+fi
+
+if [ -n "$account_prompt" ]; then   # the model answers /account, unless it can't be reached
+  [ -n "$line" ] || block "$(account_line)"
+  [ "$(peak "$line")" -ge 100 ] 2>/dev/null && block "$(account_line) · limit reached: $(figures "$line")"
 fi
 
 # --warn: band 1 from 80%, band 2 from 100%. The state file holds the band last warned about; its age is the time since.

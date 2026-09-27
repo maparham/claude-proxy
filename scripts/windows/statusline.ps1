@@ -7,13 +7,16 @@
 # figure reaches 100%. Nothing else ever goes to stdout in that mode: a hook's plain output joins the prompt.
 # The same hook answers gclaude's /usage command (commands\usage.md there; Claude Code's own /usage can't see the
 # gateway): it blocks that prompt, so no model call is made, and gives a fresh line with the dashboard link as the reason.
-# gclaude's /account (commands\account.md) is answered the same way, with who the key belongs to and which key it is.
+# With --account it prints who the key belongs to, which key it is and the dashboard link, for gclaude's /account
+# (commands\account.md there runs it, and the model repeats the line: a hook's reply would read as an error).
+# Only when a limit is reached or the gateway is down, so that model call would fail, --warn answers /account instead.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
 # Any error ends quietly: a statusline or a hook must never break the session.
 
 $warn = $args -contains '--warn'
+$accountMode = $args -contains '--account'
 try {
   $utf8 = New-Object Text.UTF8Encoding $false
   try { [Console]::InputEncoding = $utf8 } catch { }
@@ -22,7 +25,7 @@ try {
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
 
   $stdin = ''
-  try { $stdin = [Console]::In.ReadToEnd() } catch { }   # session or prompt JSON; only --warn looks at it, for /usage
+  if (-not $accountMode) { try { $stdin = [Console]::In.ReadToEnd() } catch { } }   # session or prompt JSON; only --warn looks at it, for /usage
   $dash = ([string]$env:CLAUDE_GATEWAY_DASHBOARD).TrimEnd('/')
 
   function Ours([string]$name) {   # the prompt is /name and gclaude's commands\name.md is claude-gateway's
@@ -40,7 +43,8 @@ try {
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
 
   if (-not $dash) {
-    if ($usage -or $account) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).' }
+    if ($accountMode) { Emit 'Gateway account unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).'; exit 0 }
+    if ($usage) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).' }
     if (-not $warn) { [Console]::Error.WriteLine('statusline.ps1: set CLAUDE_GATEWAY_DASHBOARD') }
     exit 0
   }
@@ -98,15 +102,16 @@ try {
     } catch { return '' }
   }
 
-  if ($account) {
-    $line = Status 'account'
-    if (-not $line) { Block "Gateway account unavailable; see $dash/dashboard" }
-    Block ('Gateway account: ' + $line + ' ' + [char]0x00B7 + " dashboard: $dash/dashboard")
+  function Account-Line {
+    $a = Status 'account'
+    if (-not $a) { return "Gateway account unavailable; see $dash/dashboard" }
+    return 'Gateway account: ' + $a + ' ' + [char]0x00B7 + " dashboard: $dash/dashboard"
   }
+  if ($accountMode) { Emit (Account-Line); exit 0 }
 
   $cache = Join-Path ([IO.Path]::GetTempPath()) 'claude-gateway-status.txt'
   $line = ''
-  if (-not $usage -and (Test-Path -LiteralPath $cache) -and (Age $cache) -lt 30) {
+  if (-not ($usage -or $account) -and (Test-Path -LiteralPath $cache) -and (Age $cache) -lt 30) {
     $line = ([IO.File]::ReadAllText($cache)).Trim()
   } else {
     $line = Status 'text'
@@ -122,6 +127,10 @@ try {
   if ($usage) {
     if (-not $line) { Block "Gateway status unavailable; see $dash/dashboard" }
     Block ('Gateway: ' + (Figures $line $false) + ' ' + [char]0x00B7 + " details: $dash/dashboard")
+  }
+  if ($account) {   # the model answers /account, unless it can't be reached
+    if (-not $line) { Block (Account-Line) }
+    if ((Peak $line) -ge 100) { Block ((Account-Line) + ' ' + [char]0x00B7 + ' limit reached: ' + (Figures $line $false)) }
   }
 
   # --warn: band 1 from 80%, band 2 from 100%. The state file holds the band last warned about; its age is the time since.

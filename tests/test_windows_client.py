@@ -367,11 +367,17 @@ def test_the_warning_hook_warns_once_and_answers_usage(gclaude, stub):
 
 
 @on_windows
-def test_the_warning_hook_answers_account(gclaude, stub):
-    r = gclaude(" --warn", '{"prompt": "/account"}')
+def test_account_prints_the_line_and_the_hook_answers_only_at_a_limit(gclaude, installed, stub):
+    r = gclaude(" --account")
     assert r.returncode == 0, r.out
-    assert json.loads(r.stdout) == {"decision": "block", "reason": "Gateway account: maya \u00b7 user \u00b7 key sk-proxy-ab1\u2026 "
-                                    f"for PC, authorized 2026-09-20 \u00b7 dashboard: {stub.url}/dashboard"}
+    assert r.stdout.strip() == f"Gateway account: maya \u00b7 user \u00b7 key sk-proxy-ab1\u2026 for PC, authorized 2026-09-20 \u00b7 dashboard: {stub.url}/dashboard"
+    assert "--account`" in (installed.gdir / "commands" / "account.md").read_text()
+    stub.status_line = "maya \u00b7 credit $1/$5"
+    r = gclaude(" --warn", '{"prompt": "/account"}')
+    assert r.returncode == 0 and not r.stdout.strip(), r.out   # the model answers it
+    stub.status_line = "maya \u00b7 credit $5/$5"
+    out = json.loads(gclaude(" --warn", '{"prompt": "/account"}').stdout)
+    assert out["decision"] == "block" and "for PC" in out["reason"] and "limit reached" in out["reason"]
 
 
 @on_windows
