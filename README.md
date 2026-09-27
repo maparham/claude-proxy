@@ -193,6 +193,8 @@ Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn
 this computer out of the gateway instead, answered by the hook: it revokes the key when it is this computer's own
 (one authorized in the browser; your first key may be in use elsewhere, so it stays valid) and removes it from
 gclaude's `settings.json` and `client.json`. gclaude then won't start until `claude-gateway on --login`.
+`gclaude update` updates claude-gateway from your gateway's dashboard, which also refreshes gclaude's setup (new
+commands such as `/logout` arrive this way), then runs Claude Code's own `claude update`.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and

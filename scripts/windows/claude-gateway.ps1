@@ -10,6 +10,7 @@
 # gclaude runs Claude Code with CLAUDE_CONFIG_DIR=%USERPROFILE%\.config\claude-gateway\claude, whose settings.json
 # sends requests to the gateway with this computer's key, shows your gateway limits on the status line, warns at
 # 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
+# `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself.
 # gclaude's /logout signs this computer out: it revokes the key when it is this computer's own and removes it here;
 # gclaude then refuses to start until `claude-gateway on --login`.
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
@@ -301,6 +302,14 @@ function Gclaude-On($c) {
     'rem Remove it with: claude-gateway off',
     'setlocal',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
+    'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
+    'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
+    ('if /i "%~1"=="update" (' + "`r`n" +
+     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex`" ||" +
+     ' (echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2 & exit /b 1)' + "`r`n" +
+     '  claude %*' + "`r`n" +
+     '  exit /b' + "`r`n" +
+     ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
     # /logout leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" (echo gclaude: signed out ^(/logout^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',

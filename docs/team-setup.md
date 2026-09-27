@@ -71,6 +71,7 @@ If your machine has no Claude login of its own, you can instead point plain `cla
   when you're out of credit it's answered without one).
 - **`/logout`** in `gclaude` signs this computer out: it revokes this computer's key and removes it. Sign in again
   with `claude-gateway on --login`.
+- **`gclaude update`** updates the gateway client and gclaude's setup, then Claude Code itself.
 - **Dashboard**: `https://claude-dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
 - **Terminal**: `claude-gateway status`.
 

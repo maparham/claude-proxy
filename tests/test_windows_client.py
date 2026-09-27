@@ -404,6 +404,17 @@ def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude
 
 
 @on_windows
+def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(gclaude, installed, stub, tmp_path):
+    win = installed
+    marker = tmp_path / "installer-ran.txt"
+    stub.files["/install.ps1"] = f"[IO.File]::WriteAllText('{marker}', 'yes')\n".encode()
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "update"], **fake)
+    assert r.returncode == 0 and marker.read_text() == "yes", r.out
+    assert claude_saw(tmp_path).endswith("|update") and str(win.gdir) not in claude_saw(tmp_path)   # plain claude's own update
+
+
+@on_windows
 def test_the_warning_hook_is_quiet_below_80_percent(gclaude, stub):
     stub.status_line = "maya \u00b7 daily $50/$100"
     r = gclaude(" --warn", '{"prompt": "hi"}')
