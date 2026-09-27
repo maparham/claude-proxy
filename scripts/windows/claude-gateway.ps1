@@ -11,7 +11,7 @@
 # sends requests to the gateway with this computer's key, shows your gateway limits on the status line, warns at
 # 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
 # `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself.
-# gclaude's /logout signs this computer out: it revokes the key when it is this computer's own and removes it here;
+# gclaude's /logout_gclaude signs this computer out: it revokes the key when it is this computer's own and removes it here;
 # gclaude then refuses to start until `claude-gateway on --login`.
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
 # replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
@@ -202,7 +202,7 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
 }
 
 function Command-Text([string]$name) {
-  if ($name -eq 'logout') {   # answered by the --warn hook, as the key it removes is the one a model call would need
+  if ($name -eq 'logout_gclaude') {   # answered by the --warn hook, as the key it removes is the one a model call would need
     return @"
 ---
 description: Sign this computer out of the gateway
@@ -274,12 +274,14 @@ function Gclaude-On($c) {
     Set-Field $rec 'added_warn_hook' $true
   }
   Write-Json $Settings $s -Private   # it holds the key
-  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout
+  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout_gclaude
   Write-Json $Client $c -Private
 
-  # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers these
-  # instead. /account: Command-Text.
-  foreach ($name in 'usage', 'account', 'logout') {
+  # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers /usage
+  # and /logout_gclaude instead (not /logout: a built-in can't be hidden, so the menu would list both). /account: Command-Text.
+  $old = Join-Path $GDir 'commands\logout.md'   # what an older gclaude named /logout_gclaude
+  if ((Test-Path -LiteralPath $old) -and (Select-String -LiteralPath $old -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $old -Force }
+  foreach ($name in 'usage', 'account', 'logout_gclaude') {
     $file = Join-Path $GDir "commands\$name.md"
     if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {
       Write-Output "$file is your own, so it was left as it is; /$name in gclaude runs it instead of the gateway's."
@@ -317,8 +319,8 @@ function Gclaude-On($c) {
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
-    # /logout leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't
-    'if exist "%CLAUDE_CONFIG_DIR%\signed-out" (echo gclaude: signed out ^(/logout^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
+    # /logout_gclaude leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't
+    'if exist "%CLAUDE_CONFIG_DIR%\signed-out" (echo gclaude: signed out ^(/logout_gclaude^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
     'claude %*',
     'exit /b',
     ':updatefailed',
@@ -341,7 +343,7 @@ function Gclaude-Off {
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue
   $cmds = Join-Path $GDir 'commands'
-  foreach ($name in 'usage', 'account', 'logout') {
+  foreach ($name in 'usage', 'account', 'logout_gclaude', 'logout') {   # logout: an older gclaude's
     $file = Join-Path $cmds "$name.md"
     if ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $file -Force }
   }

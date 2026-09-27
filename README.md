@@ -179,7 +179,7 @@ Settings, login and prompt history stay separate, so both commands can run at on
 The gateway's `ANTHROPIC_BASE_URL` and key live only in the `"env"` block of gclaude's `settings.json`, which
 Claude Code applies to its own process, and `CLAUDE_CONFIG_DIR` is set only for the `claude` that gclaude starts.
 Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and uses this machine's login.
-`off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout` and the gateway settings, and keeps gclaude's own history.
+`off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout_gclaude` and the gateway settings, and keeps gclaude's own history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
 In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
@@ -189,13 +189,13 @@ so it costs nothing. Plain `claude` keeps the real `/usage`.
 `Account: maya · maya@example.com · user · key sk-proxy-ab1… for MacBook, authorized 2026-09-20 · dashboard: https://…/dashboard`.
 A small Haiku request repeats that line, since a hook's reply reads as an error in Claude Code. When a limit is
 reached or the gateway is down, so that request would fail, the hook answers `/account` itself.
-Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn't use. gclaude's `/logout` signs
-this computer out of the gateway instead, answered by the hook: it revokes the key when it is this computer's own
+Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn't use, and it can't be hidden or
+blocked (a hook never sees it). gclaude's `/logout_gclaude` signs this computer out of the gateway, answered by the hook: it revokes the key when it is this computer's own
 (one authorized in the browser; your first key may be in use elsewhere, so it stays valid) and removes it from
 gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session (on macOS
 and Linux; on Windows, `/exit`), and gclaude won't start until `claude-gateway on --login`.
 `gclaude update` updates claude-gateway from your gateway's dashboard, which also refreshes gclaude's setup (new
-commands such as `/logout` arrive this way), then runs Claude Code's own `claude update`.
+commands such as `/logout_gclaude` arrive this way), then runs Claude Code's own `claude update`.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and

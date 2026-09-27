@@ -288,7 +288,7 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert "\\" not in line and s["statusLine"]["refreshInterval"] == 30
     assert s["hooks"]["UserPromptSubmit"] == [{"hooks": [{"type": "command", "command": line + " --warn", "timeout": 10}]}]
     assert (win.config / "statusline.ps1").is_file()
-    for name in "usage", "account", "logout":
+    for name in "usage", "account", "logout_gclaude":
         assert "# Installed by claude-gateway on --gclaude." in (win.gdir / "commands" / f"{name}.md").read_text()
     assert json.loads((win.gdir / ".claude.json").read_text())["hasCompletedOnboarding"] is True
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake_claude(win, tmp_path))
@@ -421,9 +421,20 @@ def test_account_prints_the_line_and_the_hook_answers_only_at_a_limit(gclaude, i
 
 
 @on_windows
+def test_on_replaces_the_older_logout_command(installed, stub):
+    win = installed
+    assert win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url).returncode == 0
+    old = win.gdir / "commands" / "logout.md"   # what an older gclaude named /logout_gclaude
+    old.write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    r = win.cg("on")
+    assert r.returncode == 0, r.out
+    assert not old.exists() and (win.gdir / "commands" / "logout_gclaude.md").is_file()
+
+
+@on_windows
 def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude, installed, stub, tmp_path):
     win = installed
-    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}').stdout)
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout_gclaude"}').stdout)
     assert out["continue"] is False and "revoked on the gateway" in out["stopReason"], out
     assert [h["authorization"] for p, h, _ in stub.requests if p == "/api/me/logout"] == ["Bearer sk-proxy-k"]
     s = win.settings()
@@ -445,7 +456,7 @@ def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude
 def test_logout_after_a_200_with_an_odd_reply_still_signs_out_and_says_so(gclaude, installed, stub, body):
     """A 2xx whose body isn't the JSON expected is not 'the gateway could not be reached'."""
     stub.logout = (200, body)
-    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}').stdout)
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout_gclaude"}').stdout)
     assert out["continue"] is False, out
     assert "unexpected reply" in out["stopReason"] and "HTTP 200" in out["stopReason"], out
     assert "could not be reached" not in out["stopReason"] and "revoked on the gateway" not in out["stopReason"], out
@@ -456,10 +467,10 @@ def test_logout_after_a_200_with_an_odd_reply_still_signs_out_and_says_so(gclaud
 @on_windows
 def test_logout_tells_a_refusal_and_an_unreachable_gateway_apart(gclaude, installed, stub):
     stub.logout = (500, {"error": "boom"})
-    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}').stdout)
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout_gclaude"}').stdout)
     assert "refused to revoke it (HTTP 500)" in out["stopReason"] and "could not be reached" not in out["stopReason"], out
     assert "ANTHROPIC_AUTH_TOKEN" not in installed.settings()["env"]
-    out = json.loads(gclaude(" --warn", '{"prompt": "/logout"}', CLAUDE_GATEWAY_DASHBOARD="http://127.0.0.1:9").stdout)
+    out = json.loads(gclaude(" --warn", '{"prompt": "/logout_gclaude"}', CLAUDE_GATEWAY_DASHBOARD="http://127.0.0.1:9").stdout)
     assert "could not be reached" in out["stopReason"] and "HTTP" not in out["stopReason"], out
 
 
