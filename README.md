@@ -186,7 +186,7 @@ In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops 
 model and shows a fresh gateway line, e.g. `Gateway: maya · daily $61/$100 61% · details: https://…/dashboard`,
 so it costs nothing. Plain `claude` keeps the real `/usage`.
 `/account` shows who your key belongs to, which key it is and a link to the dashboard, e.g.
-`Gateway account: maya · maya@example.com · user · key sk-proxy-ab1… for MacBook, authorized 2026-09-20 · dashboard: https://…/dashboard`.
+`Account: maya · maya@example.com · user · key sk-proxy-ab1… for MacBook, authorized 2026-09-20 · dashboard: https://…/dashboard`.
 A small Haiku request repeats that line, since a hook's reply reads as an error in Claude Code. When a limit is
 reached or the gateway is down, so that request would fail, the hook answers `/account` itself.
 
