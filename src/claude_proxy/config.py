@@ -80,6 +80,7 @@ class SignupConfig:
     free_daily_cap_usd: float = 0.0    # what all accounts on a credit may spend together in any 24 h; 0: no cap
     clerk_publishable_key: str = ""    # public; the secret key is CLERK_SECRET_KEY in the environment
     installer_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh"
+    installer_ps1_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1"   # Windows
 
     def clerk_secret(self) -> str | None:
         return os.environ.get("CLERK_SECRET_KEY") or None

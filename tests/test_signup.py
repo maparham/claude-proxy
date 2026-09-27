@@ -200,6 +200,29 @@ async def test_install_script(env):
         assert (await c.get("/install")).status_code == 503
 
 
+async def test_install_script_for_windows(env):
+    gw, *_ = env
+    async with app(gw) as c:
+        r = await c.get("/install.ps1")
+        await signed_in(c)
+        assert (await c.get("/api/session")).json()["install_windows"] == f"irm {DASH}/install.ps1 | iex"
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/plain")
+    assert r.headers["cache-control"] == "no-cache"
+    s = r.text
+    assert "[Net.SecurityProtocolType]::Tls12" in s
+    assert f"(Invoke-RestMethod '{gw.cfg.signup.installer_ps1_url}')" in s
+    assert f"on --url 'https://gw.test' --dashboard '{DASH}'" in s
+    assert gw.cfg.signup.installer_ps1_url.endswith("/install.ps1")
+    gw.cfg.listener.public_url = "https://o'brien.test/"   # a quote is doubled, as PowerShell reads it
+    async with app(gw) as c:
+        assert "--url 'https://o''brien.test' " in (await c.get("/install.ps1")).text
+    gw.cfg.listener.public_url = ""
+    async with app(gw) as c:
+        assert (await c.get("/install.ps1")).status_code == 503
+        await signed_in(c)
+        assert (await c.get("/api/session")).json()["install_windows"] is None
+
+
 async def test_device_flow_gives_the_cli_a_key_of_its_own(env):
     gw, conn, _ = env
     async with app(gw) as cli, app(gw) as browser:
