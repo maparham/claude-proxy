@@ -11,8 +11,9 @@
 # another source; CLAUDE_GATEWAY_ZIP gives the archive directly (a URL or a local file); CLAUDE_GATEWAY_BIN another
 # folder for claude-gateway.cmd (then PATH is left to you).
 # It runs inside the caller's own PowerShell (irm | iex), so it never calls exit: that would close their window. A
-# failure is a throw instead: an interactive session just shows it, while `powershell -Command "irm ... | iex"`
-# (gclaude update) and `powershell -File install.ps1` exit 1 with it.
+# failure is a throw instead: an interactive session just shows it, `powershell -File install.ps1` exits 1 with it, and
+# gclaude update wraps its `irm ... | iex` in try/catch to exit 1 (Windows PowerShell's -Command exits 0 when the
+# throw happens inside iex).
 
 function Cmd-Path([string]$Path) {
   # How a .cmd file should spell a path: the profile folder as %USERPROFILE%, since its name may hold letters the

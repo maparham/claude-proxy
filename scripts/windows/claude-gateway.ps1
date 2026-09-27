@@ -307,9 +307,10 @@ function Gclaude-On($c) {
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
     'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
-    'rem install.ps1 throws when it fails, so that powershell exits 1 and Claude Code is left alone.',
+    'rem install.ps1 throws when it fails. Windows PowerShell exits 0 all the same when the throw happens inside iex,',
+    'rem so the try/catch turns it into exit 1: the || branch runs and Claude Code is left alone.',
     ('if /i "%~1"=="update" (' + "`r`n" +
-     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex`" ||" +
+     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" ||" +
      ' (echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2 & exit /b 1)' + "`r`n" +
      '  claude %*' + "`r`n" +
      '  exit /b' + "`r`n" +
