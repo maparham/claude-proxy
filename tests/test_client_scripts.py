@@ -810,6 +810,63 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert os.access(launcher, os.X_OK)
 
 
+ONE_M = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
+
+
+def test_gclaude_picks_the_1m_context_forms_of_fable_opus_and_sonnet(stub, home):
+    """Without a claude.ai login Claude Code gives the plain model names a 200K window; the [1m] forms get 1M."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    env = json.loads(gsettings.read_text())["env"]
+    assert {k: env[k] for k in ONE_M} == ONE_M
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {}
+
+
+def test_gclaude_keeps_a_model_the_user_chose_for_an_alias(stub, home):
+    _, gsettings, _ = gc_paths(home)
+    gsettings.parent.mkdir(parents=True)
+    gsettings.write_text(json.dumps({"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5"}}))
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    env = json.loads(gsettings.read_text())["env"]
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5"
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == ONE_M["ANTHROPIC_DEFAULT_FABLE_MODEL"]
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5"}}
+
+
+def test_gclaude_rerun_replaces_its_own_model_but_not_one_the_user_changed(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    s["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"] = "claude-fable-5"          # the user's own choice since
+    s["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "claude-sonnet-4-6[1m]"   # stands in for an older id written by an earlier install
+    gsettings.write_text(json.dumps(s))
+    client = home / ".config" / "claude-gateway" / "client.json"
+    c = json.loads(client.read_text())
+    c["gclaude"]["added_models"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "claude-sonnet-4-6[1m]"
+    client.write_text(json.dumps(c))
+    assert cg(home, "on", "--gclaude").returncode == 0
+    env = json.loads(gsettings.read_text())["env"]
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-5"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == ONE_M["ANTHROPIC_DEFAULT_SONNET_MODEL"]
+
+
+def test_own_login_mode_leaves_the_model_aliases_alone(stub, home):
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    env = json.loads((home / ".claude" / "settings.json").read_text())["env"]
+    assert {k: env[k] for k in ONE_M} == ONE_M                           # key-only: no claude.ai login either
+    client = home / ".config" / "claude-gateway" / "client.json"
+    data = json.loads(client.read_text())
+    data["mode"] = "own-login"
+    client.write_text(json.dumps(data))
+    (home / ".claude" / ".credentials.json").write_text("{}")             # a claude.ai login on this machine
+    assert cg(home, "on", "--global").returncode == 0
+    env = json.loads((home / ".claude" / "settings.json").read_text())["env"]
+    assert "ANTHROPIC_CUSTOM_HEADERS" in env and not set(ONE_M) & set(env)
+
+
 def test_gclaude_launcher_runs_claude_with_its_own_config_dir_and_every_argument(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     gdir, _, launcher = gc_paths(home)
