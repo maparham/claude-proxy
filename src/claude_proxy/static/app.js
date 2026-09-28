@@ -471,7 +471,7 @@ const VIEWS = {
   overview: { label: "Overview", render: renderOverview },
   usage: { label: "Usage over time", render: renderUsage },
   users: { label: "Users & limits", render: renderUsers, admin: true },
-  authorize: { label: "Connect a computer", render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by claude-gateway on
+  authorize: { label: "Connect a computer", render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { label: "Account quota", render: renderQuota, admin: true },
   models: { label: "Models & cache", render: renderModels },
   activity: { label: "Activity", render: renderActivity },
@@ -716,7 +716,7 @@ function wireMachines(root) {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { /* clipboard blocked */ }
   }));
   root.querySelectorAll("[data-key-remove]").forEach((b) => (b.onclick = async () => {
-    if (!confirmInline(`Remove ${b.dataset.label}? Its key stops working at once; run claude-gateway on --login there to connect it again.`)) return;
+    if (!confirmInline(`Remove ${b.dataset.label}? Its key stops working at once. To connect it again, run /logout_gclaude in gclaude there, then gclaude.`)) return;
     try { await api(`/api/keys/${b.dataset.keyRemove}/remove`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
 }
@@ -736,7 +736,7 @@ async function renderAuthorize(main) {
     <p>A computer that calls itself <b>${esc(req.label)}</b> asks to use the gateway as <b>${esc(S.user.name)}</b>, through <code>gclaude</code>.
       It asked ${fmtAgo(req.created_at)} from ${esc(req.ip || "an unknown address")}${req.ip && req.ip !== req.your_ip ? ` <b>(not this browser's address, ${esc(req.your_ip)})</b>` : ""}.</p>
     <p>Check that your terminal shows this code:</p><div class="user-code">${esc(req.user_code)}</div>
-    <p class="muted">Only authorize if you just ran <code>claude-gateway on</code> yourself: if someone sent you this link, cancel. The computer gets a key of its own, which you can remove later under Your computers.</p>
+    <p class="muted">Only authorize if you just ran <code>gclaude</code> or the install command yourself: if someone sent you this link, cancel. The computer gets a key of its own, which you can remove later under Your computers.</p>
     <p><button class="btn primary" id="az-yes">Authorize</button> <button class="btn" id="az-no">Cancel</button></p></div></section>`;
   const decide = async (decision, title, text) => {
     main.querySelectorAll(".authorize button").forEach((b) => (b.disabled = true));
