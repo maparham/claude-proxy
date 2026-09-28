@@ -141,6 +141,36 @@ In Clerk: email code, Google and GitHub sign-in, bot protection, and blocking of
 disposable domains. A production instance also needs its DNS records (DNS only, not proxied, in Cloudflare) and
 its own Google and GitHub OAuth apps.
 
+#### How a computer signs in
+
+`claude-gateway on` (run by the install command, by `gclaude` when it's signed out, or with `--login`) uses a
+device flow like OAuth's: the terminal and the browser never talk to each other, only to the dashboard, which pairs
+them by a short code. The terminal keeps a secret `device_code` (the dashboard stores only its hash); the person
+checks that the browser shows the same `user_code` as the terminal. Only a browser signed in to the dashboard can
+approve, not a key, so a leaked computer key can't mint more. The request lives 10 minutes, and its answer can be
+picked up once: the key is made at that moment and never stored in plain text. Details:
+[spec §4](docs/superpowers/specs/2026-09-26-signup-and-browser-authorization-design.md).
+
+```mermaid
+sequenceDiagram
+    participant T as Terminal (claude-gateway on)
+    participant D as Dashboard
+    participant B as Browser (signed in)
+    T->>D: POST /api/device/start {label: hostname}
+    D-->>T: device_code, user_code (BCDF-GHJK), link …/dashboard#authorize/USER_CODE, interval 3 s, expires 10 min
+    T->>B: opens the link (over SSH: only prints it)
+    B->>D: GET /api/device/USER_CODE
+    D-->>B: label, the requester's and this browser's address
+    loop every 3 s until answered or expired
+        T->>D: POST /api/device/token {device_code}
+        D-->>T: 400 authorization_pending (or slow_down)
+    end
+    B->>D: POST /api/device/USER_CODE/approve (or deny)
+    T->>D: POST /api/device/token {device_code}
+    D-->>T: {key, user, url, dashboard} (a new key for this computer), or access_denied
+    Note over T: saves the key in client.json and gclaude's settings.json
+```
+
 ### gclaude: the gateway beside your own `claude`
 
 To keep `claude` on this machine's own login and reach the gateway with a second command, use gclaude, which
