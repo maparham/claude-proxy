@@ -69,8 +69,8 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 - **`/usage`** in `gclaude` shows the same line with a link to the dashboard, without using a request.
 - **`/account`** in `gclaude` shows your account and key with a link to the dashboard (a small Haiku request;
   when you're out of credit it's answered without one).
-- **`/logout_gclaude`** in `gclaude` signs this computer out (Claude Code's own `/logout` doesn't): it revokes this computer's key, removes it and closes the session. Sign in again
-  with `claude-gateway on --login`.
+- **`/logout_gclaude`** in `gclaude` signs this computer out (Claude Code's own `/logout` doesn't): it revokes this computer's key, removes it and closes the session. Run `gclaude`
+  again to sign in: it shows the link and code, as the first setup did, then starts.
 - **`gclaude update`** updates the gateway client and gclaude's setup, then Claude Code itself.
 - **Dashboard**: `https://claude-dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
 - **Terminal**: `claude-gateway status`.
@@ -79,7 +79,7 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 
 ```sh
 curl -fsSL https://claude-dash.rahkar.pro/install | sh   # update (it keeps this computer's key); Windows: irm …/install.ps1 | iex
-claude-gateway on --login         # connect this computer again, e.g. after removing it in the dashboard
+claude-gateway on --login         # connect this computer again after removing it in the dashboard (gclaude can't tell)
 claude-gateway off                # remove gclaude (keeps its history)
 claude-gateway off --opencode     # remove the gateway from OpenCode
 ```
