@@ -366,9 +366,10 @@ function Gclaude-On($c) {
     'exit /b 1',
     ':status',
     'call claude-gateway status & exit /b',
-    'rem One line, read before `off` deletes this file.',
+    'rem `off` deletes this file, and cmd would go on reading it ("The batch file cannot be found.", exit 1): (goto)',
+    'rem first ends the batch, and the rest of the line runs on its own, its exit code going to cmd /c.',
     ':uninstall',
-    'call claude-gateway off & exit /b'
+    '(goto) 2>nul & call claude-gateway off'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
 
