@@ -607,7 +607,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                            (f"{code[:4]}-{code[4:]}", int(time.time()))).fetchone()
         if row is None:
             fail(404, "No such request waiting: it may have expired (after 10 minutes) or been answered already. "
-                      "Run claude-gateway on again for a new code.")
+                      "Run gclaude again for a new code (the first time, the install command).")
         return row
 
     @app.get("/api/device/{user_code}")
