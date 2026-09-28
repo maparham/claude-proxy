@@ -6,13 +6,15 @@
 #   claude-gateway on --login        # authorize this computer again, e.g. after it was removed in the dashboard
 #   claude-gateway off               # remove gclaude (its history stays)
 #   claude-gateway status
+# gclaude users need none of these: `gclaude update`, `gclaude status` and `gclaude uninstall` run them.
 #
 # gclaude runs Claude Code with CLAUDE_CONFIG_DIR=%USERPROFILE%\.config\claude-gateway\claude, whose settings.json
 # sends requests to the gateway with this computer's key, shows your gateway limits on the status line, warns at
 # 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
 # `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself.
 # gclaude's /logout_gclaude signs this computer out: it revokes the key when it is this computer's own and removes it here;
-# the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts.
+# the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts, as it
+# does when the dashboard answers 401 to the saved key (the computer was removed there).
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
 # replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
 # its own. Over SSH it only prints the link and the code. The URL and key are kept in
@@ -218,7 +220,7 @@ disable-model-invocation: true
 ---
 <!-- $UsageMark -->
 The claude-gateway hook that signs gclaude out did not run, so nothing was changed. Tell the user, in one sentence,
-that ``claude-gateway on`` reinstalls the hook and ``claude-gateway off`` removes gclaude with its key. Use no tools.
+that running ``gclaude update`` in a terminal reinstalls the hook and ``gclaude uninstall`` removes gclaude with its key. Use no tools.
 "@
   }
   if ($name -eq 'account') {   # statusline.ps1 --account, repeated by a small model call; see statusline.ps1
@@ -242,7 +244,7 @@ disable-model-invocation: true
 ---
 <!-- $UsageMark -->
 The claude-gateway hook that answers /usage did not run. Tell the user, in one sentence, that their gateway limits
-are on the status line and on the dashboard, and that ``claude-gateway on`` reinstalls the hook. Use no tools.
+are on the status line and on the dashboard, and that running ``gclaude update`` in a terminal reinstalls the hook. Use no tools.
 "@
 }
 
@@ -317,8 +319,11 @@ function Gclaude-On($c) {
     'rem gclaude: Claude Code through the claude-proxy gateway, with its own settings and history in the',
     'rem CLAUDE_CONFIG_DIR below. Plain claude keeps this machine''s own login.',
     $LauncherMark,
-    'rem Remove it with: claude-gateway off',
+    'rem Remove it with: gclaude uninstall',
     'setlocal',
+    'rem Users only need gclaude: its update, status and uninstall run claude-gateway for them.',
+    'if /i "%~1"=="status" goto status',
+    'if /i "%~1"=="uninstall" goto uninstall',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
     'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
@@ -332,10 +337,20 @@ function Gclaude-On($c) {
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
-    # /logout_gclaude leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't. Signed
-    # out: sign in again first, as plain claude's login would. One block, read before `on` rewrites this file.
-    ('if exist "%CLAUDE_CONFIG_DIR%\signed-out" (' + "`r`n" +
-     '  echo gclaude: signed out ^(/logout_gclaude^); signing this computer in again. 1>&2' + "`r`n" +
+    'rem Sign this computer in again first, as plain claude''s login would, when /logout_gclaude left its signed-out file',
+    'rem (`if exist` reads any folder name, where findstr can''t) or the dashboard no longer accepts the key (the computer',
+    'rem was removed there). Only a 401 counts: offline, without curl.exe, or with the dashboard slow or down, gclaude',
+    'rem starts as usual. The key reaches curl on stdin, through GW_KEY, which the inner cmd expands: never in a command line.',
+    'set "GW_WHY=" & set "GW_KEY=" & set "GW_CODE="',
+    'if exist "%CLAUDE_CONFIG_DIR%\signed-out" set "GW_WHY=signed out by /logout_gclaude"',
+    'if not defined GW_WHY for /f "tokens=2 delims=:, " %%k in (''type "%CLAUDE_CONFIG_DIR%\settings.json" 2^>nul ^| findstr ANTHROPIC_AUTH_TOKEN'') do set "GW_KEY=%%~k"',
+    ("if defined GW_KEY for /f %%c in ('echo Authorization: Bearer %%GW_KEY%%^| curl.exe -s -o nul --max-time 3 -H @- -w `"%%{http_code}`" `"" +
+     ($c.dashboard + '/api/me/status').Replace('%', '%%') + "`" 2^>nul') do set `"GW_CODE=%%c`""),
+    'if "%GW_CODE%"=="401" set "GW_WHY=this computer''s key no longer works, removed in the dashboard?"',
+    'set "GW_KEY="',
+    'rem One block, read before `on` rewrites this file; GW_WHY holds no parentheses, which would end it.',
+    ('if defined GW_WHY (' + "`r`n" +
+     '  echo gclaude: %GW_WHY%; signing this computer in again. 1>&2' + "`r`n" +
      '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
      '  call claude-gateway on --gclaude --login || goto signinfailed' + "`r`n" +
      '  claude %*' + "`r`n" +
@@ -348,7 +363,13 @@ function Gclaude-On($c) {
     'exit /b 1',
     ':signinfailed',   # a top-level label, like :updatefailed, so cmd /c really returns 1
     'echo gclaude: not signed in, so Claude Code was not started 1>&2',
-    'exit /b 1'
+    'exit /b 1',
+    ':status',
+    'call claude-gateway status & exit /b',
+    'rem `off` deletes this file, and cmd would go on reading it ("The batch file cannot be found.", exit 1): (goto)',
+    'rem first ends the batch, and the rest of the line runs on its own, its exit code going to cmd /c.',
+    ':uninstall',
+    '(goto) 2>nul & call claude-gateway off'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
 
@@ -390,7 +411,10 @@ function Show-Status {
   if (Launcher-Ours) { Write-Output "gclaude: installed ($Launcher)" } else { Write-Output 'gclaude: not set up' }
   try {
     $r = Invoke-Json GET "$($c.dashboard)/api/me/status?format=text" $null @{ Authorization = "Bearer $($c.key)" }
-    if ($r.code -eq 200) { Write-Output "status: $(([string]$r.text).Trim())" } else { Write-Output "status: unavailable (HTTP $($r.code))" }
+    if ($r.code -eq 200) { Write-Output "status: $(([string]$r.text).Trim())" }
+    elseif (-not $c.key) { Write-Output 'status: signed out; run gclaude to sign in' }
+    elseif ($r.code -eq 401) { Write-Output "status: this computer's key no longer works; run gclaude to sign in again" }
+    else { Write-Output "status: unavailable (HTTP $($r.code))" }
   } catch { Write-Output "status: unavailable ($($_.Exception.Message))" }
 }
 

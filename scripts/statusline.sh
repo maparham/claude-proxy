@@ -86,7 +86,7 @@ edit(client, lambda c: bool(key) and c.get("key") == key and c.pop("key") is not
 if os.path.exists(settings + ".bak-claude-gateway"):   # claude-gateway's copy from before its last edit holds the key too
     os.remove(settings + ".bak-claude-gateway")
 EOF
-    stop "Sign-out failed: the key could not be removed from $CLAUDE_CONFIG_DIR/settings.json. claude-gateway off --gclaude removes it."
+    stop "Sign-out failed: the key could not be removed from $CLAUDE_CONFIG_DIR/settings.json. gclaude uninstall removes it."
   quit_claude
   again="gclaude is closing; run gclaude again to sign in."
   case "$reply" in
@@ -97,8 +97,8 @@ EOF
   esac
 fi
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
-  [ -n "$account" ] && { echo "Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."; exit 0; }
-  [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on --gclaude)."
+  [ -n "$account" ] && { echo "Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update)."; exit 0; }
+  [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update)."
   [ -n "$warn" ] && exit 0
   [ -n "$then" ] && { own_line; exit 0; }
   echo "statusline.sh: set CLAUDE_GATEWAY_DASHBOARD" >&2
