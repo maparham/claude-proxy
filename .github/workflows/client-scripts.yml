@@ -2,6 +2,8 @@
 # these add Windows (install.ps1, scripts/windows, under Windows PowerShell 5.1, the one every Windows PC has) and
 # macOS (install.sh, scripts/claude-gateway and statusline.sh under the Mac's own bash 3.2). They don't gate the
 # deploy. `real-install` also installs from GitHub itself, the way the one-liners do; weekly too.
+# `windows` and `macos` are required checks on master, so they run on every pull request: a required check that
+# never starts would hold a PR open for good. Pushes to master still run it only when the client side changed.
 # "Run workflow" runs it all on demand.
 name: client scripts
 
@@ -20,8 +22,7 @@ on:
       - src/claude_proxy/web.py
       - src/claude_proxy/config.py
       - .github/workflows/client-scripts.yml
-  pull_request:
-    paths: *paths
+  pull_request:   # every one: see above
   schedule:
     - cron: "17 6 * * 1"   # Mondays: GitHub's archive and raw URLs still work the way the installers use them
   workflow_dispatch:
