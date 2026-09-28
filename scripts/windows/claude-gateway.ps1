@@ -337,7 +337,7 @@ function Gclaude-On($c) {
     ('if exist "%CLAUDE_CONFIG_DIR%\signed-out" (' + "`r`n" +
      '  echo gclaude: signed out ^(/logout_gclaude^); signing this computer in again. 1>&2' + "`r`n" +
      '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
-     '  call claude-gateway on --gclaude --login || (echo gclaude: not signed in, so Claude Code was not started 1>&2 & exit /b 1)' + "`r`n" +
+     '  call claude-gateway on --gclaude --login || goto signinfailed' + "`r`n" +
      '  claude %*' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
@@ -345,6 +345,9 @@ function Gclaude-On($c) {
     'exit /b',
     ':updatefailed',
     'echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2',
+    'exit /b 1',
+    ':signinfailed',   # a top-level label, like :updatefailed, so cmd /c really returns 1
+    'echo gclaude: not signed in, so Claude Code was not started 1>&2',
     'exit /b 1'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
@@ -433,7 +436,7 @@ switch -Exact ($cmd) {
     Preflight $url $key
     Set-Field $c 'url' $url; Set-Field $c 'key' $key; Set-Field $c 'dashboard' $dash
     Gclaude-On $c
-    Write-Output 'Start a new gclaude session to use it.'
+    if (-not $env:CLAUDE_GATEWAY_FROM_GCLAUDE) { Write-Output 'Start a new gclaude session to use it.' }   # else gclaude starts now
   }
   'off' { Gclaude-Off }
   'status' { Show-Status }
