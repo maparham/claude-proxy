@@ -39,7 +39,7 @@
 # /resume lists them) from ~/.claude are shared, refreshed each time gclaude starts (gclaude-sync.py); settings,
 # login, prompt history and the sessions started in gclaude stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
-# call. `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself. Its /logout signs this computer out: it revokes the key when it is this computer's own and removes it here;
+# call. `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself. Its /logout_gclaude signs this computer out: it revokes the key when it is this computer's own and removes it here;
 # the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
 # Without --key (and none saved for that URL), `on` authorizes in the browser: it opens the dashboard (--dashboard,
 # else the URL with claude. replaced by claude-dash.) at a code, and once you click Authorize there the dashboard
@@ -162,6 +162,8 @@ edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its ow
   python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" "$SETTINGS" <<'EOF'
 import json, os, shlex, sys, tempfile
 mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
+ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}   # the newest of each; update when one ships
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
@@ -179,6 +181,10 @@ if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
 if st.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
+added = st.pop("added_models", None)
+for k, v in (added.items() if isinstance(added, dict) else ()):
+    if env.get(k) == v:   # still ours: the user has not picked another model for that alias since
+        del env[k]
 line_cmd = shlex.quote(statusline)
 ours_line = lambda v: isinstance(v, dict) and isinstance(v.get("command"), str) and (
     v["command"] == line_cmd or v["command"].startswith(line_cmd + " --then "))
@@ -208,6 +214,12 @@ if mode == "on":
         if "disableClaudeAiConnectors" not in s:
             s["disableClaudeAiConnectors"] = True
             st["added_disable_connectors"] = True
+        # Without a claude.ai login Claude Code gives fable, opus and sonnet a 200K context window; only their
+        # [1m] forms get 1M. So the aliases (and the /model picker) name those, unless the user chose a model already.
+        for k, v in ONE_M_MODELS.items():
+            if k not in env:
+                env[k] = v
+                st.setdefault("added_models", {})[k] = v
     if os.path.exists(statusline):
         if "statusLine" not in s:
             s["statusLine"] = {"type": "command", "command": line_cmd, "refreshInterval": 30}
@@ -467,7 +479,7 @@ opencode_state() {
 gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE_MARK" "$GCLAUDE"; }
 gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
-gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage, /account and /logout commands, and a first-run state file
+gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage, /account and /logout_gclaude commands, and a first-run state file
   python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
 import atexit, json, os, shlex, sys, tempfile
 mode, client, gdir, launcher, mark, shared, own_state, sync, statusline, self_path = sys.argv[1:]
@@ -480,8 +492,9 @@ cmds, own_cmds = os.path.join(gdir, "commands"), os.path.join(shared, "commands"
 # only if that hook is missing.
 # /account runs statusline.sh --account and a small model call repeats its line: a hook's reply would read as an
 # error. When that call can't be made (a limit reached, the gateway down), the hook answers /account instead.
-# /logout takes the place of Claude Code's own, which can't sign out of the gateway: the hook answers it, as the key
-# it removes is the one a model call would need.
+# /logout_gclaude signs out of the gateway, which Claude Code's own /logout can't: the hook answers it, as the key it
+# removes is the one a model call would need. Not named /logout: a built-in can't be hidden, and the menu would list
+# both under one name.
 account_cmd = f"sh {shlex.quote(statusline)} --account"
 COMMANDS = {"usage": f"""---
 description: Your gateway limits and usage
@@ -500,7 +513,7 @@ disable-model-invocation: true
 !`{account_cmd}`
 
 Repeat the line above to the user exactly as it is, and nothing else. Use no tools.
-""", "logout": f"""---
+""", "logout_gclaude": f"""---
 description: Sign this computer out of the gateway
 disable-model-invocation: true
 ---
@@ -509,6 +522,7 @@ The claude-gateway hook that signs gclaude out did not run, so nothing was chang
 that `claude-gateway on --gclaude` reinstalls the hook and `claude-gateway off --gclaude` removes gclaude with its key.
 Use no tools.
 """}
+RETIRED = ("logout",)   # commands an older gclaude installed under another name
 cmd_file = lambda name: os.path.join(cmds, name + ".md")
 ours_cmd = lambda name: os.path.isfile(cmd_file(name)) and not os.path.islink(cmd_file(name)) and mark in open(cmd_file(name)).read()
 
@@ -532,6 +546,9 @@ if mode == "on":
         elif os.path.exists(src) and not os.path.lexists(dst):   # never replace what the gclaude dir already has
             links.add(name)
             os.symlink(src, dst)
+    for name in RETIRED:
+        if ours_cmd(name):
+            os.remove(cmd_file(name))
     for name, text in COMMANDS.items():
         path = cmd_file(name)
         if os.path.islink(cmds):
@@ -572,12 +589,12 @@ if mode == "on":
                 "fi\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
-                "# Signed out (/logout): sign this computer in again first, as plain claude's login would, with the\n"
+                "# Signed out (/logout_gclaude): sign this computer in again first, as plain claude's login would, with the\n"
                 "# claude-gateway installed beside this command, else the one on PATH or the one that wrote this file.\n"
                 "if ! grep -q '\"ANTHROPIC_AUTH_TOKEN\"' \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null; then\n"
                 '  gw=$(dirname "$0")/claude-gateway\n'
                 f'  [ -x "$gw" ] || gw=$(command -v claude-gateway 2>/dev/null) || gw={shlex.quote(self_path)}\n'
-                "  echo 'gclaude: signed out (/logout); signing this computer in again.' >&2\n"
+                "  echo 'gclaude: signed out (/logout_gclaude); signing this computer in again.' >&2\n"
                 '  CLAUDE_GATEWAY_FROM_GCLAUDE=1 "$gw" on --gclaude --login ||'
                 " { echo 'gclaude: not signed in, so Claude Code was not started' >&2; exit 1; }\n"
                 "fi\n"
@@ -592,7 +609,7 @@ else:
         if os.path.islink(dst) and os.readlink(dst) == os.path.join(shared, name):
             os.remove(dst)
     if os.path.isdir(cmds) and not os.path.islink(cmds):
-        for name in COMMANDS:
+        for name in (*COMMANDS, *RETIRED):
             if ours_cmd(name):
                 os.remove(cmd_file(name))
         if not os.listdir(cmds):

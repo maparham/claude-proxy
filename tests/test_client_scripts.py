@@ -340,11 +340,11 @@ def test_other_account_prompts_are_left_alone(stub, warn_env, prompt, text):
     assert (r.returncode, r.stdout) == (0, "")
 
 
-def logout_prompt(env, prompt="/logout", text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
-    """/logout in a gclaude-like folder whose settings.json and client.json hold the key sk-proxy-k."""
+def logout_prompt(env, prompt="/logout_gclaude", text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
+    """/logout_gclaude in a gclaude-like folder whose settings.json and client.json hold the key sk-proxy-k."""
     env = gclaude_config(env)
     cfg = Path(env["CLAUDE_CONFIG_DIR"])
-    (cfg / "commands" / "logout.md").write_text(text)
+    (cfg / "commands" / "logout_gclaude.md").write_text(text)
     settings = {"env": {"ANTHROPIC_BASE_URL": "https://gw", "ANTHROPIC_AUTH_TOKEN": "sk-proxy-k"}, "model": "opus"}
     for name in ("settings.json", "settings.json.bak-claude-gateway"):
         (cfg / name).write_text(json.dumps(settings))
@@ -391,7 +391,28 @@ def test_logout_prompt_still_signs_out_here_when_the_gateway_is_down(stub, warn_
     assert signed_out(warn_env)
 
 
-@pytest.mark.parametrize("prompt,text", [("/logout", "my own logout command\n"), ("/logouts", None), ("how do I /logout", None)])
+def test_logout_prompt_ends_the_claude_session_that_ran_it(stub, warn_env, tmp_path):
+    """Two SIGINTs, as Ctrl-C twice: Claude Code then exits the usual way. Only to a claude running the hook."""
+    fake = tmp_path / "bin" / "claude"
+    fake.parent.mkdir()
+    fake.symlink_to("/bin/sh")   # a process named claude (a copy would lose its code signature on macOS)
+    log = tmp_path / "signals"
+    env = gclaude_config(warn_env)
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "logout_gclaude.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json").write_text("{}")
+    prompt = tmp_path / "prompt.json"
+    prompt.write_text(json.dumps({"prompt": "/logout_gclaude"}))
+    script = (f"trap 'echo INT >> {log}' INT; sh {STATUSLINE} --warn < {prompt}; "
+              "i=0; while [ $i -lt 30 ]; do sleep 0.1; i=$((i + 1)); done")
+    r = run([str(fake), "-c", script], {**env, "CLAUDE_PROJECT_DIR": str(tmp_path)})
+    assert json.loads(r.stdout)["stopReason"].startswith("Signed out") and "gclaude is closing" in r.stdout
+    assert log.read_text() == "INT\nINT\n"
+    log.unlink()
+    run([str(fake), "-c", script], env)   # not run by Claude Code (no CLAUDE_PROJECT_DIR): nothing is signalled
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("prompt,text", [("/logout_gclaude", "my own command\n"), ("/logout", None), ("/logout_gclauded", None), ("how do I /logout_gclaude", None)])
 def test_other_logout_prompts_are_left_alone(stub, warn_env, prompt, text):
     r = logout_prompt(warn_env, prompt, **({"text": text} if text else {}))
     assert (r.returncode, r.stdout) == (0, "")
@@ -793,9 +814,66 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("statusline.sh --warn")
     assert os.readlink(gdir / "CLAUDE.md") == str(home / ".claude" / "CLAUDE.md")
     assert os.readlink(gdir / "agents") == str(home / ".claude" / "agents")
-    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "logout.md", "usage.md"]   # gclaude's own only
+    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "logout_gclaude.md", "usage.md"]   # gclaude's own only
     assert json.loads((gdir / ".claude.json").read_text()) == {"hasCompletedOnboarding": True, "theme": "light"}
     assert os.access(launcher, os.X_OK)
+
+
+ONE_M = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
+
+
+def test_gclaude_picks_the_1m_context_forms_of_fable_opus_and_sonnet(stub, home):
+    """Without a claude.ai login Claude Code gives the plain model names a 200K window; the [1m] forms get 1M."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    env = json.loads(gsettings.read_text())["env"]
+    assert {k: env[k] for k in ONE_M} == ONE_M
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {}
+
+
+def test_gclaude_keeps_a_model_the_user_chose_for_an_alias(stub, home):
+    _, gsettings, _ = gc_paths(home)
+    gsettings.parent.mkdir(parents=True)
+    gsettings.write_text(json.dumps({"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5"}}))
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    env = json.loads(gsettings.read_text())["env"]
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5"
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == ONE_M["ANTHROPIC_DEFAULT_FABLE_MODEL"]
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5"}}
+
+
+def test_gclaude_rerun_replaces_its_own_model_but_not_one_the_user_changed(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    s["env"]["ANTHROPIC_DEFAULT_FABLE_MODEL"] = "claude-fable-5"          # the user's own choice since
+    s["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "claude-sonnet-4-6[1m]"   # stands in for an older id written by an earlier install
+    gsettings.write_text(json.dumps(s))
+    client = home / ".config" / "claude-gateway" / "client.json"
+    c = json.loads(client.read_text())
+    c["gclaude"]["added_models"]["ANTHROPIC_DEFAULT_SONNET_MODEL"] = "claude-sonnet-4-6[1m]"
+    client.write_text(json.dumps(c))
+    assert cg(home, "on", "--gclaude").returncode == 0
+    env = json.loads(gsettings.read_text())["env"]
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-5"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == ONE_M["ANTHROPIC_DEFAULT_SONNET_MODEL"]
+
+
+def test_own_login_mode_leaves_the_model_aliases_alone(stub, home):
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    env = json.loads((home / ".claude" / "settings.json").read_text())["env"]
+    assert {k: env[k] for k in ONE_M} == ONE_M                           # key-only: no claude.ai login either
+    client = home / ".config" / "claude-gateway" / "client.json"
+    data = json.loads(client.read_text())
+    data["mode"] = "own-login"
+    client.write_text(json.dumps(data))
+    (home / ".claude" / ".credentials.json").write_text("{}")             # a claude.ai login on this machine
+    assert cg(home, "on", "--global").returncode == 0
+    env = json.loads((home / ".claude" / "settings.json").read_text())["env"]
+    assert "ANTHROPIC_CUSTOM_HEADERS" in env and not set(ONE_M) & set(env)
 
 
 def test_gclaude_launcher_runs_claude_with_its_own_config_dir_and_every_argument(stub, home):
@@ -981,6 +1059,26 @@ def test_gclaude_gets_a_usage_command_that_plain_claude_never_sees(stub, home):
     assert os.readlink(cmds / "mine.md") == str(own_cmds / "mine.md")
 
 
+def test_gclaude_on_replaces_the_older_logout_command_and_off_removes_it(stub, home):
+    """An older gclaude named /logout_gclaude /logout, beside the built-in /logout it can't hide."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    cmds = gc_paths(home)[0] / "commands"
+    (cmds / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    assert cg(home, "on", "--gclaude").returncode == 0
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "logout_gclaude.md", "usage.md"]
+    (cmds / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not cmds.exists()
+
+
+def test_gclaude_on_leaves_the_users_own_logout_command_alone(stub, home):
+    cmds = gc_paths(home)[0] / "commands"
+    cmds.mkdir(parents=True)
+    (cmds / "logout.md").write_text("mine\n")
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert (cmds / "logout.md").read_text() == "mine\n"
+
+
 def logged_out(stub, home):
     """gclaude set up, then signed out with its /logout: the key is gone from settings.json and client.json."""
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
@@ -988,7 +1086,7 @@ def logged_out(stub, home):
     env = {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_CONFIG_DIR": str(gdir),
            **json.loads(gsettings.read_text())["env"]}
     hook = json.loads(gsettings.read_text())["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
-    out = json.loads(run(["sh", "-c", hook], env, stdin=json.dumps({"prompt": "/logout"})).stdout)
+    out = json.loads(run(["sh", "-c", hook], env, stdin=json.dumps({"prompt": "/logout_gclaude"})).stdout)
     assert out["continue"] is False
     assert "sk-proxy-full" not in gsettings.read_text()
     assert "sk-proxy-full" not in (home / ".config" / "claude-gateway" / "client.json").read_text()
@@ -1043,7 +1141,7 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
 def test_gclaude_update_works_after_logout(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, gsettings, launcher = gc_paths(home)
-    gsettings.write_text("{}")   # as /logout leaves it
+    gsettings.write_text("{}")   # as /logout_gclaude leaves it
     stub.install = "echo installer ran\n"
     r = run_gclaude(home, launcher)
     assert r.returncode == 1
@@ -1065,7 +1163,7 @@ def test_gclaude_launcher_follows_later_command_changes(stub, home):
     (own_cmds / "new.md").write_text("new\n")
     (own_cmds / "usage.md").write_text("my own usage\n")          # gclaude's /usage wins in gclaude
     assert run_gclaude(home, launcher).returncode == 0
-    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "logout.md", "new.md", "usage.md"]
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "logout_gclaude.md", "new.md", "usage.md"]
     assert "disable-model-invocation" in (cmds / "usage.md").read_text()
 
 
@@ -1189,6 +1287,47 @@ def test_keys_never_appear_in_curls_arguments(stub, home, tmp_path):
     assert argv.count("\n") >= 6 and "secret" not in argv
     sent = [h.get("authorization", "") + h.get("x-api-key", "") for _, h in stub.requests]
     assert "Bearer sk-proxy-fullsecret" in sent and "sk-proxy-r-routesecret" in sent
+
+
+def logging_python3(where):
+    """A python3 first on PATH that records each of its arguments (one per line), then runs the real one."""
+    import shutil
+    fake = Path(where) / "py-argvbin"
+    fake.mkdir(exist_ok=True)
+    log = Path(where) / "python3-argv.log"
+    (fake / "python3").write_text(f'#!/bin/sh\nfor a in "$@"; do printf "%s\\n" "$a" >> {log}; done\n'
+                                  f'exec {shutil.which("python3")} "$@"\n')
+    (fake / "python3").chmod(0o755)
+    return fake, log
+
+
+def test_keys_never_appear_in_python3s_arguments(stub, home):
+    stub.models = MODELS
+    fake, log = logging_python3(home)
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "TMPDIR": str(tmp)}
+    for args in (["on", "--global", "--url", stub.url, "--key", "sk-proxy-fullsecret"],
+                 ["on", "--gclaude"],
+                 ["on", "--gclaude", "--key", "sk-proxy-newsecret", "--dashboard", stub.url],
+                 ["on", "--opencode", "--routes-key", "sk-proxy-r-routesecret"]):
+        r = run(["bash", str(GATEWAY), *args], env)
+        assert r.returncode == 0, (args, r.stderr)
+    argv = log.read_text().splitlines()
+    assert len(argv) >= 6 and not [a for a in argv if "secret" in a]
+    client = json.loads((home / ".config" / "claude-gateway" / "client.json").read_text())   # and the key still lands
+    assert client["key"] == "sk-proxy-newsecret" and client["dashboard"] == stub.url
+    assert json.loads(gc_paths(home)[1].read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-newsecret"
+
+
+def test_logout_keeps_the_key_out_of_python3s_arguments(stub, warn_env):
+    fake, log = logging_python3(warn_env["HOME"])
+    env = {**warn_env, "PATH": f"{fake}:{warn_env['PATH']}"}
+    out = json.loads(logout_prompt(env).stdout)
+    assert out["continue"] is False and "revoked on the gateway" in out["stopReason"]
+    argv = log.read_text().splitlines()
+    assert argv and not [a for a in argv if "sk-proxy-k" in a]
+    assert signed_out(env)
 
 
 def test_opencode_off_removes_the_agents_folder_it_created_and_an_empty_client_json(stub, home):

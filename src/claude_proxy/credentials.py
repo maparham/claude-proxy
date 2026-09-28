@@ -43,6 +43,9 @@ class RefreshUnavailable(Exception):
 
 
 REFRESH_BACKOFF_S = 60
+# A forced refresh (upstream 401) this soon after a successful one is a no-op: the 401 was not about token
+# expiry (a scope-rejected path, say), and each refresh spends the single-use refresh token.
+FORCED_REFRESH_MIN_INTERVAL_S = 60
 
 
 # --- Encryption of the stored grant (spec 5.1 Storage) ---
@@ -174,6 +177,7 @@ class OAuthBackend:
         self._blob: str | None = None
         self.last_error: str | None = None
         self._retry_at = 0.0   # after a temporary refresh failure, don't hammer the token endpoint
+        self._refreshed_at = 0.0   # when this process last obtained a new access token
 
     def _load(self) -> tuple[dict | None, str | None]:
         # The decrypted grant is cached until the stored row changes (`claude-proxy login` from another process).
@@ -219,6 +223,9 @@ class OAuthBackend:
                 return True
             if not force and data["expires_at"] - time.time() >= 300:
                 return True
+            # The token is fresh from this process's own refresh: the 401 was not about expiry, keep it.
+            if force and time.time() - self._refreshed_at < FORCED_REFRESH_MIN_INTERVAL_S:
+                return True
             if time.time() < self._retry_at:
                 return False
             refresh_token = data.get("refresh_token")
@@ -235,7 +242,8 @@ class OAuthBackend:
                 return False
             if resp.status_code != 200:
                 body = resp.text[:300]
-                if resp.status_code in (400, 401) and "rate_limit" not in body or "invalid_grant" in body:
+                # Only a 400/401 says the grant itself is bad; a 429/5xx is temporary whatever its text says.
+                if resp.status_code in (400, 401) and ("rate_limit" not in body or "invalid_grant" in body):
                     self._mark_needs_login(f"refresh rejected {resp.status_code}: {body}")
                 else:
                     self.last_error = f"refresh failed {resp.status_code}: {body}"
@@ -251,6 +259,7 @@ class OAuthBackend:
                 logger.warning(self.last_error)
                 return False
             self.store(record)
+            self._refreshed_at = time.time()
             self.last_error = None
             logger.info("oauth access token refreshed")
             return True

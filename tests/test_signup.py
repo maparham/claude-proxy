@@ -96,8 +96,10 @@ def test_frontend_api_comes_from_the_publishable_key():
 
 
 @pytest.mark.parametrize("bad, why", [
-    ({"exp": int(time.time()) - 60}, "expired"),
-    ({"nbf": int(time.time()) + 120}, "not valid yet"),
+    # Time-based claims are callables, evaluated when the test runs rather than at collection (which can be
+    # minutes earlier and would eat into clerk.LEEWAY_S).
+    (lambda: {"exp": int(time.time()) - 60}, "expired"),
+    (lambda: {"nbf": int(time.time()) + 120}, "not valid yet"),
     ({"iss": "https://clerk.other.dev"}, "another Clerk instance"),
     ({"azp": "https://evil.test"}, "another site"),
     ({"azp": None}, "another site"),
@@ -107,6 +109,8 @@ def test_frontend_api_comes_from_the_publishable_key():
 ])
 async def test_clerk_tokens_are_checked(env, bad, why):
     gw, *_ = env
+    if callable(bad):
+        bad = bad()
     v = clerk.Verifier(PK, "sk_test_secret", DASH, gw.http)
     with pytest.raises(clerk.ClerkError, match=why):
         await v.verify(jwt(claims(**bad)))

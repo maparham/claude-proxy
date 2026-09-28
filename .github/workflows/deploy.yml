@@ -9,6 +9,9 @@ on:
   pull_request:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 # One run per branch at a time, in push order (a newer queued run replaces an older queued one), so an
 # older commit can't deploy over a newer one and deploys never overlap.
 defaults:

@@ -289,11 +289,15 @@ def _user_name(conn: sqlite3.Connection, user_id: int) -> str:
 
 
 def rotate_key(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> str:
+    """A new first key. Every machine key goes with the old one: whoever held a leaked first key could have
+    minted them, so rotating must leave nothing of theirs behind. All the user's sessions end too."""
     raw, h, prefix = generate_virtual_key()
     conn.execute("UPDATE users SET key_hash=?, key_prefix=? WHERE id=?", (h, prefix, user_id))
-    # A dashboard session made from the old key would otherwise outlive it.
+    n = conn.execute("UPDATE keys SET revoked_at=? WHERE user_id=? AND revoked_at IS NULL",
+                     (int(time.time()), user_id)).rowcount
+    # A dashboard session made from the old key, or from a machine key, would otherwise outlive it.
     conn.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
-    audit(conn, actor, "rotate_key", _user_name(conn, user_id))
+    audit(conn, actor, "rotate_key", _user_name(conn, user_id), {"machine_keys_revoked": n} if n else None)
     return raw
 
 

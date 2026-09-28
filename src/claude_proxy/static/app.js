@@ -95,7 +95,7 @@ const TIPS = {
   key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
   act_limits: `View or change this user's limits.`,
   act_upgrade: `Replace their one-time sign-up credit with a daily allowance.`,
-  act_rotate: `Issue a new key and stop the old one immediately. Usage history is kept.`,
+  act_rotate: `Issue a new key and stop the old one immediately, along with every computer authorized under it. Usage history is kept.`,
   act_routes_key: `Issue a key for OpenCode that works only for third-party models (such as Muse), never Claude. Issuing again replaces it.`,
   act_routes_key_remove: `Delete this user's OpenCode key. Their Claude Code key keeps working.`,
   act_disable: `Block the key until re-enabled. Nothing is deleted.`,
@@ -354,9 +354,20 @@ function baseOption() {
 function timeLabel(gran) {
   return (v) => {
     const d = new Date(Number(v));   // category axes hand the formatter strings
-    if (gran === "hour") return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit" });
+    if (gran === "hour") return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
+}
+// Axis labels for bucket times (seconds): hourly buckets show the clock time, with the date
+// only on the first label and where the day changes, so the date is not repeated on every tick.
+function axisLabels(gran, times) {
+  if (gran !== "hour") return times.map((t) => timeLabel(gran)(t * 1000));
+  return times.map((t, i) => {
+    const d = new Date(t * 1000);
+    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const newDay = i === 0 || d.toDateString() !== new Date(times[i - 1] * 1000).toDateString();
+    return newDay ? `${timeLabel("day")(t * 1000)} ${time}` : time;
+  });
 }
 
 // Stacked bars over time from API points [{t, key, <metric>}].
@@ -390,7 +401,7 @@ function stackedTime(el, points, metric, dim, gran, opts = {}) {
     ...o,
     tooltip: { ...o.tooltip, valueFormatter: (v) => fmtMetric(metric, v) },
     legend: { ...o.legend, show: keys.length > 1, data: keys },
-    xAxis: { ...o.xAxis, type: "category", data: times.map((t) => timeLabel(gran)(t * 1000)) },
+    xAxis: { ...o.xAxis, type: "category", data: axisLabels(gran, times) },
     yAxis: { ...o.yAxis, type: "value", axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtMetric(metric, v) } },
     dataZoom: times.length > 30 ? [{ type: "inside" }] : [],
     series: keys.map((k) => ({

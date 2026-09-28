@@ -179,7 +179,10 @@ Settings, login and prompt history stay separate, so both commands can run at on
 The gateway's `ANTHROPIC_BASE_URL` and key live only in the `"env"` block of gclaude's `settings.json`, which
 Claude Code applies to its own process, and `CLAUDE_CONFIG_DIR` is set only for the `claude` that gclaude starts.
 Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and uses this machine's login.
-`off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout` and the gateway settings, and keeps gclaude's own history.
+Without a claude.ai login Claude Code gives `fable`, `opus` and `sonnet` a 200K context window, so the key-only
+setup (gclaude's, and global `--key-only`) points them at their 1M forms (`ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1[1m]`
+and the like) unless you set those yourself. `/model fable` then gets the 1M window with no `[1m]` to type.
+`off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout_gclaude` and the gateway settings, and keeps gclaude's own history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
 In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
@@ -189,13 +192,14 @@ so it costs nothing. Plain `claude` keeps the real `/usage`.
 `Account: maya · maya@example.com · user · key sk-proxy-ab1… for MacBook, authorized 2026-09-20 · dashboard: https://…/dashboard`.
 A small Haiku request repeats that line, since a hook's reply reads as an error in Claude Code. When a limit is
 reached or the gateway is down, so that request would fail, the hook answers `/account` itself.
-Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn't use. gclaude's `/logout` signs
-this computer out of the gateway instead, answered by the hook: it revokes the key when it is this computer's own
+Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn't use, and it can't be hidden or
+blocked (a hook never sees it). gclaude's `/logout_gclaude` signs this computer out of the gateway, answered by the hook: it revokes the key when it is this computer's own
 (one authorized in the browser; your first key may be in use elsewhere, so it stays valid) and removes it from
-gclaude's `settings.json` and `client.json`. The next `gclaude` signs this computer in again in the browser before it
-starts, like plain `claude`'s login (`claude-gateway on --login` does the same on its own).
+gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session (on macOS
+and Linux; on Windows, `/exit`). The next `gclaude` signs this computer in again in the browser before it starts,
+like plain `claude`'s login (`claude-gateway on --login` does the same on its own).
 `gclaude update` updates claude-gateway from your gateway's dashboard, which also refreshes gclaude's setup (new
-commands such as `/logout` arrive this way), then runs Claude Code's own `claude update`.
+commands such as `/logout_gclaude` arrive this way), then runs Claude Code's own `claude update`.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and
@@ -273,6 +277,9 @@ back to zero, and the next request opens a new window. A user over a limit waits
 - Limits are checked from recorded history before each request. The request that crosses a limit
   is served, and the next one gets a 429 that Claude Code shows verbatim, for example `API Error:
   Request rejected (429) · Gateway limit requests_daily reached: 1 of 1 requests; retry in 24.0 h.`
+- Requests still in flight count toward request-count limits, and each user may have at most
+  `[limits] max_inflight` (default 8) in flight at once; the next gets a 429 (`max_inflight`) with
+  `retry-after: 1`. A token or cost limit can therefore be overshot by at most that many requests.
 
 ## Operations
 

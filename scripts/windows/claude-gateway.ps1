@@ -11,7 +11,7 @@
 # sends requests to the gateway with this computer's key, shows your gateway limits on the status line, warns at
 # 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
 # `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself.
-# gclaude's /logout signs this computer out: it revokes the key when it is this computer's own and removes it here;
+# gclaude's /logout_gclaude signs this computer out: it revokes the key when it is this computer's own and removes it here;
 # the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts.
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
 # replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
@@ -39,17 +39,21 @@ $Statusline = Join-Path $ClientDir 'statusline.ps1'   # a copy, so the installed
 # How Claude Code runs it: forward slashes and double quotes read the same in cmd, PowerShell and Git Bash.
 $LineCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + ($Statusline -replace '\\', '/') + '"'
 $WarnCmd = "$LineCmd --warn"
+# Without a claude.ai login Claude Code gives fable, opus and sonnet a 200K context window; only their [1m] forms get 1M.
+# So gclaude's aliases (and its /model picker) name those. The newest of each; update when one ships.
+$OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
+                          ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5[1m]' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 
 function Say([string]$m) { [Console]::Error.WriteLine($m) }
 function Fail([string]$m) { Say $m; exit 1 }
 
-function Usage {
+function Usage {   # the comment block at the top of this file, up to its first blank line
   Write-Output 'claude-gateway (Windows)'
-  Get-Content -LiteralPath $PSCommandPath | Select-Object -Skip 1 | ForEach-Object {
-    if ($_ -notmatch '^#') { return }
-    $_ -replace '^# ?', ''
-  } | Select-Object -First 17
+  foreach ($line in @(Get-Content -LiteralPath $PSCommandPath | Select-Object -Skip 1)) {
+    if ($line -notmatch '^#') { break }
+    Write-Output ($line -replace '^# ?', '')
+  }
 }
 
 # ---------- JSON files ----------
@@ -61,9 +65,12 @@ function Read-Json([string]$Path) {
   return ($text | ConvertFrom-Json)
 }
 
-function Protect([string]$Path) {   # this user alone may read it: the Windows form of chmod 600
+function Protect([string]$Path, [string]$Shown = $Path) {   # this user alone may read it: the Windows form of chmod 600
+  # icacls can't on a FAT/exFAT drive or some shared folders; the file is already written, so warn rather than stop.
   $me = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-  & icacls.exe $Path /inheritance:r /grant:r "${me}:F" | Out-Null
+  $ok = $false
+  try { & icacls.exe $Path /inheritance:r /grant:r "${me}:F" | Out-Null; $ok = ($LASTEXITCODE -eq 0) } catch { }
+  if (-not $ok) { Write-Warning "$Shown holds your gateway key but could not be made readable by you alone (icacls failed; is this a FAT/exFAT or shared drive?). Keep it where only you can read it." }
 }
 
 function Write-Json([string]$Path, $Object, [switch]$Private) {
@@ -71,7 +78,7 @@ function Write-Json([string]$Path, $Object, [switch]$Private) {
   if (-not (Test-Path -LiteralPath $dir)) { New-Item -ItemType Directory -Path $dir -Force | Out-Null }
   $tmp = "$Path.tmp-claude-gateway"
   [IO.File]::WriteAllText($tmp, (ConvertTo-Json -InputObject $Object -Depth 20) + "`n", (New-Object Text.UTF8Encoding $false))
-  if ($Private) { Protect $tmp }
+  if ($Private) { Protect $tmp $Path }
   Move-Item -LiteralPath $tmp -Destination $Path -Force
 }
 
@@ -185,6 +192,10 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
   $envBlock = Field $s 'env'
   if ($envBlock -is [psobject]) {
     foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD') { Remove-Field $envBlock $k }
+    $added = Field $rec 'added_models'
+    if ($added -is [psobject]) {   # only while still ours: the user has not picked another model for that alias since
+      foreach ($p in $added.PSObject.Properties) { if ((Field $envBlock $p.Name) -eq $p.Value) { Remove-Field $envBlock $p.Name } }
+    }
     if (Is-Empty $envBlock) { Remove-Field $s 'env' }
   }
   if (Field $rec 'added_disable_connectors') { Remove-Field $s 'disableClaudeAiConnectors' }
@@ -195,11 +206,11 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
     if ($groups.Count) { Set-Field $hooks 'UserPromptSubmit' $groups } else { Remove-Field $hooks 'UserPromptSubmit' }
     if (Is-Empty $hooks) { Remove-Field $s 'hooks' }
   }
-  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook') { Remove-Field $rec $k }
+  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook', 'added_models') { Remove-Field $rec $k }
 }
 
 function Command-Text([string]$name) {
-  if ($name -eq 'logout') {   # answered by the --warn hook, as the key it removes is the one a model call would need
+  if ($name -eq 'logout_gclaude') {   # answered by the --warn hook, as the key it removes is the one a model call would need
     return @"
 ---
 description: Sign this computer out of the gateway
@@ -250,6 +261,11 @@ function Gclaude-On($c) {
   Set-Field $envBlock 'ANTHROPIC_BASE_URL' $c.url
   Set-Field $envBlock 'ANTHROPIC_AUTH_TOKEN' $c.key
   Set-Field $envBlock 'CLAUDE_GATEWAY_DASHBOARD' $c.dashboard
+  $added = New-Object psobject
+  foreach ($k in $OneMModels.Keys) {
+    if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $OneMModels[$k]; Set-Field $added $k $OneMModels[$k] }
+  }
+  if (-not (Is-Empty $added)) { Set-Field $rec 'added_models' $added }
   if (-not (Has $s 'disableClaudeAiConnectors')) {   # no claude.ai login in gclaude: silence its connectors warning
     Set-Field $s 'disableClaudeAiConnectors' $true
     Set-Field $rec 'added_disable_connectors' $true
@@ -271,12 +287,14 @@ function Gclaude-On($c) {
     Set-Field $rec 'added_warn_hook' $true
   }
   Write-Json $Settings $s -Private   # it holds the key
-  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout
+  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout_gclaude
   Write-Json $Client $c -Private
 
-  # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers these
-  # instead. /account: Command-Text.
-  foreach ($name in 'usage', 'account', 'logout') {
+  # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers /usage
+  # and /logout_gclaude instead (not /logout: a built-in can't be hidden, so the menu would list both). /account: Command-Text.
+  $old = Join-Path $GDir 'commands\logout.md'   # what an older gclaude named /logout_gclaude
+  if ((Test-Path -LiteralPath $old) -and (Select-String -LiteralPath $old -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $old -Force }
+  foreach ($name in 'usage', 'account', 'logout_gclaude') {
     $file = Join-Path $GDir "commands\$name.md"
     if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {
       Write-Output "$file is your own, so it was left as it is; /$name in gclaude runs it instead of the gateway's."
@@ -304,23 +322,30 @@ function Gclaude-On($c) {
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
     'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
+    'rem install.ps1 throws when it fails. Windows PowerShell exits 0 all the same when the throw happens inside iex,',
+    'rem so the try/catch turns it into exit 1. The failure then goes to :updatefailed (a label is found by name, so',
+    'rem the rewritten file serves; keep the name), whose top-level exit /b 1 reaches cmd /c where one in a nested',
+    'rem block would not, and Claude Code is left alone.',
     ('if /i "%~1"=="update" (' + "`r`n" +
-     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex`" ||" +
-     ' (echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2 & exit /b 1)' + "`r`n" +
+     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
      '  claude %*' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
-    # /logout leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't. Signed out:
-    # sign in again first, as plain claude's login would. One block, read before `on` rewrites this file.
+    # /logout_gclaude leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't. Signed
+    # out: sign in again first, as plain claude's login would. One block, read before `on` rewrites this file.
     ('if exist "%CLAUDE_CONFIG_DIR%\signed-out" (' + "`r`n" +
-     '  echo gclaude: signed out ^(/logout^); signing this computer in again. 1>&2' + "`r`n" +
+     '  echo gclaude: signed out ^(/logout_gclaude^); signing this computer in again. 1>&2' + "`r`n" +
      '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
      '  call claude-gateway on --gclaude --login || (echo gclaude: not signed in, so Claude Code was not started 1>&2 & exit /b 1)' + "`r`n" +
      '  claude %*' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
-    'claude %*'
+    'claude %*',
+    'exit /b',
+    ':updatefailed',
+    'echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2',
+    'exit /b 1'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
 
@@ -338,7 +363,7 @@ function Gclaude-Off {
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue
   $cmds = Join-Path $GDir 'commands'
-  foreach ($name in 'usage', 'account', 'logout') {
+  foreach ($name in 'usage', 'account', 'logout_gclaude', 'logout') {   # logout: an older gclaude's
     $file = Join-Path $cmds "$name.md"
     if ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $file -Force }
   }

@@ -16,7 +16,12 @@ TAG=manual-\$(date -u +%Y%m%dT%H%M%SZ)   # never reuse a CI per-commit tag for a
 sudo docker build -q -t "claude-proxy:\$TAG" ../.. >/dev/null
 printf 'GATEWAY_TAG=%s\n' "\$TAG" > .env
 sudo docker compose up -d --no-build
-for i in \$(seq 30); do curl -fsS http://127.0.0.1:18480/health >/dev/null 2>&1 && break; sleep 1; done
+up=
+for i in \$(seq 30); do
+  if curl -fsS --max-time 5 http://127.0.0.1:18480/health >/dev/null 2>&1; then up=1; break; fi
+  sleep 1
+done
+[ -n "\$up" ] || { echo "gateway did not answer on http://127.0.0.1:18480/health within 30 s" >&2; exit 1; }
 curl -fsS http://127.0.0.1:18480/health && echo
 sudo docker compose exec -T gateway claude-proxy status | grep -v "HTTP Request"
 REMOTE_SCRIPT

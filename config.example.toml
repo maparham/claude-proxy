@@ -31,6 +31,9 @@ poll_min_interval_s = 180
 poll_max_backoff_s = 1800
 stale_after_s = 1800        # share limits are skipped when account figures are older than this
 
+[limits]
+max_inflight = 8            # requests one user may have in flight at once; limits can be overshot by at most this many
+
 [db]
 path = "claude_proxy.db"
 
