@@ -12,7 +12,7 @@
 # 80% of a limit, answers /usage with the gateway's figures and /account with your account and a dashboard link. Plain `claude` keeps this machine's own login.
 # `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself.
 # gclaude's /logout_gclaude signs this computer out: it revokes the key when it is this computer's own and removes it here;
-# gclaude then refuses to start until `claude-gateway on --login`.
+# the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts.
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
 # replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
 # its own. Over SSH it only prints the link and the code. The URL and key are kept in
@@ -332,8 +332,15 @@ function Gclaude-On($c) {
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
-    # /logout_gclaude leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't
-    'if exist "%CLAUDE_CONFIG_DIR%\signed-out" (echo gclaude: signed out ^(/logout_gclaude^); to sign in again: claude-gateway on --login 1>&2 & exit /b 1)',
+    # /logout_gclaude leaves this file (statusline.ps1); `if exist` reads any folder name, where findstr can't. Signed
+    # out: sign in again first, as plain claude's login would. One block, read before `on` rewrites this file.
+    ('if exist "%CLAUDE_CONFIG_DIR%\signed-out" (' + "`r`n" +
+     '  echo gclaude: signed out ^(/logout_gclaude^); signing this computer in again. 1>&2' + "`r`n" +
+     '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
+     '  call claude-gateway on --gclaude --login || (echo gclaude: not signed in, so Claude Code was not started 1>&2 & exit /b 1)' + "`r`n" +
+     '  claude %*' + "`r`n" +
+     '  exit /b' + "`r`n" +
+     ')'),
     'claude %*',
     'exit /b',
     ':updatefailed',
@@ -343,7 +350,7 @@ function Gclaude-On($c) {
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
 
   Write-Output "gclaude now runs Claude Code through the gateway at $($c.url); plain 'claude' is unchanged."
-  if (($env:Path -split ';') -notcontains $Bin) { Write-Output "Open a new terminal (or add $Bin to your PATH) to run gclaude." }
+  if (($env:Path -split ';') -notcontains $Bin -and -not $env:CLAUDE_GATEWAY_FROM_GCLAUDE) { Write-Output "Open a new terminal (or add $Bin to your PATH) to run gclaude." }
 }
 
 function Gclaude-Off {

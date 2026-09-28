@@ -13,7 +13,7 @@
 # It also answers gclaude's /logout_gclaude (commands\logout_gclaude.md there): it revokes the key on
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
-# signed-out file in CLAUDE_CONFIG_DIR, so gclaude.cmd won't start until `claude-gateway on` removes it.
+# signed-out file in CLAUDE_CONFIG_DIR, so the next gclaude.cmd signs in again (`claude-gateway on --login`, which removes it) before it starts.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -86,7 +86,7 @@ try {
         }
       }
     } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. claude-gateway off removes it." }
-    $again = 'Exit gclaude now (/exit); to sign in again: claude-gateway on --login'
+    $again = 'Exit gclaude now (/exit); run gclaude again to sign in.'
     $where = if ($dash) { " ($dash/dashboard)" } else { '' }
     $accepted = $code -ge 200 -and $code -lt 300
     if ($accepted -and $odd) { Stop-Prompt "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP $code) but gave an unexpected reply; check in the dashboard that this computer is gone$where. $again" }

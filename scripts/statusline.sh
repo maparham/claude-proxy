@@ -88,7 +88,7 @@ if os.path.exists(settings + ".bak-claude-gateway"):   # claude-gateway's copy f
 EOF
     stop "Sign-out failed: the key could not be removed from $CLAUDE_CONFIG_DIR/settings.json. claude-gateway off --gclaude removes it."
   quit_claude
-  again="gclaude is closing; to sign in again: claude-gateway on --login"
+  again="gclaude is closing; run gclaude again to sign in."
   case "$reply" in
     *'"revoked":true'*200) stop "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" ;;
     *'"revoked":false'*200) stop "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" ;;

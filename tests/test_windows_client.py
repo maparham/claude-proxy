@@ -434,10 +434,11 @@ def test_on_replaces_the_older_logout_command(installed, stub):
 
 
 @on_windows
-def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude, installed, stub, tmp_path):
+def test_logout_revokes_the_key_and_the_next_gclaude_signs_in_again(gclaude, installed, stub, tmp_path):
     win = installed
     out = json.loads(gclaude(" --warn", '{"prompt": "/logout_gclaude"}').stdout)
     assert out["continue"] is False and "revoked on the gateway" in out["stopReason"], out
+    assert "run gclaude again" in out["stopReason"]
     assert [h["authorization"] for p, h, _ in stub.requests if p == "/api/me/logout"] == ["Bearer sk-proxy-k"]
     s = win.settings()
     assert "ANTHROPIC_AUTH_TOKEN" not in s["env"] and s["env"]["ANTHROPIC_BASE_URL"] == stub.url
@@ -445,12 +446,16 @@ def test_logout_revokes_the_key_and_gclaude_stays_signed_out_until_login(gclaude
     assert "key" not in win.client() and win.client()["url"] == stub.url
     assert (win.gdir / "signed-out").is_file()
     fake = fake_claude(win, tmp_path)
+    stub.tokens = [(400, {"error": "access_denied"})]   # cancelled: Claude Code is not started
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
-    assert r.returncode == 1 and "claude-gateway on --login" in r.out, r.out
-    assert win.cg("on", "--key", "sk-proxy-new").returncode == 0
+    assert r.returncode == 1 and "Cancelled in the browser" in r.out, r.out
+    assert (win.gdir / "signed-out").is_file() and not (tmp_path / "claude-saw.txt").exists()
+    stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]   # like plain claude: gclaude signs in, then starts
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and "Authorized as ana" in r.out, r.out
     assert not (win.gdir / "signed-out").exists()
-    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
-    assert r.returncode == 0, r.out
+    assert win.settings()["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
+    assert claude_saw(tmp_path) == f"{win.gdir}|-p hi"
 
 
 @on_windows
