@@ -198,14 +198,17 @@ blocked (a hook never sees it). gclaude's `/logout_gclaude` signs this computer 
 gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session (on macOS
 and Linux; on Windows, `/exit`). The next `gclaude` signs this computer in again in the browser before it starts,
 like plain `claude`'s login (`claude-gateway on --login` does the same on its own).
+The same happens when the dashboard no longer accepts the key, e.g. after the computer was removed there.
 How that works, for debugging: the gclaude command counts as signed out when its `settings.json` has no
 `ANTHROPIC_AUTH_TOKEN` (macOS and Linux) or when the `signed-out` file `/logout_gclaude` leaves is in its folder
-(Windows). It then runs `claude-gateway on --gclaude --login` with `CLAUDE_GATEWAY_FROM_GCLAUDE=1`, which only hides
+(Windows), or when the dashboard's `/api/me/status` answers 401 to the key (a 3-second check at each start, with
+`curl` on Windows too; any other answer, or none, starts gclaude as usual). It then runs `claude-gateway on --gclaude --login` with `CLAUDE_GATEWAY_FROM_GCLAUDE=1`, which only hides
 the "Next:" hint, and starts Claude Code once that succeeds. A cancelled or expired sign-in exits 1 and starts
 nothing (on Windows through the `:signinfailed` label, since `exit /b 1` inside a block doesn't reach `cmd /c`). The
-macOS and Linux command uses the `claude-gateway` beside it, else the one on PATH, else the one that wrote it. A key
-that is still saved but was removed in the dashboard is not noticed: requests fail with "Invalid or revoked gateway
-key" until `claude-gateway on --login`.
+macOS and Linux command uses the `claude-gateway` beside it, else the one on PATH, else the one that wrote it.
+`gclaude status` shows the gateway, whether this computer is signed in, and the limits (`claude-gateway status
+--gclaude`; on Windows, `claude-gateway status`), and `gclaude uninstall` runs `claude-gateway off --gclaude`, so a
+gclaude user never needs `claude-gateway` itself.
 `gclaude update` updates claude-gateway from your gateway's dashboard, which also refreshes gclaude's setup (new
 commands such as `/logout_gclaude` arrive this way), then runs Claude Code's own `claude update`.
 

@@ -54,6 +54,7 @@ class Stub:
 
     def __init__(self):
         self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
+        self.revoked: set[str] = set()   # keys /api/me/status answers 401 for, as for a computer removed in the dashboard
         self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
         self.account_line = "maya · user · key sk-proxy-ab1… for PC, authorized 2026-09-20"   # ?format=account
         self.models_status = 200
@@ -80,6 +81,8 @@ class Stub:
                     self.reply(200, d.files[self.path], "text/plain; charset=utf-8")
                 elif self.path.startswith("/v1/models"):
                     self.reply(d.models_status, {"data": [], "has_more": False})
+                elif self.path.startswith("/api/me/status") and self.headers.get("authorization", "").removeprefix("Bearer ") in d.revoked:
+                    self.reply(401, {"detail": "Not signed in."})
                 elif self.path.startswith("/api/me/status"):
                     line = d.account_line if "format=account" in self.path else d.status_line
                     self.reply(200 if line is not None else 503, ((line or "") + "\n").encode(), "text/plain; charset=utf-8")
@@ -431,6 +434,40 @@ def test_on_replaces_the_older_logout_command(installed, stub):
     r = win.cg("on")
     assert r.returncode == 0, r.out
     assert not old.exists() and (win.gdir / "commands" / "logout_gclaude.md").is_file()
+
+
+@on_windows
+def test_gclaude_signs_in_again_when_its_key_was_removed_in_the_dashboard(gclaude, installed, stub, tmp_path):
+    win = installed
+    stub.revoked.add("sk-proxy-k")
+    stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and "key no longer works" in r.out and "Authorized as ana" in r.out, r.out
+    assert win.settings()["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
+    assert claude_saw(tmp_path) == f"{win.gdir}|-p hi"
+    assert all("sk-proxy" not in p for p, *_ in stub.requests)   # the key goes in a header, never the URL
+
+
+@on_windows
+def test_gclaude_starts_as_usual_while_its_key_works(gclaude, installed, stub, tmp_path):
+    win = installed
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and "sign" not in r.out and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
+    assert "/api/device/start" not in stub.paths()
+
+
+@on_windows
+def test_gclaude_status_and_uninstall(gclaude, installed, stub, tmp_path):
+    win = installed
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "status"], **fake)
+    assert r.returncode == 0 and f"gateway: {stub.url}" in r.out and "status: maya" in r.out, r.out
+    assert not (tmp_path / "claude-saw.txt").exists()
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "uninstall"], **fake)
+    assert r.returncode == 0 and "gclaude is removed" in r.out, r.out
+    assert not (win.bin / "gclaude.cmd").exists() and not (tmp_path / "claude-saw.txt").exists()
 
 
 @on_windows

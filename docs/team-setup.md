@@ -73,14 +73,14 @@ If your machine has no Claude login of its own, you can instead point plain `cla
   again to sign in: it shows the link and code, as the first setup did, then starts.
 - **`gclaude update`** updates the gateway client and gclaude's setup, then Claude Code itself.
 - **Dashboard**: `https://claude-dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
-- **Terminal**: `claude-gateway status`.
+- **Terminal**: `gclaude status` shows the gateway, your account and your limits.
 
 ## Updating and removing
 
 ```sh
 curl -fsSL https://claude-dash.rahkar.pro/install | sh   # update (it keeps this computer's key); Windows: irm …/install.ps1 | iex
-claude-gateway on --login         # connect this computer again after removing it in the dashboard (gclaude can't tell)
-claude-gateway off                # remove gclaude (keeps its history)
+gclaude update                    # or this, from any terminal: the same update, then Claude Code's own
+gclaude uninstall                 # remove gclaude (keeps its history)
 claude-gateway off --opencode     # remove the gateway from OpenCode
 ```
 

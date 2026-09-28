@@ -15,6 +15,8 @@
 #   claude-gateway on --opencode     # later: refreshes the model list
 #   claude-gateway off --opencode
 #   claude-gateway on --gclaude / off --gclaude      # gclaude, explicitly
+#   claude-gateway status --gclaude  # gclaude's gateway, whether this computer is signed in, and the limits
+# gclaude users need none of these: `gclaude update`, `gclaude status` and `gclaude uninstall` run them.
 #
 # Global mode (--global) edits ~/.claude itself. Its key-only mode (the default there) sets ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN in the "env" block of
 # ~/.claude/settings.json. Claude Code then has no claude.ai login, so claude.ai connectors and Claude in
@@ -40,7 +42,8 @@
 # login, prompt history and the sessions started in gclaude stay separate.
 # gclaude's own /usage shows the gateway line instead of Claude Code's (which can't see the gateway), with no model
 # call. `gclaude update` updates claude-gateway from the dashboard (refreshing gclaude), then Claude Code itself. Its /logout_gclaude signs this computer out: it revokes the key when it is this computer's own and removes it here;
-# the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts. `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
+# the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts, as it
+# does when the dashboard answers 401 to the saved key (the computer was removed there). `off --gclaude` removes the command, the links, /usage and its settings, and keeps gclaude's history.
 # Without --key (and none saved for that URL), `on` authorizes in the browser: it opens the dashboard (--dashboard,
 # else the URL with claude. replaced by claude-dash.) at a code, and once you click Authorize there the dashboard
 # hands this computer a key of its own. Over SSH it only prints the link and the code, to open on any device.
@@ -502,7 +505,7 @@ disable-model-invocation: true
 ---
 <!-- {mark} -->
 The claude-gateway hook that answers /usage did not run. Tell the user, in one sentence, that their gateway limits
-are on the status line and on the dashboard, and that `claude-gateway on --gclaude` reinstalls the hook. Use no tools.
+are on the status line and on the dashboard, and that running `gclaude update` in a terminal reinstalls the hook. Use no tools.
 """, "account": f"""---
 description: Your gateway account and a link to the dashboard
 allowed-tools: Bash({account_cmd})
@@ -519,7 +522,7 @@ disable-model-invocation: true
 ---
 <!-- {mark} -->
 The claude-gateway hook that signs gclaude out did not run, so nothing was changed. Tell the user, in one sentence,
-that `claude-gateway on --gclaude` reinstalls the hook and `claude-gateway off --gclaude` removes gclaude with its key.
+that running `gclaude update` in a terminal reinstalls the hook and `gclaude uninstall` removes gclaude with its key.
 Use no tools.
 """}
 RETIRED = ("logout",)   # commands an older gclaude installed under another name
@@ -571,6 +574,7 @@ if mode == "on":
             pass
         with open(state, "w") as f:
             json.dump(seed, f)
+    dash = c.get("dashboard", "").rstrip("/")
     os.makedirs(os.path.dirname(launcher), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(launcher))   # replaced, never written through a link
     with os.fdopen(fd, "w") as f:
@@ -578,23 +582,38 @@ if mode == "on":
                 "# gclaude: Claude Code through the claude-proxy gateway, with its own settings and history in the\n"
                 "# CLAUDE_CONFIG_DIR below. Plain `claude` keeps this machine's own login.\n"
                 f"{mark}\n"
-                "# Remove it with: claude-gateway off --gclaude\n"
+                "# Remove it with: gclaude uninstall\n"
+                "# claude-gateway does the setup: the one installed beside this command, else the one on PATH or the one\n"
+                "# that wrote this file. Users only need gclaude: its update, status and uninstall run claude-gateway for them.\n"
+                'gw=$(dirname "$0")/claude-gateway\n'
+                f'[ -x "$gw" ] || gw=$(command -v claude-gateway 2>/dev/null) || gw={shlex.quote(self_path)}\n'
+                'case "${1:-}" in\n'
+                "  # gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then\n"
+                "  # Claude Code's own update, run as plain `claude update` would be.\n"
+                "  update)\n"
+                f"    script=$(curl -fsSL {shlex.quote(dash + '/install')}) && printf '%s\\n' \"$script\" | sh ||\n"
+                "      { echo 'gclaude: the gateway update failed, so Claude Code was not updated' >&2; exit 1; }\n"
+                '    exec claude "$@" ;;\n'
+                '  status) exec "$gw" status --gclaude ;;\n'
+                '  uninstall) exec "$gw" off --gclaude ;;\n'
+                "esac\n"
                 "command -v claude >/dev/null 2>&1 || { echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127; }\n"
-                "# gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then\n"
-                "# Claude Code's own update, run as plain `claude update` would be.\n"
-                'if [ "${1:-}" = update ]; then\n'
-                f"  script=$(curl -fsSL {shlex.quote(c.get('dashboard', '') + '/install')}) && printf '%s\\n' \"$script\" | sh ||\n"
-                "    { echo 'gclaude: the gateway update failed, so Claude Code was not updated' >&2; exit 1; }\n"
-                '  exec claude "$@"\n'
-                "fi\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
-                "# Signed out (/logout_gclaude): sign this computer in again first, as plain claude's login would, with the\n"
-                "# claude-gateway installed beside this command, else the one on PATH or the one that wrote this file.\n"
-                "if ! grep -q '\"ANTHROPIC_AUTH_TOKEN\"' \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null; then\n"
-                '  gw=$(dirname "$0")/claude-gateway\n'
-                f'  [ -x "$gw" ] || gw=$(command -v claude-gateway 2>/dev/null) || gw={shlex.quote(self_path)}\n'
-                "  echo 'gclaude: signed out (/logout_gclaude); signing this computer in again.' >&2\n"
+                "# Sign this computer in again first, as plain claude's login would, when /logout_gclaude removed the key or\n"
+                "# the dashboard no longer accepts it (the computer was removed there). Only a 401 counts: offline, or with the\n"
+                "# dashboard slow or down, gclaude starts as usual. The key goes to curl on stdin, where `ps` can't show it.\n"
+                "key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(\"env\", {}).get(\"ANTHROPIC_AUTH_TOKEN\", \"\"))'"
+                " \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null)\n"
+                'why=\n'
+                "if [ -z \"$key\" ]; then\n"
+                "  why='signed out (/logout_gclaude)'\n"
+                "elif [ \"$(printf 'Authorization: Bearer %s\\n' \"$key\" | curl -s -o /dev/null --max-time 3 -H @- -w '%{http_code}'"
+                f" {shlex.quote(dash + '/api/me/status')} 2>/dev/null)\" = 401 ]; then\n"
+                "  why=\"this computer's key no longer works (removed in the dashboard?)\"\n"
+                "fi\n"
+                'if [ -n "$why" ]; then\n'
+                "  echo \"gclaude: $why; signing this computer in again.\" >&2\n"
                 '  CLAUDE_GATEWAY_FROM_GCLAUDE=1 "$gw" on --gclaude --login ||'
                 " { echo 'gclaude: not signed in, so Claude Code was not started' >&2; exit 1; }\n"
                 "fi\n"
@@ -660,6 +679,27 @@ gclaude_off() {
 gclaude_set_up() {   # its command, or its record in client.json (what `off --gclaude` would undo)
   gclaude_ours || python3 -c 'import json,os,sys; c=json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}
 sys.exit(0 if isinstance(c.get("gclaude"), dict) else 1)' "$CLIENT"
+}
+
+gclaude_status() {   # what `gclaude status` shows: its gateway, whether this computer is signed in, and the limits
+  gclaude_ours || { echo "gclaude: not set up"; return; }
+  local url dash key reply code body
+  url=$(field url) dash=$(field dashboard)
+  key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env", {}).get("ANTHROPIC_AUTH_TOKEN", ""))' \
+        "$GCLAUDE_DIR/settings.json" 2>/dev/null || true)
+  if curl -fsS --max-time 10 "$url/health" >/dev/null 2>&1; then echo "gateway: $url (reachable)"; else echo "gateway: $url (NOT reachable)"; fi
+  [ -n "$key" ] || { echo "account: signed out; run gclaude to sign in"; return; }
+  reply=$(printf 'Authorization: Bearer %s\n' "$key" | curl -sS --max-time 10 -H @- -w '\n%{http_code}' \
+          "$dash/api/me/status?format=account" 2>/dev/null || true)
+  code=${reply##*$'\n'} body=${reply%$'\n'*}
+  case "$code" in
+    200) echo "account: $body" ;;
+    401) echo "account: this computer's key no longer works; run gclaude to sign in again"; return ;;
+    *) echo "account: unavailable (dashboard: $dash)"; return ;;
+  esac
+  body=$(printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 10 -H @- "$dash/api/me/status?format=text" 2>/dev/null || true)
+  [ -z "$body" ] || echo "usage: $body"
+  echo "dashboard: $dash/dashboard"
 }
 
 gclaude_state() {
@@ -778,6 +818,7 @@ case "$cmd" in
     esac
     ;;
   status)
+    if [ "${1:-}" = --gclaude ]; then gclaude_status; exit 0; fi
     read -r url mode <<<"$(current)" || true
     if [ -z "${url:-}" ]; then echo "off: Claude Code uses this machine's own login"; gclaude_state; opencode_state; exit 0; fi
     echo "on: $url ($mode mode)"

@@ -85,7 +85,7 @@ try {
           [IO.File]::WriteAllText($client, (ConvertTo-Json -InputObject $c -Depth 20) + "`n", $utf8)
         }
       }
-    } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. claude-gateway off removes it." }
+    } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. gclaude uninstall removes it." }
     $again = 'Exit gclaude now (/exit); run gclaude again to sign in.'
     $where = if ($dash) { " ($dash/dashboard)" } else { '' }
     $accepted = $code -ge 200 -and $code -lt 300
@@ -98,8 +98,8 @@ try {
   }
 
   if (-not $dash) {
-    if ($accountMode) { Emit 'Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).'; exit 0 }
-    if ($usage) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (rerun claude-gateway on).' }
+    if ($accountMode) { Emit 'Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update).'; exit 0 }
+    if ($usage) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update).' }
     if (-not $warn) { [Console]::Error.WriteLine('statusline.ps1: set CLAUDE_GATEWAY_DASHBOARD') }
     exit 0
   }

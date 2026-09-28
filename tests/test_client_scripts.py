@@ -23,6 +23,7 @@ class Stub:
         self.models_status = 200
         self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
         self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
+        self.revoked: set[str] = set()   # keys /api/me/status answers 401 for, as for a computer removed in the dashboard
         self.install: str | None = None   # GET /install, the dashboard's installer; None: 404
         self.requests: list[tuple[str, dict]] = []
         stub = self
@@ -33,7 +34,9 @@ class Stub:
 
             def do_GET(self):
                 stub.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}))
-                if self.path.startswith("/api/me/status"):
+                if self.path.startswith("/api/me/status") and self.headers.get("authorization", "").removeprefix("Bearer ") in stub.revoked:
+                    code, body, ctype = 401, b'{"detail": "Not signed in."}', "application/json"
+                elif self.path.startswith("/api/me/status"):
                     line = stub.account_line if "format=account" in self.path else stub.status_line
                     code, body, ctype = (200 if line is not None else 503), ((line or "") + "\n").encode(), "text/plain; charset=utf-8"
                 elif self.path.startswith("/v1/models"):
@@ -290,7 +293,7 @@ def test_usage_prompt_says_when_the_gateway_is_down(stub, warn_env):
 def test_usage_prompt_without_dashboard_still_blocks(warn_env):
     del warn_env["CLAUDE_GATEWAY_DASHBOARD"]
     out = json.loads(usage_prompt(warn_env).stdout)
-    assert out["decision"] == "block" and "claude-gateway on --gclaude" in out["reason"]
+    assert out["decision"] == "block" and "gclaude update" in out["reason"]
 
 
 @pytest.mark.parametrize("prompt", ["what does /usage show?", "/usages", "/usage-report"])
@@ -1012,6 +1015,28 @@ def test_status_reports_gclaude(stub, home):
     assert out.startswith("off: Claude Code uses this machine's own login")
 
 
+def test_gclaude_status_shows_the_gateway_the_account_and_the_limits(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    launcher = gc_paths(home)[2]
+    r = run_gclaude(home, launcher, "status")
+    assert r.returncode == 0, r.stderr
+    assert "claude started" not in r.stdout
+    assert f"gateway: {stub.url} (reachable)" in r.stdout
+    assert "account: alice · user · key sk-proxy-ab1… (your first key)" in r.stdout
+    assert "usage: alice · daily 10/100 req" in r.stdout
+    stub.revoked.add("sk-proxy-full")
+    r = run_gclaude(home, launcher, "status")
+    assert "account: this computer's key no longer works; run gclaude to sign in again" in r.stdout, r.stdout
+
+
+def test_gclaude_uninstall_removes_gclaude(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, gsettings, launcher = gc_paths(home)
+    r = run_gclaude(home, launcher, "uninstall")
+    assert r.returncode == 0 and "claude started" not in r.stdout, r.stderr
+    assert not launcher.exists() and "sk-proxy-full" not in gsettings.read_text()
+
+
 def test_gclaude_keeps_its_key_private(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     gdir, gsettings, _ = gc_paths(home)
@@ -1105,6 +1130,31 @@ def test_gclaude_signs_in_again_in_the_browser_when_started_signed_out(stub, hom
     assert json.loads(gsettings.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
     r = run_gclaude(home, launcher)   # signed in now: no authorization
     assert r.returncode == 0 and "authorize" not in r.stderr, r.stderr
+
+
+def test_gclaude_signs_in_again_when_its_key_was_removed_in_the_dashboard(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, launcher = gc_paths(home)
+    stub.revoked.add("sk-proxy-full")
+    stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0, r.stderr
+    assert "key no longer works" in r.stderr and "Authorized as ana" in r.stderr
+    assert r.stdout.strip().endswith("claude started -p hi")
+    assert json.loads(gsettings.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
+    status = [h for p, h in stub.requests if p.startswith("/api/me/status")]
+    assert status and all("sk-proxy" not in p for p, _ in stub.requests)   # the key goes in a header, never the URL
+
+
+def test_gclaude_starts_when_the_dashboard_cannot_be_reached(stub, home):
+    """Only a clear 401 means signed out: offline, gclaude starts as usual."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    launcher = gc_paths(home)[2]
+    stub.server.shutdown()
+    stub.server.server_close()
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi", r.stderr
+    assert r.stderr == ""
 
 
 def test_gclaude_does_not_start_when_the_sign_in_is_cancelled(stub, home):

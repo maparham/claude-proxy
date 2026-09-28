@@ -716,7 +716,7 @@ function wireMachines(root) {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { /* clipboard blocked */ }
   }));
   root.querySelectorAll("[data-key-remove]").forEach((b) => (b.onclick = async () => {
-    if (!confirmInline(`Remove ${b.dataset.label}? Its key stops working at once. To connect it again, run /logout_gclaude in gclaude there, then gclaude.`)) return;
+    if (!confirmInline(`Remove ${b.dataset.label}? Its key stops working at once; the next gclaude there asks to sign in again.`)) return;
     try { await api(`/api/keys/${b.dataset.keyRemove}/remove`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
 }
