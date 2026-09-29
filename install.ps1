@@ -7,9 +7,9 @@
 # It puts scripts\windows from the repository in %USERPROFILE%\.local\share\claude-gateway, replacing an earlier copy,
 # and writes %USERPROFILE%\.local\bin\claude-gateway.cmd, the folder where Claude Code's own installer puts claude.exe,
 # adding that folder to the user's PATH if it isn't there. Arguments then run as `claude-gateway ...`.
-# Needs no admin rights, Python or Git. CLAUDE_GATEWAY_REPO (owner/name) and CLAUDE_GATEWAY_REF (branch or tag) pick
-# another source; CLAUDE_GATEWAY_ZIP gives the archive directly (a URL or a local file); CLAUDE_GATEWAY_BIN another
-# folder for claude-gateway.cmd (then PATH is left to you).
+# Needs a Claude Code that runs, and no admin rights, Python or Git. CLAUDE_GATEWAY_REPO (owner/name) and
+# CLAUDE_GATEWAY_REF (branch or tag) pick another source; CLAUDE_GATEWAY_ZIP gives the archive directly (a URL or a
+# local file); CLAUDE_GATEWAY_BIN another folder for claude-gateway.cmd (then PATH is left to you).
 # It runs inside the caller's own PowerShell (irm | iex), so it never calls exit: that would close their window. A
 # failure is a throw instead: an interactive session just shows it, `powershell -File install.ps1` exits 1 with it, and
 # gclaude update wraps its `irm ... | iex` in try/catch to exit 1 (Windows PowerShell's -Command exits 0 when the
@@ -45,6 +45,22 @@ function Add-UserPath([string]$Dir) {
   return $true
 }
 
+function Assert-ClaudeCode([string]$Bin) {
+  # Claude Code must run before anything is set up for it: an npm install whose native binary never arrived leaves a
+  # claude that only fails, and gclaude would then fail on every start. Claude Code's own installer puts claude.exe in
+  # $Bin, which may not be on this session's PATH yet.
+  $found = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  $claude = if ($found) { $found.Source } elseif (Test-Path -LiteralPath (Join-Path $Bin 'claude.exe')) { Join-Path $Bin 'claude.exe' }
+  if (-not $claude) { throw 'install.ps1: Claude Code (claude) is needed first: install it, then run this again.' }
+  $ErrorActionPreference = 'Continue'   # under Stop, anything claude writes to stderr would throw here
+  try { $out = (& $claude --version 2>&1 | Out-String).Trim(); $ok = $LASTEXITCODE -eq 0 }
+  catch { $out = $_.Exception.Message; $ok = $false }   # e.g. not a valid Win32 application
+  if (-not $ok) {
+    throw ("install.ps1: Claude Code at $claude doesn't run:`n  " + (($out -split "`r?`n" | Select-Object -First 3) -join "`n  ") +
+           "`nReinstall it (installed with npm: npm install -g @anthropic-ai/claude-code), then run this again.")
+  }
+}
+
 function Install-ClaudeGateway {
   param([string[]]$Rest)
   $ErrorActionPreference = 'Stop'
@@ -61,6 +77,7 @@ function Install-ClaudeGateway {
   $launcher = Join-Path $bin 'claude-gateway.cmd'
   $mark = 'rem Installed by claude-gateway install.ps1.'
 
+  Assert-ClaudeCode $(if ($env:CLAUDE_GATEWAY_BIN) { $env:CLAUDE_GATEWAY_BIN } else { Join-Path $home_ '.local\bin' })
   if ((Test-Path -LiteralPath $launcher) -and -not (Select-String -LiteralPath $launcher -SimpleMatch $mark -Quiet)) {
     throw "install.ps1: $launcher already exists and install.ps1 did not write it; left as it is."
   }
