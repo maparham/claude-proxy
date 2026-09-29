@@ -1,5 +1,6 @@
 """install.sh, run against a tarball of this checkout instead of GitHub."""
 import os
+import shutil
 import subprocess
 import tarfile
 
@@ -28,8 +29,20 @@ def home(tmp_path):
     return h
 
 
-def install(home, tarball, *args):
-    env = {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"),
+def fake_claude(home, body='#!/bin/sh\necho "2.1.0 (Claude Code)"\n', mode=0o755):
+    """A claude of our own ahead of the machine's: one that runs by default."""
+    fake = home / "claudebin"
+    fake.mkdir(exist_ok=True)
+    (fake / "claude").write_text(body)
+    (fake / "claude").chmod(mode)
+    return fake
+
+
+def install(home, tarball, *args, path=None):
+    if path is None:
+        path = f"{home / 'claudebin'}:{os.environ['PATH']}" if (home / "claudebin").exists() else \
+            f"{fake_claude(home)}:{os.environ['PATH']}"
+    env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home / "tmp"),
            "CLAUDE_GATEWAY_TARBALL": f"file://{tarball}"}
     return subprocess.run(["sh", str(INSTALL), *args], capture_output=True, text=True, env=env, timeout=60)
 
@@ -84,3 +97,45 @@ def test_a_failed_download_keeps_the_installed_copy(home, tarball, tmp_path):
     r = install(home, tmp_path / "missing.tar.gz")
     assert r.returncode != 0
     assert (home / ".local" / "share" / "claude-gateway" / "scripts" / "claude-gateway").exists()
+
+
+# ---------- Claude Code must run first ----------
+
+def no_claude_path(tmp_path):
+    """The system tools the installer needs, and no claude."""
+    tools = tmp_path / "tools"
+    tools.mkdir()
+    for t in ("sh", "curl", "tar", "python3", "gzip", "mktemp", "rm", "mkdir", "cp", "chmod", "mv", "ln", "head", "sed",
+              "cat", "dirname", "basename", "readlink", "uname", "env", "bash"):
+        found = shutil.which(t)
+        if found:
+            (tools / t).symlink_to(found)
+    return str(tools)
+
+
+def test_install_stops_when_claude_is_missing(home, tarball, tmp_path):
+    r = install(home, tarball, path=no_claude_path(tmp_path))
+    assert r.returncode == 1 and "Claude Code (claude) is needed first" in r.stderr
+    assert not (home / ".local" / "bin" / "claude-gateway").exists()
+
+
+def test_install_stops_when_claude_does_not_run(home, tarball):
+    # npm's placeholder when the native binary never arrived
+    fake_claude(home, '#!/bin/sh\necho "Error: claude native binary not installed." >&2\nexit 1\n')
+    r = install(home, tarball)
+    assert r.returncode == 1 and "doesn't run" in r.stderr and "native binary not installed" in r.stderr
+    assert "npm install -g @anthropic-ai/claude-code" in r.stderr
+    assert not (home / ".local" / "bin" / "claude-gateway").exists()
+
+
+def test_install_stops_when_claude_cannot_be_executed(home, tarball, tmp_path):
+    fake = fake_claude(home, "not a program\n", mode=0o644)
+    r = install(home, tarball, path=f"{fake}:{no_claude_path(tmp_path)}")   # no working claude later on PATH
+    assert r.returncode == 1 and "doesn't run" in r.stderr and str(home / "claudebin" / "claude") in r.stderr
+    assert not (home / ".local" / "bin" / "claude-gateway").exists()
+
+
+def test_install_for_opencode_only_needs_no_claude(home, tarball, tmp_path):
+    r = install(home, tarball, "on", "--opencode", "--url", "http://127.0.0.1:9", path=no_claude_path(tmp_path))
+    assert "Claude Code" not in r.stderr
+    assert (home / ".local" / "bin" / "claude-gateway").is_symlink()

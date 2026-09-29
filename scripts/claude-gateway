@@ -597,7 +597,15 @@ if mode == "on":
                 '  status) exec "$gw" status --gclaude ;;\n'
                 '  uninstall) exec "$gw" off --gclaude ;;\n'
                 "esac\n"
-                "command -v claude >/dev/null 2>&1 || { echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127; }\n"
+                "# A claude on PATH that can't be executed (an npm install whose native binary never arrived) isn't missing.\n"
+                "if ! command -v claude >/dev/null 2>&1; then\n"
+                "  bad=$(IFS=:; for d in $PATH; do [ -e \"$d/claude\" ] && { echo \"$d/claude\"; break; }; done)\n"
+                "  if [ -n \"$bad\" ]; then\n"
+                "    echo \"gclaude: Claude Code at $bad can't be run; reinstall it (installed with npm: npm install -g @anthropic-ai/claude-code)\" >&2\n"
+                "    exit 126\n"
+                "  fi\n"
+                "  echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127\n"
+                "fi\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
                 "# Sign this computer in again first, as plain claude's login would, when /logout_gclaude removed the key or\n"
