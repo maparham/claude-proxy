@@ -64,6 +64,19 @@ jobs:
       CLAUDE_GATEWAY_REPO: ${{ github.repository }}
       CLAUDE_GATEWAY_REF: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
+      - name: curl … | sh stops without Claude Code
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if out=$(curl -fsSL "https://raw.githubusercontent.com/$CLAUDE_GATEWAY_REPO/$CLAUDE_GATEWAY_REF/install.sh" | sh 2>&1); then
+            echo "installed without Claude Code: $out"; exit 1
+          fi
+          grep 'Claude Code (claude) is needed first' <<<"$out" >/dev/null
+      - name: Install Claude Code
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://claude.ai/install.sh | bash
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: curl … | sh
         if: runner.os != 'Windows'
         shell: bash
