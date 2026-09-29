@@ -1188,6 +1188,19 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
     assert r.returncode == 1 and "claude [" not in r.stdout
 
 
+def test_gclaude_tells_a_claude_that_cannot_run_from_a_missing_one(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    fake = home / "fakebin"
+    fake.mkdir()
+    (fake / "claude").write_text("not a program\n")   # on PATH, but not executable
+    r = run([str(launcher)], {"PATH": f"{fake}:/usr/bin:/bin", "HOME": str(home)})
+    assert r.returncode == 126 and f"Claude Code at {fake / 'claude'} can't be run" in r.stderr
+    (fake / "claude").unlink()
+    r = run([str(launcher)], {"PATH": f"{fake}:/usr/bin:/bin", "HOME": str(home)})
+    assert r.returncode == 127 and "not installed or not on PATH" in r.stderr
+
+
 def test_gclaude_update_works_after_logout(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, gsettings, launcher = gc_paths(home)

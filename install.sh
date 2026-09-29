@@ -7,7 +7,8 @@
 #
 # It puts claude-gateway and the files it installs from (statusline.sh, gclaude-sync.py, examples/opencode) in
 # ~/.local/share/claude-gateway, replacing an earlier copy, and links ~/.local/bin/claude-gateway to it. Anything
-# after `--` then runs as `claude-gateway ...`. Needs curl, tar and python3.
+# after `--` then runs as `claude-gateway ...`. Needs curl, tar and python3, and a Claude Code that runs (not for
+# `on --opencode`).
 # CLAUDE_GATEWAY_REPO (owner/name) and CLAUDE_GATEWAY_REF (branch or tag) pick another source;
 # CLAUDE_GATEWAY_TARBALL gives the archive's URL directly.
 set -eu
@@ -23,6 +24,23 @@ link=$bin/claude-gateway
 for tool in curl tar python3; do
   command -v "$tool" >/dev/null 2>&1 || { echo "install.sh: $tool is needed" >&2; exit 1; }
 done
+# Claude Code must run before anything is set up for it: an npm install whose native binary never arrived leaves a
+# `claude` on PATH that only fails (or can't be executed at all), and gclaude would then fail on every start.
+case " $* " in
+  *" --opencode "*) ;;
+  *)
+    claude=$(command -v claude 2>/dev/null) ||
+      claude=$(IFS=:; for d in $PATH; do [ -e "$d/claude" ] && { echo "$d/claude"; break; }; done; true)
+    if [ -z "$claude" ]; then
+      echo "install.sh: Claude Code (claude) is needed first: install it, then run this again." >&2; exit 1
+    fi
+    if ! out=$("$claude" --version 2>&1); then
+      echo "install.sh: Claude Code at $claude doesn't run:" >&2
+      printf '%s\n' "$out" | head -n 3 | sed 's/^/  /' >&2
+      echo "Reinstall it (installed with npm: npm install -g @anthropic-ai/claude-code), then run this again." >&2
+      exit 1
+    fi ;;
+esac
 if [ -e "$link" ] && [ ! -L "$link" ]; then
   echo "install.sh: $link already exists and is not a link; left as it is." >&2; exit 1
 fi
