@@ -185,8 +185,12 @@ def test_the_dashboards_one_liner_installs_and_authorizes(dash, home, tmp_path, 
     dash.files = {"/install": install_sh(c).encode(), "/raw/install.sh": (ROOT / "install.sh").read_bytes()}
     dash.tokens = [(400, {"error": "authorization_pending"}), (200, {"key": "sk-proxy-machine", "user": "maya"})]
     path, log = opener(tmp_path)
+    fake = tmp_path / "claudebin"   # the installer checks that Claude Code runs; CI has none
+    fake.mkdir()
+    (fake / "claude").write_text('#!/bin/sh\necho "2.1.0 (Claude Code)"\n')
+    (fake / "claude").chmod(0o755)
     r = run(["sh", "-c", f"curl -fsSL {dash.url}/install | sh"],
-            {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"),
+            {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home), "TMPDIR": str(home / "tmp"),
              "CLAUDE_GATEWAY_TARBALL": f"file://{tarball}", "CLAUDE_GATEWAY_OPEN": str(path)})
     assert r.returncode == 0, r.stdout + r.stderr
     assert "gclaude now runs Claude Code" in r.stdout and "Authorized as maya" in r.stderr
