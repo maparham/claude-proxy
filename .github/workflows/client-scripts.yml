@@ -84,6 +84,18 @@ jobs:
           curl -fsSL "https://raw.githubusercontent.com/$CLAUDE_GATEWAY_REPO/$CLAUDE_GATEWAY_REF/install.sh" | sh
           "$HOME/.local/bin/claude-gateway" --help | grep 'claude-gateway on --gclaude' >/dev/null   # not -q: it would stop reading early
           "$HOME/.local/bin/claude-gateway" status
+      - name: irm … | iex stops without Claude Code
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $threw = $null
+          try { irm "https://raw.githubusercontent.com/$env:CLAUDE_GATEWAY_REPO/$env:CLAUDE_GATEWAY_REF/install.ps1" | iex } catch { $threw = "$_" }
+          if ($threw -notmatch 'Claude Code \(claude\) is needed first') { throw "expected the installer to stop, got: $threw" }
+      - name: Install Claude Code
+        if: runner.os == 'Windows'
+        shell: powershell
+        # Not added to PATH: install.ps1 finds claude.exe in .local\bin, where Claude Code's own installer puts it.
+        run: irm https://claude.ai/install.ps1 | iex
       - name: irm … | iex
         if: runner.os == 'Windows'
         shell: powershell

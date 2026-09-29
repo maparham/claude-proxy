@@ -138,10 +138,14 @@ class Win:
         self.bin = self.home / ".local" / "bin"
         for p in (self.home, self.temp):
             p.mkdir(parents=True, exist_ok=True)
+        # A Claude Code that runs, as install.ps1 checks for one (CI has none); fake_claude's goes ahead of it.
+        self.claudebin = tmp_path / "claudebin"
+        self.claudebin.mkdir(exist_ok=True)
+        (self.claudebin / "claude.cmd").write_text("@echo 2.1.0 (Claude Code)\r\n")
         self.env = {k: v for k, v in os.environ.items() if k != "SSH_CONNECTION"}
         self.env.update({"USERPROFILE": str(self.home), "TEMP": str(self.temp), "TMP": str(self.temp),
                          "CLAUDE_GATEWAY_ZIP": str(source_zip), "CLAUDE_GATEWAY_BIN": str(self.bin),
-                         "CLAUDE_GATEWAY_OPEN": "none", "PATH": f"{self.bin};{os.environ['PATH']}"})
+                         "CLAUDE_GATEWAY_OPEN": "none", "PATH": f"{self.bin};{self.claudebin};{os.environ['PATH']}"})
         self.config = self.home / ".config" / "claude-gateway"
         self.gdir = self.config / "claude"
 
@@ -243,6 +247,32 @@ def test_a_failed_install_fails_the_command_that_ran_it(win, tmp_path):
     assert win.install_command().returncode == 0
 
 
+def no_claude_path(win, tmp_path):
+    """PATH without any claude: the machine's own folders that hold one left out."""
+    keep = [d for d in os.environ["PATH"].split(";") if d and not any((Path(d) / f"claude{x}").exists() for x in (".exe", ".cmd", ".bat"))]
+    return ";".join([str(win.bin), *keep])
+
+
+@on_windows
+def test_install_stops_when_claude_is_missing(win, tmp_path):
+    r = win.install(PATH=no_claude_path(win, tmp_path))
+    assert "session still open" in r.out and "Claude Code (claude) is needed first" in r.out, r.out
+    assert not (win.bin / "claude-gateway.cmd").exists()
+    r = win.install_command(PATH=no_claude_path(win, tmp_path))   # gclaude update's way: a failure exits non-zero
+    assert r.returncode != 0 and "is needed first" in r.out, r.out
+
+
+@on_windows
+def test_install_stops_when_claude_does_not_run(win, tmp_path):
+    bad = tmp_path / "badclaude"
+    bad.mkdir()
+    (bad / "claude.cmd").write_text("@echo Error: claude native binary not installed. 1>&2\r\n@exit /b 1\r\n")
+    r = win.install(PATH=f"{bad};{no_claude_path(win, tmp_path)}")
+    assert "session still open" in r.out and "doesn't run" in r.out and "native binary not installed" in r.out, r.out
+    assert "npm install -g @anthropic-ai/claude-code" in r.out
+    assert not (win.bin / "claude-gateway.cmd").exists()
+
+
 @on_windows
 def test_help_prints_the_whole_header(installed):
     r = installed.cg("help")
@@ -260,7 +290,8 @@ def fake_claude(win, tmp_path):
     with echo: cmd would split a folder name with & in it, and print in the console's code page."""
     d = tmp_path / "fakebin"
     d.mkdir()
-    (d / "saw.ps1").write_text("[IO.File]::WriteAllText($env:GW_OUT, $env:CLAUDE_CONFIG_DIR + '|' + ($args -join ' '))\n")
+    (d / "saw.ps1").write_text("if ($args -contains '--version') { '2.1.0 (Claude Code)'; exit 0 }   # install.ps1's check\n"
+                               "[IO.File]::WriteAllText($env:GW_OUT, $env:CLAUDE_CONFIG_DIR + '|' + ($args -join ' '))\n")
     (d / "claude.cmd").write_text('@powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0saw.ps1" %*\r\n')
     return {"PATH": f"{d};{win.env['PATH']}", "GW_OUT": str(tmp_path / "claude-saw.txt")}
 
