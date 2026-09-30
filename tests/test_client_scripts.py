@@ -1880,21 +1880,28 @@ def cg_tty(home, answer, *args, **env):
     tmp = home / "tmp"
     tmp.mkdir(exist_ok=True)
     master, slave = pty.openpty()
+    shown = bytearray()
+
+    def drain():   # reads while the child runs: on some platforms, output left unread past the child's exit
+        try:        # (and the parent's close of master) is lost rather than staying queued for a later read
+            while chunk := os.read(master, 65536):
+                shown.extend(chunk)
+        except OSError:   # EIO once the slave side is fully closed and the buffer is drained
+            pass
+
+    reader = threading.Thread(target=drain)
+    reader.start()
     try:
-        r = subprocess.run(["bash", str(GATEWAY), *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=slave,
-                           text=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp),
-                                                       "CLAUDE_GATEWAY_TTY": str(tty), **env})
+        p = subprocess.Popen(["bash", str(GATEWAY), *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=slave,
+                             text=True, env={"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp),
+                                             "CLAUDE_GATEWAY_TTY": str(tty), **env})
     finally:
-        os.close(slave)
-    os.set_blocking(master, False)
-    shown = b""
-    try:
-        while chunk := os.read(master, 65536):
-            shown += chunk
-    except OSError:   # BlockingIOError once drained; EIO on Linux once the other end is closed
-        pass
+        os.close(slave)   # the parent's copy; the child's own copy keeps the pty alive until it exits
+    stdout, _ = p.communicate(timeout=60)
+    reader.join(timeout=5)
     os.close(master)
-    return r, shown.decode("utf-8", "replace")
+    r = subprocess.CompletedProcess(p.args, p.returncode, stdout=stdout, stderr=None)
+    return r, bytes(shown).decode("utf-8", "replace")
 
 
 def client_json(home):
