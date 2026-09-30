@@ -548,6 +548,33 @@ def test_logout_revokes_the_key_and_the_next_gclaude_signs_in_again(gclaude, ins
 
 
 @on_windows
+@pytest.mark.skipif(not shutil.which("node"), reason="no node here")
+def test_logout_ends_the_claude_session_that_ran_it(installed, stub, tmp_path):
+    """Ctrl-C twice, typed into the console of the claude running the hook: Claude Code then exits the usual way."""
+    win = installed
+    assert win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url).returncode == 0
+    s = win.settings()
+    log = tmp_path / "ctrl-c.txt"
+    fake = tmp_path / "claude.js"   # node running claude, as an npm install does, in raw mode like Claude Code
+    fake.write_text("""
+const fs = require("fs"), [line, log] = process.argv.slice(2);
+let n = 0, out = "";
+process.stdin.setRawMode(true);
+process.stdin.on("data", d => { for (const b of d) if (b === 3) n++; fs.writeFileSync(log, `${n}|${out}`); if (n >= 2) process.exit(0); });
+const hook = require("child_process").spawn(line, { shell: true, stdio: ["pipe", "pipe", "inherit"] });
+hook.stdout.on("data", d => out += d);
+hook.stdin.end(JSON.stringify({ prompt: "/logout_gclaude" }));
+setTimeout(() => process.exit(1), 40000);
+""")
+    env = {**win.env, **s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir), "CLAUDE_PROJECT_DIR": str(tmp_path)}
+    p = subprocess.Popen(["node", str(fake), s["statusLine"]["command"] + " --warn", str(log)], env=env,
+                         creationflags=subprocess.CREATE_NEW_CONSOLE)   # a console of its own, as a terminal gives
+    assert p.wait(timeout=60) == 0
+    n, out = log.read_text().split("|", 1)
+    assert n == "2" and "gclaude is closing" in json.loads(out)["stopReason"], out
+
+
+@on_windows
 @pytest.mark.parametrize("body", [b"", b"<html>maintenance</html>"], ids=["empty", "html"])
 def test_logout_after_a_200_with_an_odd_reply_still_signs_out_and_says_so(gclaude, installed, stub, body):
     """A 2xx whose body isn't the JSON expected is not 'the gateway could not be reached'."""
