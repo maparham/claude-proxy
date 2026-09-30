@@ -4,6 +4,8 @@
 #   claude-gateway on --url https://claude.example.com --key sk-proxy-...   # or with a key from the admin
 #   claude-gateway on                # later: refresh what it set up
 #   claude-gateway on --login        # authorize this computer again, e.g. after it was removed in the dashboard
+#   claude-gateway on --lang en|fa   # gclaude's language (asked the first time)
+#   claude-gateway lang en|fa        # switch it; gclaude's /language runs this
 #   claude-gateway off               # remove gclaude (its history stays)
 #   claude-gateway status
 # gclaude users need none of these: `gclaude update`, `gclaude status` and `gclaude uninstall` run them.
@@ -38,6 +40,7 @@ $LauncherMark = 'rem Installed by claude-gateway on --gclaude.'
 $UsageMark = '# Installed by claude-gateway on --gclaude.'   # the same as on macOS/Linux
 $Settings = Join-Path $GDir 'settings.json'
 $Statusline = Join-Path $ClientDir 'statusline.ps1'   # a copy, so the installed folder can be replaced
+$I18n = Join-Path $PSScriptRoot 'i18n.json'   # gclaude's text in English and Persian; Persian can't sit in this ANSI-read file
 # How Claude Code runs it: forward slashes and double quotes read the same in cmd, PowerShell and Git Bash.
 $LineCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + ($Statusline -replace '\\', '/') + '"'
 $WarnCmd = "$LineCmd --warn"
@@ -89,6 +92,48 @@ function Set-Field($o, [string]$n, $v) { $o | Add-Member -NotePropertyName $n -N
 function Remove-Field($o, [string]$n) { if (Has $o $n) { $o.PSObject.Properties.Remove($n) } }
 function Field($o, [string]$n) { if (Has $o $n) { return $o.$n } return $null }
 function Is-Empty($o) { return @($o.PSObject.Properties).Count -eq 0 }
+
+# ---------- language ----------
+
+function T([string]$key, [string]$lang, [hashtable]$a = @{}) {   # the catalog's text for key in lang (English when it has none)
+  $texts = ([IO.File]::ReadAllText($I18n, (New-Object Text.UTF8Encoding $false)) | ConvertFrom-Json).$key
+  $text = [string](Field $texts $lang); if (-not $text) { $text = [string]$texts.en }
+  foreach ($k in $a.Keys) { $text = $text.Replace('{' + $k + '}', [string]$a[$k]) }
+  return $text
+}
+function Lang($c) { $l = [string](Field $c 'lang'); if ($l -in 'en', 'fa') { return $l } return 'en' }
+
+function Choose-Lang([string]$given, $c) {   # the language given, else the saved one, else asked once; '' when it can't ask
+  if ($given) { return $given }
+  $saved = [string](Field $c 'lang'); if ($saved -in 'en', 'fa') { return $saved }
+  if ($env:CLAUDE_GATEWAY_FROM_GCLAUDE) { return '' }
+  if (-not $env:CLAUDE_GATEWAY_TTY -and [Console]::IsInputRedirected) {
+    Say 'No terminal to ask on, so gclaude uses English; /language fa switches it to Persian (Farsi).'
+    return ''
+  }
+  [Console]::Error.Write('Language:  1) English  2) Farsi (Persian)  [1] ')
+  if ($env:CLAUDE_GATEWAY_TTY) { $answer = [IO.File]::ReadAllText($env:CLAUDE_GATEWAY_TTY); Say '' }   # tests: the answer from a file, as on macOS/Linux
+  else { $answer = [Console]::ReadLine() }
+  $answer = ([string]$answer).Trim()
+  if ($answer -in '2', 'fa', 'farsi', 'persian', [string][char]0x06F2) { return 'fa' }   # 0x06F2: the Persian digit 2
+  return 'en'
+}
+
+function Set-Language($c, $s) {   # client.json's lang into gclaude's settings: Claude's replies, and what the hook needs
+  $rec = Field $c 'gclaude'
+  if (-not ($rec -is [psobject])) { $rec = New-Object psobject; Set-Field $c 'gclaude' $rec }
+  $lang = Lang $c
+  $envBlock = Field $s 'env'
+  if (-not ($envBlock -is [psobject])) { $envBlock = New-Object psobject; Set-Field $s 'env' $envBlock }
+  Set-Field $envBlock 'CLAUDE_GATEWAY_LANG' $lang
+  Set-Field $envBlock 'CLAUDE_GATEWAY_CMD' $PSCommandPath   # /language runs `claude-gateway lang`
+  if ((Field $rec 'added_language') -and ((Field $s 'language') -eq 'persian')) { Remove-Field $s 'language' }
+  Remove-Field $rec 'added_language'
+  if ($lang -eq 'fa' -and -not (Has $s 'language')) {   # a language the user set in gclaude's settings stays theirs
+    Set-Field $s 'language' 'persian'
+    Set-Field $rec 'added_language' $true
+  }
+}
 
 function Cmd-Path([string]$Path) {
   # How a .cmd file should spell a path: the profile folder as %USERPROFILE%, since its name may hold letters the
@@ -193,7 +238,7 @@ function Ours-Hook($group) {
 function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's settings.json, as far as it is still ours
   $envBlock = Field $s 'env'
   if ($envBlock -is [psobject]) {
-    foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD') { Remove-Field $envBlock $k }
+    foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD', 'CLAUDE_GATEWAY_LANG', 'CLAUDE_GATEWAY_CMD') { Remove-Field $envBlock $k }
     $added = Field $rec 'added_models'
     if ($added -is [psobject]) {   # only while still ours: the user has not picked another model for that alias since
       foreach ($p in $added.PSObject.Properties) { if ((Field $envBlock $p.Name) -eq $p.Value) { Remove-Field $envBlock $p.Name } }
@@ -208,14 +253,27 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
     if ($groups.Count) { Set-Field $hooks 'UserPromptSubmit' $groups } else { Remove-Field $hooks 'UserPromptSubmit' }
     if (Is-Empty $hooks) { Remove-Field $s 'hooks' }
   }
-  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook', 'added_models') { Remove-Field $rec $k }
+  if ((Field $rec 'added_language') -and ((Field $s 'language') -eq 'persian')) { Remove-Field $s 'language' }
+  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook', 'added_models', 'added_language') { Remove-Field $rec $k }
 }
 
-function Command-Text([string]$name) {
+function Command-Text([string]$name, [string]$lang) {
+  if ($name -eq 'language') {   # answered by the --warn hook, which runs `claude-gateway lang`
+    return @"
+---
+description: $(ConvertTo-Json -Compress (T 'cmd.language' $lang))
+argument-hint: en | fa
+disable-model-invocation: true
+---
+<!-- $UsageMark -->
+The claude-gateway hook that answers /language did not run, so the language was not changed. Tell the user, in one
+sentence, that running ``gclaude update`` in a terminal reinstalls the hook. Use no tools.
+"@
+  }
   if ($name -eq 'logout_gclaude') {   # answered by the --warn hook, as the key it removes is the one a model call would need
     return @"
 ---
-description: Sign this computer out of the gateway
+description: $(ConvertTo-Json -Compress (T 'cmd.logout_gclaude' $lang))
 disable-model-invocation: true
 ---
 <!-- $UsageMark -->
@@ -226,7 +284,7 @@ that running ``gclaude update`` in a terminal reinstalls the hook and ``gclaude 
   if ($name -eq 'account') {   # statusline.ps1 --account, repeated by a small model call; see statusline.ps1
     return @"
 ---
-description: Your gateway account and a link to the dashboard
+description: $(ConvertTo-Json -Compress (T 'cmd.account' $lang))
 allowed-tools: Bash($LineCmd --account)
 model: haiku
 disable-model-invocation: true
@@ -239,7 +297,7 @@ Repeat the line above to the user exactly as it is, and nothing else. Use no too
   }
   return @"
 ---
-description: Your gateway limits and usage
+description: $(ConvertTo-Json -Compress (T 'cmd.usage' $lang))
 disable-model-invocation: true
 ---
 <!-- $UsageMark -->
@@ -248,16 +306,30 @@ are on the status line and on the dashboard, and that running ``gclaude update``
 "@
 }
 
+function Write-Commands($c) {   # gclaude's /usage, /account, /logout_gclaude and /language, in its language
+  foreach ($name in 'usage', 'account', 'logout_gclaude', 'language') {
+    $file = Join-Path $GDir "commands\$name.md"
+    if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {
+      Write-Output "$file is your own, so it was left as it is; /$name in gclaude runs it instead of the gateway's."
+    } else {
+      New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
+      [IO.File]::WriteAllText($file, ((Command-Text $name (Lang $c)) -replace "`r`n", "`n") + "`n", (New-Object Text.UTF8Encoding $false))
+    }
+  }
+}
+
 function Gclaude-On($c) {
   $rec = Field $c 'gclaude'
   if (-not ($rec -is [psobject])) { $rec = New-Object psobject; Set-Field $c 'gclaude' $rec }
 
   foreach ($d in $ClientDir, $GDir) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
   Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'statusline.ps1') -Destination $Statusline -Force
+  Copy-Item -LiteralPath $I18n -Destination (Join-Path $ClientDir 'i18n.json') -Force   # the statusline's text, beside it
 
   $s = Read-Json $Settings
   if (-not ($s -is [psobject])) { $s = New-Object psobject }
   Remove-Ours $s $rec
+  Set-Language $c $s
   $envBlock = Field $s 'env'
   if (-not ($envBlock -is [psobject])) { $envBlock = New-Object psobject; Set-Field $s 'env' $envBlock }
   Set-Field $envBlock 'ANTHROPIC_BASE_URL' $c.url
@@ -296,15 +368,7 @@ function Gclaude-On($c) {
   # and /logout_gclaude instead (not /logout: a built-in can't be hidden, so the menu would list both). /account: Command-Text.
   $old = Join-Path $GDir 'commands\logout.md'   # what an older gclaude named /logout_gclaude
   if ((Test-Path -LiteralPath $old) -and (Select-String -LiteralPath $old -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $old -Force }
-  foreach ($name in 'usage', 'account', 'logout_gclaude') {
-    $file = Join-Path $GDir "commands\$name.md"
-    if ((Test-Path -LiteralPath $file) -and -not (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) {
-      Write-Output "$file is your own, so it was left as it is; /$name in gclaude runs it instead of the gateway's."
-    } else {
-      New-Item -ItemType Directory -Path (Split-Path -Parent $file) -Force | Out-Null
-      [IO.File]::WriteAllText($file, ((Command-Text $name) -replace "`r`n", "`n") + "`n", (New-Object Text.UTF8Encoding $false))
-    }
-  }
+  Write-Commands $c
 
   $state = Join-Path $GDir '.claude.json'   # Claude Code's own state; seeded once so it skips its welcome screens
   if (-not (Test-Path -LiteralPath $state)) {
@@ -387,12 +451,13 @@ function Gclaude-Off {
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue
   $cmds = Join-Path $GDir 'commands'
-  foreach ($name in 'usage', 'account', 'logout_gclaude', 'logout') {   # logout: an older gclaude's
+  foreach ($name in 'usage', 'account', 'logout_gclaude', 'language', 'logout') {   # logout: an older gclaude's
     $file = Join-Path $cmds "$name.md"
     if ((Test-Path -LiteralPath $file) -and (Select-String -LiteralPath $file -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $file -Force }
   }
   if ((Test-Path -LiteralPath $cmds) -and -not (Get-ChildItem -LiteralPath $cmds -Force)) { Remove-Item -LiteralPath $cmds -Force }
   Remove-Field $c 'gclaude'
+  Remove-Field $c 'lang'   # `on` saved it for gclaude
   if (Test-Path -LiteralPath $Client) { Write-Json $Client $c -Private }
   if (Launcher-Ours) {
     Remove-Item -LiteralPath $Launcher -Force
@@ -423,7 +488,21 @@ function Show-Status {
 $cmd = 'status'; $rest = @()
 if ($args.Count -gt 0) { $cmd = [string]$args[0] }
 if ($args.Count -gt 1) { $rest = @($args[1..($args.Count - 1)]) }
-$url = ''; $key = ''; $dash = ''; $login = $false
+if ($cmd -eq 'lang') {   # gclaude's /language runs this (statusline.ps1 --warn). No network and no key, so it works signed out too.
+  if ($rest.Count -ne 1 -or [string]$rest[0] -notin 'en', 'fa') { Fail 'Usage: claude-gateway lang en|fa' }
+  if (-not (Launcher-Ours)) { Fail 'gclaude is not set up, so it has no language to change.' }
+  $c = Read-Json $Client
+  if (-not ($c -is [psobject])) { $c = New-Object psobject }
+  Set-Field $c 'lang' ([string]$rest[0])
+  $s = Read-Json $Settings
+  if (-not ($s -is [psobject])) { $s = New-Object psobject }
+  Set-Language $c $s
+  Write-Json $Settings $s -Private
+  Write-Json $Client $c -Private
+  Write-Commands $c
+  exit 0
+}
+$url = ''; $key = ''; $dash = ''; $login = $false; $lang = ''
 for ($i = 0; $i -lt $rest.Count; $i++) {
   $a = [string]$rest[$i]
   $next = { if ($i + 1 -ge $rest.Count) { Fail "$a needs a value" }; $script:i++; [string]$rest[$script:i] }
@@ -432,6 +511,7 @@ for ($i = 0; $i -lt $rest.Count; $i++) {
     '--key' { $key = & $next }
     '--dashboard' { $dash = & $next }
     '--login' { $login = $true }
+    '--lang' { $lang = & $next; if ($lang -notin 'en', 'fa') { Fail '--lang is en (English) or fa (Persian).' } }
     '--gclaude' { }
     { $_ -in '--global', '--own-login', '--key-only', '--opencode', '--routes-key' } { Fail "$a is not available on Windows yet; see $Issue" }
     { $_ -in '-h', '--help' } { Usage; exit 0 }
@@ -454,6 +534,8 @@ switch -Exact ($cmd) {
       if ($savedUrl -eq $url -and $savedDash) { $dash = $savedDash } else { $dash = ([regex]'://claude\.').Replace($url, '://claude-dash.', 1) }
     }
     $dash = $dash.TrimEnd('/')
+    $chosen = Choose-Lang $lang $c   # before signing in, as on macOS/Linux; saved only once `on` goes through
+    if ($chosen) { Set-Field $c 'lang' $chosen }
     if (-not $key) {
       if ($login -or $savedUrl -ne $url -or -not $savedKey) { $key = Authorize $dash } else { $key = $savedKey }
     }

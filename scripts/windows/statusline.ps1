@@ -14,6 +14,9 @@
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
 # signed-out file in CLAUDE_CONFIG_DIR, so the next gclaude.cmd signs in again (`claude-gateway on --login`, which removes it) before it starts.
+# It answers gclaude's /language too (commands\language.md there): alone it says which language gclaude speaks;
+# with en or fa (English, Persian, Farsi) it runs `claude-gateway lang` (CLAUDE_GATEWAY_CMD) to switch. What this
+# script shows is in CLAUDE_GATEWAY_LANG (gclaude's settings.json sets it; English without it), from i18n.json beside it.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -50,6 +53,12 @@ try {
   function Emit([string]$s) { $stdout.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
   function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
+  function T([string]$key, [hashtable]$a = @{}, [string]$lang = $env:CLAUDE_GATEWAY_LANG) {   # i18n.json beside this script
+    $texts = ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'i18n.json'), $utf8) | ConvertFrom-Json).$key
+    $text = if ($lang -eq 'fa' -and $texts.fa) { [string]$texts.fa } else { [string]$texts.en }
+    foreach ($k in $a.Keys) { $text = $text.Replace('{' + $k + '}', [string]$a[$k]) }
+    return $text
+  }
 
   if (Ours 'logout_gclaude') {   # gclaude's /logout_gclaude: revoke this computer's key on the gateway, then drop every copy of it here
     $key = [string]$env:ANTHROPIC_AUTH_TOKEN
@@ -87,21 +96,33 @@ try {
           [IO.File]::WriteAllText($client, (ConvertTo-Json -InputObject $c -Depth 20) + "`n", $utf8)
         }
       }
-    } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. gclaude uninstall removes it." }
-    $again = 'Exit gclaude now (/exit); run gclaude again to sign in.'
+    } catch { Stop-Prompt (T 'logout.failed' @{ settings = $settings }) }
+    $again = T 'logout.again_windows'
     $where = if ($dash) { " ($dash/dashboard)" } else { '' }
     $accepted = $code -ge 200 -and $code -lt 300
-    if ($accepted -and $odd) { Stop-Prompt "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP $code) but gave an unexpected reply; check in the dashboard that this computer is gone$where. $again" }
-    if ($accepted -and $revoked) { Stop-Prompt "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" }
-    if ($accepted) { Stop-Prompt "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" }
-    if ($code -eq 401 -or $code -eq 403) { Stop-Prompt "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" }
-    $why = if ($code) { "refused to revoke it (HTTP $code)" } else { 'could not be reached to revoke it' }
-    Stop-Prompt "Signed out here: the key is removed from gclaude, but the gateway $why; remove this computer in the dashboard$where. $again"
+    if ($accepted -and $odd) { Stop-Prompt (T 'logout.odd' @{ code = $code; where = $where; again = $again }) }
+    if ($accepted -and $revoked) { Stop-Prompt (T 'logout.revoked' @{ again = $again }) }
+    if ($accepted) { Stop-Prompt (T 'logout.first_key' @{ again = $again }) }
+    if ($code -eq 401 -or $code -eq 403) { Stop-Prompt (T 'logout.refused' @{ again = $again }) }
+    if ($code) { Stop-Prompt (T 'logout.http' @{ code = $code; where = $where; again = $again }) }
+    Stop-Prompt (T 'logout.offline' @{ where = $where; again = $again })
+  }
+
+  if (Ours 'language') {   # gclaude's /language [en|fa]: switching runs `claude-gateway lang`
+    $arg = ''
+    try { $arg = ([string]($stdin | ConvertFrom-Json).prompt).Substring('/language'.Length).Trim().ToLowerInvariant() } catch { }
+    $farsi = -join ([char[]](0x0641, 0x0627, 0x0631, 0x0633, 0x06CC))   # the word in Persian script; this file stays ASCII
+    $english = -join ([char[]](0x0627, 0x0646, 0x06AF, 0x0644, 0x06CC, 0x0633, 0x06CC))   # "English" in Persian script, as on macOS/Linux
+    if (-not $arg) { Block (T 'language.current') }
+    $new = if ($arg -in 'en', 'english', $english) { 'en' } elseif ($arg -in 'fa', 'persian', 'farsi', $farsi) { 'fa' } else { Block (T 'language.usage') }
+    $out = & powershell -NoProfile -ExecutionPolicy Bypass -File $env:CLAUDE_GATEWAY_CMD lang $new 2>&1
+    if ($LASTEXITCODE -eq 0) { Block (T 'language.switched' @{} $new) }
+    Block (T 'language.failed' @{ error = ([string](@($out)[-1])).Trim() })
   }
 
   if (-not $dash) {
-    if ($accountMode) { Emit 'Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update).'; exit 0 }
-    if ($usage) { Block 'Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update).' }
+    if ($accountMode) { Emit (T 'account.no_dashboard'); exit 0 }
+    if ($usage) { Block (T 'usage.no_dashboard') }
     if (-not $warn) { [Console]::Error.WriteLine('statusline.ps1: set CLAUDE_GATEWAY_DASHBOARD') }
     exit 0
   }
@@ -161,8 +182,8 @@ try {
 
   function Account-Line {
     $a = Status 'account'
-    if (-not $a) { return "Account details unavailable; see $dash/dashboard" }
-    return 'Account: ' + $a + ' ' + [char]0x00B7 + " dashboard: $dash/dashboard"
+    if (-not $a) { return (T 'account.unavailable' @{ dashboard = "$dash/dashboard" }) }
+    return (T 'account.line' @{ account = $a; dashboard = "$dash/dashboard" })
   }
   if ($accountMode) { Emit (Account-Line); exit 0 }
 
@@ -176,18 +197,18 @@ try {
   }
 
   if (-not $warn) {
-    if (-not $line) { $line = 'gateway status unavailable' }
+    if (-not $line) { $line = T 'line.unavailable' }
     Emit (Figures $line $true)
     exit 0
   }
 
   if ($usage) {
-    if (-not $line) { Block "Gateway status unavailable; see $dash/dashboard" }
-    Block ('Gateway: ' + (Figures $line $false) + ' ' + [char]0x00B7 + " details: $dash/dashboard")
+    if (-not $line) { Block (T 'usage.unavailable' @{ dashboard = "$dash/dashboard" }) }
+    Block (T 'usage.line' @{ figures = (Figures $line $false); dashboard = "$dash/dashboard" })
   }
   if ($account) {   # the model answers /account, unless it can't be reached
     if (-not $line) { Block (Account-Line) }
-    if ((Peak $line) -ge 100) { Block ((Account-Line) + ' ' + [char]0x00B7 + ' limit reached: ' + (Figures $line $false)) }
+    if ((Peak $line) -ge 100) { Block (T 'account.limit' @{ account = (Account-Line); figures = (Figures $line $false) }) }
   }
 
   # --warn: band 1 from 80%, band 2 from 100%. The state file holds the band last warned about; its age is the time since.
@@ -205,9 +226,13 @@ try {
     if ($band -le $last -and (Age $state) -lt 900) { exit 0 }
   }
   [IO.File]::WriteAllText($state, "$band`n", $utf8)
-  Emit (ConvertTo-Json -Compress -InputObject @{ systemMessage = 'Gateway: ' + (Figures $line $false) })
+  Emit (ConvertTo-Json -Compress -InputObject @{ systemMessage = (T 'warn.line' @{ figures = (Figures $line $false) }) })
   exit 0
 } catch {
-  if (-not $warn -and $stdout) { $stdout.Write("gateway status unavailable`n") }   # $stdout: unless making it failed
+  if (-not $warn -and $stdout) {   # $stdout: unless making it failed. English when the catalog is what failed.
+    $text = 'gateway status unavailable'
+    try { $text = T 'line.unavailable' } catch { }
+    $stdout.Write("$text`n")
+  }
   exit 0
 }

@@ -315,9 +315,11 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     c = win.client()
     assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-new", stub.url)
     s = win.settings()
+    assert s["env"].pop("CLAUDE_GATEWAY_CMD").endswith("claude-gateway.ps1")   # /language runs it
     assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url,
                         "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
-                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]", "CLAUDE_GATEWAY_LANG": "en"}
+    s = win.settings()
     assert s["disableClaudeAiConnectors"] is True
     line = s["statusLine"]["command"]
     assert line.startswith("powershell -NoProfile -ExecutionPolicy Bypass -File \"") and line.endswith("/statusline.ps1\"")
@@ -753,3 +755,56 @@ def test_login_authorizes_again_and_a_key_alone_keeps_the_saved_gateway(installe
     assert r.returncode == 0 and "/api/device/start" not in stub.paths(), r.out
     c = win.client()
     assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-three", stub.url)
+
+
+# ---------- gclaude's language ----------
+
+CATALOG = json.loads((WINDOWS / "i18n.json").read_text(encoding="utf-8"))
+
+
+@on_windows
+def test_on_with_lang_fa_sets_the_language_and_the_command_descriptions(installed, stub):
+    win = installed
+    r = win.cg("on", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url)
+    assert r.returncode == 0, r.out
+    s = win.settings()
+    assert win.client()["lang"] == "fa" and s["language"] == "persian" and s["env"]["CLAUDE_GATEWAY_LANG"] == "fa"
+    assert s["env"]["CLAUDE_GATEWAY_CMD"].endswith("claude-gateway.ps1")
+    md = (win.gdir / "commands" / "usage.md").read_text(encoding="utf-8")
+    line = next(l for l in md.splitlines() if l.startswith("description: "))
+    assert json.loads(line.removeprefix("description: ")) == CATALOG["cmd.usage"]["fa"]   # PS 5.1 writes \uXXXX escapes
+    assert (win.gdir / "commands" / "language.md").is_file()
+    assert win.cg("off").returncode == 0
+    s = win.settings()
+    assert "language" not in s and "CLAUDE_GATEWAY_LANG" not in s.get("env", {}) and "lang" not in win.client()
+
+
+@on_windows
+def test_on_asks_for_the_language_when_it_can(installed, stub, tmp_path):
+    win = installed
+    answer = tmp_path / "answer.txt"
+    answer.write_text("2\n", encoding="ascii")
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url, CLAUDE_GATEWAY_TTY=str(answer))
+    assert r.returncode == 0 and "Language:" in r.out, r.out
+    assert win.client()["lang"] == "fa"
+
+
+@on_windows
+def test_on_without_a_console_uses_english_unsaved(installed, stub):
+    win = installed
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url, stdin="")
+    assert r.returncode == 0 and "/language fa" in r.out, r.out
+    assert "lang" not in win.client() and "language" not in win.settings()
+
+
+@on_windows
+def test_the_hook_answers_language_and_switches(gclaude, installed, stub):
+    win = installed
+    r = gclaude(" --warn", '{"prompt": "/language"}')
+    assert json.loads(r.stdout)["reason"] == CATALOG["language.current"]["en"], r.out
+    r = gclaude(" --warn", '{"prompt": "/language fa"}')
+    assert json.loads(r.stdout)["reason"] == CATALOG["language.switched"]["fa"], r.out
+    assert win.client()["lang"] == "fa" and win.settings()["language"] == "persian"
+    stub.status_line = None
+    r = gclaude("", CLAUDE_GATEWAY_LANG="fa")
+    assert CATALOG["line.unavailable"]["fa"] in r.stdout, r.out
