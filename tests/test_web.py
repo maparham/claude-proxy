@@ -176,9 +176,10 @@ async def test_admin_read_endpoints_respond(env, path):
 async def test_dashboard_page_served_with_security_headers(env):
     gw, *_ = env
     async with asgi_client(create_dashboard_app(gw)) as c:
-        r = await c.get("/dashboard")
-    assert r.status_code == 200 and "<html" in r.text.lower()
-    assert r.headers["x-frame-options"] == "DENY"
+        for path in ("/dashboard", "/admin"):
+            r = await c.get(path)
+            assert r.status_code == 200 and "<html" in r.text.lower()
+            assert r.headers["x-frame-options"] == "DENY"
 
 
 async def test_dashboard_assets_are_versioned_so_caches_pick_up_deploys(env):

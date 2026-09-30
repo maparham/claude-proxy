@@ -786,6 +786,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     # Asset URLs carry a content hash, so a CDN or browser that caches them still picks up a deploy.
     @app.get("/dashboard")
+    @app.get("/admin")   # the same page, offering the admin's password sign-in instead of Clerk and keys
     async def page():
         html = (STATIC / "index.html").read_text()
         for name in ("app.js", "app.css"):
