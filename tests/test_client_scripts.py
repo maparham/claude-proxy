@@ -422,6 +422,71 @@ def test_other_logout_prompts_are_left_alone(stub, warn_env, prompt, text):
     assert json.loads((Path(warn_env["HOME"]) / "client.json").read_text())["key"] == "sk-proxy-k"
 
 
+# ---------- statusline.sh in Persian, and gclaude's /language ----------
+
+def fake_gateway(tmp_path, fails=False):
+    """A stand-in for claude-gateway that records its arguments."""
+    log = tmp_path / "gw.log"
+    path = tmp_path / "fake-claude-gateway"
+    path.write_text(f'#!/bin/sh\necho "$@" >> {log}\n' + ('echo "Usage: \\"boom\\" \\\\ here" >&2\nexit 1\n' if fails else ""))
+    path.chmod(0o755)
+    return path, log
+
+
+def language_prompt(env, prompt, gw, text="<!-- # Installed by claude-gateway on --gclaude. -->\n"):
+    env = gclaude_config(env)
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "language.md").write_text(text)
+    return run(["sh", str(STATUSLINE), "--warn"], {**env, "CLAUDE_GATEWAY_CMD": str(gw)}, stdin=json.dumps({"prompt": prompt}))
+
+
+def test_statusline_speaks_persian_when_gclaude_does(stub, warn_env):
+    fa = {**warn_env, "CLAUDE_GATEWAY_LANG": "fa"}
+    stub.status_line = None
+    assert CATALOG["line.unavailable"]["fa"] in run(["sh", str(STATUSLINE)], fa, stdin="{}").stdout
+    stub.status_line = "alice · daily 10/100 req"
+    out = json.loads(usage_prompt(fa).stdout)
+    assert out["reason"] == f"درگاه: alice · daily 10/100 req 10% · جزئیات: {stub.url}/dashboard"
+
+
+def test_language_prompt_alone_says_the_current_language(stub, warn_env, tmp_path):
+    gw, log = fake_gateway(tmp_path)
+    out = json.loads(language_prompt(warn_env, "/language", gw).stdout)
+    assert out == {"decision": "block", "reason": CATALOG["language.current"]["en"]}
+    out = json.loads(language_prompt({**warn_env, "CLAUDE_GATEWAY_LANG": "fa"}, "/language", gw).stdout)
+    assert out["reason"] == CATALOG["language.current"]["fa"]
+    assert not log.exists()
+
+
+@pytest.mark.parametrize("prompt, lang", [("/language fa", "fa"), ("/language  FA ", "fa"), ("/language Persian", "fa"),
+                                          ("/language فارسی", "fa"), ("/language en", "en"), ("/language English", "en")])
+def test_language_prompt_understands_each_way_of_naming_persian(stub, warn_env, tmp_path, prompt, lang):
+    gw, log = fake_gateway(tmp_path)
+    out = json.loads(language_prompt(warn_env, prompt, gw).stdout)
+    assert log.read_text() == f"lang {lang}\n"
+    assert out == {"decision": "block", "reason": CATALOG["language.switched"][lang]}   # in the new language
+
+
+def test_language_prompt_with_another_language_shows_how(stub, warn_env, tmp_path):
+    gw, log = fake_gateway(tmp_path)
+    out = json.loads(language_prompt(warn_env, "/language de", gw).stdout)
+    assert out["reason"] == CATALOG["language.usage"]["en"] and not log.exists()
+
+
+def test_language_answers_are_valid_json(stub, warn_env, tmp_path):
+    gw, _ = fake_gateway(tmp_path, fails=True)
+    out = json.loads(language_prompt(warn_env, "/language fa", gw).stdout)
+    assert out["reason"] == CATALOG["language.failed"]["en"].replace("{error}", 'Usage: "boom" \\ here')
+
+
+@pytest.mark.parametrize("prompt, text", [("/languages", None), ("what does /language do?", None),
+                                          ("/language fa", "my own language command\n")])
+def test_other_prompts_mentioning_language_are_left_alone(stub, warn_env, tmp_path, prompt, text):
+    stub.status_line = "alice · daily 10/100 req"
+    gw, log = fake_gateway(tmp_path)
+    r = language_prompt(warn_env, prompt, gw, **({"text": text} if text else {}))
+    assert (r.returncode, r.stdout) == (0, "") and not log.exists()
+
+
 # ---------- claude-gateway ----------
 
 @pytest.fixture

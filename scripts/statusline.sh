@@ -22,11 +22,14 @@
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). Then, like
 # Claude Code's own /logout, the session ends: a second later the hook sends the claude that ran it two SIGINTs, the
 # same as pressing Ctrl-C twice, so it exits the usual way, saving the session, after showing the reason.
+# It answers gclaude's /language too (commands/language.md there): alone it says which language gclaude speaks;
+# with en or fa (English, Persian, فارسی) it runs `claude-gateway lang` (CLAUDE_GATEWAY_CMD) to switch. What this
+# script shows is in CLAUDE_GATEWAY_LANG (gclaude's settings.json sets it; English without it), from i18n.json beside it.
 # Environment (e.g. in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key (already set for the gateway); in own-login mode, where
 #                               it is unset, the key is read from ANTHROPIC_CUSTOM_HEADERS (x-gateway-key)
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL, e.g. http://gateway.lan:8081
-warn= usage= account= account_prompt= logout= then=
+warn= usage= account= account_prompt= logout= language= then=
 case "${1:-}" in --warn) warn=1 ;; --account) account=1 ;; --then) then=${2:-} ;; esac
 [ -z "$warn$account" ] && [ -n "${CLAUDE_GATEWAY_STATUS_INNER:-}" ] && exit 0
 input=
@@ -39,9 +42,23 @@ ours() {   # name: the prompt is /name and gclaude's commands/name.md is claude-
 ours usage && usage=1
 ours account && account_prompt=1
 ours logout_gclaude && logout=1
+ours language && language=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 stop() { printf '{"continue": false, "stopReason": "%s"}\n' "$(json_str "$1")"; exit 0; }   # ends the prompt with no model call, like block
+t() {   # key [name=value...]: the text for key in CLAUDE_GATEWAY_LANG, from i18n.json beside this script. Only for text
+        # actually shown, so a statusline with figures to show makes no call.
+  python3 - "$(dirname "$0")/i18n.json" "${CLAUDE_GATEWAY_LANG:-en}" "$@" <<'EOF'
+import json, sys
+path, lang, key, *pairs = sys.argv[1:]
+texts = json.load(open(path, encoding="utf-8"))[key]
+text = texts.get(lang) or texts["en"]
+for p in pairs:
+    k, _, v = p.partition("=")
+    text = text.replace("{" + k + "}", v)
+print(text)
+EOF
+}
 quit_claude() {   # the claude that runs this hook (its parent, or grandparent through a shell), only when one does
   [ -n "${CLAUDE_PROJECT_DIR:-}" ] || return 0   # set by Claude Code for its hooks
   p=$PPID found=
@@ -86,24 +103,38 @@ edit(client, lambda c: bool(key) and c.get("key") == key and c.pop("key") is not
 if os.path.exists(settings + ".bak-claude-gateway"):   # claude-gateway's copy from before its last edit holds the key too
     os.remove(settings + ".bak-claude-gateway")
 EOF
-    stop "Sign-out failed: the key could not be removed from $CLAUDE_CONFIG_DIR/settings.json. gclaude uninstall removes it."
+    stop "$(t logout.failed settings="$CLAUDE_CONFIG_DIR/settings.json")"
   quit_claude
-  again="gclaude is closing; run gclaude again to sign in."
+  again=$(t logout.again)
   case "$reply" in
-    *'"revoked":true'*200) stop "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" ;;
-    *'"revoked":false'*200) stop "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" ;;
-    *401|*403) stop "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" ;;
-    *) stop "Signed out here: the key is removed from gclaude, but the gateway could not be reached to revoke it; remove this computer in the dashboard${CLAUDE_GATEWAY_DASHBOARD:+ (${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard)}. $again" ;;
+    *'"revoked":true'*200) stop "$(t logout.revoked again="$again")" ;;
+    *'"revoked":false'*200) stop "$(t logout.first_key again="$again")" ;;
+    *401|*403) stop "$(t logout.refused again="$again")" ;;
+    *) stop "$(t logout.offline where="${CLAUDE_GATEWAY_DASHBOARD:+ (${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard)}" again="$again")" ;;
   esac
 fi
+if [ -n "$language" ]; then   # gclaude's /language [en|fa]
+  arg=$(printf '%s' "$input" | python3 -c 'import json, sys; print(json.load(sys.stdin).get("prompt", "")[len("/language"):].strip().lower())' 2>/dev/null)
+  case "$arg" in
+    "") block "$(t language.current)" ;;
+    en|english|انگلیسی) new=en ;;
+    fa|persian|farsi|فارسی) new=fa ;;
+    *) block "$(t language.usage)" ;;
+  esac
+  if err=$("${CLAUDE_GATEWAY_CMD:-claude-gateway}" lang "$new" 2>&1 >/dev/null); then
+    block "$(CLAUDE_GATEWAY_LANG=$new t language.switched)"   # in the language just chosen
+  fi
+  block "$(t language.failed error="$(printf '%s\n' "$err" | tail -n 1)")"
+fi
 if [ -z "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
-  [ -n "$account" ] && { echo "Account details unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update)."; exit 0; }
-  [ -n "$usage" ] && block "Gateway status unavailable: CLAUDE_GATEWAY_DASHBOARD is not set (run gclaude update)."
+  [ -n "$account" ] && { t account.no_dashboard; exit 0; }
+  [ -n "$usage" ] && block "$(t usage.no_dashboard)"
   [ -n "$warn" ] && exit 0
   [ -n "$then" ] && { own_line; exit 0; }
   echo "statusline.sh: set CLAUDE_GATEWAY_DASHBOARD" >&2
   exit 1
 fi
+dash="${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
 cache="${TMPDIR:-/tmp}/claude-gateway-status.$(id -u)"
 # A figure is a percentage or a used/limit pair (`$61/$100`, `4.2M/5.0M`); pct() gives it as a percentage.
 FIGURES='
@@ -151,9 +182,9 @@ status() {   # format: /api/me/status as text, with this key
 
 account_line() {
   if line=$(status account) && [ -n "$line" ]; then
-    echo "Account: $line · dashboard: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+    t account.line account="$line" dashboard="$dash"
   else
-    echo "Account details unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+    t account.unavailable dashboard="$dash"
   fi
 }
 if [ -n "$account" ]; then
@@ -171,18 +202,18 @@ fi
 
 if [ -z "$warn" ]; then
   own=$(own_line)
-  printf '%s%s\n' "$(show "${line:-gateway status unavailable}")" "${own:+ | $own}"
+  printf '%s%s\n' "$(show "${line:-$(t line.unavailable)}")" "${own:+ | $own}"
   exit 0
 fi
 
 if [ -n "$usage" ]; then
-  [ -n "$line" ] || block "Gateway status unavailable; see ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
-  block "Gateway: $(figures "$line") · details: ${CLAUDE_GATEWAY_DASHBOARD%/}/dashboard"
+  [ -n "$line" ] || block "$(t usage.unavailable dashboard="$dash")"
+  block "$(t usage.line figures="$(figures "$line")" dashboard="$dash")"
 fi
 
 if [ -n "$account_prompt" ]; then   # the model answers /account, unless it can't be reached
   [ -n "$line" ] || block "$(account_line)"
-  [ "$(peak "$line")" -ge 100 ] 2>/dev/null && block "$(account_line) · limit reached: $(figures "$line")"
+  [ "$(peak "$line")" -ge 100 ] 2>/dev/null && block "$(t account.limit account="$(account_line)" figures="$(figures "$line")")"
 fi
 
 # --warn: band 1 from 80%, band 2 from 100%. The state file holds the band last warned about; its age is the time since.
@@ -201,5 +232,5 @@ if [ "$band" -le "$last" ] && [ "$(age "$state")" -lt 900 ]; then
   exit 0
 fi
 printf '%s\n' "$band" > "$state"
-printf '{"systemMessage": "%s"}\n' "$(json_str "Gateway: $(figures "$line")")"
+printf '{"systemMessage": "%s"}\n' "$(json_str "$(t warn.line figures="$(figures "$line")")")"
 exit 0
