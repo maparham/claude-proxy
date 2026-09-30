@@ -363,3 +363,6 @@ uv run --with playwright python e2e/run.py [--docker]             # needs claude
 ```
 
 Only Clerk's own sign-in (Google, GitHub, an emailed code) is left to a person.
+
+To see how gclaude renders on a real Windows desktop, [docs/windows-test-vm.md](docs/windows-test-vm.md) sets up
+a throwaway Windows VM reached over RDP.
