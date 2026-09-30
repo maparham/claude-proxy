@@ -38,12 +38,13 @@ def fake_claude(home, body='#!/bin/sh\necho "2.1.0 (Claude Code)"\n', mode=0o755
     return fake
 
 
-def install(home, tarball, *args, path=None):
+def install(home, tarball, *args, path=None, claude_installer=None):
     if path is None:
         path = f"{home / 'claudebin'}:{os.environ['PATH']}" if (home / "claudebin").exists() else \
             f"{fake_claude(home)}:{os.environ['PATH']}"
     env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home / "tmp"),
-           "CLAUDE_GATEWAY_TARBALL": f"file://{tarball}"}
+           "CLAUDE_GATEWAY_TARBALL": f"file://{tarball}",
+           "CLAUDE_GATEWAY_CLAUDE_INSTALLER": f"file://{claude_installer or home / 'no-claude-installer.sh'}"}
     return subprocess.run(["sh", str(INSTALL), *args], capture_output=True, text=True, env=env, timeout=60)
 
 
@@ -106,16 +107,35 @@ def no_claude_path(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
     for t in ("sh", "curl", "tar", "python3", "gzip", "mktemp", "rm", "mkdir", "cp", "chmod", "mv", "ln", "head", "sed",
-              "cat", "dirname", "basename", "readlink", "uname", "env", "bash"):
+              "cat", "dirname", "basename", "readlink", "uname", "env", "bash", "tail"):
         found = shutil.which(t)
         if found:
             (tools / t).symlink_to(found)
     return str(tools)
 
 
-def test_install_stops_when_claude_is_missing(home, tarball, tmp_path):
-    r = install(home, tarball, path=no_claude_path(tmp_path))
-    assert r.returncode == 1 and "Claude Code (claude) is needed first" in r.stderr
+def test_install_installs_claude_code_when_it_is_missing(home, tarball, tmp_path):
+    # Like Claude Code's own installer: claude into ~/.local/bin, which isn't on this PATH
+    installer = tmp_path / "claude-install.sh"
+    installer.write_text('echo Setting up Claude Code...\nmkdir -p "$HOME/.local/bin"\n'
+                         'printf \'#!/bin/sh\\necho "2.1.0 (Claude Code)"\\n\' > "$HOME/.local/bin/claude"\n'
+                         'chmod 755 "$HOME/.local/bin/claude"\n')
+    r = install(home, tarball, path=no_claude_path(tmp_path), claude_installer=installer)
+    assert r.returncode == 0, r.stderr
+    assert "Installing Claude Code" in r.stdout and "Installed Claude Code 2.1.0." in r.stdout
+    assert "Setting up" not in r.stdout + r.stderr                     # its installer's own output
+    assert (home / ".local" / "bin" / "claude-gateway").exists()
+
+
+@pytest.mark.parametrize("script", [None, "echo broke >&2; exit 1\n", "true\n"])   # no download, fails, installs nothing
+def test_install_stops_when_claude_code_cannot_be_installed(home, tarball, tmp_path, script):
+    installer = None
+    if script:
+        installer = tmp_path / "claude-install.sh"
+        installer.write_text(script)
+    r = install(home, tarball, path=no_claude_path(tmp_path), claude_installer=installer)
+    assert r.returncode == 1 and "Claude Code (claude) could not be installed" in r.stderr
+    assert ("broke" in r.stderr) == ("broke" in (script or ""))       # its installer's output, on a failure
     assert not (home / ".local" / "bin" / "claude-gateway").exists()
 
 

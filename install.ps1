@@ -45,13 +45,54 @@ function Add-UserPath([string]$Dir) {
   return $true
 }
 
+function Find-ClaudeCode([string]$Bin) {
+  # Claude Code's own installer puts claude.exe in .local\bin, which may not be on this session's PATH yet.
+  $found = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+  if ($found) { return $found.Source }
+  foreach ($dir in @($Bin, (Join-Path $env:USERPROFILE '.local\bin'))) {
+    if (Test-Path -LiteralPath (Join-Path $dir 'claude.exe')) { return Join-Path $dir 'claude.exe' }
+  }
+}
+
+function Install-ClaudeCode([string]$Bin) {
+  # In a PowerShell of its own: Claude Code's installer ends with `exit`, which would close the caller's window here.
+  $installer = if ($env:CLAUDE_GATEWAY_CLAUDE_INSTALLER) { $env:CLAUDE_GATEWAY_CLAUDE_INSTALLER } else { 'https://claude.ai/install.ps1' }
+  Write-Host 'Installing Claude Code...'
+  $script = Join-Path ([IO.Path]::GetTempPath()) ('claude-code-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
+  try {
+    try {
+      if (Test-Path -LiteralPath $installer) { Copy-Item -LiteralPath $installer -Destination $script }
+      else { Invoke-WebRequest -UseBasicParsing -Uri $installer -OutFile $script }
+    } catch { throw "install.ps1: Claude Code (claude) could not be installed: could not get $installer ($($_.Exception.Message))" }
+    $ErrorActionPreference = 'Continue'   # under Stop, anything it writes to stderr would throw here
+    # The 64-bit PowerShell even from a 32-bit (SysWOW64) one, which Claude Code's installer refuses. Sysnative is
+    # how a 32-bit process reaches the real System32.
+    $ps = (Get-Process -Id $PID).Path
+    if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+      $ps = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    }
+    # Kept for a failure only: on success its PATH advice is already taken care of below, and its symbols come out
+    # garbled in the console's code page.
+    $log = & $ps -NoProfile -ExecutionPolicy Bypass -File $script 2>&1 | Out-String
+    $code = $LASTEXITCODE
+    $ErrorActionPreference = 'Stop'
+  } finally {
+    Remove-Item -LiteralPath $script -Force -ErrorAction SilentlyContinue
+  }
+  $claude = Find-ClaudeCode $Bin
+  if ($code -ne 0 -or -not $claude) {
+    $tail = @(($log.Trim() -split "`r?`n") | Select-Object -Last 10) -join "`n  "
+    throw "install.ps1: Claude Code (claude) could not be installed:`n  $tail`nInstall it (https://claude.ai/install.ps1), then run this again."
+  }
+  return $claude
+}
+
 function Assert-ClaudeCode([string]$Bin) {
   # Claude Code must run before anything is set up for it: an npm install whose native binary never arrived leaves a
-  # claude that only fails, and gclaude would then fail on every start. Claude Code's own installer puts claude.exe in
-  # $Bin, which may not be on this session's PATH yet.
-  $found = Get-Command claude -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
-  $claude = if ($found) { $found.Source } elseif (Test-Path -LiteralPath (Join-Path $Bin 'claude.exe')) { Join-Path $Bin 'claude.exe' }
-  if (-not $claude) { throw 'install.ps1: Claude Code (claude) is needed first: install it, then run this again.' }
+  # claude that only fails, and gclaude would then fail on every start.
+  $claude = Find-ClaudeCode $Bin
+  $installed = -not $claude
+  if ($installed) { $claude = Install-ClaudeCode $Bin }
   $ErrorActionPreference = 'Continue'   # under Stop, anything claude writes to stderr would throw here
   try { $out = (& $claude --version 2>&1 | Out-String).Trim(); $ok = $LASTEXITCODE -eq 0 }
   catch { $out = $_.Exception.Message; $ok = $false }   # e.g. not a valid Win32 application
@@ -59,6 +100,7 @@ function Assert-ClaudeCode([string]$Bin) {
     throw ("install.ps1: Claude Code at $claude doesn't run:`n  " + (($out -split "`r?`n" | Select-Object -First 3) -join "`n  ") +
            "`nReinstall it (installed with npm: npm install -g @anthropic-ai/claude-code), then run this again.")
   }
+  if ($installed) { Write-Host "Installed Claude Code $(($out -split ' ')[0])." }
 }
 
 function Install-ClaudeGateway {

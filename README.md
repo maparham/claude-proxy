@@ -71,7 +71,8 @@ curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/instal
 
 Without `--key`, `claude-gateway on --url …` authorizes in the browser instead: it opens the dashboard at a code,
 and once you click **Authorize** there, the dashboard gives this computer a key of its own. With sign-up set up
-(below), a teammate's whole setup is `curl -fsSL https://<dashboard>/install | sh`.
+(below), a teammate's whole setup is `curl -fsSL https://<dashboard>/install | sh`. Without `claude` on the computer, it
+runs Claude Code's own installer first (`claude.ai/install.sh`, or `install.ps1` on Windows).
 
 On Windows, `irm https://<dashboard>/install.ps1 | iex` in PowerShell does the same with no Python, Git or admin
 rights (`install.ps1`, `scripts/windows`). It sets up gclaude only (`gclaude.cmd`, with the limits statusline, the
@@ -362,3 +363,6 @@ uv run --with playwright python e2e/run.py [--docker]             # needs claude
 ```
 
 Only Clerk's own sign-in (Google, GitHub, an emailed code) is left to a person.
+
+To see how gclaude renders on a real Windows desktop, [docs/windows-test-vm.md](docs/windows-test-vm.md) sets up
+a throwaway Windows VM reached over RDP.
