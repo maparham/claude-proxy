@@ -597,7 +597,7 @@ def test_gclaude_shows_why_claude_closed_after_a_logout(gclaude, installed, tmp_
     win = installed
     fake = fake_claude(win, tmp_path)
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake, GW_SIGNOUT="gclaude: Signed out: test.\n")
-    assert r.returncode == 0 and "gclaude: Signed out: test." in r.out and "\x1b[?25h" in r.stdout, r.out
+    assert r.returncode == 0 and "gclaude: Signed out: test." in r.out and "\x1b[1G\x1b[0J" in r.stdout and "\x1b[?25h" in r.stdout, r.out
 
 
 @on_windows
