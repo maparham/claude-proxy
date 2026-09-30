@@ -430,7 +430,8 @@ def test_the_statusline_says_so_when_the_gateway_is_down(gclaude, stub):
 
 
 @on_windows
-def test_the_statusline_leaves_the_consoles_code_page_alone(installed, stub, tmp_path):
+@pytest.mark.parametrize("which", ["statusline", "hook"])
+def test_the_statusline_and_hook_leave_the_consoles_code_page_alone(installed, stub, tmp_path, which):
     """Claude Code shares its console with the statusline and hook. Were they to switch it to UTF-8 (65001), the old
     console (conhost) would draw Claude Code's logo and bullets as boxes, as plain claude never does. A console of
     its own, since pytest's pipes have none, and cmd reports the code page it's left with."""
@@ -438,11 +439,14 @@ def test_the_statusline_leaves_the_consoles_code_page_alone(installed, stub, tmp
     assert win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url).returncode == 0
     s = win.settings()
     env = {**win.env, **s["env"], "CLAUDE_CONFIG_DIR": str(win.gdir)}
-    out, cp = tmp_path / "line.txt", tmp_path / "cp.txt"
+    command = s["statusLine"]["command"] if which == "statusline" else s["hooks"]["UserPromptSubmit"][-1]["hooks"][0]["command"]
+    out, cp, prompt = tmp_path / "out.txt", tmp_path / "cp.txt", tmp_path / "prompt.json"
+    prompt.write_text('{"prompt": "hi"}', encoding="ascii")
     script = tmp_path / "run.cmd"
-    script.write_text(f'@chcp 437 >nul\r\n@{s["statusLine"]["command"]} <nul >"{out}"\r\n@chcp >"{cp}"\r\n', encoding="ascii")
+    script.write_text(f'@chcp 437 >nul\r\n@{command} <"{prompt}" >"{out}"\r\n@chcp >"{cp}"\r\n', encoding="ascii")
     subprocess.run(["cmd.exe", "/d", "/c", str(script)], env=env, timeout=120, creationflags=subprocess.CREATE_NEW_CONSOLE)
-    assert "\u25c6" in out.read_text(encoding="utf-8"), out.read_text(encoding="utf-8", errors="replace")
+    if which == "statusline":
+        assert "\u25c6" in out.read_text(encoding="utf-8"), out.read_text(encoding="utf-8", errors="replace")
     assert cp.read_text().strip().endswith("437"), cp.read_text()
 
 
