@@ -226,7 +226,8 @@ reached or the gateway is down, so that request would fail, the hook answers `/a
 Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn't use, and it can't be hidden or
 blocked (a hook never sees it). gclaude's `/logout_gclaude` signs this computer out of the gateway, answered by the hook: it revokes the key when it is this computer's own
 (one authorized in the browser; your first key may be in use elsewhere, so it stays valid) and removes it from
-gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session. The next `gclaude` signs this computer in again in the browser before it starts,
+gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session (on macOS
+and Linux; on Windows, `/exit`). The next `gclaude` signs this computer in again in the browser before it starts,
 like plain `claude`'s login (`claude-gateway on --login` does the same on its own).
 The same happens when the dashboard no longer accepts the key, e.g. after the computer was removed there.
 How that works, for debugging: the gclaude command counts as signed out when its `settings.json` has no
