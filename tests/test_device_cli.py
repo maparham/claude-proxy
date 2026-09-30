@@ -12,6 +12,7 @@ from tests.test_client_scripts import GATEWAY, ROOT, run
 from tests.test_install import tarball  # noqa: F401  (a fixture)
 
 CODE = "BCDF-GHJK"
+QR = ["1100", "0110", "0011"]   # an odd number of rows: the last line is padded with light modules
 
 
 class Dashboard:
@@ -53,7 +54,7 @@ class Dashboard:
                 if self.path == "/api/device/start":
                     self.reply(200, {"device_code": "dc-1", "user_code": CODE, "interval": 0.05, "expires_in": 5,
                                      "verification_uri": f"{d.url}/dashboard#authorize",
-                                     "verification_uri_complete": f"{d.url}/dashboard#authorize/{CODE}"})
+                                     "verification_uri_complete": f"{d.url}/dashboard#authorize/{CODE}", "qr": QR})
                 elif self.path == "/api/device/token":
                     assert body == {"device_code": "dc-1"}
                     self.reply(*(d.tokens.pop(0) if d.tokens else (400, {"error": "authorization_pending"})))
@@ -106,6 +107,7 @@ def test_on_without_a_key_authorizes_in_the_browser(dash, home, tmp_path):
     r = cg(home, "on", "--url", dash.url, "--dashboard", dash.url, CLAUDE_GATEWAY_OPEN=str(path))
     assert r.returncode == 0, r.stderr
     assert f"open {dash.url}/dashboard#authorize/{CODE}" in r.stderr and f"shows the code {CODE}" in r.stderr
+    assert "Or scan this with your phone:\n\u2584 \u2580\u2588\n\u2588\u2588\u2584\u2584\n" in r.stderr   # light modules drawn
     assert "Authorized as maya" in r.stderr and "sk-proxy-machine" not in r.stdout + r.stderr
     assert log.read_text().strip() == f"{dash.url}/dashboard#authorize/{CODE}"
     c = client(home)

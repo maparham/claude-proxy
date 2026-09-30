@@ -141,6 +141,20 @@ function Authorize([string]$Dash) {   # the key the dashboard hands this compute
   $link = $s.data.verification_uri_complete
   Say "To connect this computer, open $link"
   Say "and check that it shows the code $($s.data.user_code)."
+  $qr = @(Field $s.data 'qr')
+  $glyph = ' ', [char]0x2584, [char]0x2580, [char]0x2588
+  $enc = [Console]::Error.Encoding   # a code page without half blocks would print the code as question marks
+  if ($qr.Count -gt 1 -and $enc.GetString($enc.GetBytes(-join $glyph)) -eq (-join $glyph)) {
+    # Two rows per line in half blocks, the light modules drawn: right on a dark console.
+    if ($qr.Count % 2) { $qr += '0' * ([string]$qr[0]).Length }
+    Say 'Or scan this with your phone:'
+    for ($i = 0; $i -lt $qr.Count; $i += 2) {
+      $top = [string]$qr[$i]; $bottom = [string]$qr[$i + 1]
+      $line = New-Object Text.StringBuilder
+      for ($j = 0; $j -lt $top.Length; $j++) { [void]$line.Append($glyph[2 * ($top[$j] -eq '0') + ($bottom[$j] -eq '0')]) }
+      Say $line.ToString()
+    }
+  }
   $opener = $env:CLAUDE_GATEWAY_OPEN
   if (-not $env:SSH_CONNECTION -and $opener -ne 'none') {
     try {

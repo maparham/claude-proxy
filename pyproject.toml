@@ -10,6 +10,7 @@ dependencies = [
     "argon2-cffi>=23",
     "cryptography>=42",
     "pydantic>=2",
+    "segno>=1.6.6",
 ]
 
 [project.scripts]

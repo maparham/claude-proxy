@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.ps1"
 WINDOWS = ROOT / "scripts" / "windows"
 CODE = "BCDF-GHJK"
+QR = ["1100", "0110", "0011"]   # an odd number of rows: the last line is padded with light modules
 on_windows = pytest.mark.skipif(sys.platform != "win32", reason="Windows PowerShell 5.1 runs only on Windows")
 
 
@@ -95,7 +96,7 @@ class Stub:
                 if self.path == "/api/device/start":
                     self.reply(200, {"device_code": "dc-1", "user_code": CODE, "interval": 0.1, "expires_in": 20,
                                      "verification_uri": f"{d.url}/dashboard#authorize",
-                                     "verification_uri_complete": f"{d.url}/dashboard#authorize/{CODE}"})
+                                     "verification_uri_complete": f"{d.url}/dashboard#authorize/{CODE}", "qr": QR})
                 elif self.path == "/api/device/token":
                     self.reply(*(d.tokens.pop(0) if d.tokens else (400, {"error": "authorization_pending"})))
                 elif self.path == "/api/me/logout":
@@ -328,6 +329,8 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     r = win.cg("on", "--url", stub.url + "/", "--dashboard", stub.url)
     assert r.returncode == 0, r.out
     assert f"{stub.url}/dashboard#authorize/{CODE}" in r.out and CODE in r.out and "Authorized as ana" in r.out
+    qr = r.out.split("Or scan this with your phone:")[1].splitlines()[1:3]   # in the console's code page, so only its shape
+    assert [len(line) for line in qr] == [4, 4]
     assert "sk-proxy-new" not in r.out
     start = next(b for p, _, b in stub.requests if p == "/api/device/start")
     assert start == {"label": os.environ["COMPUTERNAME"]}
