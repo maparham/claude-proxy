@@ -262,6 +262,7 @@ def test_install_installs_claude_code_when_it_is_missing(win, tmp_path):
                          "Set-Content -LiteralPath (Join-Path $d 'claude.cmd') -Value '@echo 2.1.0 (Claude Code)'\nexit 0\n")
     r = win.install(PATH=no_claude_path(win, tmp_path), CLAUDE_GATEWAY_CLAUDE_INSTALLER=str(installer))
     assert "session still open" in r.out and "Installing Claude Code" in r.out and "threw" not in r.out, r.out
+    assert "Installed Claude Code 2.1.0." in r.out and "Setting up" not in r.out, r.out   # its installer's output hidden
     assert (win.bin / "claude-gateway.cmd").exists()
 
 
@@ -274,6 +275,7 @@ def test_install_stops_when_claude_code_cannot_be_installed(win, tmp_path, scrip
         env["CLAUDE_GATEWAY_CLAUDE_INSTALLER"] = str(tmp_path / "claude-install.ps1")
     r = win.install(**env)
     assert "session still open" in r.out and "Claude Code (claude) could not be installed" in r.out, r.out
+    assert ("broke" in r.out) == ("broke" in (script or "")), r.out   # its installer's output, on a failure
     assert not (win.bin / "claude-gateway.cmd").exists()
     r = win.install_command(**env)   # gclaude update's way: a failure exits non-zero
     assert r.returncode != 0 and "could not be installed" in r.out, r.out

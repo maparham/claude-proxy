@@ -107,7 +107,7 @@ def no_claude_path(tmp_path):
     tools = tmp_path / "tools"
     tools.mkdir()
     for t in ("sh", "curl", "tar", "python3", "gzip", "mktemp", "rm", "mkdir", "cp", "chmod", "mv", "ln", "head", "sed",
-              "cat", "dirname", "basename", "readlink", "uname", "env", "bash"):
+              "cat", "dirname", "basename", "readlink", "uname", "env", "bash", "tail"):
         found = shutil.which(t)
         if found:
             (tools / t).symlink_to(found)
@@ -117,12 +117,13 @@ def no_claude_path(tmp_path):
 def test_install_installs_claude_code_when_it_is_missing(home, tarball, tmp_path):
     # Like Claude Code's own installer: claude into ~/.local/bin, which isn't on this PATH
     installer = tmp_path / "claude-install.sh"
-    installer.write_text('mkdir -p "$HOME/.local/bin"\n'
+    installer.write_text('echo Setting up Claude Code...\nmkdir -p "$HOME/.local/bin"\n'
                          'printf \'#!/bin/sh\\necho "2.1.0 (Claude Code)"\\n\' > "$HOME/.local/bin/claude"\n'
                          'chmod 755 "$HOME/.local/bin/claude"\n')
     r = install(home, tarball, path=no_claude_path(tmp_path), claude_installer=installer)
     assert r.returncode == 0, r.stderr
-    assert "Installing Claude Code" in r.stdout
+    assert "Installing Claude Code" in r.stdout and "Installed Claude Code 2.1.0." in r.stdout
+    assert "Setting up" not in r.stdout + r.stderr                     # its installer's own output
     assert (home / ".local" / "bin" / "claude-gateway").exists()
 
 
@@ -134,6 +135,7 @@ def test_install_stops_when_claude_code_cannot_be_installed(home, tarball, tmp_p
         installer.write_text(script)
     r = install(home, tarball, path=no_claude_path(tmp_path), claude_installer=installer)
     assert r.returncode == 1 and "Claude Code (claude) could not be installed" in r.stderr
+    assert ("broke" in r.stderr) == ("broke" in (script or ""))       # its installer's output, on a failure
     assert not (home / ".local" / "bin" / "claude-gateway").exists()
 
 
