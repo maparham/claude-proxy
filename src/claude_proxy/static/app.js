@@ -94,6 +94,7 @@ const TIPS = {
   limits_col: `Per-user caps, checked before every request. The bar turns amber at 80% and red at 100%.`,
   key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
   act_limits: `View or change this user's limits.`,
+  act_rename: `Change the name shown on the dashboard and in their status line.`,
   act_upgrade: `Replace their one-time sign-up credit with a daily allowance.`,
   act_rotate: `Issue a new key and stop the old one immediately, along with every computer authorized under it. Usage history is kept.`,
   act_routes_key: `Issue a key for OpenCode that works only for third-party models (such as Muse), never Claude. Issuing again replaces it.`,
@@ -642,6 +643,7 @@ function userActions(u) {
     ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">Upgrade</button>` : "";
   return `<div class="row-actions">${upgrade}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
+      <button class="btn small" data-act="rename" data-id="${u.id}" data-tip="act_rename">Rename</button>
       <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
       ${opencode}
       <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? "Disable" : "Enable"}</button>
@@ -661,17 +663,21 @@ function keyDialog(title, key, how = "The user sets it as <code>ANTHROPIC_AUTH_T
   $("#copy-key").onclick = async () => { try { await navigator.clipboard.writeText(key); $("#copy-key").textContent = "Copied"; } catch { /* clipboard blocked */ } };
 }
 function showWho() { $("#who").textContent = `${S.user.name} · ${S.user.role}`; }
-function nameDialog() {
-  const d = openDialog(`<h3>Your name</h3><p>Shown on this dashboard and in gclaude's status line.${isAdmin() ? " You also sign in with it as the admin username." : ""}</p>
-    <form id="f-name" class="form-grid"><label>Name<input type="text" name="name" required maxlength="64" value="${esc(S.user.name)}"></label>
+// Without `u`: the signed-in user renames themselves; with it, an admin renames that user.
+function nameDialog(u) {
+  const self = !u, name = self ? S.user.name : u.name;
+  const d = openDialog(`<h3>${self ? "Your name" : `Rename ${esc(name)}`}</h3><p>Shown on this dashboard and in ${self ? "gclaude's" : "their"} status line.${(self ? isAdmin() : u.role === "admin") ? ` ${self ? "You also sign" : "They also sign"} in with it as the admin username.` : ""}</p>
+    <form id="f-name" class="form-grid"><label>Name<input type="text" name="name" required maxlength="64" value="${esc(name)}"></label>
     <button class="btn primary" type="submit">Save</button></form><div class="error" id="name-err"></div>
     <p><button class="btn" data-close>Cancel</button></p>`);
   $("#f-name input", d).select();
   $("#f-name", d).onsubmit = async (e) => {
     e.preventDefault();
     try {
-      const r = await api("/api/me/name", { method: "POST", body: { name: new FormData(e.target).get("name") } });
-      S.user.name = r.name; showWho(); d.close(); render();
+      const body = { name: new FormData(e.target).get("name") };
+      if (self) { S.user.name = (await api("/api/me/name", { method: "POST", body })).name; showWho(); }
+      else await api(`/api/admin/users/${u.id}/rename`, { method: "POST", body });
+      d.close(); render();
     } catch (err) { $("#name-err").textContent = err.message; }
   };
 }
@@ -691,6 +697,7 @@ function addUserDialog() {
 async function userAction(act, id, u) {
   if (act === "limits") return limitsDialog(u);
   if (act === "upgrade") return upgradeDialog(u);
+  if (act === "rename") return nameDialog(u);
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
   if (act === "delete" && !confirmInline(`Delete ${u.name} permanently? Their recorded usage is deleted too and disappears from account totals and charts. This cannot be undone.`)) return;
   try {
@@ -1276,7 +1283,7 @@ $("#logout").onclick = async () => {
   if (window.Clerk?.session) await window.Clerk.signOut().catch(() => {});   // or the sign-in page would trade it in again
   showLogin();
 };
-$("#who").onclick = nameDialog;
+$("#who").onclick = () => nameDialog();
 $("#theme-toggle").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";
