@@ -25,7 +25,9 @@
   <ol class="signin-steps hidden" id="signin-steps">
     <li><span class="step-n">1</span><div><b>Sign in</b> with Google, GitHub or a code sent to your email.</div></li>
     <li><span class="step-n">2</span><div><b>Run one command</b> in the computer’s terminal.
-      <div class="signin-cmd"><pre><span class="prompt" aria-hidden="true" id="signin-prompt">$</span><code id="signin-install"></code></pre>
+      <div class="os-tabs" id="signin-os" role="tablist" aria-label="Operating system">
+        <button type="button" role="tab" data-os="unix">macOS / Linux</button><button type="button" role="tab" data-os="windows">Windows</button></div>
+      <div class="signin-cmd" role="tabpanel"><pre><span class="prompt" aria-hidden="true" id="signin-prompt">$</span><code id="signin-install"></code></pre>
         <button type="button" class="cmd-copy" id="signin-copy" aria-label="Copy command" title="Copy command">
           <svg class="i-copy" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 3.5v-.5A1.5 1.5 0 0 0 9 1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg>
           <svg class="i-done" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 8.5l3.2 3L13 4.5"/></svg>

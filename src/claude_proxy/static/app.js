@@ -789,13 +789,22 @@ async function clerkExchange() {
     if (!ok) { const msg = $("#login-error").textContent; await window.Clerk.signOut(); $("#login-error").textContent = msg; mountClerk(); }   // refused: let them try another account
   } finally { S.exchanging = false; }
 }
-// The how-to-join steps, when a sign-up can go all the way to a connected computer; the install command suits the visitor's system.
+// The how-to-join steps, when a sign-up can go all the way to a connected computer. Both install commands sit in tabs;
+// the one open first suits the visitor's system, and anything not detected as Windows gets the unix one.
 function signinSteps(cfg) {
   $("#signup-hint").classList.toggle("hidden", !cfg.signup);
-  const win = /Win/.test(navigator.userAgentData?.platform ?? navigator.platform), cmd = (win && cfg.install_windows) || cfg.install;
-  $("#signin-steps").classList.toggle("hidden", !(cfg.clerk && cmd));
-  $("#signin-install").textContent = cmd || "";
-  $("#signin-prompt").textContent = win && cfg.install_windows ? "PS>" : "$";
+  $("#signin-steps").classList.toggle("hidden", !(cfg.clerk && cfg.install));
+  const cmds = { unix: cfg.install, windows: cfg.install_windows }, tabs = $("#signin-os");
+  tabs.classList.toggle("hidden", !cmds.windows);
+  const pick = (os) => {
+    tabs.querySelectorAll("[data-os]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.os === os)));
+    $("#signin-install").textContent = cmds[os] || "";
+    $("#signin-prompt").textContent = os === "windows" ? "PS>" : "$";
+  };
+  tabs.querySelectorAll("[data-os]").forEach((b) => (b.onclick = () => pick(b.dataset.os)));
+  let win = false;
+  try { win = /Win/.test(navigator.userAgentData?.platform || navigator.platform || ""); } catch { /* unknown: unix */ }
+  pick(win && cmds.windows ? "windows" : "unix");
 }
 // Clerk's colours from the page's own tokens, read when it mounts: the theme can be the system's or one the viewer picked.
 function clerkAppearance() {

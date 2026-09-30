@@ -193,6 +193,12 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .signin-steps b { color: var(--ink); font-weight: 600; }
 .signin-steps code { font: 13px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
 .step-n { color: var(--muted); font-variant-numeric: tabular-nums; }
+.os-tabs { display: flex; gap: 2px; margin: 10px 0 0; border-bottom: 1px solid var(--border); }
+.os-tabs button { border: 0; background: none; padding: 6px 10px; margin-bottom: -1px; cursor: pointer; color: var(--ink-2); font-size: 13px;
+                  border-bottom: 2px solid transparent; }
+.os-tabs button:hover { color: var(--ink); }
+.os-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
+.os-tabs + .signin-cmd { margin-top: 10px; }
 .signin-cmd { margin: 10px 0 0; display: flex; align-items: flex-start; gap: 8px; padding: 6px 6px 6px 14px; border-radius: 8px;
               background: var(--wash); border: 1px solid var(--border); }
 .signin-cmd pre { flex: 1; min-width: 0; margin: 0; padding: 5px 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
