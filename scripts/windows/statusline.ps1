@@ -14,6 +14,7 @@
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
 # signed-out file in CLAUDE_CONFIG_DIR, so the next gclaude.cmd signs in again (`claude-gateway on --login`, which removes it) before it starts.
+# Then it ends the claude session that ran it, as Claude Code's own /logout does (see below).
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -88,15 +89,34 @@ try {
         }
       }
     } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. gclaude uninstall removes it." }
-    $again = 'Exit gclaude now (/exit); run gclaude again to sign in.'
     $where = if ($dash) { " ($dash/dashboard)" } else { '' }
     $accepted = $code -ge 200 -and $code -lt 300
-    if ($accepted -and $odd) { Stop-Prompt "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP $code) but gave an unexpected reply; check in the dashboard that this computer is gone$where. $again" }
-    if ($accepted -and $revoked) { Stop-Prompt "Signed out: this computer's key is revoked on the gateway and removed from gclaude. $again" }
-    if ($accepted) { Stop-Prompt "Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up. $again" }
-    if ($code -eq 401 -or $code -eq 403) { Stop-Prompt "Signed out: the key is removed from gclaude (the gateway no longer accepted it). $again" }
     $why = if ($code) { "refused to revoke it (HTTP $code)" } else { 'could not be reached to revoke it' }
-    Stop-Prompt "Signed out here: the key is removed from gclaude, but the gateway $why; remove this computer in the dashboard$where. $again"
+    $said = if ($accepted -and $odd) { "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP $code) but gave an unexpected reply; check in the dashboard that this computer is gone$where." }
+      elseif ($accepted -and $revoked) { "Signed out: this computer's key is revoked on the gateway and removed from gclaude." }
+      elseif ($accepted) { 'Signed out: the key is removed from gclaude. It is your first key, so it still works wherever else it is set up.' }
+      elseif ($code -eq 401 -or $code -eq 403) { 'Signed out: the key is removed from gclaude (the gateway no longer accepted it).' }
+      else { "Signed out here: the key is removed from gclaude, but the gateway $why; remove this computer in the dashboard$where." }
+    # gclaude.cmd shows the signed-out file once claude has exited, so the reason outlasts the session
+    try { [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'signed-out'), "gclaude: $said Run gclaude again to sign in.`n", $utf8) } catch { }
+    # Then, like Claude Code's own /logout, the session ends: the claude that runs this hook (up to three processes
+    # up, through a shell; only when Claude Code runs it, which sets CLAUDE_PROJECT_DIR) is stopped. Windows has no
+    # SIGINT to send it, and a console Ctrl-C would reach gclaude.cmd's cmd too. Claude Code saves each message as it
+    # goes, so the session can still be resumed; gclaude.cmd puts the terminal back and shows the reason.
+    if ($env:CLAUDE_PROJECT_DIR) {
+      try {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop
+        for ($i = 0; $i -lt 3 -and $proc; $i++) {
+          $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction Stop
+          if ($proc -and ($proc.Name -eq 'claude.exe' -or ($proc.Name -eq 'node.exe' -and [string]$proc.CommandLine -match 'claude'))) {   # node: an npm install
+            Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = "$said gclaude is closing." })
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction Stop
+            exit 0
+          }
+        }
+      } catch { }
+    }
+    Stop-Prompt "$said Exit gclaude now (/exit); run gclaude again to sign in."
   }
 
   if (-not $dash) {
