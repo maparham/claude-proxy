@@ -21,6 +21,7 @@ import sqlite3
 import time
 from collections import defaultdict, deque
 from pathlib import Path
+from urllib.parse import urlsplit
 
 import segno
 from argon2 import PasswordHasher
@@ -614,9 +615,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 continue
         page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard"
         link = f"{page}#authorize/{code}"
-        # The link as a QR code for a phone: its rows, "1" a dark module, quiet zone included. Plain ASCII, so the
-        # clients draw it in whatever characters their terminal has, whatever the response is decoded as.
-        qr = ["".join("1" if m else "0" for m in row) for row in segno.make(link, error="l", micro=False).matrix_iter(border=2)]
+        # For a phone, a QR code of a short link to it (/d/CODE below), all capitals where it can be: QR's
+        # alphanumeric mode takes only those, and the code comes out a size or two smaller than the link's.
+        # Its rows, "1" a dark module, quiet zone included. Plain ASCII, so the clients draw it in whatever
+        # characters their terminal has, whatever the response is decoded as.
+        u = urlsplit(cfg.listener.dashboard_url.rstrip("/"))
+        short = f"{u.scheme.upper()}://{u.netloc.upper()}{u.path}/D/{code}"
+        qr = ["".join("1" if m else "0" for m in row) for row in segno.make(short, error="l", micro=False).matrix_iter(border=2)]
         return {"device_code": device_code, "user_code": code, "verification_uri": f"{page}#authorize",
                 "verification_uri_complete": link, "qr": qr, "interval": DEVICE_INTERVAL_S, "expires_in": DEVICE_TTL_S}
 
@@ -796,6 +801,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/")
     async def root():
         return RedirectResponse("/dashboard")
+
+    @app.get("/d/{code}")
+    @app.get("/D/{code}")   # as the QR code spells it
+    async def device_short_link(code: str):
+        code = "".join(c for c in code.upper() if c in USER_CODE_LETTERS)
+        page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#authorize"
+        return RedirectResponse(f"{page}/{code[:4]}-{code[4:]}" if len(code) == 8 else page)
 
     # Asset URLs carry a content hash, so a CDN or browser that caches them still picks up a deploy.
     @app.get("/dashboard")
