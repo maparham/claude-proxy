@@ -239,6 +239,10 @@ async def test_device_flow_gives_the_cli_a_key_of_its_own(env):
         qr = start["qr"]   # the link as a QR code: square, finder patterns in three corners inside a 2-module quiet zone
         assert len(qr) == len(qr[0]) >= 25 and all(len(r) == len(qr) and set(r) <= {"0", "1"} for r in qr)
         assert qr[2][2:9] == qr[2][-9:-2] == qr[-3][2:9] == "1111111" and qr[0] == "0" * len(qr)
+        assert len(qr) == 25 + 4   # version 2: the short link in alphanumeric mode
+        r = await cli.get(f"/D/{code}", follow_redirects=False)   # where the QR code leads
+        assert r.status_code == 307 and r.headers["location"] == start["verification_uri_complete"]
+        assert (await cli.get("/d/nope", follow_redirects=False)).headers["location"] == f"{DASH}/dashboard#authorize"
         assert len(code) == 9 and code[4] == "-" and not set(code) & set("AEIOUY0123456789")
         r = await cli.post("/api/device/token", json={"device_code": dc})
         assert r.status_code == 400 and r.json()["error"] == "authorization_pending"
