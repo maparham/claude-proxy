@@ -1136,7 +1136,7 @@ def test_the_installers_on_leaves_a_signed_out_gclaude_to_sign_in_when_it_next_s
     """gclaude update runs the dashboard's installer, whose `on` must not stop for the browser: the next gclaude signs in."""
     gsettings, launcher = logged_out(stub, home)
     r = cg(home, "on", "--url", stub.url, "--dashboard", stub.url)   # what the dashboard's /install runs
-    assert r.returncode == 0 and "signs it in again when you next start it" in r.stdout, r.stderr
+    assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
     assert not any(p == "/api/device/start" for p, _ in stub.requests)
     stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
     r = run_gclaude(home, launcher, "-p", "hi")
@@ -1190,8 +1190,15 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
     stub.install = "echo installer ran\n"
     r = run([str(launcher), "update"], env)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["installer ran", "Now Claude Code itself:", "claude [own config] update",
-                                   "gclaude is up to date."]   # plain claude's own update, then gclaude's last word
+    assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "claude [own config] update",
+                                   "gclaude is up to date."]   # plain claude's own update, shown as it did something
+    (fake / "claude").write_text('#!/bin/sh\necho "Claude Code is up to date (2.1.286)"\n')
+    r = run([str(launcher), "update"], env)
+    assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "gclaude is up to date."]
+    (fake / "claude").write_text('#!/bin/sh\necho "no network" >&2; exit 4\n')
+    r = run([str(launcher), "update"], env)
+    assert r.returncode == 4 and "no network" in r.stderr and "gclaude is up to date" not in r.stdout
+    (fake / "claude").write_text('#!/bin/sh\necho "claude [${CLAUDE_CONFIG_DIR:-own config}] $*"\n')
     stub.install = "exit 3\n"
     r = run([str(launcher), "update"], env)
     assert r.returncode == 1 and "Claude Code was not updated" in r.stderr and "claude [" not in r.stdout
