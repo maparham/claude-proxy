@@ -353,11 +353,12 @@ function Gclaude-On($c) {
      '  echo gclaude: %GW_WHY%; signing this computer in again. 1>&2' + "`r`n" +
      '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
      '  call claude-gateway on --gclaude --login || goto signinfailed' + "`r`n" +
-     '  claude %*' + "`r`n" +
+     '  call claude %*' + "`r`n" +
      '  if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
-    'claude %*',
+    'rem call: an npm install''s claude is claude.cmd, and a batch run without call never comes back here.',
+    'call claude %*',
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed',
     'exit /b',
     'rem /logout_gclaude signed out and stopped claude (statusline.ps1): the terminal back as Claude Code would leave it',
