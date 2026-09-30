@@ -310,7 +310,8 @@ def fake_claude(win, tmp_path):
     d = tmp_path / "fakebin"
     d.mkdir()
     (d / "saw.ps1").write_text("if ($args -contains '--version') { '2.1.0 (Claude Code)'; exit 0 }   # install.ps1's check\n"
-                               "[IO.File]::WriteAllText($env:GW_OUT, $env:CLAUDE_CONFIG_DIR + '|' + ($args -join ' '))\n")
+                               "[IO.File]::WriteAllText($env:GW_OUT, $env:CLAUDE_CONFIG_DIR + '|' + ($args -join ' '))\n"
+                               "if ($env:GW_SIGNOUT) { [IO.File]::WriteAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'signed-out'), $env:GW_SIGNOUT) }\n")
     (d / "claude.cmd").write_text('@powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0saw.ps1" %*\r\n')
     return {"PATH": f"{d};{win.env['PATH']}", "GW_OUT": str(tmp_path / "claude-saw.txt")}
 
@@ -564,6 +565,39 @@ def test_logout_revokes_the_key_and_the_next_gclaude_signs_in_again(gclaude, ins
     assert not (win.gdir / "signed-out").exists()
     assert win.settings()["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
     assert claude_saw(tmp_path) == f"{win.gdir}|-p hi"
+
+
+@on_windows
+@pytest.mark.skipif(not shutil.which("node"), reason="no node here")
+def test_logout_ends_the_claude_session_that_ran_it(installed, stub, tmp_path):
+    """Stopped, as Windows has no SIGINT: only a claude running the hook, and only when Claude Code runs it."""
+    win = installed
+    assert win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url).returncode == 0
+    s = win.settings()
+    fake = tmp_path / "claude.js"   # node running claude, as an npm install does
+    fake.write_text("""
+const hook = require("child_process").spawn(process.argv[2], { shell: true, stdio: ["pipe", "inherit", "inherit"] });
+hook.stdin.end(JSON.stringify({ prompt: "/logout_gclaude" }));
+hook.on("close", () => setTimeout(() => process.exit(7), 15000));
+""")
+    argv = ["node", str(fake), s["statusLine"]["command"] + " --warn"]
+    started = time.monotonic()
+    r = win.run(argv, **s["env"], CLAUDE_CONFIG_DIR=str(win.gdir), CLAUDE_PROJECT_DIR=str(tmp_path))
+    assert r.returncode not in (0, 7) and time.monotonic() - started < 14, r.out
+    assert "gclaude is closing" in r.stdout
+    said = (win.gdir / "signed-out").read_text(encoding="utf-8")
+    assert said.startswith("gclaude: Signed out: this computer's key is revoked") and "Run gclaude again" in said
+    assert win.cg("on", "--url", stub.url, "--key", "sk-proxy-k", "--dashboard", stub.url).returncode == 0
+    r = win.run(argv, **s["env"], CLAUDE_CONFIG_DIR=str(win.gdir))   # not run by Claude Code: left running
+    assert r.returncode == 7 and "Exit gclaude now (/exit)" in r.stdout, r.out
+
+
+@on_windows
+def test_gclaude_shows_why_claude_closed_after_a_logout(gclaude, installed, tmp_path):
+    win = installed
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake, GW_SIGNOUT="gclaude: Signed out: test.\n")
+    assert r.returncode == 0 and "gclaude: Signed out: test." in r.out and "\x1b[?25h" in r.stdout, r.out
 
 
 @on_windows
