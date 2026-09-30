@@ -180,11 +180,11 @@ def cmd_user_delete(args, cfg):
 def cmd_user_rename(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
-    if conn.execute("SELECT 1 FROM users WHERE name=?", (args.new,)).fetchone():
-        sys.exit(f"User {args.new!r} already exists.")
-    conn.execute("UPDATE users SET name=? WHERE id=?", (args.new, u["id"]))
-    db.audit(conn, None, "rename", f"{u['name']}->{args.new}")
-    print(f"Renamed {u['name']} -> {args.new}")
+    try:
+        new = db.rename_user(conn, u["id"], args.new, None)
+    except (ValueError, LookupError) as e:
+        sys.exit(str(e))
+    print(f"Renamed {u['name']} -> {new}")
 
 
 def cmd_limit_set(args, cfg):

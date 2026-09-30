@@ -535,6 +535,20 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
         return out
 
+    def set_name(user_id: int, name, actor: int) -> str:
+        try:
+            return db.rename_user(conn, user_id, str(name or ""), actor)
+        except ValueError as e:
+            fail(400, str(e))
+        except LookupError as e:
+            fail(409, str(e))
+
+    @app.post("/api/me/name")
+    async def me_name(request: Request):
+        """The name the dashboard and gclaude's status line show for this user."""
+        user = principal(request, write=True)
+        return {"ok": True, "name": set_name(user["id"], (await _json(request)).get("name"), user["id"])}
+
     @app.post("/api/me/logout")
     async def me_logout(request: Request):
         """gclaude's /logout: revokes the key that asked when it is one computer's own (authorized from the browser).
@@ -741,13 +755,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         elif action == "revoke":
             db.revoke(conn, u["id"], actor["id"])
         elif action == "rename":
-            new = str((await _json(request)).get("name", "")).strip()
-            if not new or len(new) > 64:
-                fail(400, "Need a name of 1-64 characters.")
-            if conn.execute("SELECT 1 FROM users WHERE name=? AND id!=?", (new, u["id"])).fetchone():
-                fail(409, f"User {new!r} already exists.")
-            conn.execute("UPDATE users SET name=? WHERE id=?", (new, u["id"]))
-            db.audit(conn, actor["id"], "rename", f"{u['name']}->{new}")
+            set_name(u["id"], (await _json(request)).get("name", ""), actor["id"])
         else:
             fail(404, f"Unknown action {action!r}.")
         return {"ok": True}
