@@ -15,6 +15,7 @@
 #   claude-gateway on --opencode     # later: refreshes the model list
 #   claude-gateway off --opencode
 #   claude-gateway on --gclaude / off --gclaude      # gclaude, explicitly
+#   claude-gateway on --lang en|fa   # gclaude's language: Claude's replies and gclaude's own text (asked the first time)
 #   claude-gateway status --gclaude  # gclaude's gateway, whether this computer is signed in, and the limits
 # gclaude users need none of these: `gclaude update`, `gclaude status` and `gclaude uninstall` run them.
 #
@@ -61,6 +62,7 @@ GCLAUDE_DIR=${CLAUDE_GATEWAY_GCLAUDE_DIR:-$(dirname "$CLIENT")/claude}   # gclau
 GCLAUDE=${CLAUDE_GATEWAY_BIN:-$HOME/.local/bin}/gclaude
 GCLAUDE_MARK="# Installed by claude-gateway on --gclaude."
 GCLAUDE_SYNC=$(dirname "$CLIENT")/gclaude-sync.py   # a copy, like statusline.sh, so the repository can move
+CG_LANG=   # the language `on` chose this run (en or fa), or empty: client.json's lang, else English
 
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
@@ -77,6 +79,61 @@ json.dump(c, open(path, "w"), indent=2)
 EOF
   )
   chmod 600 "$CLIENT"
+}
+
+save_lang() {   # en|fa: gclaude's language, kept in client.json (readable by this user alone, as it holds the key)
+  mkdir -p "$(dirname "$CLIENT")"
+  ( umask 077; python3 - "$CLIENT" "$1" <<'EOF'
+import json, os, sys
+path, lang = sys.argv[1:]
+c = json.load(open(path)) if os.path.exists(path) else {}
+c["lang"] = lang
+json.dump(c, open(path, "w"), indent=2)
+EOF
+  )
+}
+
+choose_lang() {   # [en|fa]: the language given, else the saved one, else asked once on the terminal. Prints nothing
+  # when it can't ask (no terminal, or gclaude signing in again): English then, unsaved, so the next `on` asks.
+  if [ -n "$1" ]; then echo "$1"; return; fi
+  case "$(field lang)" in en|fa) field lang; return ;; esac
+  [ -z "${CLAUDE_GATEWAY_FROM_GCLAUDE:-}" ] || return 0
+  local answer=
+  # stdin may be the installer itself (curl ... | sh), so the answer comes from the terminal.
+  if [ -t 2 ] && { exec 3<"${CLAUDE_GATEWAY_TTY:-/dev/tty}"; } 2>/dev/null; then
+    printf 'Language / زبان:  1) English  2) فارسی  [1] ' >&2
+    IFS= read -r answer <&3 || true
+    exec 3<&-
+    case "$(printf '%s' "$answer" | tr -d '[:space:]')" in 2|۲|fa|FA|فارسی) echo fa ;; *) echo en ;; esac
+  else
+    echo "No terminal to ask on, so gclaude uses English; /language fa switches it to Persian (فارسی)." >&2
+  fi
+}
+
+gclaude_language() {   # client.json's lang into gclaude's settings.json: Claude's replies, and what the hook needs
+  python3 - "$GCLAUDE_DIR/settings.json" "$CLIENT" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
+import json, os, sys, tempfile
+settings, client, self_path = sys.argv[1:]
+c = json.load(open(client))
+rec = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
+lang = c.get("lang") if c.get("lang") in ("en", "fa") else "en"
+s = json.load(open(settings))
+env = s.setdefault("env", {})
+env["CLAUDE_GATEWAY_LANG"] = lang        # statusline.sh and its hook speak it
+env["CLAUDE_GATEWAY_CMD"] = self_path    # /language runs `claude-gateway lang`
+if rec.pop("added_language", False) and s.get("language") == "persian":
+    del s["language"]
+if lang == "fa" and "language" not in s:   # a language the user set in gclaude's settings stays theirs
+    s["language"] = "persian"            # Claude Code's own setting: "Always respond in persian..."
+    rec["added_language"] = True
+fd, tmp = tempfile.mkstemp(dir=os.path.dirname(settings))
+with os.fdopen(fd, "w") as f:
+    json.dump(s, f, indent=2)
+    f.write("\n")
+os.chmod(tmp, os.stat(settings).st_mode & 0o777)
+os.replace(tmp, settings)
+json.dump(c, open(client, "w"), indent=2)
+EOF
 }
 
 authorize() {   # url dashboard: prints the key the dashboard hands this computer once someone authorizes it there
@@ -151,10 +208,11 @@ src_dir() {   # the directory this script really lives in (through any symlink)
   dirname "$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "${BASH_SOURCE[0]}")"
 }
 
-install_statusline() {   # copy statusline.sh from beside this script next to client.json
+install_statusline() {   # copy statusline.sh, and the i18n.json it reads, from beside this script next to client.json
   local src
   src=$(src_dir)/statusline.sh
   if [ -f "$src" ]; then cp "$src" "$STATUSLINE" && chmod 755 "$STATUSLINE"; fi
+  if [ -f "$(src_dir)/i18n.json" ]; then cp "$(src_dir)/i18n.json" "$(dirname "$STATUSLINE")/i18n.json"; fi
 }
 
 edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its own record in client.json and is always key-only.
@@ -178,12 +236,14 @@ ours = lambda v: isinstance(v, str) and v.lower().startswith("x-gateway-key:")
 if mode == "on" and "ANTHROPIC_CUSTOM_HEADERS" in env and not ours(env["ANTHROPIC_CUSTOM_HEADERS"]):
     sys.exit("ANTHROPIC_CUSTOM_HEADERS is already set in %s by something else; leaving everything as it is." % settings)
 
-for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_GATEWAY_DASHBOARD"):
+for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_GATEWAY_DASHBOARD", "CLAUDE_GATEWAY_LANG", "CLAUDE_GATEWAY_CMD"):
     env.pop(k, None)
 if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
 if st.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
+if st.pop("added_language", False) and s.get("language") == "persian":   # gclaude_language's; a user's own stays
+    s.pop("language")
 added = st.pop("added_models", None)
 for k, v in (added.items() if isinstance(added, dict) else ()):
     if env.get(k) == v:   # still ours: the user has not picked another model for that alias since
@@ -642,6 +702,7 @@ else:
         if not os.listdir(cmds):
             os.rmdir(cmds)
     c.pop("gclaude", None)
+    c.pop("lang", None)   # `on` saved it for gclaude
 EOF
 }
 
@@ -649,11 +710,13 @@ gclaude_on() {
   gclaude_free
   [ -n "$(field key)" ] || { echo "No gateway configured yet: claude-gateway on --gclaude --url <url> --key <key>" >&2; exit 1; }
   preflight key-only
+  [ -z "$CG_LANG" ] || save_lang "$CG_LANG"
   install_statusline
   mkdir -p "$GCLAUDE_DIR"
   chmod 700 "$GCLAUDE_DIR"   # its settings.json holds the gateway key
   [ -f "$GCLAUDE_DIR/settings.json" ] || ( umask 077; echo '{}' > "$GCLAUDE_DIR/settings.json" )
   edit_settings on "$GCLAUDE_DIR/settings.json" gclaude
+  gclaude_language
   chmod 600 "$GCLAUDE_DIR/settings.json" "$GCLAUDE_DIR/settings.json.bak-claude-gateway"
   cp "$(src_dir)/gclaude-sync.py" "$GCLAUDE_SYNC"
   gclaude_files on
@@ -717,7 +780,7 @@ gclaude_state() {
 cmd=${1:-status}; shift || true
 case "$cmd" in
   on)
-    url="" key="" dash="" mode="" opencode="" rkey="" gclaude="" global="" login=""
+    url="" key="" dash="" mode="" opencode="" rkey="" gclaude="" global="" login="" lang=""
     while [ $# -gt 0 ]; do
       case "$1" in
         --url) url=$2; shift 2 ;;
@@ -730,11 +793,13 @@ case "$cmd" in
         --routes-key) rkey=$2; shift 2 ;;
         --gclaude) gclaude=1; shift ;;
         --login) login=1; shift ;;
+        --lang) lang=$2; shift 2 ;;
         *) usage 1 ;;
       esac
     done
+    case "$lang" in ""|en|fa) ;; *) echo "--lang is en (English) or fa (Persian)." >&2; exit 1 ;; esac
     if [ -n "$opencode" ]; then
-      [ -z "$key$dash$mode$gclaude$global$login" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on'." >&2; exit 1; }
+      [ -z "$key$dash$mode$gclaude$global$login$lang" ] || { echo "--opencode takes only --url and --routes-key; set up Claude Code with a separate 'claude-gateway on' (--lang is for gclaude)." >&2; exit 1; }
       opencode_on "$url" "$rkey"
       exit 0
     fi
@@ -757,6 +822,8 @@ case "$cmd" in
         gclaude=1
       fi
     fi
+    [ -z "$lang" ] || [ -n "$gclaude" ] || { echo "--lang goes with gclaude: gclaude's language (global mode is English)." >&2; exit 1; }
+    [ -z "$gclaude" ] || CG_LANG=$(choose_lang "$lang")   # before signing in, so that speaks it too
     [ -z "$key" ] || [ -z "$login" ] || { echo "Choose one: --key or --login." >&2; exit 1; }
     if [ -n "$key" ]; then
       url=${url:-$(field url)}

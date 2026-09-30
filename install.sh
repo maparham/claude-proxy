@@ -5,7 +5,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://claude.example.com --key sk-proxy-...   # and set up gclaude
 #   curl -fsSL https://claude-dash.example.com/install | sh    # a gateway's own: this, then `on` authorizing in the browser
 #
-# It puts claude-gateway and the files it installs from (statusline.sh, gclaude-sync.py, examples/opencode) in
+# It puts claude-gateway and the files it installs from (statusline.sh, gclaude-sync.py, i18n.json, examples/opencode) in
 # ~/.local/share/claude-gateway, replacing an earlier copy, and links ~/.local/bin/claude-gateway to it. Anything
 # after `--` then runs as `claude-gateway ...`. Needs curl, tar and python3, and a Claude Code that runs (not for
 # `on --opencode`).
@@ -53,7 +53,7 @@ curl -fsSL "$tarball" | tar -xzf - -C "$tmp" --strip-components=1
 # Build the new copy beside the old one, then swap, so a failed download never leaves half an install.
 rm -rf "$share.new"
 mkdir -p "$share.new/scripts" "$share.new/examples" "$bin"
-cp "$tmp/scripts/claude-gateway" "$tmp/scripts/statusline.sh" "$tmp/scripts/gclaude-sync.py" "$share.new/scripts/"
+cp "$tmp/scripts/claude-gateway" "$tmp/scripts/statusline.sh" "$tmp/scripts/gclaude-sync.py" "$tmp/scripts/i18n.json" "$share.new/scripts/"
 cp -R "$tmp/examples/opencode" "$share.new/examples/"
 chmod 755 "$share.new/scripts/claude-gateway" "$share.new/scripts/statusline.sh" "$share.new/scripts/gclaude-sync.py"
 rm -rf "$share"

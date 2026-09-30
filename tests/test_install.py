@@ -53,7 +53,7 @@ def test_install_puts_claude_gateway_on_the_path_with_its_files(home, tarball):
     share = home / ".local" / "share" / "claude-gateway"
     link = home / ".local" / "bin" / "claude-gateway"
     assert os.readlink(link) == str(share / "scripts" / "claude-gateway")
-    for f in ("scripts/claude-gateway", "scripts/statusline.sh", "scripts/gclaude-sync.py", "examples/opencode/muse.md"):
+    for f in ("scripts/claude-gateway", "scripts/statusline.sh", "scripts/gclaude-sync.py", "scripts/i18n.json", "examples/opencode/muse.md"):
         assert (share / f).read_bytes() == (ROOT / f).read_bytes()
     assert os.access(share / "scripts" / "claude-gateway", os.X_OK)
     assert "Add " in r.stdout                                          # ~/.local/bin isn't on this PATH

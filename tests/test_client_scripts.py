@@ -1864,3 +1864,116 @@ def test_sync_leaves_an_unreadable_gclaude_claude_json_alone(home):
     gclaude_json(home).write_text("{not json")
     assert sync(home).returncode == 0
     assert gclaude_json(home).read_text() == "{not json"
+
+
+# ---------- gclaude in English or Persian (gclaude bilingual design) ----------
+
+CATALOG = json.loads((ROOT / "scripts" / "i18n.json").read_text(encoding="utf-8"))
+
+
+def cg_tty(home, answer, *args, **env):
+    """claude-gateway with a terminal on stderr, as under `curl ... | sh`; its question's answer comes from the file
+    CLAUDE_GATEWAY_TTY names. Returns (result, what went to the terminal)."""
+    import pty
+    tty = home / "tty-answer"
+    tty.write_text(answer, encoding="utf-8")
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    master, slave = pty.openpty()
+    try:
+        r = subprocess.run(["bash", str(GATEWAY), *args], stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=slave,
+                           text=True, timeout=60, env={"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(tmp),
+                                                       "CLAUDE_GATEWAY_TTY": str(tty), **env})
+    finally:
+        os.close(slave)
+    os.set_blocking(master, False)
+    shown = b""
+    try:
+        while chunk := os.read(master, 65536):
+            shown += chunk
+    except OSError:   # BlockingIOError once drained; EIO on Linux once the other end is closed
+        pass
+    os.close(master)
+    return r, shown.decode("utf-8", "replace")
+
+
+def client_json(home):
+    return json.loads((home / ".config" / "claude-gateway" / "client.json").read_text())
+
+
+def test_gclaude_asks_for_its_language_on_a_terminal_and_keeps_it(stub, home):
+    r, shown = cg_tty(home, "2\n", "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, shown
+    assert "Language / زبان" in shown
+    _, gsettings, _ = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    assert client_json(home)["lang"] == "fa"
+    assert s["language"] == "persian" and s["env"]["CLAUDE_GATEWAY_LANG"] == "fa"
+    r, shown = cg_tty(home, "1\n", "on")   # later runs keep the choice and never ask
+    assert r.returncode == 0 and "Language / زبان" not in shown
+    assert client_json(home)["lang"] == "fa"
+
+
+@pytest.mark.parametrize("answer, lang", [("۲\n", "fa"), ("fa\n", "fa"), ("فارسی\n", "fa"), ("\n", "en"), ("x\n", "en")])
+def test_gclaude_takes_a_persian_digit_as_the_answer(stub, home, answer, lang):
+    r, shown = cg_tty(home, answer, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, shown
+    assert client_json(home)["lang"] == lang
+
+
+def test_gclaude_lang_flag_skips_the_question(stub, home):
+    r, shown = cg_tty(home, "1\n", "on", "--gclaude", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0 and "Language / زبان" not in shown
+    assert client_json(home)["lang"] == "fa"
+
+
+def test_gclaude_without_a_terminal_uses_english_and_asks_next_time(stub, home):
+    r = cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, r.stderr
+    assert "/language fa" in r.stderr
+    assert "lang" not in client_json(home)                     # not saved: the next `on` on a terminal asks
+    _, gsettings, _ = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    assert "language" not in s and s["env"]["CLAUDE_GATEWAY_LANG"] == "en"
+    r, shown = cg_tty(home, "2\n", "on")
+    assert "Language / زبان" in shown and client_json(home)["lang"] == "fa"
+
+
+def test_gclaude_is_not_asked_while_it_signs_in_again(stub, home):
+    r, shown = cg_tty(home, "2\n", "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full",
+                      CLAUDE_GATEWAY_FROM_GCLAUDE="1")
+    assert r.returncode == 0 and "Language / زبان" not in shown
+    assert "lang" not in client_json(home)
+
+
+def test_gclaude_settings_name_this_claude_gateway_for_the_language_hook(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    cmd = json.loads(gsettings.read_text())["env"]["CLAUDE_GATEWAY_CMD"]
+    assert os.path.isabs(cmd) and os.path.realpath(cmd) == str(GATEWAY.resolve())
+
+
+@pytest.mark.parametrize("args", [["--gclaude", "--lang", "de"], ["--global", "--lang", "fa"],
+                                  ["--opencode", "--lang", "fa", "--routes-key", "sk-proxy-r-k"]])
+def test_lang_is_en_or_fa_and_goes_with_gclaude(stub, home, args):
+    r = cg(home, "on", *args, "--url", stub.url, *(["--key", "sk-proxy-full"] if "--opencode" not in args else []))
+    assert r.returncode == 1 and "--lang" in r.stderr
+
+
+def test_gclaude_leaves_the_users_own_language_alone(stub, home):
+    gdir, gsettings, _ = gc_paths(home)
+    gdir.mkdir(parents=True)
+    gsettings.write_text(json.dumps({"language": "japanese"}))
+    assert cg(home, "on", "--gclaude", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert json.loads(gsettings.read_text())["language"] == "japanese"
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text())["language"] == "japanese"
+
+
+def test_gclaude_off_removes_the_language_it_set(stub, home):
+    assert cg(home, "on", "--gclaude", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "off", "--gclaude").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    assert "language" not in s and "CLAUDE_GATEWAY_LANG" not in s.get("env", {}) and "CLAUDE_GATEWAY_CMD" not in s.get("env", {})
+    assert "lang" not in client_json(home)
