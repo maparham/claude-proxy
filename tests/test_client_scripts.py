@@ -1136,7 +1136,7 @@ def test_the_installers_on_leaves_a_signed_out_gclaude_to_sign_in_when_it_next_s
     """gclaude update runs the dashboard's installer, whose `on` must not stop for the browser: the next gclaude signs in."""
     gsettings, launcher = logged_out(stub, home)
     r = cg(home, "on", "--url", stub.url, "--dashboard", stub.url)   # what the dashboard's /install runs
-    assert r.returncode == 0 and "signs it in again when you next start it" in r.stdout, r.stderr
+    assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
     assert not any(p == "/api/device/start" for p, _ in stub.requests)
     stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
     r = run_gclaude(home, launcher, "-p", "hi")
