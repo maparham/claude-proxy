@@ -1179,7 +1179,8 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
     stub.install = "echo installer ran\n"
     r = run([str(launcher), "update"], env)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["installer ran", "claude [own config] update"]   # plain claude's own update
+    assert r.stdout.splitlines() == ["installer ran", "Now Claude Code itself:", "claude [own config] update",
+                                   "gclaude is up to date."]   # plain claude's own update, then gclaude's last word
     stub.install = "exit 3\n"
     r = run([str(launcher), "update"], env)
     assert r.returncode == 1 and "Claude Code was not updated" in r.stderr and "claude [" not in r.stdout

@@ -340,14 +340,15 @@ function Gclaude-On($c) {
     'if /i "%~1"=="uninstall" goto uninstall',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
-    'rem Claude Code''s own update. One block, so cmd has read all of it before the installer rewrites this file.',
+    'rem Claude Code''s own update, and a last line saying it was gclaude''s. One block, so cmd has read all of it before the installer rewrites this file.',
     'rem install.ps1 throws when it fails. Windows PowerShell exits 0 all the same when the throw happens inside iex,',
     'rem so the try/catch turns it into exit 1. The failure then goes to :updatefailed (a label is found by name, so',
     'rem the rewritten file serves; keep the name), whose top-level exit /b 1 reaches cmd /c where one in a nested',
     'rem block would not, and Claude Code is left alone.',
     ('if /i "%~1"=="update" (' + "`r`n" +
      "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
-     '  claude %*' + "`r`n" +
+     '  echo Now Claude Code itself:' + "`r`n" +
+     '  claude %* && echo gclaude is up to date.' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
