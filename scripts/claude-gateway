@@ -861,12 +861,12 @@ case "$cmd" in
       fi
     fi
     [ -z "$lang" ] || [ -n "$gclaude" ] || { echo "--lang goes with gclaude: gclaude's language (global mode is English)." >&2; exit 1; }
-    [ -z "$gclaude" ] || CG_LANG=$(choose_lang "$lang")   # before signing in, so that speaks it too
     [ -z "$key" ] || [ -z "$login" ] || { echo "Choose one: --key or --login." >&2; exit 1; }
+    [ -z "$gclaude" ] || gclaude_free   # below the checks above, so a refusal doesn't waste the language question
+    [ -z "$gclaude" ] || CG_LANG=$(choose_lang "$lang")   # before signing in, so that speaks it too
     if [ -n "$key" ]; then
       url=${url:-$(field url)}
       [ -n "$url" ] || { echo "Give --url with --key the first time." >&2; exit 1; }
-      [ -z "$gclaude" ] || gclaude_free
       save_client "$url" "$key" "$dash"
     elif [ -n "$url$login" ] || [ -z "$(field key)" ]; then
       url=${url:-$(field url)}
@@ -874,7 +874,6 @@ case "$cmd" in
       if [ -z "$login" ] && [ -n "$(field key)" ] && [ "$(field url)" = "${url%/}" ]; then
         [ -z "$dash" ] || save_client "$url" "$(field key)" "$dash"   # already connected there: keep its key
       else
-        [ -z "$gclaude" ] || gclaude_free
         dash=${dash:-$(dashboard_for "$url")}
         key=$(authorize "$url" "${dash%/}") || exit 1
         save_client "$url" "$key" "$dash"
@@ -899,6 +898,7 @@ case "$cmd" in
     gclaude_ours || { echo "gclaude is not set up, so it has no language to change." >&2; exit 1; }
     CG_LANG=$1
     save_lang "$1"
+    [ -f "$GCLAUDE_DIR/settings.json" ] || ( umask 077; echo '{}' > "$GCLAUDE_DIR/settings.json" )
     gclaude_language
     gclaude_files on
     ;;
