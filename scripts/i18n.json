@@ -15,8 +15,8 @@
   "off.not_set_up": {"en": "gclaude was not set up; nothing to undo.", "fa": "gclaude راه‌اندازی نشده بود؛ چیزی برای برگرداندن نیست."},
 
   "status.not_set_up": {"en": "gclaude: not set up", "fa": "gclaude: راه‌اندازی نشده"},
-  "status.reachable": {"en": "gateway: {url} (reachable)", "fa": "درگاه: {url} (در دسترس)"},
-  "status.unreachable": {"en": "gateway: {url} (NOT reachable)", "fa": "درگاه: {url} (در دسترس نیست)"},
+  "status.reachable": {"en": "gateway: {url} (reachable)", "fa": "درگاه: در دسترس · {url}"},
+  "status.unreachable": {"en": "gateway: {url} (NOT reachable)", "fa": "درگاه: در دسترس نیست · {url}"},
   "status.signed_out": {"en": "account: signed out; run gclaude to sign in", "fa": "حساب: خارج شده‌اید؛ برای ورود gclaude را اجرا کنید"},
   "status.account": {"en": "account: {account}", "fa": "حساب: {account}"},
   "status.key_removed": {"en": "account: this computer's key no longer works; run gclaude to sign in again", "fa": "حساب: کلید این رایانه دیگر کار نمی‌کند؛ برای ورود دوباره gclaude را اجرا کنید"},
