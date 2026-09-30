@@ -57,7 +57,7 @@
   "logout.odd": {"en": "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP {code}) but gave an unexpected reply; check in the dashboard that this computer is gone{where}. {again}", "fa": "خارج شدید: کلید از gclaude حذف شد و درگاه خروج را پذیرفت (HTTP {code}) اما پاسخ غیرمنتظره‌ای داد؛ در داشبورد بررسی کنید که این رایانه حذف شده باشد{where}. {again}"},
 
   "language.current": {"en": "gclaude's language is English. /language fa switches it to Persian (فارسی).", "fa": "زبان gclaude فارسی است. ‎/language en آن را به انگلیسی برمی‌گرداند."},
-  "language.switched": {"en": "gclaude now uses English: Claude's replies from your next message, and gclaude's own text.", "fa": "زبان gclaude اکنون فارسی است: پاسخ‌های Claude از پیام بعدی شما، و متن‌های خود gclaude."},
+  "language.switched": {"en": "gclaude now uses English: its own text now, and Claude's replies from your next message (if they don't change, restart gclaude).", "fa": "زبان gclaude اکنون فارسی است: متن‌های خود gclaude از همین حالا، و پاسخ‌های Claude از پیام بعدی شما (اگر تغییر نکرد، gclaude را دوباره اجرا کنید)."},
   "language.usage": {"en": "Use /language en or /language fa.", "fa": "از ‎/language en یا ‎/language fa استفاده کنید."},
   "language.failed": {"en": "The language was not changed: {error}. Run gclaude update in a terminal, then try again.", "fa": "زبان تغییر نکرد: {error}. در ترمینال gclaude update را اجرا کنید و دوباره امتحان کنید."}
 }

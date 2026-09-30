@@ -46,11 +46,21 @@ ours language && language=1
 json_str() { printf '%s' "$1" | tr -d '\000-\037' | sed 's/\\/\\\\/g; s/"/\\"/g'; }
 block() { printf '{"decision": "block", "reason": "%s"}\n' "$(json_str "$1")"; exit 0; }
 stop() { printf '{"continue": false, "stopReason": "%s"}\n' "$(json_str "$1")"; exit 0; }   # ends the prompt with no model call, like block
-t() {   # key [name=value...]: the text for key in CLAUDE_GATEWAY_LANG, from i18n.json beside this script. Only for text
-        # actually shown, so a statusline with figures to show makes no call.
-  python3 - "$(dirname "$0")/i18n.json" "${CLAUDE_GATEWAY_LANG:-en}" "$@" <<'EOF'
+t() {   # key [name=value...]: the text for key, from i18n.json beside this script. The language is CG_FORCE_LANG when
+        # set (the switched reply forces it, since the language it just saved may not show up below yet), else
+        # settings.json's env.CLAUDE_GATEWAY_LANG under CLAUDE_CONFIG_DIR (Claude Code may not re-apply the process
+        # env after a settings.json edit, so that file is more current than CLAUDE_GATEWAY_LANG below), else
+        # CLAUDE_GATEWAY_LANG, else en. Only for text actually shown, so a statusline with figures to show makes no call.
+  python3 - "$(dirname "$0")/i18n.json" "${CLAUDE_CONFIG_DIR:-}" "${CLAUDE_GATEWAY_LANG:-en}" "${CG_FORCE_LANG:-}" "$@" <<'EOF'
 import json, sys
-path, lang, key, *pairs = sys.argv[1:]
+path, config_dir, env_lang, force_lang, key, *pairs = sys.argv[1:]
+lang = force_lang
+if not lang and config_dir:
+    try:
+        lang = json.load(open(config_dir + "/settings.json", encoding="utf-8")).get("env", {}).get("CLAUDE_GATEWAY_LANG")
+    except Exception:
+        lang = None
+lang = lang or env_lang
 texts = json.load(open(path, encoding="utf-8"))[key]
 text = texts.get(lang) or texts["en"]
 for p in pairs:
@@ -122,7 +132,7 @@ if [ -n "$language" ]; then   # gclaude's /language [en|fa]
     *) block "$(t language.usage)" ;;
   esac
   if err=$("${CLAUDE_GATEWAY_CMD:-claude-gateway}" lang "$new" 2>&1 >/dev/null); then
-    block "$(CLAUDE_GATEWAY_LANG=$new t language.switched)"   # in the language just chosen
+    block "$(CG_FORCE_LANG=$new t language.switched)"   # in the language just chosen
   fi
   block "$(t language.failed error="$(printf '%s\n' "$err" | tail -n 1)")"
 fi

@@ -53,7 +53,17 @@ try {
   function Emit([string]$s) { $stdout.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
   function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
-  function T([string]$key, [hashtable]$a = @{}, [string]$lang = $env:CLAUDE_GATEWAY_LANG) {   # i18n.json beside this script
+  # settings.json's env.CLAUDE_GATEWAY_LANG, when CLAUDE_CONFIG_DIR is set: Claude Code may not re-apply the process
+  # env after a settings.json edit, so that file is more current than $env:CLAUDE_GATEWAY_LANG below.
+  $configLang = $env:CLAUDE_GATEWAY_LANG
+  if ($env:CLAUDE_CONFIG_DIR) {
+    try {
+      $gs = [IO.File]::ReadAllText((Join-Path $env:CLAUDE_CONFIG_DIR 'settings.json'), $utf8) | ConvertFrom-Json
+      if (($gs.env -is [psobject]) -and $gs.env.PSObject.Properties['CLAUDE_GATEWAY_LANG']) { $configLang = [string]$gs.env.CLAUDE_GATEWAY_LANG }
+    } catch { }
+  }
+  function T([string]$key, [hashtable]$a = @{}, [string]$lang = $configLang) {   # i18n.json beside this script; $lang
+    # defaults to $configLang above, but the switched reply passes the language just chosen explicitly
     $texts = ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'i18n.json'), $utf8) | ConvertFrom-Json).$key
     $text = if ($lang -eq 'fa' -and $texts.fa) { [string]$texts.fa } else { [string]$texts.en }
     foreach ($k in $a.Keys) { $text = $text.Replace('{' + $k + '}', [string]$a[$k]) }

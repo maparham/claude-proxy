@@ -457,6 +457,17 @@ def test_language_prompt_alone_says_the_current_language(stub, warn_env, tmp_pat
     assert not log.exists()
 
 
+def test_language_prompt_prefers_settings_json_over_the_process_env(stub, warn_env, tmp_path):
+    """Claude Code may not re-apply the process env after a settings.json edit (review finding 2): a bare
+    /language right after /language fa must still answer in Persian, even though the process env still says en."""
+    env = gclaude_config(warn_env)
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "commands" / "language.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
+    (Path(env["CLAUDE_CONFIG_DIR"]) / "settings.json").write_text(json.dumps({"env": {"CLAUDE_GATEWAY_LANG": "fa"}}))
+    out = json.loads(run(["sh", str(STATUSLINE), "--warn"], {**env, "CLAUDE_GATEWAY_LANG": "en"},
+                          stdin=json.dumps({"prompt": "/language"})).stdout)
+    assert out["reason"] == CATALOG["language.current"]["fa"]
+
+
 @pytest.mark.parametrize("prompt, lang", [("/language fa", "fa"), ("/language  FA ", "fa"), ("/language Persian", "fa"),
                                           ("/language فارسی", "fa"), ("/language en", "en"), ("/language English", "en")])
 def test_language_prompt_understands_each_way_of_naming_persian(stub, warn_env, tmp_path, prompt, lang):

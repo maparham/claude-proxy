@@ -825,3 +825,15 @@ def test_the_hook_answers_language_and_switches(gclaude, installed, stub):
     stub.status_line = None
     r = gclaude("", CLAUDE_GATEWAY_LANG="fa")
     assert CATALOG["line.unavailable"]["fa"] in r.stdout, r.out
+
+
+@on_windows
+def test_the_hook_prefers_settings_json_over_the_process_env(gclaude, installed, stub):
+    """Claude Code may not re-apply the process env after a settings.json edit (review finding 2): a bare
+    /language right after /language fa must still answer in Persian, even though the process env still says en."""
+    win = installed
+    s = win.settings()
+    s["env"]["CLAUDE_GATEWAY_LANG"] = "fa"
+    (win.gdir / "settings.json").write_text(json.dumps(s), encoding="utf-8")
+    r = gclaude(" --warn", '{"prompt": "/language"}', CLAUDE_GATEWAY_LANG="en")
+    assert json.loads(r.stdout)["reason"] == CATALOG["language.current"]["fa"], r.out
