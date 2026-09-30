@@ -32,7 +32,18 @@ case " $* " in
     claude=$(command -v claude 2>/dev/null) ||
       claude=$(IFS=:; for d in $PATH; do [ -e "$d/claude" ] && { echo "$d/claude"; break; }; done; true)
     if [ -z "$claude" ]; then
-      echo "install.sh: Claude Code (claude) is needed first: install it, then run this again." >&2; exit 1
+      installer=${CLAUDE_GATEWAY_CLAUDE_INSTALLER:-https://claude.ai/install.sh}
+      echo "Installing Claude Code ($installer)..."
+      script=$(mktemp)
+      # Downloaded first, so a failed download isn't run as an empty script that succeeds.
+      if curl -fsSL "$installer" -o "$script" && command -v bash >/dev/null 2>&1 && bash "$script"; then
+        claude=$(command -v claude 2>/dev/null) || claude=$HOME/.local/bin/claude   # where its installer puts it
+      fi
+      rm -f "$script"
+      if [ -z "$claude" ] || [ ! -e "$claude" ]; then
+        echo "install.sh: Claude Code (claude) could not be installed: install it (https://claude.ai/install.sh), then run this again." >&2
+        exit 1
+      fi
     fi
     if ! out=$("$claude" --version 2>&1); then
       echo "install.sh: Claude Code at $claude doesn't run:" >&2
