@@ -213,7 +213,7 @@ Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and
 Without a claude.ai login Claude Code gives `fable`, `opus` and `sonnet` a 200K context window, so the key-only
 setup (gclaude's, and global `--key-only`) points them at their 1M forms (`ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-1[1m]`
 and the like) unless you set those yourself. `/model fable` then gets the 1M window with no `[1m]` to type.
-`off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout_gclaude` and the gateway settings, and keeps gclaude's own history.
+`off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout_gclaude`, `/language` and the gateway settings, and keeps gclaude's own history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.
 In gclaude, `/usage` is a command of ours instead. The limit-warning hook stops that prompt before it reaches the
@@ -229,6 +229,11 @@ blocked (a hook never sees it). gclaude's `/logout_gclaude` signs this computer 
 gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session (on macOS
 and Linux; on Windows, `/exit`). The next `gclaude` signs this computer in again in the browser before it starts,
 like plain `claude`'s login (`claude-gateway on --login` does the same on its own).
+
+gclaude speaks English or Persian (فارسی): setup asks which (or pass `--lang en|fa` to `claude-gateway on`), and
+`/language fa` or `/language en` inside gclaude switches it. It sets Claude Code's own `language` setting for
+gclaude, so Claude answers in that language, and gclaude's status line, commands and messages follow.
+
 The same happens when the dashboard no longer accepts the key, e.g. after the computer was removed there.
 How that works, for debugging: the gclaude command counts as signed out when its `settings.json` has no
 `ANTHROPIC_AUTH_TOKEN` (macOS and Linux) or when the `signed-out` file `/logout_gclaude` leaves is in its folder
