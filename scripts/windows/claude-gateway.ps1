@@ -344,11 +344,15 @@ function Gclaude-On($c) {
     'rem install.ps1 throws when it fails. Windows PowerShell exits 0 all the same when the throw happens inside iex,',
     'rem so the try/catch turns it into exit 1. The failure then goes to :updatefailed (a label is found by name, so',
     'rem the rewritten file serves; keep the name), whose top-level exit /b 1 reaches cmd /c where one in a nested',
-    'rem block would not, and Claude Code is left alone.',
+    'rem block would not, and Claude Code is left alone. Claude Code''s own output shows only when it updated or failed',
+    'rem (:claudeupdatefailed), not "... is up to date", so the update reads as gclaude''s.',
     ('if /i "%~1"=="update" (' + "`r`n" +
      "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
-     '  echo Now Claude Code itself:' + "`r`n" +
-     '  claude %* && echo gclaude is up to date.' + "`r`n" +
+     '  echo Checking for a Claude Code update...' + "`r`n" +
+     '  call claude %* >"%TEMP%\gclaude-update.log" 2>&1 || goto :claudeupdatefailed' + "`r`n" +
+     '  findstr /c:"is up to date" "%TEMP%\gclaude-update.log" >nul || type "%TEMP%\gclaude-update.log"' + "`r`n" +
+     '  del "%TEMP%\gclaude-update.log" 2>nul' + "`r`n" +
+     '  echo gclaude is up to date.' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
@@ -386,6 +390,11 @@ function Gclaude-On($c) {
     ':updatefailed',
     'echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2',
     'exit /b 1',
+    ':claudeupdatefailed',
+    'set "GW_RC=%ERRORLEVEL%"',
+    'type "%TEMP%\gclaude-update.log" 1>&2',
+    'del "%TEMP%\gclaude-update.log" 2>nul',
+    'exit /b %GW_RC%',
     ':signinfailed',   # a top-level label, like :updatefailed, so cmd /c really returns 1
     'echo gclaude: not signed in, so Claude Code was not started 1>&2',
     'exit /b 1',
