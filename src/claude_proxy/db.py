@@ -343,6 +343,21 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
     return n
 
 
+def rename_user(conn: sqlite3.Connection, user_id: int, new: str, actor: int | None) -> str:
+    """Returns the trimmed name. The name is what the status line and dashboard show; an admin also signs in with it."""
+    new = new.strip()
+    if not new or len(new) > 64:
+        raise ValueError("Need a name of 1-64 characters.")
+    old = _user_name(conn, user_id)
+    if new == old:
+        return new
+    if conn.execute("SELECT 1 FROM users WHERE name=? AND id!=?", (new, user_id)).fetchone():
+        raise LookupError(f"The name {new!r} is taken.")
+    conn.execute("UPDATE users SET name=? WHERE id=?", (new, user_id))
+    audit(conn, actor, "rename", f"{old}->{new}")
+    return new
+
+
 def set_session_title(conn: sqlite3.Connection, user_id: int, session_id: str, title: str) -> None:
     # Keyed by user too: the session id comes from the client, so one user can never rename another's session.
     conn.execute("INSERT INTO session_titles(user_id, session_id, title, updated_at) VALUES(?,?,?,?) "

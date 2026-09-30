@@ -660,6 +660,21 @@ function keyDialog(title, key, how = "The user sets it as <code>ANTHROPIC_AUTH_T
     <code class="key" id="new-key">${esc(key)}</code><p><button class="btn" id="copy-key">Copy</button> <button class="btn primary" data-close>Done</button></p>`);
   $("#copy-key").onclick = async () => { try { await navigator.clipboard.writeText(key); $("#copy-key").textContent = "Copied"; } catch { /* clipboard blocked */ } };
 }
+function showWho() { $("#who").textContent = `${S.user.name} · ${S.user.role}`; }
+function nameDialog() {
+  const d = openDialog(`<h3>Your name</h3><p>Shown on this dashboard and in gclaude's status line.${isAdmin() ? " You also sign in with it as the admin username." : ""}</p>
+    <form id="f-name" class="form-grid"><label>Name<input type="text" name="name" required maxlength="64" value="${esc(S.user.name)}"></label>
+    <button class="btn primary" type="submit">Save</button></form><div class="error" id="name-err"></div>
+    <p><button class="btn" data-close>Cancel</button></p>`);
+  $("#f-name input", d).select();
+  $("#f-name", d).onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api("/api/me/name", { method: "POST", body: { name: new FormData(e.target).get("name") } });
+      S.user.name = r.name; showWho(); d.close(); render();
+    } catch (err) { $("#name-err").textContent = err.message; }
+  };
+}
 function addUserDialog() {
   const d = openDialog(`<h3>Add user</h3><form id="f-add" class="form-grid">
     <label>Name<input type="text" name="name" required maxlength="64"></label>
@@ -1229,7 +1244,7 @@ async function boot() {
   if (pending && !location.hash.startsWith("#authorize/")) history.replaceState(null, "", `#authorize/${pending}`);
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
-  $("#who").textContent = `${S.user.name} · ${S.user.role}`;
+  showWho();
   route();
   render();
 }
@@ -1260,6 +1275,7 @@ $("#logout").onclick = async () => {
   if (window.Clerk?.session) await window.Clerk.signOut().catch(() => {});   // or the sign-in page would trade it in again
   showLogin();
 };
+$("#who").onclick = nameDialog;
 $("#theme-toggle").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";

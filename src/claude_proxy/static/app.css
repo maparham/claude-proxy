@@ -66,6 +66,8 @@ header.top h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: -0
 header.top .spacer { flex: 1; }
 .pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px;
         border: 1px solid var(--border); font-size: 12px; color: var(--ink-2); background: var(--surface); }
+button.pill { font: inherit; font-size: 12px; cursor: pointer; }
+button.pill:hover { border-color: var(--ink-2); color: var(--ink); }
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex: none; }
 
 nav.tabs { display: flex; gap: 2px; padding: 0 24px; background: var(--surface); border-bottom: 1px solid var(--border);
