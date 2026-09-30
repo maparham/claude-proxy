@@ -25,15 +25,21 @@ a Persian font) and gets its own spec.
 
       Language / زبان:  1) English  2) فارسی  [1]
 
-  from `/dev/tty` in sh (stdin is the piped installer), `[Console]::ReadLine` in PowerShell. With no terminal (CI,
-  `/dev/tty` unopenable, `[Console]::IsInputRedirected` with no console), it picks English and says so.
-- `gclaude update`, a bare `on`, and `on --login` keep the saved choice and never ask.
+  on stderr, reading the answer from `/dev/tty` in sh (stdin is the piped installer; `1`, `2`, `۲`, `en`, `fa` and
+  `فارسی` are understood), `Read-Host` in PowerShell (an ASCII prompt there: `1) English  2) Farsi (Persian)`). It
+  asks only when stderr is a terminal (sh) or stdin is not redirected (PowerShell). Otherwise (CI, tests, no
+  terminal) it uses English without saving it and says `/language fa` switches, so the question comes again at the
+  next `on` that has a terminal, `gclaude update` included.
+- Once saved, `gclaude update` and a bare `on` keep the choice and never ask; nor does the sign-in that gclaude
+  itself starts (`CLAUDE_GATEWAY_FROM_GCLAUDE`).
+- `off --gclaude` removes `lang` with the rest of what `on` added.
 
 ## Claude's replies
 
 `on --gclaude` writes `"language": "persian"` into gclaude's own `settings.json` for `fa`, and removes it for `en`.
 Claude Code then adds "Always respond in persian…" to its system prompt; code and identifiers stay as they are.
-It's recorded in client.json's `gclaude` record like the other settings `on` adds (`added_language`), so `off
+The same settings.json `env` gets `CLAUDE_GATEWAY_LANG` (`en` or `fa`, for the statusline and hook) and
+`CLAUDE_GATEWAY_CMD` (this claude-gateway, which /language runs). It's recorded in client.json's `gclaude` record like the other settings `on` adds (`added_language`), so `off
 --gclaude` removes it, and a `language` the user set there themselves is left alone (recorded as not ours, never
 overwritten).
 
@@ -46,22 +52,29 @@ the Windows installer's source folder; a test checks the two are identical).
 Readers:
 
 - the Python embedded in `claude-gateway` and `gclaude-sync.py`: `json.load`, `t(key, **args)`;
-- `statusline.sh`: a `t key [name=value…]` helper. When lang is `en` it uses the English text already in the script
-  and makes no extra call, so the 30-second statusline stays as cheap as now. When `fa`, one `python3` call per run
-  reads every key the run needs;
-- `claude-gateway.ps1`, `statusline.ps1`: `ConvertFrom-Json`, a `T` function.
+- `claude-gateway` and `statusline.sh`: a `t key [name=value…]` shell helper (one `python3` call). It is called
+  only for text actually shown, so a statusline with figures to show, or a hook with nothing to say, makes no
+  extra call;
+- `statusline.ps1`: `ConvertFrom-Json`, a `T` function.
 
-A key with no `fa` text falls back to `en`. Which language to use: `client.json`'s `lang`, read where client.json is
-already read; statusline and the hook read `CLAUDE_GATEWAY_LANG` from gclaude's settings.json `env` block, which
-`on` and `/language` keep equal to client.json's `lang`.
+Placeholders are filled by plain replacement of `{name}`, the same in every reader.
 
-The gclaude command files (commands/usage.md, account.md, logout_gclaude.md, language.md) are written in the chosen
-language, so the `/` menu's descriptions show in Persian too. Their marker comment stays the same, so
+A key with no `fa` text falls back to `en`. Which language to use: `client.json`'s `lang` in claude-gateway;
+`CLAUDE_GATEWAY_LANG` from gclaude's settings.json `env` in the statusline and hook.
+
+The `description` of each gclaude command (usage, account, logout_gclaude, language) is written in the chosen
+language, so the `/` menu shows it in Persian. Their bodies, instructions to the model for when the hook is
+missing, stay English: the model answers in the `language` setting anyway. Their marker comment stays the same, so
 statusline.sh's `ours` check still recognises them.
 
-What stays English: global mode, admin-facing `claude-gateway` output (status details, errors meant for bug reports),
-`gclaude-sync.py` notes, and the `gclaude.cmd` launcher's few messages on Windows (cmd.exe reads a .cmd file in the
-console code page, not UTF-8).
+In Persian on macOS/Linux: the setup question, the browser sign-in messages, `on`/`off`/`gclaude status` output
+for gclaude, and the gclaude launcher's messages. On Windows: the statusline, hook answers and command descriptions
+(all shown by Claude Code, which reads UTF-8).
+
+What stays English: global mode and OpenCode, errors meant for an admin or a bug report, `gclaude-sync.py` notes,
+the gateway's own figures line (`alice · daily 10/100 req`, written by the server), and on Windows the
+`claude-gateway.ps1` output and the `gclaude.cmd` launcher's messages (the console there uses a legacy code page,
+and switching it would garble Claude Code's own output in the same console).
 
 ## /language
 
@@ -73,6 +86,10 @@ did not run. The `--warn` UserPromptSubmit hook answers it and blocks the prompt
   and `env.CLAUDE_GATEWAY_LANG` in gclaude's settings.json, rewrites the command files, and answers in the new
   language;
 - anything else: the usage line again.
+
+Switching runs `claude-gateway lang en|fa` (`CLAUDE_GATEWAY_CMD`): it saves `lang`, sets the two settings, and
+rewrites the command files and the launcher. It needs no network and no key, so it also works signed out. If it
+fails, the reply gives its last line of error.
 
 Claude Code watches settings.json; the implementation checks whether the `language` setting takes effect in the
 running session. If it needs a restart, the `/language` reply says so.
