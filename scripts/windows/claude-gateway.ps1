@@ -478,6 +478,12 @@ switch -Exact ($cmd) {
       if ($savedUrl -eq $url -and $savedDash) { $dash = $savedDash } else { $dash = ([regex]'://claude\.').Replace($url, '://claude-dash.', 1) }
     }
     $dash = $dash.TrimEnd('/')
+    if (-not $key -and -not $login -and -not $savedKey -and $savedUrl -eq $url -and (Launcher-Ours)) {
+      # Signed out by /logout_gclaude, and here from the installer (gclaude update): no browser mid-update. The next
+      # gclaude signs in (`on --login`), which also refreshes its setup.
+      Write-Output 'This computer is signed out of the gateway; gclaude signs it in again when you next start it.'
+      exit 0
+    }
     if (-not $key) {
       if ($login -or $savedUrl -ne $url -or -not $savedKey) { $key = Authorize $dash } else { $key = $savedKey }
     }

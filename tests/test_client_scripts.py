@@ -1132,6 +1132,17 @@ def test_gclaude_signs_in_again_in_the_browser_when_started_signed_out(stub, hom
     assert r.returncode == 0 and "authorize" not in r.stderr, r.stderr
 
 
+def test_the_installers_on_leaves_a_signed_out_gclaude_to_sign_in_when_it_next_starts(stub, home):
+    """gclaude update runs the dashboard's installer, whose `on` must not stop for the browser: the next gclaude signs in."""
+    gsettings, launcher = logged_out(stub, home)
+    r = cg(home, "on", "--url", stub.url, "--dashboard", stub.url)   # what the dashboard's /install runs
+    assert r.returncode == 0 and "signs it in again when you next start it" in r.stdout, r.stderr
+    assert not any(p == "/api/device/start" for p, _ in stub.requests)
+    stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0 and "Authorized as ana" in r.stderr, r.stderr
+
+
 def test_gclaude_signs_in_again_when_its_key_was_removed_in_the_dashboard(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, gsettings, launcher = gc_paths(home)
