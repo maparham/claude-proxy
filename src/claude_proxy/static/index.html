@@ -40,17 +40,16 @@
       <div id="clerk-area" class="hidden"><div id="clerk-signin"></div>
         <button type="button" class="signin-more" id="other-ways" aria-expanded="false" aria-controls="classic">Other ways to sign in</button></div>
       <div id="classic" class="hidden">
-      <p class="signin-sub" id="login-hint">Sign in as the admin, or with your own gateway key to see your usage.<span class="tip-i" tabindex="0" role="button" aria-label="About gateway keys" data-tip="login_key">?</span></p>
-      <form id="form-admin">
+      <p class="signin-sub" id="login-hint">Sign in with your own gateway key to see your usage.<span class="tip-i" tabindex="0" role="button" aria-label="About gateway keys" data-tip="login_key">?</span></p>
+      <form id="form-admin" class="hidden">
         <input type="text" name="username" placeholder="Admin username" aria-label="Admin username" autocomplete="username" value="admin" required>
         <input type="password" name="password" placeholder="Password" aria-label="Password" autocomplete="current-password" required>
         <button class="btn primary" type="submit">Sign in</button>
       </form>
-      <form id="form-key" class="hidden">
+      <form id="form-key">
         <input type="password" name="key" placeholder="sk-proxy-…" aria-label="Gateway key" autocomplete="off" required>
         <button class="btn primary" type="submit">Sign in with key</button>
       </form>
-      <div class="switch"><a href="#" id="login-switch">Use my gateway key instead</a></div>
       </div>
       <div class="error" id="login-error" role="alert"></div>
     </div>

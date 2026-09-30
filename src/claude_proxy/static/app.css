@@ -233,15 +233,14 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 #clerk-signin .cl-formButtonPrimary::after { display: none; }
 #clerk-signin .cl-formButtonPrimary:hover { background: color-mix(in srgb, var(--ink) 86%, var(--surface)); }
 #clerk-signin .cl-dividerLine { background: var(--border); }
-.signin-more, .signin .switch a { margin-top: 20px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--ink-2);
+.signin-more { margin-top: 20px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--ink-2);
                text-decoration: underline; text-decoration-color: var(--axis); text-underline-offset: 3px; }
-.signin-more:hover, .signin .switch a:hover { color: var(--ink); text-decoration-color: currentColor; }
+.signin-more:hover { color: var(--ink); text-decoration-color: currentColor; }
 #classic { margin-top: 16px; }
 #clerk-area:not(.hidden) + #classic { padding-top: 16px; border-top: 1px solid var(--border); }
 #classic form { display: grid; gap: 10px; margin-top: 12px; }
 #classic form input { padding: 9px 10px; border-color: var(--axis); }
 #classic form .btn { padding: 9px 12px; font-weight: 600; }
-.signin .switch { margin-top: 12px; font-size: 13px; }
 .for-authorize .signin-steps { display: none; }
 .signin .error { margin-top: 12px; }
 

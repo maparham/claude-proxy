@@ -819,9 +819,10 @@ function mountClerk() {
     appearance: clerkAppearance(),
   });
 }
+const ADMIN_PAGE = location.pathname === "/admin";
 async function showClerk() {
   // The other forms wait until the page knows whether Clerk is on, so they don't flash before its sign-in.
-  const clerk = await setupClerk();
+  const clerk = !ADMIN_PAGE && await setupClerk();
   if (!clerk) { $("#classic").classList.remove("hidden"); return; }
   if (S.user) return;
   $("#clerk-area").classList.remove("hidden");
@@ -1248,12 +1249,12 @@ async function login(path, body) {
 }
 $("#form-admin").onsubmit = (e) => { e.preventDefault(); const f = new FormData(e.target); login("/api/login", { username: f.get("username"), password: f.get("password") }); };
 $("#form-key").onsubmit = (e) => { e.preventDefault(); login("/api/login/key", { key: new FormData(e.target).get("key") }); };
-$("#login-switch").onclick = (e) => {
-  e.preventDefault();
-  const keyMode = $("#form-key").classList.toggle("hidden") === false;
-  $("#form-admin").classList.toggle("hidden", keyMode);
-  e.target.textContent = keyMode ? "Sign in as admin instead" : "Use my gateway key instead";
-};
+// The admin's password form lives only at /admin, which nothing links to; everyone else signs in with Clerk or a key.
+if (ADMIN_PAGE) {
+  $("#form-admin").classList.remove("hidden");
+  $("#form-key").classList.add("hidden");
+  $("#login-hint").textContent = "Sign in as the admin.";
+}
 $("#logout").onclick = async () => {
   await api("/api/logout", { method: "POST", body: {} }).catch(() => {});
   S.user = null;
