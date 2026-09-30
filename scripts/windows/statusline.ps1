@@ -23,15 +23,17 @@ $warn = $args -contains '--warn'
 $accountMode = $args -contains '--account'
 try {
   $utf8 = New-Object Text.UTF8Encoding $false
-  try { [Console]::InputEncoding = $utf8 } catch { }
-  try { [Console]::OutputEncoding = $utf8 } catch { }   # the diamond and the colour codes as they are
+  # UTF-8 through our own stdin and stdout, not [Console]::InputEncoding/OutputEncoding: those set the code page of
+  # the console Claude Code shares with us, and the old console (conhost) then draws its logo and bullets as boxes.
+  $out = New-Object IO.StreamWriter ([Console]::OpenStandardOutput()), $utf8
+  $out.AutoFlush = $true
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   # Windows PowerShell 5.1 would write arrays as {"value": [...], "Count": n}; see claude-gateway.ps1.
   Remove-TypeData System.Array -ErrorAction SilentlyContinue
 
   $stdin = ''
-  if (-not $accountMode) { try { $stdin = [Console]::In.ReadToEnd() } catch { } }   # session or prompt JSON; only --warn looks at it, for /usage
+  if (-not $accountMode) { try { $stdin = (New-Object IO.StreamReader ([Console]::OpenStandardInput()), $utf8).ReadToEnd() } catch { } }   # session or prompt JSON; only --warn looks at it, for /usage
   $dash = ([string]$env:CLAUDE_GATEWAY_DASHBOARD).TrimEnd('/')
 
   function Ours([string]$name) {   # the prompt is /name and gclaude's commands\name.md is claude-gateway's
@@ -45,7 +47,7 @@ try {
   $usage = Ours 'usage'
   $account = Ours 'account'
 
-  function Emit([string]$s) { [Console]::Out.Write($s + "`n") }
+  function Emit([string]$s) { $out.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
   function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
 
@@ -206,6 +208,6 @@ try {
   Emit (ConvertTo-Json -Compress -InputObject @{ systemMessage = 'Gateway: ' + (Figures $line $false) })
   exit 0
 } catch {
-  if (-not $warn) { [Console]::Out.Write("gateway status unavailable`n") }
+  if (-not $warn) { $out.Write("gateway status unavailable`n") }
   exit 0
 }
