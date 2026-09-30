@@ -258,7 +258,7 @@ def no_claude_path(win, tmp_path):
 def test_install_installs_claude_code_when_it_is_missing(win, tmp_path):
     # Like Claude Code's own installer: claude into .local\bin, and `exit` at the end, which mustn't end the session
     installer = tmp_path / "claude-install.ps1"
-    installer.write_text("$d = Join-Path $env:USERPROFILE '.local\\bin'; New-Item -ItemType Directory -Force $d | Out-Null\n"
+    installer.write_text("Write-Output 'Setting up Claude Code...'\n$d = Join-Path $env:USERPROFILE '.local\\bin'; New-Item -ItemType Directory -Force $d | Out-Null\n"
                          "Set-Content -LiteralPath (Join-Path $d 'claude.cmd') -Value '@echo 2.1.0 (Claude Code)'\nexit 0\n")
     r = win.install(PATH=no_claude_path(win, tmp_path), CLAUDE_GATEWAY_CLAUDE_INSTALLER=str(installer))
     assert "session still open" in r.out and "Installing Claude Code" in r.out and "threw" not in r.out, r.out

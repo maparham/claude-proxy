@@ -65,7 +65,8 @@ function Install-ClaudeCode([string]$Bin) {
       else { Invoke-WebRequest -UseBasicParsing -Uri $installer -OutFile $script }
     } catch { throw "install.ps1: could not get Claude Code's installer $installer ($($_.Exception.Message))" }
     $ErrorActionPreference = 'Continue'   # under Stop, anything it writes to stderr would throw here
-    & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $script
+    # To the console: as this function's output, it would become part of the path returned below
+    & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $script | Out-Host
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
   } finally {
