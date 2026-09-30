@@ -817,7 +817,7 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("statusline.sh --warn")
     assert os.readlink(gdir / "CLAUDE.md") == str(home / ".claude" / "CLAUDE.md")
     assert os.readlink(gdir / "agents") == str(home / ".claude" / "agents")
-    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "logout_gclaude.md", "usage.md"]   # gclaude's own only
+    assert sorted(p.name for p in (gdir / "commands").iterdir()) == ["account.md", "language.md", "logout_gclaude.md", "usage.md"]   # gclaude's own only
     assert json.loads((gdir / ".claude.json").read_text()) == {"hasCompletedOnboarding": True, "theme": "light"}
     assert os.access(launcher, os.X_OK)
 
@@ -1090,7 +1090,7 @@ def test_gclaude_on_replaces_the_older_logout_command_and_off_removes_it(stub, h
     cmds = gc_paths(home)[0] / "commands"
     (cmds / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
     assert cg(home, "on", "--gclaude").returncode == 0
-    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "logout_gclaude.md", "usage.md"]
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "language.md", "logout_gclaude.md", "usage.md"]
     (cmds / "logout.md").write_text("<!-- # Installed by claude-gateway on --gclaude. -->\n")
     assert cg(home, "off", "--gclaude").returncode == 0
     assert not cmds.exists()
@@ -1226,7 +1226,7 @@ def test_gclaude_launcher_follows_later_command_changes(stub, home):
     (own_cmds / "new.md").write_text("new\n")
     (own_cmds / "usage.md").write_text("my own usage\n")          # gclaude's /usage wins in gclaude
     assert run_gclaude(home, launcher).returncode == 0
-    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "logout_gclaude.md", "new.md", "usage.md"]
+    assert sorted(p.name for p in cmds.iterdir()) == ["account.md", "gateway-only.md", "language.md", "logout_gclaude.md", "new.md", "usage.md"]
     assert "disable-model-invocation" in (cmds / "usage.md").read_text()
 
 
@@ -1984,3 +1984,67 @@ def test_gclaude_off_removes_the_language_it_set(stub, home):
     s = json.loads(gsettings.read_text())
     assert "language" not in s and "CLAUDE_GATEWAY_LANG" not in s.get("env", {}) and "CLAUDE_GATEWAY_CMD" not in s.get("env", {})
     assert "lang" not in client_json(home)
+
+
+def description(path):
+    line = next(l for l in path.read_text(encoding="utf-8").splitlines() if l.startswith("description: "))
+    return json.loads(line.removeprefix("description: "))   # a JSON string is a YAML one too
+
+
+def test_gclaude_on_localizes_its_command_descriptions(stub, home):
+    assert cg(home, "on", "--gclaude", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, _ = gc_paths(home)
+    for name in ("usage", "account", "logout_gclaude", "language"):
+        md = gdir / "commands" / f"{name}.md"
+        assert description(md) == CATALOG[f"cmd.{name}"]["fa"]
+        assert "<!-- # Installed by claude-gateway on --gclaude. -->" in md.read_text(encoding="utf-8")
+
+
+def test_gclaude_lang_switches_everything(stub, home):
+    assert cg(home, "on", "--gclaude", "--lang", "en", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, gsettings, launcher = gc_paths(home)
+    r = cg(home, "lang", "fa")
+    assert r.returncode == 0, r.stderr
+    s = json.loads(gsettings.read_text())
+    assert (client_json(home)["lang"], s["language"], s["env"]["CLAUDE_GATEWAY_LANG"]) == ("fa", "persian", "fa")
+    assert description(gdir / "commands" / "usage.md") == CATALOG["cmd.usage"]["fa"]
+    assert CATALOG["launch.no_claude"]["fa"] in launcher.read_text(encoding="utf-8")
+    assert cg(home, "lang", "en").returncode == 0
+    s = json.loads(gsettings.read_text())
+    assert "language" not in s and s["env"]["CLAUDE_GATEWAY_LANG"] == "en"
+    assert description(gdir / "commands" / "usage.md") == "Your gateway limits and usage"
+    assert CATALOG["launch.no_claude"]["en"] in launcher.read_text(encoding="utf-8")
+
+
+def test_gclaude_lang_works_signed_out_and_offline(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    del s["env"]["ANTHROPIC_AUTH_TOKEN"]                    # as /logout_gclaude leaves it
+    gsettings.write_text(json.dumps(s))
+    c = client_json(home)
+    del c["key"]
+    (home / ".config" / "claude-gateway" / "client.json").write_text(json.dumps(c))
+    stub.server.shutdown()                                 # and no gateway either
+    r = cg(home, "lang", "fa")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(gsettings.read_text())["language"] == "persian"
+
+
+def test_gclaude_launcher_speaks_persian(stub, home):
+    assert cg(home, "on", "--gclaude", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    r = run([str(launcher)], {"PATH": "/usr/bin:/bin", "HOME": str(home)})   # no claude on this PATH
+    assert r.returncode == 127 and CATALOG["launch.no_claude"]["fa"] in r.stderr
+
+
+@pytest.mark.parametrize("args, why", [(["de"], "en|fa"), ([], "en|fa"), (["fa", "x"], "en|fa")])
+def test_gclaude_lang_takes_en_or_fa(stub, home, args, why):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    r = cg(home, "lang", *args)
+    assert r.returncode == 1 and why in r.stderr
+
+
+def test_gclaude_lang_needs_gclaude(home):
+    r = cg(home, "lang", "fa")
+    assert r.returncode == 1 and "not set up" in r.stderr

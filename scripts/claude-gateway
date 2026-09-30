@@ -16,6 +16,7 @@
 #   claude-gateway off --opencode
 #   claude-gateway on --gclaude / off --gclaude      # gclaude, explicitly
 #   claude-gateway on --lang en|fa   # gclaude's language: Claude's replies and gclaude's own text (asked the first time)
+#   claude-gateway lang en|fa        # switch gclaude's language; its /language runs this
 #   claude-gateway status --gclaude  # gclaude's gateway, whether this computer is signed in, and the limits
 # gclaude users need none of these: `gclaude update`, `gclaude status` and `gclaude uninstall` run them.
 #
@@ -199,6 +200,19 @@ dashboard_for() {   # url: the dashboard saved for it, else the usual claude. ->
 }
 
 field() { python3 -c 'import json,os,sys; c=json.load(open(sys.argv[1])) if os.path.exists(sys.argv[1]) else {}; print(c.get(sys.argv[2], sys.argv[3] if len(sys.argv) > 3 else ""))' "$CLIENT" "$@"; }
+
+t() {   # key [name=value...]: gclaude's text in its language (this run's choice, else client.json's lang) from i18n.json
+  python3 - "$(src_dir)/i18n.json" "${CG_LANG:-$(field lang en)}" "$@" <<'EOF'
+import json, sys
+path, lang, key, *pairs = sys.argv[1:]
+texts = json.load(open(path, encoding="utf-8"))[key]
+text = texts.get(lang) or texts["en"]
+for p in pairs:
+    k, _, v = p.partition("=")
+    text = text.replace("{" + k + "}", v)
+print(text)
+EOF
+}
 
 set_mode() {
   python3 -c 'import json,sys; p=sys.argv[1]; c=json.load(open(p)); c["mode"]=sys.argv[2]; json.dump(c, open(p,"w"), indent=2)' "$CLIENT" "$1"
@@ -542,10 +556,17 @@ opencode_state() {
 gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE_MARK" "$GCLAUDE"; }
 gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
-gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage, /account and /logout_gclaude commands, and a first-run state file
-  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
+gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage, /account, /logout_gclaude and /language commands, and a first-run state file
+  CG_I18N="$(src_dir)/i18n.json" CG_LANG="${CG_LANG:-$(field lang en)}" python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
 import atexit, json, os, shlex, sys, tempfile
 mode, client, gdir, launcher, mark, shared, own_state, sync, statusline, self_path = sys.argv[1:]
+CATALOG = json.load(open(os.environ["CG_I18N"], encoding="utf-8"))
+def t(key, **a):   # as claude-gateway's own t
+    text = CATALOG[key].get(os.environ.get("CG_LANG") or "en") or CATALOG[key]["en"]
+    for k, v in a.items():
+        text = text.replace("{" + k + "}", v)
+    return text
+desc = lambda name: json.dumps(t("cmd." + name), ensure_ascii=False)   # a JSON string is valid YAML, Persian or not
 SHARED = ("CLAUDE.md", "agents", "skills")   # commands/ is gclaude's own folder: see USAGE below
 c = json.load(open(client)) if os.path.exists(client) else {}
 rec = c["gclaude"] = c["gclaude"] if isinstance(c.get("gclaude"), dict) else {}
@@ -558,16 +579,17 @@ cmds, own_cmds = os.path.join(gdir, "commands"), os.path.join(shared, "commands"
 # /logout_gclaude signs out of the gateway, which Claude Code's own /logout can't: the hook answers it, as the key it
 # removes is the one a model call would need. Not named /logout: a built-in can't be hidden, and the menu would list
 # both under one name.
+# /language switches gclaude between English and Persian: the hook answers it by running `claude-gateway lang`.
 account_cmd = f"sh {shlex.quote(statusline)} --account"
 COMMANDS = {"usage": f"""---
-description: Your gateway limits and usage
+description: {desc("usage")}
 disable-model-invocation: true
 ---
 <!-- {mark} -->
 The claude-gateway hook that answers /usage did not run. Tell the user, in one sentence, that their gateway limits
 are on the status line and on the dashboard, and that running `gclaude update` in a terminal reinstalls the hook. Use no tools.
 """, "account": f"""---
-description: Your gateway account and a link to the dashboard
+description: {desc("account")}
 allowed-tools: Bash({account_cmd})
 model: haiku
 disable-model-invocation: true
@@ -577,13 +599,21 @@ disable-model-invocation: true
 
 Repeat the line above to the user exactly as it is, and nothing else. Use no tools.
 """, "logout_gclaude": f"""---
-description: Sign this computer out of the gateway
+description: {desc("logout_gclaude")}
 disable-model-invocation: true
 ---
 <!-- {mark} -->
 The claude-gateway hook that signs gclaude out did not run, so nothing was changed. Tell the user, in one sentence,
 that running `gclaude update` in a terminal reinstalls the hook and `gclaude uninstall` removes gclaude with its key.
 Use no tools.
+""", "language": f"""---
+description: {desc("language")}
+argument-hint: en | fa
+disable-model-invocation: true
+---
+<!-- {mark} -->
+The claude-gateway hook that answers /language did not run, so the language was not changed. Tell the user, in one
+sentence, that running `gclaude update` in a terminal reinstalls the hook. Use no tools.
 """}
 RETIRED = ("logout",)   # commands an older gclaude installed under another name
 cmd_file = lambda name: os.path.join(cmds, name + ".md")
@@ -635,6 +665,7 @@ if mode == "on":
         with open(state, "w") as f:
             json.dump(seed, f)
     dash = c.get("dashboard", "").rstrip("/")
+    signing_pre, signing_post = t("launch.signing_in", why="\0").split("\0")
     os.makedirs(os.path.dirname(launcher), exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=os.path.dirname(launcher))   # replaced, never written through a link
     with os.fdopen(fd, "w") as f:
@@ -652,7 +683,7 @@ if mode == "on":
                 "  # Claude Code's own update, run as plain `claude update` would be.\n"
                 "  update)\n"
                 f"    script=$(curl -fsSL {shlex.quote(dash + '/install')}) && printf '%s\\n' \"$script\" | sh ||\n"
-                "      { echo 'gclaude: the gateway update failed, so Claude Code was not updated' >&2; exit 1; }\n"
+                f"      {{ echo {shlex.quote(t('launch.update_failed'))} >&2; exit 1; }}\n"
                 '    exec claude "$@" ;;\n'
                 '  status) exec "$gw" status --gclaude ;;\n'
                 '  uninstall) exec "$gw" off --gclaude ;;\n'
@@ -664,7 +695,7 @@ if mode == "on":
                 "    echo \"gclaude: Claude Code at $bad can't be run; reinstall it (installed with npm: npm install -g @anthropic-ai/claude-code)\" >&2\n"
                 "    exit 126\n"
                 "  fi\n"
-                "  echo 'gclaude: Claude Code (claude) is not installed or not on PATH' >&2; exit 127\n"
+                f"  echo {shlex.quote(t('launch.no_claude'))} >&2; exit 127\n"
                 "fi\n"
                 f"CLAUDE_CONFIG_DIR={shlex.quote(gdir)}\n"
                 "export CLAUDE_CONFIG_DIR\n"
@@ -675,15 +706,15 @@ if mode == "on":
                 " \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null)\n"
                 'why=\n'
                 "if [ -z \"$key\" ]; then\n"
-                "  why='signed out (/logout_gclaude)'\n"
+                f"  why={shlex.quote(t('launch.signed_out'))}\n"
                 "elif [ \"$(printf 'Authorization: Bearer %s\\n' \"$key\" | curl -s -o /dev/null --max-time 3 -H @- -w '%{http_code}'"
                 f" {shlex.quote(dash + '/api/me/status')} 2>/dev/null)\" = 401 ]; then\n"
-                "  why=\"this computer's key no longer works (removed in the dashboard?)\"\n"
+                f"  why={shlex.quote(t('launch.key_removed'))}\n"
                 "fi\n"
                 'if [ -n "$why" ]; then\n'
-                "  echo \"gclaude: $why; signing this computer in again.\" >&2\n"
+                f"  echo {shlex.quote(signing_pre)}\"$why\"{shlex.quote(signing_post)} >&2\n"
                 '  CLAUDE_GATEWAY_FROM_GCLAUDE=1 "$gw" on --gclaude --login ||'
-                " { echo 'gclaude: not signed in, so Claude Code was not started' >&2; exit 1; }\n"
+                f" {{ echo {shlex.quote(t('launch.not_signed_in'))} >&2; exit 1; }}\n"
                 "fi\n"
                 "# Share commands, plugins, MCP servers, memory and sessions from ~/.claude (see gclaude-sync.py); never stops gclaude.\n"
                 f"python3 {shlex.quote(sync)} sync \"$CLAUDE_CONFIG_DIR\" {shlex.quote(shared)} 2>/dev/null\n"
@@ -854,6 +885,15 @@ case "$cmd" in
     install_statusline
     edit_settings on
     echo "Claude Code now uses the gateway at $(field url) ($(field mode key-only) mode). Start a new session to pick it up."
+    ;;
+  lang)   # gclaude's /language runs this (statusline.sh --warn). No network and no key, so it works signed out too.
+    case "${1:-}" in en|fa) ;; *) echo "Usage: claude-gateway lang en|fa" >&2; exit 1 ;; esac
+    [ $# -eq 1 ] || { echo "Usage: claude-gateway lang en|fa" >&2; exit 1; }
+    gclaude_ours || { echo "gclaude is not set up, so it has no language to change." >&2; exit 1; }
+    CG_LANG=$1
+    save_lang "$1"
+    gclaude_language
+    gclaude_files on
     ;;
   off)
     case "${1:-}" in
