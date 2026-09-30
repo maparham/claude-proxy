@@ -33,24 +33,29 @@ case " $* " in
       claude=$(IFS=:; for d in $PATH; do [ -e "$d/claude" ] && { echo "$d/claude"; break; }; done; true)
     if [ -z "$claude" ]; then
       installer=${CLAUDE_GATEWAY_CLAUDE_INSTALLER:-https://claude.ai/install.sh}
-      echo "Installing Claude Code ($installer)..."
-      script=$(mktemp)
-      # Downloaded first, so a failed download isn't run as an empty script that succeeds.
-      if curl -fsSL "$installer" -o "$script" && command -v bash >/dev/null 2>&1 && bash "$script"; then
+      echo "Installing Claude Code..."
+      script=$(mktemp) log=$(mktemp)
+      # Downloaded first, so a failed download isn't run as an empty script that succeeds. Its output is kept for a
+      # failure only: on success its PATH advice is already taken care of below.
+      if curl -fsSL "$installer" -o "$script" && command -v bash >/dev/null 2>&1 && bash "$script" >"$log" 2>&1; then
         claude=$(command -v claude 2>/dev/null) || claude=$HOME/.local/bin/claude   # where its installer puts it
       fi
-      rm -f "$script"
       if [ -z "$claude" ] || [ ! -e "$claude" ]; then
-        echo "install.sh: Claude Code (claude) could not be installed: install it (https://claude.ai/install.sh), then run this again." >&2
-        exit 1
+        echo "install.sh: Claude Code (claude) could not be installed:" >&2
+        tail -n 10 "$log" | sed 's/^/  /' >&2
+        echo "Install it (https://claude.ai/install.sh), then run this again." >&2
+        rm -f "$script" "$log"; exit 1
       fi
+      rm -f "$script" "$log"
+      installed=1
     fi
     if ! out=$("$claude" --version 2>&1); then
       echo "install.sh: Claude Code at $claude doesn't run:" >&2
       printf '%s\n' "$out" | head -n 3 | sed 's/^/  /' >&2
       echo "Reinstall it (installed with npm: npm install -g @anthropic-ai/claude-code), then run this again." >&2
       exit 1
-    fi ;;
+    fi
+    [ -z "${installed:-}" ] || echo "Installed Claude Code ${out%% *}." ;;
 esac
 if [ -e "$link" ] && [ ! -L "$link" ]; then
   echo "install.sh: $link already exists and is not a link; left as it is." >&2; exit 1

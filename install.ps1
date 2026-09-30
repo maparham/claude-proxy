@@ -57,7 +57,7 @@ function Find-ClaudeCode([string]$Bin) {
 function Install-ClaudeCode([string]$Bin) {
   # In a PowerShell of its own: Claude Code's installer ends with `exit`, which would close the caller's window here.
   $installer = if ($env:CLAUDE_GATEWAY_CLAUDE_INSTALLER) { $env:CLAUDE_GATEWAY_CLAUDE_INSTALLER } else { 'https://claude.ai/install.ps1' }
-  Write-Host "Installing Claude Code ($installer)..."
+  Write-Host 'Installing Claude Code...'
   $script = Join-Path ([IO.Path]::GetTempPath()) ('claude-code-install-' + [Guid]::NewGuid().ToString('N') + '.ps1')
   try {
     try {
@@ -71,8 +71,9 @@ function Install-ClaudeCode([string]$Bin) {
     if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
       $ps = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
     }
-    # To the console: as this function's output, it would become part of the path returned below
-    & $ps -NoProfile -ExecutionPolicy Bypass -File $script | Out-Host
+    # Kept for a failure only: on success its PATH advice is already taken care of below, and its symbols come out
+    # garbled in the console's code page.
+    $log = & $ps -NoProfile -ExecutionPolicy Bypass -File $script 2>&1 | Out-String
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
   } finally {
@@ -80,7 +81,8 @@ function Install-ClaudeCode([string]$Bin) {
   }
   $claude = Find-ClaudeCode $Bin
   if ($code -ne 0 -or -not $claude) {
-    throw 'install.ps1: Claude Code (claude) could not be installed: install it (https://claude.ai/install.ps1), then run this again.'
+    $tail = @(($log.Trim() -split "`r?`n") | Select-Object -Last 10) -join "`n  "
+    throw "install.ps1: Claude Code (claude) could not be installed:`n  $tail`nInstall it (https://claude.ai/install.ps1), then run this again."
   }
   return $claude
 }
@@ -89,7 +91,8 @@ function Assert-ClaudeCode([string]$Bin) {
   # Claude Code must run before anything is set up for it: an npm install whose native binary never arrived leaves a
   # claude that only fails, and gclaude would then fail on every start.
   $claude = Find-ClaudeCode $Bin
-  if (-not $claude) { $claude = Install-ClaudeCode $Bin }
+  $installed = -not $claude
+  if ($installed) { $claude = Install-ClaudeCode $Bin }
   $ErrorActionPreference = 'Continue'   # under Stop, anything claude writes to stderr would throw here
   try { $out = (& $claude --version 2>&1 | Out-String).Trim(); $ok = $LASTEXITCODE -eq 0 }
   catch { $out = $_.Exception.Message; $ok = $false }   # e.g. not a valid Win32 application
@@ -97,6 +100,7 @@ function Assert-ClaudeCode([string]$Bin) {
     throw ("install.ps1: Claude Code at $claude doesn't run:`n  " + (($out -split "`r?`n" | Select-Object -First 3) -join "`n  ") +
            "`nReinstall it (installed with npm: npm install -g @anthropic-ai/claude-code), then run this again.")
   }
+  if ($installed) { Write-Host "Installed Claude Code $(($out -split ' ')[0])." }
 }
 
 function Install-ClaudeGateway {
