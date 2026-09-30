@@ -64,44 +64,28 @@ jobs:
       CLAUDE_GATEWAY_REPO: ${{ github.repository }}
       CLAUDE_GATEWAY_REF: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: curl … | sh stops without Claude Code
-        if: runner.os != 'Windows'
-        shell: bash
-        run: |
-          if out=$(curl -fsSL "https://raw.githubusercontent.com/$CLAUDE_GATEWAY_REPO/$CLAUDE_GATEWAY_REF/install.sh" | sh 2>&1); then
-            echo "installed without Claude Code: $out"; exit 1
-          fi
-          grep 'Claude Code (claude) is needed first' <<<"$out" >/dev/null
-      - name: Install Claude Code
-        if: runner.os != 'Windows'
-        run: |
-          curl -fsSL https://claude.ai/install.sh | bash
-          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
       - name: curl … | sh
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          curl -fsSL "https://raw.githubusercontent.com/$CLAUDE_GATEWAY_REPO/$CLAUDE_GATEWAY_REF/install.sh" | sh
+          # No Claude Code on the runner: the installer puts it in first
+          if command -v claude; then echo 'the runner already has claude'; exit 1; fi
+          out=$(curl -fsSL "https://raw.githubusercontent.com/$CLAUDE_GATEWAY_REPO/$CLAUDE_GATEWAY_REF/install.sh" | sh 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          grep 'Installing Claude Code' <<<"$out" >/dev/null
+          "$HOME/.local/bin/claude" --version
           "$HOME/.local/bin/claude-gateway" --help | grep 'claude-gateway on --gclaude' >/dev/null   # not -q: it would stop reading early
           "$HOME/.local/bin/claude-gateway" status
-      - name: irm … | iex stops without Claude Code
-        if: runner.os == 'Windows'
-        shell: powershell
-        run: |
-          $threw = $null
-          try { irm "https://raw.githubusercontent.com/$env:CLAUDE_GATEWAY_REPO/$env:CLAUDE_GATEWAY_REF/install.ps1" | iex } catch { $threw = "$_" }
-          if ($threw -notmatch 'Claude Code \(claude\) is needed first') { throw "expected the installer to stop, got: $threw" }
-      - name: Install Claude Code
-        if: runner.os == 'Windows'
-        shell: powershell
-        # Not added to PATH: install.ps1 finds claude.exe in .local\bin, where Claude Code's own installer puts it.
-        run: irm https://claude.ai/install.ps1 | iex
       - name: irm … | iex
         if: runner.os == 'Windows'
         shell: powershell
         run: |
+          # No Claude Code on the runner: the installer puts it in first
+          if (Get-Command claude -ErrorAction SilentlyContinue) { throw 'the runner already has claude' }
           irm "https://raw.githubusercontent.com/$env:CLAUDE_GATEWAY_REPO/$env:CLAUDE_GATEWAY_REF/install.ps1" | iex
           $bin = Join-Path $env:USERPROFILE '.local\bin'
+          & (Join-Path $bin 'claude.exe') --version
+          if ($LASTEXITCODE -ne 0) { throw 'claude.exe does not run' }
           $out = & (Join-Path $bin 'claude-gateway.cmd') help | Out-String
           if ($out -notmatch 'claude-gateway \(Windows\)') { throw "claude-gateway help said: $out" }
           if (([Environment]::GetEnvironmentVariable('Path', 'User') -split ';') -notcontains $bin) { throw "$bin is not on the user's PATH" }
