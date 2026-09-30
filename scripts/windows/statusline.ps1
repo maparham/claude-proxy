@@ -25,8 +25,8 @@ try {
   $utf8 = New-Object Text.UTF8Encoding $false
   # UTF-8 through our own stdin and stdout, not [Console]::InputEncoding/OutputEncoding: those set the code page of
   # the console Claude Code shares with us, and the old console (conhost) then draws its logo and bullets as boxes.
-  $out = New-Object IO.StreamWriter ([Console]::OpenStandardOutput()), $utf8
-  $out.AutoFlush = $true
+  $stdout = New-Object IO.StreamWriter ([Console]::OpenStandardOutput()), $utf8
+  $stdout.AutoFlush = $true
   $ProgressPreference = 'SilentlyContinue'
   [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
   # Windows PowerShell 5.1 would write arrays as {"value": [...], "Count": n}; see claude-gateway.ps1.
@@ -47,7 +47,7 @@ try {
   $usage = Ours 'usage'
   $account = Ours 'account'
 
-  function Emit([string]$s) { $out.Write($s + "`n") }
+  function Emit([string]$s) { $stdout.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
   function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
 
@@ -208,6 +208,6 @@ try {
   Emit (ConvertTo-Json -Compress -InputObject @{ systemMessage = 'Gateway: ' + (Figures $line $false) })
   exit 0
 } catch {
-  if (-not $warn) { $out.Write("gateway status unavailable`n") }
+  if (-not $warn -and $stdout) { $stdout.Write("gateway status unavailable`n") }   # $stdout: unless making it failed
   exit 0
 }
