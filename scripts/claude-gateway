@@ -138,10 +138,16 @@ EOF
 }
 
 authorize() {   # url dashboard: prints the key the dashboard hands this computer once someone authorizes it there
-  python3 - "$@" <<'EOF'
+  CG_I18N="$(src_dir)/i18n.json" CG_LANG="${CG_LANG:-$(field lang en)}" python3 - "$@" <<'EOF'
 import json, os, shutil, socket, subprocess, sys, time
 url, dash = sys.argv[1], sys.argv[2]
 say = lambda m: print(m, file=sys.stderr, flush=True)
+CATALOG = json.load(open(os.environ["CG_I18N"], encoding="utf-8"))
+def t(key, **a):   # as claude-gateway's own t
+    text = CATALOG[key].get(os.environ.get("CG_LANG") or "en") or CATALOG[key]["en"]
+    for k, v in a.items():
+        text = text.replace("{" + k + "}", v)
+    return text
 
 def post(path, body):   # via curl, which uses the system's certificates (some Pythons have none)
     r = subprocess.run(["curl", "-sS", "--max-time", "15", "-X", "POST", "-H", "content-type: application/json",
@@ -164,14 +170,14 @@ if code != 200 or "device_code" not in s:
     hint = f" (is {dash} this gateway's dashboard? Give it with --dashboard)" if code == 404 else ""
     sys.exit(f"The dashboard at {dash} can't authorize this computer: {s.get('error') or 'HTTP %d' % code}{hint}")
 link = s["verification_uri_complete"]
-say(f"To connect this computer, open {link}")
-say(f"and check that it shows the code {s['user_code']}.")
+say(t("auth.open", link=link))
+say(t("auth.code", code=s["user_code"]))
 opener = os.environ.get("CLAUDE_GATEWAY_OPEN")
 if opener is None and not os.environ.get("SSH_CONNECTION"):
     opener = shutil.which("open" if sys.platform == "darwin" else "xdg-open")
 if opener and subprocess.run([opener, link], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
-    say("It is open in your browser.")
-say("Waiting for you to authorize it there...")
+    say(t("auth.opened"))
+say(t("auth.waiting"))
 interval, deadline = float(s.get("interval", 3)), time.time() + float(s.get("expires_in", 600))
 while time.time() < deadline:
     time.sleep(interval)
@@ -182,16 +188,16 @@ while time.time() < deadline:
     if code >= 500 or code == 429:
         continue   # e.g. the gateway restarting behind its proxy; the approval is still there
     if code == 200 and r.get("key"):
-        say(f"Authorized as {r.get('user', '?')}.")
+        say(t("auth.authorized", user=r.get("user", "?")))
         print(r["key"])
         sys.exit(0)
     err = r.get("error")
     if err == "slow_down":
         interval += 2
     elif err != "authorization_pending":
-        sys.exit({"access_denied": "Cancelled in the browser; nothing was changed.",
-                  "expired_token": "The code expired. Run the command again for a new one."}.get(err, f"Authorization failed: {err or code}"))
-sys.exit("The code expired. Run the command again for a new one.")
+        sys.exit({"access_denied": t("auth.cancelled"),
+                  "expired_token": t("auth.expired")}.get(err, f"Authorization failed: {err or code}"))
+sys.exit(t("auth.expired"))
 EOF
 }
 
@@ -752,17 +758,18 @@ gclaude_on() {
   cp "$(src_dir)/gclaude-sync.py" "$GCLAUDE_SYNC"
   gclaude_files on
   python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
-  echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
+  t on.ready url="$(field url)"
   if [ -t 1 ]; then b=$(printf '\033[1;32m'); r=$(printf '\033[0m'); else b=; r=; fi   # bold green on a terminal
   [ -z "${CLAUDE_GATEWAY_FROM_GCLAUDE:-}" ] || return 0   # gclaude is signing in and about to start
   case ":$PATH:" in
-    *":$(dirname "$GCLAUDE"):"*) echo "${b}Next: run 'gclaude' instead of 'claude'.${r}" ;;
-    *) echo "${b}Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'.${r}" ;;
+    *":$(dirname "$GCLAUDE"):"*) echo "${b}$(t on.next)${r}" ;;
+    *) echo "${b}$(t on.next_path bin="$(dirname "$GCLAUDE")")${r}" ;;
   esac
 }
 
 gclaude_off() {
-  if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then echo "gclaude was not set up; nothing to undo."; return; fi
+  CG_LANG=$(field lang en)   # `off` removes it below; its messages still speak it
+  if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then t off.not_set_up; return; fi
   python3 "$(src_dir)/gclaude-sync.py" unsync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # the rest of off still runs
   rm -f "$GCLAUDE_SYNC"
   if [ -f "$GCLAUDE_DIR/settings.json" ]; then
@@ -772,9 +779,9 @@ gclaude_off() {
   gclaude_files off
   if gclaude_ours; then
     rm -f "$GCLAUDE"
-    echo "gclaude is removed. Its history and sessions are still in $GCLAUDE_DIR; delete that folder to drop them."
+    t off.removed dir="$GCLAUDE_DIR"
   else
-    echo "gclaude's gateway settings are removed. $GCLAUDE was not installed by claude-gateway, so it was left as it is."
+    t off.foreign path="$GCLAUDE"
   fi
 }
 
@@ -784,24 +791,24 @@ sys.exit(0 if isinstance(c.get("gclaude"), dict) else 1)' "$CLIENT"
 }
 
 gclaude_status() {   # what `gclaude status` shows: its gateway, whether this computer is signed in, and the limits
-  gclaude_ours || { echo "gclaude: not set up"; return; }
+  gclaude_ours || { t status.not_set_up; return; }
   local url dash key reply code body
   url=$(field url) dash=$(field dashboard)
   key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env", {}).get("ANTHROPIC_AUTH_TOKEN", ""))' \
         "$GCLAUDE_DIR/settings.json" 2>/dev/null || true)
-  if curl -fsS --max-time 10 "$url/health" >/dev/null 2>&1; then echo "gateway: $url (reachable)"; else echo "gateway: $url (NOT reachable)"; fi
-  [ -n "$key" ] || { echo "account: signed out; run gclaude to sign in"; return; }
+  if curl -fsS --max-time 10 "$url/health" >/dev/null 2>&1; then t status.reachable url="$url"; else t status.unreachable url="$url"; fi
+  [ -n "$key" ] || { t status.signed_out; return; }
   reply=$(printf 'Authorization: Bearer %s\n' "$key" | curl -sS --max-time 10 -H @- -w '\n%{http_code}' \
           "$dash/api/me/status?format=account" 2>/dev/null || true)
   code=${reply##*$'\n'} body=${reply%$'\n'*}
   case "$code" in
-    200) echo "account: $body" ;;
-    401) echo "account: this computer's key no longer works; run gclaude to sign in again"; return ;;
-    *) echo "account: unavailable (dashboard: $dash)"; return ;;
+    200) t status.account account="$body" ;;
+    401) t status.key_removed; return ;;
+    *) t status.account_unavailable dashboard="$dash"; return ;;
   esac
   body=$(printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 10 -H @- "$dash/api/me/status?format=text" 2>/dev/null || true)
-  [ -z "$body" ] || echo "usage: $body"
-  echo "dashboard: $dash/dashboard"
+  [ -z "$body" ] || t status.usage usage="$body"
+  t status.dashboard url="$dash/dashboard"
 }
 
 gclaude_state() {

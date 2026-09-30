@@ -118,6 +118,15 @@ def test_on_without_a_key_authorizes_in_the_browser(dash, home, tmp_path):
     assert models and models[-1]["authorization"] == "Bearer sk-proxy-machine"
 
 
+def test_on_authorizes_in_persian_when_gclaude_is_persian(dash, home, tmp_path):
+    dash.tokens = [(200, {"key": "sk-proxy-machine", "user": "maya"})]
+    path, _ = opener(tmp_path)
+    r = cg(home, "on", "--lang", "fa", "--url", dash.url, "--dashboard", dash.url, CLAUDE_GATEWAY_OPEN=str(path))
+    assert r.returncode == 0, r.stderr
+    assert f"این پیوند را باز کنید: {dash.url}/dashboard#authorize/{CODE}" in r.stderr
+    assert "به‌عنوان maya تأیید شد." in r.stderr
+
+
 def test_over_ssh_it_only_prints_the_link(dash, home, tmp_path):
     dash.tokens = [(200, {"key": "sk-proxy-machine", "user": "maya"})]
     bindir = tmp_path / "bin"

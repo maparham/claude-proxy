@@ -1094,6 +1094,17 @@ def test_gclaude_status_shows_the_gateway_the_account_and_the_limits(stub, home)
     assert "account: this computer's key no longer works; run gclaude to sign in again" in r.stdout, r.stdout
 
 
+def test_gclaude_on_status_and_off_speak_persian(stub, home):
+    r = cg(home, "on", "--gclaude", "--lang", "fa", "--url", stub.url, "--key", "sk-proxy-full")
+    assert CATALOG["on.ready"]["fa"].replace("{url}", stub.url) in r.stdout
+    r = cg(home, "status", "--gclaude")
+    assert CATALOG["status.reachable"]["fa"].replace("{url}", stub.url) in r.stdout
+    assert CATALOG["status.dashboard"]["fa"].replace("{url}", f"{stub.url}/dashboard") in r.stdout
+    gdir, _, _ = gc_paths(home)
+    r = cg(home, "off", "--gclaude")
+    assert CATALOG["off.removed"]["fa"].replace("{dir}", str(gdir)) in r.stdout
+
+
 def test_gclaude_uninstall_removes_gclaude(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     gdir, gsettings, launcher = gc_paths(home)
