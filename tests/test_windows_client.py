@@ -145,7 +145,8 @@ class Win:
         self.env = {k: v for k, v in os.environ.items() if k != "SSH_CONNECTION"}
         self.env.update({"USERPROFILE": str(self.home), "TEMP": str(self.temp), "TMP": str(self.temp),
                          "CLAUDE_GATEWAY_ZIP": str(source_zip), "CLAUDE_GATEWAY_BIN": str(self.bin),
-                         "CLAUDE_GATEWAY_OPEN": "none", "PATH": f"{self.bin};{self.claudebin};{os.environ['PATH']}"})
+                         "CLAUDE_GATEWAY_OPEN": "none",
+                         "CLAUDE_GATEWAY_CLAUDE_INSTALLER": str(tmp_path / "no-claude-installer.ps1"), "PATH": f"{self.bin};{self.claudebin};{os.environ['PATH']}"})
         self.config = self.home / ".config" / "claude-gateway"
         self.gdir = self.config / "claude"
 
@@ -254,12 +255,28 @@ def no_claude_path(win, tmp_path):
 
 
 @on_windows
-def test_install_stops_when_claude_is_missing(win, tmp_path):
-    r = win.install(PATH=no_claude_path(win, tmp_path))
-    assert "session still open" in r.out and "Claude Code (claude) is needed first" in r.out, r.out
+def test_install_installs_claude_code_when_it_is_missing(win, tmp_path):
+    # Like Claude Code's own installer: claude into .local\bin, and `exit` at the end, which mustn't end the session
+    installer = tmp_path / "claude-install.ps1"
+    installer.write_text("Write-Output 'Setting up Claude Code...'\n$d = Join-Path $env:USERPROFILE '.local\\bin'; New-Item -ItemType Directory -Force $d | Out-Null\n"
+                         "Set-Content -LiteralPath (Join-Path $d 'claude.cmd') -Value '@echo 2.1.0 (Claude Code)'\nexit 0\n")
+    r = win.install(PATH=no_claude_path(win, tmp_path), CLAUDE_GATEWAY_CLAUDE_INSTALLER=str(installer))
+    assert "session still open" in r.out and "Installing Claude Code" in r.out and "threw" not in r.out, r.out
+    assert (win.bin / "claude-gateway.cmd").exists()
+
+
+@on_windows
+@pytest.mark.parametrize("script", [None, "Write-Error broke\nexit 1\n", "exit 0\n"])   # no installer, fails, installs nothing
+def test_install_stops_when_claude_code_cannot_be_installed(win, tmp_path, script):
+    env = {"PATH": no_claude_path(win, tmp_path)}
+    if script:
+        (tmp_path / "claude-install.ps1").write_text(script)
+        env["CLAUDE_GATEWAY_CLAUDE_INSTALLER"] = str(tmp_path / "claude-install.ps1")
+    r = win.install(**env)
+    assert "session still open" in r.out and "Claude Code (claude) could not be installed" in r.out, r.out
     assert not (win.bin / "claude-gateway.cmd").exists()
-    r = win.install_command(PATH=no_claude_path(win, tmp_path))   # gclaude update's way: a failure exits non-zero
-    assert r.returncode != 0 and "is needed first" in r.out, r.out
+    r = win.install_command(**env)   # gclaude update's way: a failure exits non-zero
+    assert r.returncode != 0 and "could not be installed" in r.out, r.out
 
 
 @on_windows
