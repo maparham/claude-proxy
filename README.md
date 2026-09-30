@@ -230,10 +230,6 @@ gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, i
 and Linux; on Windows, `/exit`). The next `gclaude` signs this computer in again in the browser before it starts,
 like plain `claude`'s login (`claude-gateway on --login` does the same on its own).
 
-gclaude speaks English or Persian (فارسی): setup asks which (or pass `--lang en|fa` to `claude-gateway on`), and
-`/language fa` or `/language en` inside gclaude switches it. It sets Claude Code's own `language` setting for
-gclaude, so Claude answers in that language, and gclaude's status line, commands and messages follow.
-
 The same happens when the dashboard no longer accepts the key, e.g. after the computer was removed there.
 How that works, for debugging: the gclaude command counts as signed out when its `settings.json` has no
 `ANTHROPIC_AUTH_TOKEN` (macOS and Linux) or when the `signed-out` file `/logout_gclaude` leaves is in its folder
@@ -247,6 +243,10 @@ macOS and Linux command uses the `claude-gateway` beside it, else the one on PAT
 gclaude user never needs `claude-gateway` itself.
 `gclaude update` updates claude-gateway from your gateway's dashboard, which also refreshes gclaude's setup (new
 commands such as `/logout_gclaude` arrive this way), then runs Claude Code's own `claude update`.
+
+gclaude speaks English or Persian (فارسی): setup asks which (or pass `--lang en|fa` to `claude-gateway on`), and
+`/language fa` or `/language en` inside gclaude switches it. It sets Claude Code's own `language` setting for
+gclaude, so Claude answers in that language, and gclaude's status line, commands and messages follow.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and
