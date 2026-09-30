@@ -657,6 +657,7 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(gclaude
     fake = fake_claude(win, tmp_path)
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "update"], **fake)
     assert r.returncode == 0 and marker.read_text() == "yes", r.out
+    assert r.out.rstrip().endswith("gclaude is up to date."), r.out
     assert claude_saw(tmp_path).endswith("|update") and str(win.gdir) not in claude_saw(tmp_path)   # plain claude's own update
 
 

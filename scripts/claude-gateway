@@ -599,11 +599,13 @@ if mode == "on":
                 f'[ -x "$gw" ] || gw=$(command -v claude-gateway 2>/dev/null) || gw={shlex.quote(self_path)}\n'
                 'case "${1:-}" in\n'
                 "  # gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then\n"
-                "  # Claude Code's own update, run as plain `claude update` would be.\n"
+                "  # Claude Code's own update, run as plain `claude update` would be. A last line says it was gclaude's update.\n"
                 "  update)\n"
                 f"    script=$(curl -fsSL {shlex.quote(dash + '/install')}) && printf '%s\\n' \"$script\" | sh ||\n"
                 "      { echo 'gclaude: the gateway update failed, so Claude Code was not updated' >&2; exit 1; }\n"
-                '    exec claude "$@" ;;\n'
+                "    echo 'Now Claude Code itself:'\n"
+                '    claude "$@" || exit\n'
+                "    echo 'gclaude is up to date.'; exit ;;\n"
                 '  status) exec "$gw" status --gclaude ;;\n'
                 '  uninstall) exec "$gw" off --gclaude ;;\n'
                 "esac\n"
