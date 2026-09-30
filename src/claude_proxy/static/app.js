@@ -698,6 +698,7 @@ async function userAction(act, id, u) {
   if (act === "limits") return limitsDialog(u);
   if (act === "upgrade") return upgradeDialog(u);
   if (act === "rename") return nameDialog(u);
+  if (act === "rotate" && !confirmInline(`Rotate ${u.name}'s key? Their current key and every computer authorized under it stop working now; they need the new key to continue.`)) return;
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
   if (act === "delete" && !confirmInline(`Delete ${u.name} permanently? Their recorded usage is deleted too and disappears from account totals and charts. This cannot be undone.`)) return;
   try {
