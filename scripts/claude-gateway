@@ -780,6 +780,11 @@ case "$cmd" in
       [ -n "$url" ] || { echo "No gateway configured yet: claude-gateway on --url <gateway url>" >&2; exit 1; }
       if [ -z "$login" ] && [ -n "$(field key)" ] && [ "$(field url)" = "${url%/}" ]; then
         [ -z "$dash" ] || save_client "$url" "$(field key)" "$dash"   # already connected there: keep its key
+      elif [ -n "$gclaude" ] && [ -z "$login" ] && [ -z "$(field key)" ] && [ "$(field url)" = "${url%/}" ] && gclaude_ours; then
+        # Signed out by /logout_gclaude, and here from the installer (gclaude update): no browser mid-update. The next
+        # gclaude signs in (`on --login`), which also refreshes its setup.
+        echo "This computer is signed out of the gateway; gclaude signs it in again when you next start it."
+        exit 0
       else
         [ -z "$gclaude" ] || gclaude_free
         dash=${dash:-$(dashboard_for "$url")}
