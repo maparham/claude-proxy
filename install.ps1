@@ -65,8 +65,14 @@ function Install-ClaudeCode([string]$Bin) {
       else { Invoke-WebRequest -UseBasicParsing -Uri $installer -OutFile $script }
     } catch { throw "install.ps1: Claude Code (claude) could not be installed: could not get $installer ($($_.Exception.Message))" }
     $ErrorActionPreference = 'Continue'   # under Stop, anything it writes to stderr would throw here
+    # The 64-bit PowerShell even from a 32-bit (SysWOW64) one, which Claude Code's installer refuses. Sysnative is
+    # how a 32-bit process reaches the real System32.
+    $ps = (Get-Process -Id $PID).Path
+    if ([Environment]::Is64BitOperatingSystem -and -not [Environment]::Is64BitProcess) {
+      $ps = Join-Path $env:SystemRoot 'Sysnative\WindowsPowerShell\v1.0\powershell.exe'
+    }
     # To the console: as this function's output, it would become part of the path returned below
-    & (Get-Process -Id $PID).Path -NoProfile -ExecutionPolicy Bypass -File $script | Out-Host
+    & $ps -NoProfile -ExecutionPolicy Bypass -File $script | Out-Host
     $code = $LASTEXITCODE
     $ErrorActionPreference = 'Stop'
   } finally {
