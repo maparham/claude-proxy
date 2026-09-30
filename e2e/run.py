@@ -244,8 +244,7 @@ def authorize_in_the_browser(link: str, code: str, key: str, label: str, shots: 
         page = browser.new_page()
         try:
             page.goto(link)
-            # Signed out: the sign-in card. This gateway has no Clerk, so its key form is the way in.
-            page.click("#login-switch")
+            # Signed out: the sign-in card. This gateway has no Clerk, so its key form is already showing.
             page.fill("#form-key input[name=key]", key)
             page.click("#form-key button[type=submit]")
             code_box = page.locator(".authorize .user-code")
