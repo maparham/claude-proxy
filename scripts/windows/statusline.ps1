@@ -14,6 +14,10 @@
 # the gateway when it is this computer's own (the first key may be in use elsewhere, so it stays valid), and removes
 # it from gclaude's settings.json and from client.json (beside this script, or CLAUDE_GATEWAY_CLIENT). It leaves a
 # signed-out file in CLAUDE_CONFIG_DIR, so the next gclaude.cmd signs in again (`claude-gateway on --login`, which removes it) before it starts.
+# Then, like Claude Code's own /logout, the session ends: about a second later a hidden helper types Ctrl-C twice into the
+# console of the claude that ran the hook, so it exits the usual way, saving the session, after showing the reason.
+# Typed, not sent as a console Ctrl-C event: that event would reach every process on the console, and gclaude.cmd's
+# cmd would then ask 'Terminate batch job (Y/N)?'.
 # Environment (set in the same settings.json "env" block):
 #   ANTHROPIC_AUTH_TOKEN        your gateway key
 #   CLAUDE_GATEWAY_DASHBOARD    dashboard base URL
@@ -50,6 +54,40 @@ try {
   function Emit([string]$s) { $stdout.Write($s + "`n") }
   function Block([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ decision = 'block'; reason = $reason }); exit 0 }
   function Stop-Prompt([string]$reason) { Emit (ConvertTo-Json -Compress -InputObject @{ continue = $false; stopReason = $reason }); exit 0 }
+  function Quit-Claude {   # the claude that runs this hook (up to three processes up, through a shell), only when one does
+    if (-not $env:CLAUDE_PROJECT_DIR) { return $false }   # set by Claude Code for its hooks
+    $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$PID" -ErrorAction Stop; $found = $null
+    for ($i = 0; $i -lt 3 -and -not $found; $i++) {
+      $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$($proc.ParentProcessId)" -ErrorAction Stop
+      if (-not $proc) { return $false }
+      if ($proc.Name -eq 'claude.exe' -or ($proc.Name -eq 'node.exe' -and [string]$proc.CommandLine -match 'claude')) { $found = $proc.ProcessId }   # node: an npm install
+    }
+    if (-not $found) { return $false }
+    $helper = @"
+Add-Type -Namespace CG -Name Con -MemberDefinition @'
+[StructLayout(LayoutKind.Explicit, CharSet = CharSet.Unicode)] public struct Key {
+  [FieldOffset(0)] public ushort EventType; [FieldOffset(4)] public int KeyDown; [FieldOffset(8)] public ushort Repeat;
+  [FieldOffset(10)] public ushort VKey; [FieldOffset(12)] public ushort ScanCode; [FieldOffset(14)] public char Char;
+  [FieldOffset(16)] public uint ControlKeys; }
+[DllImport("kernel32.dll")] public static extern bool FreeConsole();
+[DllImport("kernel32.dll")] public static extern bool AttachConsole(uint pid);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern IntPtr CreateFile(string name, uint access, uint share, IntPtr sec, uint disp, uint flags, IntPtr tmpl);
+[DllImport("kernel32.dll", CharSet = CharSet.Unicode)] public static extern bool WriteConsoleInput(IntPtr h, Key[] keys, uint n, out uint written);
+'@
+Start-Sleep -Milliseconds 500   # with PowerShell's start and Add-Type, about a second after the hook
+[void][CG.Con]::FreeConsole()
+if (-not [CG.Con]::AttachConsole($found)) { exit }
+`$in = [CG.Con]::CreateFile('CONIN`$', 3221225472, 3, [IntPtr]::Zero, 3, 0, [IntPtr]::Zero)
+foreach (`$n in 1, 2) {   # Ctrl-C, down and up: the key 0x43 (C) with the left Ctrl held, as the character 3
+  `$keys = foreach (`$down in 1, 0) { `$k = New-Object CG.Con+Key; `$k.EventType = 1; `$k.KeyDown = `$down; `$k.Repeat = 1; `$k.VKey = 0x43; `$k.ScanCode = 0x2E; `$k.Char = [char]3; `$k.ControlKeys = 8; `$k }
+  `$w = [uint32]0; [void][CG.Con]::WriteConsoleInput(`$in, [CG.Con+Key[]]`$keys, 2, [ref]`$w)
+  Start-Sleep -Milliseconds 300
+}
+"@
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($helper))
+    Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', $encoded
+    return $true
+  }
 
   if (Ours 'logout_gclaude') {   # gclaude's /logout_gclaude: revoke this computer's key on the gateway, then drop every copy of it here
     $key = [string]$env:ANTHROPIC_AUTH_TOKEN
@@ -88,7 +126,9 @@ try {
         }
       }
     } catch { Stop-Prompt "Sign-out failed: the key could not be removed from $settings. gclaude uninstall removes it." }
-    $again = 'Exit gclaude now (/exit); run gclaude again to sign in.'
+    $closing = $false
+    try { $closing = Quit-Claude } catch { }
+    $again = if ($closing) { 'gclaude is closing; run gclaude again to sign in.' } else { 'Exit gclaude now (/exit); run gclaude again to sign in.' }
     $where = if ($dash) { " ($dash/dashboard)" } else { '' }
     $accepted = $code -ge 200 -and $code -lt 300
     if ($accepted -and $odd) { Stop-Prompt "Signed out: the key is removed from gclaude, and the gateway accepted the sign-out (HTTP $code) but gave an unexpected reply; check in the dashboard that this computer is gone$where. $again" }
