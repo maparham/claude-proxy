@@ -108,6 +108,16 @@ if code != 200 or "device_code" not in s:
 link = s["verification_uri_complete"]
 say(f"To connect this computer, open {link}")
 say(f"and check that it shows the code {s['user_code']}.")
+qr = s.get("qr")
+if isinstance(qr, list) and qr and all(isinstance(r, str) for r in qr):
+    # Two rows per line in half blocks, the light modules drawn: right on a dark terminal, and forced white on
+    # black where the terminal takes colors, so a light one shows it the right way round too.
+    rows = qr + ["0" * len(qr[0])] * (len(qr) % 2)
+    color = sys.stderr.isatty() and os.environ.get("TERM") not in (None, "", "dumb")
+    say("Or scan this with your phone:")
+    for top, bottom in zip(rows[::2], rows[1::2]):
+        line = "".join(" \u2584\u2580\u2588"[(t == "0") * 2 + (b == "0")] for t, b in zip(top, bottom))
+        say(f"\x1b[97;40m{line}\x1b[0m" if color else line)
 opener = os.environ.get("CLAUDE_GATEWAY_OPEN")
 if opener is None and not os.environ.get("SSH_CONNECTION"):
     opener = shutil.which("open" if sys.platform == "darwin" else "xdg-open")

@@ -22,6 +22,7 @@ import time
 from collections import defaultdict, deque
 from pathlib import Path
 
+import segno
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import FastAPI, HTTPException, Request
@@ -612,8 +613,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             except sqlite3.IntegrityError:
                 continue
         page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard"
+        link = f"{page}#authorize/{code}"
+        # The link as a QR code for a phone: its rows, "1" a dark module, quiet zone included. Plain ASCII, so the
+        # clients draw it in whatever characters their terminal has, whatever the response is decoded as.
+        qr = ["".join("1" if m else "0" for m in row) for row in segno.make(link, error="l", micro=False).matrix_iter(border=2)]
         return {"device_code": device_code, "user_code": code, "verification_uri": f"{page}#authorize",
-                "verification_uri_complete": f"{page}#authorize/{code}", "interval": DEVICE_INTERVAL_S, "expires_in": DEVICE_TTL_S}
+                "verification_uri_complete": link, "qr": qr, "interval": DEVICE_INTERVAL_S, "expires_in": DEVICE_TTL_S}
 
     def pending(user_code: str):
         code = "".join(c for c in user_code.upper() if c.isalpha())
