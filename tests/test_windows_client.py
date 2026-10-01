@@ -342,6 +342,7 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-new", stub.url)
     s = win.settings()
     assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url,
+                        "CLAUDE_GATEWAY_VERSION": "1.0.8",   # the source zip's VERSION, for the statusline to send
                         "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
                         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
     assert s["disableClaudeAiConnectors"] is True
@@ -443,6 +444,14 @@ def gclaude(installed, stub):
 def test_the_installers_on_says_nothing_under_gclaude_update(gclaude, installed, stub):
     r = installed.cg("on", "--url", stub.url, "--dashboard", stub.url, CLAUDE_GATEWAY_UPDATE="1")
     assert r.returncode == 0 and r.out.strip() == "", r.out
+
+
+@on_windows
+def test_the_statusline_sends_gclaudes_version_from_its_settings(gclaude, installed, stub):
+    assert installed.settings()["env"]["CLAUDE_GATEWAY_VERSION"] == "1.0.8"   # the source zip's VERSION
+    gclaude()
+    sent = [h for p, h, _ in stub.requests if p.startswith("/api/me/status")]
+    assert sent and sent[-1].get("x-gclaude-version") == "1.0.8", sent
 
 
 @on_windows

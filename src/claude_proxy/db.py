@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import os
 import json
+import re
 import secrets
 import sqlite3
 import time
@@ -125,7 +126,8 @@ SCHEMA = [
         label TEXT NOT NULL,
         created_at INTEGER NOT NULL,
         last_used_at INTEGER,
-        revoked_at INTEGER
+        revoked_at INTEGER,
+        client_version TEXT         -- the gclaude version its statusline last reported (set_client_version)
     )""",
     # `claude-gateway on` waiting for someone to authorize it in the browser (sign-up design section 4).
     """CREATE TABLE IF NOT EXISTS device_requests (
@@ -175,6 +177,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "clerk_id" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN clerk_id TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk ON users(clerk_id)")
+    if "client_version" not in _columns(conn, "keys"):
+        conn.execute("ALTER TABLE keys ADD COLUMN client_version TEXT")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
@@ -259,8 +263,18 @@ def add_machine_key(conn: sqlite3.Connection, user_id: int, label: str) -> str:
     return raw
 
 
+CLIENT_VERSION = re.compile(r"\d{1,4}\.\d{1,4}\.\d{1,6}")
+
+
+def set_client_version(conn: sqlite3.Connection, key_id: int, version: str) -> None:
+    """The gclaude version a machine's statusline reported (X-Gclaude-Version); anything not MAJOR.MINOR.N is ignored.
+    Written only when it changes: the statusline asks every half minute."""
+    if CLIENT_VERSION.fullmatch(version or ""):
+        conn.execute("UPDATE keys SET client_version=? WHERE id=? AND client_version IS NOT ?", (version, key_id, version))
+
+
 def machine_keys(conn: sqlite3.Connection, user_id: int) -> list[dict]:
-    rows = conn.execute("SELECT id, key_prefix, label, created_at, last_used_at FROM keys WHERE user_id=? AND revoked_at IS NULL "
+    rows = conn.execute("SELECT id, key_prefix, label, created_at, last_used_at, client_version FROM keys WHERE user_id=? AND revoked_at IS NULL "
                         "ORDER BY created_at DESC, id DESC", (user_id,)).fetchall()
     return [dict(r) for r in rows]
 

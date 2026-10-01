@@ -144,8 +144,9 @@ age() { echo $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || stat -f %m "$1")
 
 status() {   # format: /api/me/status as text, with this key
   key=$(gateway_key)
-  # The key goes to curl on stdin: in its arguments, `ps` would show it to every local user.
-  printf 'Authorization: Bearer %s\n' "$key" | curl -fsS --max-time 3 -H @- \
+  # The key goes to curl on stdin: in its arguments, `ps` would show it to every local user. The version (not a
+  # secret) lets the dashboard show which gclaude each computer runs.
+  printf 'Authorization: Bearer %s\nX-Gclaude-Version: %s\n' "$key" "${CLAUDE_GATEWAY_VERSION:-}" | curl -fsS --max-time 3 -H @- \
     "${CLAUDE_GATEWAY_DASHBOARD%/}/api/me/status?format=$1" 2>/dev/null
 }
 

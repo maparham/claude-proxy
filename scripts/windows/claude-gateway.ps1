@@ -217,7 +217,7 @@ function Ours-Hook($group) {
 function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's settings.json, as far as it is still ours
   $envBlock = Field $s 'env'
   if ($envBlock -is [psobject]) {
-    foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD') { Remove-Field $envBlock $k }
+    foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD', 'CLAUDE_GATEWAY_VERSION') { Remove-Field $envBlock $k }
     $added = Field $rec 'added_models'
     if ($added -is [psobject]) {   # only while still ours: the user has not picked another model for that alias since
       foreach ($p in $added.PSObject.Properties) { if ((Field $envBlock $p.Name) -eq $p.Value) { Remove-Field $envBlock $p.Name } }
@@ -402,6 +402,8 @@ function Gclaude-On($c) {
   Set-Field $envBlock 'ANTHROPIC_BASE_URL' $c.url
   Set-Field $envBlock 'ANTHROPIC_AUTH_TOKEN' $c.key
   Set-Field $envBlock 'CLAUDE_GATEWAY_DASHBOARD' $c.dashboard
+  $v = Get-Version   # sent by the statusline, so the dashboard shows which gclaude each computer runs
+  if ($v) { Set-Field $envBlock 'CLAUDE_GATEWAY_VERSION' $v }
   $added = New-Object psobject
   foreach ($k in $OneMModels.Keys) {
     if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $OneMModels[$k]; Set-Field $added $k $OneMModels[$k] }
