@@ -342,6 +342,7 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert (c["url"], c["key"], c["dashboard"]) == (stub.url, "sk-proxy-new", stub.url)
     s = win.settings()
     assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url,
+                        "CLAUDE_GATEWAY_VERSION": "1.0.8",   # the source zip's VERSION, for the statusline to send
                         "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
                         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
     assert s["disableClaudeAiConnectors"] is True
