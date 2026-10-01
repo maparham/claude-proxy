@@ -299,6 +299,7 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'rem block would not, and Claude Code is left alone. Claude Code''s own output shows only when it updated or failed',
     'rem (:claudeupdatefailed), not "... is up to date", so the update reads as gclaude''s.',
     ('if /i "%~1"=="update" (' + "`r`n" +
+     '  set CLAUDE_GATEWAY_UPDATE=1' + "`r`n" +
      "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
      '  echo Checking for a Claude Code update...' + "`r`n" +
      '  call claude %* >"%TEMP%\gclaude-update.log" 2>&1 || goto :claudeupdatefailed' + "`r`n" +
@@ -415,6 +416,7 @@ function Gclaude-On($c) {
 
   Write-Launcher $c
 
+  if ($env:CLAUDE_GATEWAY_UPDATE) { return }   # gclaude update: its own lines say what happened
   Write-Output "gclaude now runs Claude Code through the gateway at $($c.url); plain 'claude' is unchanged."
   if (($env:Path -split ';') -notcontains $Bin -and -not $env:CLAUDE_GATEWAY_FROM_GCLAUDE) { Write-Output "Open a new terminal (or add $Bin to your PATH) to run gclaude." }
 }
@@ -511,7 +513,7 @@ switch -Exact ($cmd) {
     Preflight $url $key
     Set-Field $c 'url' $url; Set-Field $c 'key' $key; Set-Field $c 'dashboard' $dash
     Gclaude-On $c
-    if (-not $env:CLAUDE_GATEWAY_FROM_GCLAUDE) { Write-Output 'Start a new gclaude session to use it.' }   # else gclaude starts now
+    if (-not ($env:CLAUDE_GATEWAY_FROM_GCLAUDE -or $env:CLAUDE_GATEWAY_UPDATE)) { Write-Output 'Start a new gclaude session to use it.' }   # else gclaude starts now
   }
   'off' { Gclaude-Off }
   'status' { Show-Status }

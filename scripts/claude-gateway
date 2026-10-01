@@ -602,7 +602,7 @@ if mode == "on":
                 "  # Claude Code's own update, run as plain `claude update` would be. Its output shows only when it updated or\n"
                 "  # failed (not \"... is up to date\"), so the update reads as gclaude's.\n"
                 "  update)\n"
-                f"    script=$(curl -fsSL {shlex.quote(dash + '/install')}) && printf '%s\\n' \"$script\" | sh ||\n"
+                f"    script=$(curl -fsSL {shlex.quote(dash + '/install')}) && printf '%s\\n' \"$script\" | CLAUDE_GATEWAY_UPDATE=1 sh ||\n"
                 "      { echo 'gclaude: the gateway update failed, so Claude Code was not updated' >&2; exit 1; }\n"
                 "    echo 'Checking for a Claude Code update...'\n"
                 '    out=$(claude "$@" 2>&1) || { rc=$?; printf \'%s\\n\' "$out" >&2; exit $rc; }\n'
@@ -672,6 +672,7 @@ gclaude_on() {
   cp "$(src_dir)/gclaude-sync.py" "$GCLAUDE_SYNC"
   gclaude_files on
   python3 "$GCLAUDE_SYNC" sync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # now, so the first start has it all
+  [ -z "${CLAUDE_GATEWAY_UPDATE:-}" ] || return 0   # gclaude update: its own lines say what happened
   echo "gclaude now runs Claude Code through the gateway at $(field url); plain 'claude' is unchanged."
   if [ -t 1 ]; then b=$(printf '\033[1;32m'); r=$(printf '\033[0m'); else b=; r=; fi   # bold green on a terminal
   [ -z "${CLAUDE_GATEWAY_FROM_GCLAUDE:-}" ] || return 0   # gclaude is signing in and about to start

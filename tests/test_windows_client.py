@@ -437,6 +437,12 @@ def gclaude(installed, stub):
 
 
 @on_windows
+def test_the_installers_on_says_nothing_under_gclaude_update(gclaude, installed, stub):
+    r = installed.cg("on", "--url", stub.url, "--dashboard", stub.url, CLAUDE_GATEWAY_UPDATE="1")
+    assert r.returncode == 0 and r.out.strip() == "", r.out
+
+
+@on_windows
 def test_the_statusline_shows_the_figures(gclaude, stub):
     stub.status_line = "maya \u00b7 daily $85/$100 \u00b7 5h 10%"
     r = gclaude()

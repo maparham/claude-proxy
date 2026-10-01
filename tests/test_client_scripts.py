@@ -1886,3 +1886,13 @@ def test_sync_leaves_an_unreadable_gclaude_claude_json_alone(home):
     gclaude_json(home).write_text("{not json")
     assert sync(home).returncode == 0
     assert gclaude_json(home).read_text() == "{not json"
+
+
+def test_the_installers_on_says_nothing_under_gclaude_update(stub, home):
+    """gclaude update runs the installer with CLAUDE_GATEWAY_UPDATE set: its own lines say what happened, not on's."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    (home / "tmp").mkdir(exist_ok=True)
+    r = run(["bash", str(GATEWAY), "on", "--url", stub.url, "--dashboard", stub.url],
+            {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_GATEWAY_UPDATE": "1"})
+    assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
+    assert "gclaude now runs" in cg(home, "on", "--url", stub.url).stdout   # a plain `on` still says it
