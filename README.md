@@ -242,6 +242,9 @@ macOS and Linux command uses the `claude-gateway` beside it, else the one on PAT
 gclaude user never needs `claude-gateway` itself.
 `gclaude update` updates claude-gateway from your gateway's dashboard, which also refreshes gclaude's setup (new
 commands such as `/logout_gclaude` arrive this way), then runs Claude Code's own `claude update`.
+gclaude's version is `MAJOR.MINOR.N`: the newest `vMAJOR.MINOR` tag and the N commits on master since it, which
+GitHub's source archives fill in (`scripts/VERSION`). `gclaude update` ends with it ("gclaude updated from 1.0.7 to
+1.0.8"), and `gclaude --version` shows it before Claude Code's. Tag `v1.1` (or `v2.0`) on master for a new minor or major.
 
 **Users never see the subscription.** To anyone but an admin, their own limits are all there is: the
 dashboard, the statusline and the proxy's responses carry no account quota, no credential state and

@@ -69,7 +69,7 @@ curl -fsSL "$tarball" | tar -xzf - -C "$tmp" --strip-components=1
 # Build the new copy beside the old one, then swap, so a failed download never leaves half an install.
 rm -rf "$share.new"
 mkdir -p "$share.new/scripts" "$share.new/examples" "$bin"
-cp "$tmp/scripts/claude-gateway" "$tmp/scripts/statusline.sh" "$tmp/scripts/gclaude-sync.py" "$share.new/scripts/"
+cp "$tmp/scripts/claude-gateway" "$tmp/scripts/statusline.sh" "$tmp/scripts/gclaude-sync.py" "$tmp/scripts/VERSION" "$share.new/scripts/"
 cp -R "$tmp/examples/opencode" "$share.new/examples/"
 chmod 755 "$share.new/scripts/claude-gateway" "$share.new/scripts/statusline.sh" "$share.new/scripts/gclaude-sync.py"
 rm -rf "$share"

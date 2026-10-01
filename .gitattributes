@@ -1,0 +1,3 @@
+# GitHub's source archives, which the installers download, fill in scripts/VERSION: see version() in
+# scripts/claude-gateway.
+scripts/VERSION export-subst
