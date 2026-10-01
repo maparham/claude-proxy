@@ -146,6 +146,8 @@ function Install-ClaudeGateway {
     if (Test-Path -LiteralPath $new) { Remove-Item -LiteralPath $new -Recurse -Force }
     New-Item -ItemType Directory -Path (Join-Path $new 'scripts') | Out-Null
     Copy-Item -LiteralPath $windows -Destination (Join-Path $new 'scripts\windows') -Recurse
+    $version = Join-Path $top.FullName 'scripts\VERSION'   # gclaude's version (Get-Version in claude-gateway.ps1)
+    if (Test-Path -LiteralPath $version) { Copy-Item -LiteralPath $version -Destination (Join-Path $new 'scripts\VERSION') }
     if (Test-Path -LiteralPath $share) { Remove-Item -LiteralPath $share -Recurse -Force }
     Move-Item -LiteralPath $new -Destination $share
   } finally {

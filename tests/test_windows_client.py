@@ -127,6 +127,7 @@ def source_zip(tmp_path_factory):
         z.write(INSTALL, "claude-proxy-test/install.ps1")
         for f in WINDOWS.iterdir():
             z.write(f, f"claude-proxy-test/scripts/windows/{f.name}")
+        z.writestr("claude-proxy-test/scripts/VERSION", "v1.0-8-gabc1234\n")   # as GitHub fills it in (export-subst)
     return path
 
 
@@ -211,6 +212,8 @@ def test_install_puts_the_scripts_and_the_launcher_in_place(installed):
     assert "rem Installed by claude-gateway install.ps1." in (win.bin / "claude-gateway.cmd").read_text()
     r = win.cg("help")
     assert r.returncode == 0 and "claude-gateway (Windows)" in r.out, r.out
+    r = win.cg("version")
+    assert r.returncode == 0 and r.out.strip() == "1.0.8", r.out
     again = win.install()   # an update replaces the copy and the launcher
     assert again.returncode == 0 and "session still open" in again.out, again.out
     assert not (win.home / ".local" / "share" / "claude-gateway.new").exists()
@@ -669,8 +672,11 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(gclaude
     fake = fake_claude(win, tmp_path)
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "update"], **fake)
     assert r.returncode == 0 and marker.read_text() == "yes", r.out
-    assert r.out.rstrip().endswith("gclaude is up to date."), r.out
+    assert r.out.rstrip().endswith("gclaude is up to date (1.0.8)"), r.out
     assert claude_saw(tmp_path).endswith("|update") and str(win.gdir) not in claude_saw(tmp_path)   # plain claude's own update
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "--version"], **fake)
+    assert r.returncode == 0 and r.out.splitlines()[0] == "1.0.8 (gclaude)", r.out
+    assert claude_saw(tmp_path).endswith("|--version")
 
 
 @on_windows

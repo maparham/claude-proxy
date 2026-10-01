@@ -1,6 +1,7 @@
 """The client-side scripts, run as subprocesses against a stub gateway (spec 4, 5, tests 14-16)."""
 import json
 import os
+import shutil
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -1190,14 +1191,26 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
     (fake / "claude").write_text('#!/bin/sh\necho "claude [${CLAUDE_CONFIG_DIR:-own config}] $*"\n')
     (fake / "claude").chmod(0o755)
     env = {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home)}
-    stub.install = "echo installer ran\n"
+    version = home / "version"   # what the claude-gateway beside gclaude says its version is; the installer moves it on
+    (launcher.parent / "claude-gateway").write_text(f'#!/bin/sh\n[ "$1" = version ] && cat {version}\n')
+    (launcher.parent / "claude-gateway").chmod(0o755)
+    version.write_text("1.0.7\n")
+    stub.install = f"echo installer ran; echo 1.0.8 > {version}\n"
     r = run([str(launcher), "update"], env)
     assert r.returncode == 0, r.stderr
     assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "claude [own config] update",
-                                   "gclaude is up to date."]   # plain claude's own update, shown as it did something
+                                   "gclaude updated from 1.0.7 to 1.0.8"]   # plain claude's own update, shown as it did something
     (fake / "claude").write_text('#!/bin/sh\necho "Claude Code is up to date (2.1.286)"\n')
     r = run([str(launcher), "update"], env)
-    assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "gclaude is up to date."]
+    assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "gclaude is up to date (1.0.8)"]
+    stub.install = f"echo installer ran; echo 1.0.9 > {version}\n"
+    version.unlink()   # an older claude-gateway, which has no version
+    r = run([str(launcher), "update"], env)
+    assert r.stdout.splitlines()[-1] == "gclaude updated to 1.0.9"
+    stub.install = "echo installer ran\n"
+    version.unlink()   # nor the new one: no version to show
+    r = run([str(launcher), "update"], env)
+    assert r.stdout.splitlines()[-1] == "gclaude is up to date"
     (fake / "claude").write_text('#!/bin/sh\necho "no network" >&2; exit 4\n')
     r = run([str(launcher), "update"], env)
     assert r.returncode == 4 and "no network" in r.stderr and "gclaude is up to date" not in r.stdout
@@ -1896,3 +1909,26 @@ def test_the_installers_on_says_nothing_under_gclaude_update(stub, home):
             {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_GATEWAY_UPDATE": "1"})
     assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
     assert "gclaude now runs" in cg(home, "on", "--url", stub.url).stdout   # a plain `on` still says it
+
+
+def test_version_comes_from_the_archives_describe_or_git(tmp_path):
+    """GitHub's archive fills scripts/VERSION in with `git describe` (export-subst); MAJOR.MINOR.<commits since the tag>."""
+    shutil.copy(GATEWAY, tmp_path / "claude-gateway")
+    for described, shown in (("v1.0-8-gabc1234", "1.0.8"), ("v1.2", "1.2.0")):
+        (tmp_path / "VERSION").write_text(described + "\n")
+        r = run(["bash", str(tmp_path / "claude-gateway"), "version"], {"PATH": os.environ["PATH"], "HOME": str(tmp_path)})
+        assert r.returncode == 0 and r.stdout == shown + "\n", r.stdout + r.stderr
+    (tmp_path / "VERSION").write_text("$Format:%(describe:tags,match=v[0-9]*)$\n")   # not an archive, nor a checkout
+    r = run(["bash", str(tmp_path / "claude-gateway"), "version"], {"PATH": os.environ["PATH"], "HOME": str(tmp_path)})
+    assert r.returncode == 1 and r.stdout == "" and "version is unknown" in r.stderr
+    assert (GATEWAY.parent / "VERSION").read_text().startswith("$Format:%(describe:tags")   # what GitHub fills in
+
+
+def test_gclaude_version_shows_gclaudes_then_claude_codes(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    (launcher.parent / "claude-gateway").write_text('#!/bin/sh\n[ "$1" = version ] && echo 1.0.8\n')
+    (launcher.parent / "claude-gateway").chmod(0o755)
+    r = run_gclaude(home, launcher, "--version")
+    assert r.returncode == 0 and r.stdout.splitlines() == ["1.0.8 (gclaude)", "claude started --version"], r.stdout
+    assert not any(p.startswith("/api/me/status") for p, _ in stub.requests)   # answered before any sign-in check

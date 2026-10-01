@@ -6,6 +6,7 @@
 #   claude-gateway on --login        # authorize this computer again, e.g. after it was removed in the dashboard
 #   claude-gateway off               # remove gclaude (its history stays)
 #   claude-gateway status
+#   claude-gateway version          # gclaude's version, as ``gclaude --version`` shows it
 # gclaude users need none of these: `gclaude update`, `gclaude status` and `gclaude uninstall` run them.
 #
 # gclaude runs Claude Code with CLAUDE_CONFIG_DIR=%USERPROFILE%\.config\claude-gateway\claude, whose settings.json
@@ -46,6 +47,15 @@ $WarnCmd = "$LineCmd --warn"
 $OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
                           ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5[1m]' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
+
+function Get-Version {   # MAJOR.MINOR.N, as version() in scripts/claude-gateway works it out; '' when unknown
+  $v = ''
+  try { $v = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\VERSION')).Trim() } catch { }
+  if ($v -notmatch '^v\d') { try { $v = [string](& git -C $PSScriptRoot describe --tags --match 'v[0-9]*' 2>$null) } catch { $v = '' } }
+  if ($v -match '^v(\d+\.\d+)-(\d+)-g[0-9a-f]+$') { return "$($Matches[1]).$($Matches[2])" }
+  if ($v -match '^v(\d+\.\d+)$') { return "$($Matches[1]).0" }
+  return ''
+}
 
 function Say([string]$m) { [Console]::Error.WriteLine($m) }
 function Fail([string]$m) { Say $m; exit 1 }
@@ -291,22 +301,24 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'if /i "%~1"=="status" goto status',
     'if /i "%~1"=="uninstall" goto uninstall',
     'where claude >nul 2>nul || (echo gclaude: Claude Code ^(claude^) is not installed or not on PATH 1>&2 & exit /b 127)',
+    'rem gclaude --version: gclaude''s version, then Claude Code''s ("2.1.286 (Claude Code)").',
+    'for %%a in (-v -V --version) do if "%~1"=="%%a" goto version',
     'rem gclaude update: the latest claude-gateway from the dashboard, whose installer also refreshes gclaude, then',
     'rem Claude Code''s own update, and a last line saying it was gclaude''s. One block, so cmd has read all of it before the installer rewrites this file.',
     'rem install.ps1 throws when it fails. Windows PowerShell exits 0 all the same when the throw happens inside iex,',
     'rem so the try/catch turns it into exit 1. The failure then goes to :updatefailed (a label is found by name, so',
     'rem the rewritten file serves; keep the name), whose top-level exit /b 1 reaches cmd /c where one in a nested',
     'rem block would not, and Claude Code is left alone. Claude Code''s own output shows only when it updated or failed',
-    'rem (:claudeupdatefailed), not "... is up to date", so the update reads as gclaude''s.',
+    'rem (:claudeupdatefailed), not "... is up to date", so the update reads as gclaude''s; :updated then gives its version.',
     ('if /i "%~1"=="update" (' + "`r`n" +
      '  set CLAUDE_GATEWAY_UPDATE=1' + "`r`n" +
+     '  for /f "delims=" %%v in (''claude-gateway version 2^>nul'') do set "GW_OLD=%%v"' + "`r`n" +
      "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
      '  echo Checking for a Claude Code update...' + "`r`n" +
      '  call claude %* >"%TEMP%\gclaude-update.log" 2>&1 || goto :claudeupdatefailed' + "`r`n" +
      '  findstr /c:"is up to date" "%TEMP%\gclaude-update.log" >nul || type "%TEMP%\gclaude-update.log"' + "`r`n" +
      '  del "%TEMP%\gclaude-update.log" 2>nul' + "`r`n" +
-     '  echo gclaude is up to date.' + "`r`n" +
-     '  exit /b' + "`r`n" +
+     '  goto :updated' + "`r`n" +
      ')'),
     "set `"CLAUDE_CONFIG_DIR=$(Cmd-Path $GDir)`"",
     'rem Sign this computer in again first, as plain claude''s login would, when /logout_gclaude left its signed-out file',
@@ -340,6 +352,20 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     ('<nul set /p "=' + ((@('[1G', '[0J', '[0m', '[?25h', '[?2004l', '[?1004l', '[<u') | ForEach-Object { [char]27 + $_ }) -join '') + '"'),
     'type "%CLAUDE_CONFIG_DIR%\signed-out"',
     'exit /b 0',
+    ':updated',
+    'set "GW_NEW="',
+    'for /f "delims=" %%v in (''claude-gateway version 2^>nul'') do set "GW_NEW=%%v"',
+    'if not defined GW_NEW echo gclaude is up to date& exit /b 0',
+    'if "%GW_OLD%"=="%GW_NEW%" echo gclaude is up to date ^(%GW_NEW%^)& exit /b 0',
+    'if defined GW_OLD echo gclaude updated from %GW_OLD% to %GW_NEW%& exit /b 0',
+    'echo gclaude updated to %GW_NEW%',
+    'exit /b 0',
+    ':version',
+    'set "GW_V=unknown"',
+    'for /f "delims=" %%v in (''claude-gateway version 2^>nul'') do set "GW_V=%%v"',
+    'echo %GW_V% (gclaude)',
+    'call claude %*',
+    'exit /b',
     ':updatefailed',
     'echo gclaude: the gateway update failed, so Claude Code was not updated 1>&2',
     'exit /b 1',
@@ -517,6 +543,7 @@ switch -Exact ($cmd) {
   }
   'off' { Gclaude-Off }
   'status' { Show-Status }
+  'version' { $v = Get-Version; if (-not $v) { Fail 'claude-gateway: its version is unknown' }; Write-Output $v }
   { $_ -in 'help', '-h', '--help' } { Usage }
-  default { Fail "Unknown command: $cmd (on, off, status or help)" }
+  default { Fail "Unknown command: $cmd (on, off, status, version or help)" }
 }
