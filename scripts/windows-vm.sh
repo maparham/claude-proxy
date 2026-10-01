@@ -12,7 +12,13 @@ AZ=${REGION}a
 RDP_FILE=${TMPDIR:-/tmp}/$NAME.rdp
 ls_() { aws lightsail --region "$REGION" "$@"; }
 
-state() { ls_ get-instance-state --instance-name "$NAME" --query state.name --output text 2>/dev/null || echo none; }
+# "none" only when Lightsail says there is no such VM; any other failure (expired login, throttling) stops the script
+state() {
+  local out
+  if out=$(ls_ get-instance-state --instance-name "$NAME" --query state.name --output text 2>&1); then echo "$out"
+  elif grep -q NotFoundException <<<"$out"; then echo none
+  else echo "$out" >&2; return 1; fi
+}
 
 create() {
   echo "creating $NAME in $AZ (Windows Server 2025, small_win_3_0)"
@@ -22,9 +28,14 @@ create() {
 
 connect() {
   local s ip addr pass
-  while s=$(state); [ "$s" != running ]; do
-    [ "$s" = none ] && { echo "$NAME doesn't exist; run: $0 up" >&2; exit 1; }
-    echo "waiting for $NAME to run ($s)"; sleep 10
+  while s=$(state) || exit 1; [ "$s" != running ]; do
+    case $s in
+      none)             echo "$NAME doesn't exist; run: $0 up" >&2; exit 1 ;;
+      stopped)          echo "starting $NAME"; ls_ start-instance --instance-name "$NAME" >/dev/null ;;
+      pending|stopping) echo "waiting for $NAME to run ($s)" ;;
+      *)                echo "$NAME is $s; can't connect" >&2; exit 1 ;;
+    esac
+    sleep 10
   done
   ip=$(curl -fsS https://api.ipify.org)
   ls_ put-instance-public-ports --instance-name "$NAME" \
@@ -48,12 +59,17 @@ RDP
   open -a "Windows App" "$RDP_FILE"
 }
 
+case ${1:-up} in up|connect|status|down) ;; *) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;; esac
+s=$(state)
 case ${1:-up} in
-  up)      if [ "$(state)" = none ]; then create; fi; connect ;;
+  up)      if [ "$s" = none ]; then create; fi; connect ;;
   connect) connect ;;
-  status)  s=$(state); echo "$NAME: $s"
+  status)  echo "$NAME: $s"
            [ "$s" = none ] || ls_ get-instance --instance-name "$NAME" --query instance.publicIpAddress --output text ;;
-  down)    if [ "$(state)" = none ]; then echo "$NAME doesn't exist"
-           else ls_ delete-instance --instance-name "$NAME" >/dev/null; rm -f "$RDP_FILE"; echo "deleted $NAME"; fi ;;
-  *)       sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 2 ;;
+  down)    if [ "$s" = none ]; then echo "$NAME doesn't exist"
+           else ls_ delete-instance --instance-name "$NAME" >/dev/null; rm -f "$RDP_FILE"
+             # Lightsail bills until the VM is gone, so don't report success before it is
+             for _ in $(seq 30); do s=$(state) || exit 1; [ "$s" = none ] && break; echo "waiting for $NAME to go ($s)"; sleep 10; done
+             [ "$s" = none ] || { echo "$NAME still exists ($s) after 5 minutes: check the Lightsail console, it is still billed" >&2; exit 1; }
+             echo "deleted $NAME"; fi ;;
 esac
