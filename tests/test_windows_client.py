@@ -446,6 +446,14 @@ def test_the_installers_on_says_nothing_under_gclaude_update(gclaude, installed,
 
 
 @on_windows
+def test_the_statusline_sends_gclaudes_version_from_its_settings(gclaude, installed, stub):
+    assert installed.settings()["env"]["CLAUDE_GATEWAY_VERSION"] == "1.0.8"   # the source zip's VERSION
+    gclaude()
+    sent = [h for p, h, _ in stub.requests if p.startswith("/api/me/status")]
+    assert sent and sent[-1].get("x-gclaude-version") == "1.0.8", sent
+
+
+@on_windows
 def test_the_statusline_shows_the_figures(gclaude, stub):
     stub.status_line = "maya \u00b7 daily $85/$100 \u00b7 5h 10%"
     r = gclaude()

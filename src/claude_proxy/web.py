@@ -518,6 +518,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/me/status")
     async def me_status(request: Request, format: str = "json"):
         user = principal(request, routes_ok=True)
+        if user.get("machine_key_id"):   # gclaude's statusline says which version this computer runs
+            db.set_client_version(conn, user["machine_key_id"], request.headers.get("x-gclaude-version", ""))
         now = time.time()
         states = limits.states(conn, cfg, user["id"], now=now)
         account = None

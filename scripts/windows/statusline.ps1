@@ -172,7 +172,7 @@ try {
 
   function Status([string]$format) {   # /api/me/status as text, with this key; '' when it fails
     try {
-      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$dash/api/me/status?format=$format" -Headers @{ Authorization = "Bearer $env:ANTHROPIC_AUTH_TOKEN" }
+      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 3 -Uri "$dash/api/me/status?format=$format" -Headers @{ Authorization = "Bearer $env:ANTHROPIC_AUTH_TOKEN"; 'X-Gclaude-Version' = [string]$env:CLAUDE_GATEWAY_VERSION }
       $body = $r.Content
       if ($body -is [byte[]]) { $body = $utf8.GetString($body) }
       return ([string]$body).Trim()

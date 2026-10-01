@@ -185,7 +185,8 @@ edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its ow
   mkdir -p "$(dirname "$settings")"
   [ -f "$settings" ] || echo '{}' > "$settings"
   cp -p "$settings" "$settings.bak-claude-gateway"
-  python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" "$SETTINGS" <<'EOF'
+  # CG_VERSION: gclaude's version, which the statusline sends the dashboard so it can show each computer's.
+  CG_VERSION=$(version 2>/dev/null) python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" "$SETTINGS" <<'EOF'
 import json, os, shlex, sys, tempfile
 mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
 ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
@@ -201,7 +202,7 @@ ours = lambda v: isinstance(v, str) and v.lower().startswith("x-gateway-key:")
 if mode == "on" and "ANTHROPIC_CUSTOM_HEADERS" in env and not ours(env["ANTHROPIC_CUSTOM_HEADERS"]):
     sys.exit("ANTHROPIC_CUSTOM_HEADERS is already set in %s by something else; leaving everything as it is." % settings)
 
-for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_GATEWAY_DASHBOARD"):
+for k in ("ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN", "CLAUDE_GATEWAY_DASHBOARD", "CLAUDE_GATEWAY_VERSION"):
     env.pop(k, None)
 if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
@@ -233,6 +234,8 @@ if st.pop("added_warn_hook", False) and isinstance(s.get("hooks"), dict):
 
 if mode == "on":
     env.update({"ANTHROPIC_BASE_URL": c["url"], "CLAUDE_GATEWAY_DASHBOARD": c["dashboard"]})
+    if os.environ.get("CG_VERSION"):
+        env["CLAUDE_GATEWAY_VERSION"] = os.environ["CG_VERSION"]
     if c.get("mode") == "own-login" and scope == "global":
         env["ANTHROPIC_CUSTOM_HEADERS"] = "x-gateway-key: " + c["key"]
     else:

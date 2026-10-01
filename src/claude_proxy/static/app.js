@@ -92,6 +92,7 @@ const TIPS = {
   served: `Limits are checked before each request against usage already recorded, so the request that crosses the line goes through and the next one is refused.`,
   share_col: `Each user's estimated share of the account's 5-hour and 7-day buckets, in percentage points.`,
   limits_col: `Per-user caps, checked before every request. The bar turns amber at 80% and red at 100%.`,
+  gclaude_version: `The gclaude version this computer's status line last reported. <code>gclaude update</code> brings it to the newest; — until it reports one.`,
   key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
   act_limits: `View or change this user's limits.`,
   act_rename: `Change the name shown on the dashboard and in their status line.`,
@@ -725,13 +726,14 @@ function upgradeDialog(u) {
 function machinesCard(keys, install, owner) {
   const rows = keys.map((k) => `<tr><td><b>${esc(k.label)}</b></td><td class="muted"><code>${esc(k.key_prefix)}…</code></td>
     <td class="nowrap">${fmtTime(k.created_at)}</td><td class="muted nowrap">${k.last_used_at ? fmtAgo(k.last_used_at) : "not yet"}</td>
+    <td class="muted nowrap">${k.client_version ? esc(k.client_version) : "—"}</td>
     <td><button class="btn small danger" data-key-remove="${k.id}" data-label="${esc(k.label)}">Remove</button></td></tr>`).join("");
   return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? "Computers" : "Your computers"}</h3>
     ${install ? `<p class="sub">To set up a computer, run this in its terminal. It opens this page to authorize it, then sets up <code>gclaude</code>.</p>
       ${[["macOS / Linux", install.unix], ["Windows (PowerShell)", install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
         `<p class="muted install-os">${os}</p>
       <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">Copy</button></div>`).join("")}` : ""}
-    ${keys.length ? `<table class="data"><thead><tr><th>Computer</th><th>Key</th><th>Authorized</th><th>Last used</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+    ${keys.length ? `<table class="data"><thead><tr><th>Computer</th><th>Key</th><th>Authorized</th><th>Last used</th><th>gclaude${tipI("gclaude_version", "About the gclaude version")}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="muted">${owner ? "No computers authorized in the browser." : "None authorized in the browser yet."}</p>`}</div>`;
 }
 function wireMachines(root) {

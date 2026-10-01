@@ -1932,3 +1932,25 @@ def test_gclaude_version_shows_gclaudes_then_claude_codes(stub, home):
     r = run_gclaude(home, launcher, "--version")
     assert r.returncode == 0 and r.stdout.splitlines() == ["1.0.8 (gclaude)", "claude started --version"], r.stdout
     assert not any(p.startswith("/api/me/status") for p, _ in stub.requests)   # answered before any sign-in check
+
+
+def test_the_statusline_sends_gclaudes_version_with_its_status_call(stub, warn_env):
+    """So the dashboard can list which gclaude each computer runs; the key still goes only in the header from stdin."""
+    stub.status_line = "maya · daily $10/$100"
+    warn({**warn_env, "CLAUDE_GATEWAY_VERSION": "1.0.8"})
+    path, headers = [(p, h) for p, h in stub.requests if p.startswith("/api/me/status")][-1]
+    assert headers["x-gclaude-version"] == "1.0.8" and headers["authorization"] == "Bearer sk-proxy-k"
+
+
+def test_on_puts_gclaudes_version_in_its_settings_for_the_statusline(stub, home, tmp_path):
+    scripts = tmp_path / "scripts"   # an installed copy, whose VERSION GitHub's archive filled in
+    shutil.copytree(GATEWAY.parent, scripts, ignore=shutil.ignore_patterns("windows"))
+    (scripts / "VERSION").write_text("v1.0-8-gabc1234\n")
+    env = {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp")}
+    (home / "tmp").mkdir(exist_ok=True)
+    r = run(["bash", str(scripts / "claude-gateway"), "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full"], env)
+    assert r.returncode == 0, r.stderr
+    _, gsettings, _ = gc_paths(home)
+    assert json.loads(gsettings.read_text())["env"]["CLAUDE_GATEWAY_VERSION"] == "1.0.8"
+    r = run(["bash", str(scripts / "claude-gateway"), "off", "--gclaude"], env)
+    assert r.returncode == 0, r.stderr
