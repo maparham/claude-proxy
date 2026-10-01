@@ -1135,8 +1135,11 @@ def test_gclaude_signs_in_again_in_the_browser_when_started_signed_out(stub, hom
 def test_the_installers_on_leaves_a_signed_out_gclaude_to_sign_in_when_it_next_starts(stub, home):
     """gclaude update runs the dashboard's installer, whose `on` must not stop for the browser: the next gclaude signs in."""
     gsettings, launcher = logged_out(stub, home)
+    launcher.write_text(launcher.read_text().replace("Checking for a Claude Code update", "an older gclaude"))
     r = cg(home, "on", "--url", stub.url, "--dashboard", stub.url)   # what the dashboard's /install runs
     assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
+    assert "Checking for a Claude Code update" in launcher.read_text()   # the launcher is refreshed all the same
+    assert "ANTHROPIC_AUTH_TOKEN" not in gsettings.read_text()             # still signed out
     assert not any(p == "/api/device/start" for p, _ in stub.requests)
     stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
     r = run_gclaude(home, launcher, "-p", "hi")

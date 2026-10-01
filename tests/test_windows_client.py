@@ -557,6 +557,12 @@ def test_logout_revokes_the_key_and_the_next_gclaude_signs_in_again(gclaude, ins
     assert s["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"].endswith("--warn")   # arrays stay arrays
     assert "key" not in win.client() and win.client()["url"] == stub.url
     assert (win.gdir / "signed-out").is_file()
+    launcher = win.bin / "gclaude.cmd"   # the installer's `on` (gclaude update) refreshes the launcher, says nothing, signs no one in
+    launcher.write_text(launcher.read_text().replace("Checking for a Claude Code update", "an older gclaude"))
+    r = win.cg("on", "--url", stub.url, "--dashboard", stub.url)
+    assert r.returncode == 0 and r.out.strip() == "", r.out
+    assert "Checking for a Claude Code update" in launcher.read_text() and (win.gdir / "signed-out").is_file()
+    assert not any(p == "/api/device/start" for p, _, _ in stub.requests)
     fake = fake_claude(win, tmp_path)
     stub.tokens = [(400, {"error": "access_denied"})]   # cancelled: Claude Code is not started
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
