@@ -1932,3 +1932,16 @@ def test_gclaude_version_shows_gclaudes_then_claude_codes(stub, home):
     r = run_gclaude(home, launcher, "--version")
     assert r.returncode == 0 and r.stdout.splitlines() == ["1.0.8 (gclaude)", "claude started --version"], r.stdout
     assert not any(p.startswith("/api/me/status") for p, _ in stub.requests)   # answered before any sign-in check
+
+
+def test_gclaude_update_refreshes_gclaude_on_a_machine_also_in_global_mode(stub, home):
+    """The installer runs a bare `on`, which refreshes global mode there; gclaude update means gclaude."""
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    launcher.write_text(launcher.read_text().replace("Checking for a Claude Code update", "an older gclaude"))
+    r = run(["bash", str(GATEWAY), "on", "--url", stub.url, "--dashboard", stub.url],
+            {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_GATEWAY_UPDATE": "1"})
+    assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
+    assert "Checking for a Claude Code update" in launcher.read_text()
+    assert "global mode" in cg(home, "on", "--url", stub.url).stdout   # a plain `on` there still refreshes global mode
