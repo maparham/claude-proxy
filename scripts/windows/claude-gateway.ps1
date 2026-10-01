@@ -262,50 +262,7 @@ are on the status line and on the dashboard, and that running ``gclaude update``
 "@
 }
 
-function Gclaude-On($c) {
-  $rec = Field $c 'gclaude'
-  if (-not ($rec -is [psobject])) { $rec = New-Object psobject; Set-Field $c 'gclaude' $rec }
-
-  foreach ($d in $ClientDir, $GDir) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
-  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'statusline.ps1') -Destination $Statusline -Force
-
-  $s = Read-Json $Settings
-  if (-not ($s -is [psobject])) { $s = New-Object psobject }
-  Remove-Ours $s $rec
-  $envBlock = Field $s 'env'
-  if (-not ($envBlock -is [psobject])) { $envBlock = New-Object psobject; Set-Field $s 'env' $envBlock }
-  Set-Field $envBlock 'ANTHROPIC_BASE_URL' $c.url
-  Set-Field $envBlock 'ANTHROPIC_AUTH_TOKEN' $c.key
-  Set-Field $envBlock 'CLAUDE_GATEWAY_DASHBOARD' $c.dashboard
-  $added = New-Object psobject
-  foreach ($k in $OneMModels.Keys) {
-    if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $OneMModels[$k]; Set-Field $added $k $OneMModels[$k] }
-  }
-  if (-not (Is-Empty $added)) { Set-Field $rec 'added_models' $added }
-  if (-not (Has $s 'disableClaudeAiConnectors')) {   # no claude.ai login in gclaude: silence its connectors warning
-    Set-Field $s 'disableClaudeAiConnectors' $true
-    Set-Field $rec 'added_disable_connectors' $true
-  }
-  if (-not (Has $s 'statusLine')) {
-    Set-Field $s 'statusLine' ([pscustomobject]@{ type = 'command'; command = $LineCmd; refreshInterval = 30 })
-    Set-Field $rec 'added_statusline' $true
-  } elseif ((Field $s.statusLine 'command') -ne $LineCmd) {
-    Write-Output "gclaude already has a statusline, so it was left as it is. To show your gateway limits in it too,"
-    Write-Output "add the output of this command to it: $LineCmd"
-  }
-  $hooks = Field $s 'hooks'
-  if (-not ($hooks -is [psobject])) { $hooks = New-Object psobject; Set-Field $s 'hooks' $hooks }
-  $groups = @(); if (Has $hooks 'UserPromptSubmit') { $groups = @($hooks.UserPromptSubmit) }
-  if (-not @($groups | Where-Object { Ours-Hook $_ }).Count) {
-    $hook = [pscustomobject]@{ type = 'command'; command = $WarnCmd; timeout = 10 }
-    $groups += [pscustomobject]@{ hooks = @($hook) }
-    Set-Field $hooks 'UserPromptSubmit' $groups
-    Set-Field $rec 'added_warn_hook' $true
-  }
-  Write-Json $Settings $s -Private   # it holds the key
-  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout_gclaude
-  Write-Json $Client $c -Private
-
+function Write-Commands {
   # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers /usage
   # and /logout_gclaude instead (not /logout: a built-in can't be hidden, so the menu would list both). /account: Command-Text.
   $old = Join-Path $GDir 'commands\logout.md'   # what an older gclaude named /logout_gclaude
@@ -319,14 +276,9 @@ function Gclaude-On($c) {
       [IO.File]::WriteAllText($file, ((Command-Text $name) -replace "`r`n", "`n") + "`n", (New-Object Text.UTF8Encoding $false))
     }
   }
+}
 
-  $state = Join-Path $GDir '.claude.json'   # Claude Code's own state; seeded once so it skips its welcome screens
-  if (-not (Test-Path -LiteralPath $state)) {
-    $seed = [pscustomobject]@{ hasCompletedOnboarding = $true }
-    try { $theme = Field (Read-Json (Join-Path $HomeDir '.claude.json')) 'theme'; if ($theme) { Set-Field $seed 'theme' $theme } } catch { }
-    Write-Json $state $seed
-  }
-
+function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude's settings.json, not from here
   if (-not (Test-Path -LiteralPath $Bin)) { New-Item -ItemType Directory -Path $Bin -Force | Out-Null }
   $cmd = @(
     '@echo off',
@@ -406,6 +358,62 @@ function Gclaude-On($c) {
     '(goto) 2>nul & call claude-gateway off'
   ) -join "`r`n"
   try { Write-Cmd $Launcher ($cmd + "`r`n") } catch { Fail $_.Exception.Message }
+}
+
+function Gclaude-On($c) {
+  $rec = Field $c 'gclaude'
+  if (-not ($rec -is [psobject])) { $rec = New-Object psobject; Set-Field $c 'gclaude' $rec }
+
+  foreach ($d in $ClientDir, $GDir) { if (-not (Test-Path -LiteralPath $d)) { New-Item -ItemType Directory -Path $d -Force | Out-Null } }
+  Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'statusline.ps1') -Destination $Statusline -Force
+
+  $s = Read-Json $Settings
+  if (-not ($s -is [psobject])) { $s = New-Object psobject }
+  Remove-Ours $s $rec
+  $envBlock = Field $s 'env'
+  if (-not ($envBlock -is [psobject])) { $envBlock = New-Object psobject; Set-Field $s 'env' $envBlock }
+  Set-Field $envBlock 'ANTHROPIC_BASE_URL' $c.url
+  Set-Field $envBlock 'ANTHROPIC_AUTH_TOKEN' $c.key
+  Set-Field $envBlock 'CLAUDE_GATEWAY_DASHBOARD' $c.dashboard
+  $added = New-Object psobject
+  foreach ($k in $OneMModels.Keys) {
+    if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $OneMModels[$k]; Set-Field $added $k $OneMModels[$k] }
+  }
+  if (-not (Is-Empty $added)) { Set-Field $rec 'added_models' $added }
+  if (-not (Has $s 'disableClaudeAiConnectors')) {   # no claude.ai login in gclaude: silence its connectors warning
+    Set-Field $s 'disableClaudeAiConnectors' $true
+    Set-Field $rec 'added_disable_connectors' $true
+  }
+  if (-not (Has $s 'statusLine')) {
+    Set-Field $s 'statusLine' ([pscustomobject]@{ type = 'command'; command = $LineCmd; refreshInterval = 30 })
+    Set-Field $rec 'added_statusline' $true
+  } elseif ((Field $s.statusLine 'command') -ne $LineCmd) {
+    Write-Output "gclaude already has a statusline, so it was left as it is. To show your gateway limits in it too,"
+    Write-Output "add the output of this command to it: $LineCmd"
+  }
+  $hooks = Field $s 'hooks'
+  if (-not ($hooks -is [psobject])) { $hooks = New-Object psobject; Set-Field $s 'hooks' $hooks }
+  $groups = @(); if (Has $hooks 'UserPromptSubmit') { $groups = @($hooks.UserPromptSubmit) }
+  if (-not @($groups | Where-Object { Ours-Hook $_ }).Count) {
+    $hook = [pscustomobject]@{ type = 'command'; command = $WarnCmd; timeout = 10 }
+    $groups += [pscustomobject]@{ hooks = @($hook) }
+    Set-Field $hooks 'UserPromptSubmit' $groups
+    Set-Field $rec 'added_warn_hook' $true
+  }
+  Write-Json $Settings $s -Private   # it holds the key
+  Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue   # left by /logout_gclaude
+  Write-Json $Client $c -Private
+
+  Write-Commands
+
+  $state = Join-Path $GDir '.claude.json'   # Claude Code's own state; seeded once so it skips its welcome screens
+  if (-not (Test-Path -LiteralPath $state)) {
+    $seed = [pscustomobject]@{ hasCompletedOnboarding = $true }
+    try { $theme = Field (Read-Json (Join-Path $HomeDir '.claude.json')) 'theme'; if ($theme) { Set-Field $seed 'theme' $theme } } catch { }
+    Write-Json $state $seed
+  }
+
+  Write-Launcher $c
 
   Write-Output "gclaude now runs Claude Code through the gateway at $($c.url); plain 'claude' is unchanged."
   if (($env:Path -split ';') -notcontains $Bin -and -not $env:CLAUDE_GATEWAY_FROM_GCLAUDE) { Write-Output "Open a new terminal (or add $Bin to your PATH) to run gclaude." }
@@ -490,7 +498,11 @@ switch -Exact ($cmd) {
     $dash = $dash.TrimEnd('/')
     if (-not $key -and -not $login -and -not $savedKey -and $savedUrl -eq $url -and (Launcher-Ours)) {
       # Signed out by /logout_gclaude, and here from the installer (gclaude update): no browser mid-update. The next
-      # gclaude signs in (`on --login`), which also refreshes its setup; it says so then, so nothing is said here.
+      # gclaude signs in (`on --login`), which refreshes the rest of its setup; it says so then, so nothing is said here.
+      # Its launcher and commands are refreshed now, so the update's own new lines reach a signed-out computer too.
+      Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'statusline.ps1') -Destination $Statusline -Force
+      Write-Commands
+      Write-Launcher $c
       exit 0
     }
     if (-not $key) {

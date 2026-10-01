@@ -784,7 +784,11 @@ case "$cmd" in
         [ -z "$dash" ] || save_client "$url" "$(field key)" "$dash"   # already connected there: keep its key
       elif [ -n "$gclaude" ] && [ -z "$login" ] && [ -z "$(field key)" ] && [ "$(field url)" = "${url%/}" ] && gclaude_ours; then
         # Signed out by /logout_gclaude, and here from the installer (gclaude update): no browser mid-update. The next
-        # gclaude signs in (`on --login`), which also refreshes its setup; it says so then, so nothing is said here.
+        # gclaude signs in (`on --login`), which refreshes the rest of its setup; it says so then, so nothing is said here.
+        # Its launcher and commands are refreshed now, so the update's own new lines reach a signed-out computer too.
+        install_statusline
+        cp "$(src_dir)/gclaude-sync.py" "$GCLAUDE_SYNC"
+        gclaude_files on
         exit 0
       else
         [ -z "$gclaude" ] || gclaude_free
