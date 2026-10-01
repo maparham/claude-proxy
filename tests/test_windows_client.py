@@ -675,8 +675,7 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(gclaude
     assert r.out.rstrip().endswith("gclaude is up to date (1.0.8)"), r.out
     assert claude_saw(tmp_path).endswith("|update") and str(win.gdir) not in claude_saw(tmp_path)   # plain claude's own update
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "--version"], **fake)
-    assert r.returncode == 0 and r.out.splitlines()[0] == "1.0.8 (gclaude)", r.out
-    assert claude_saw(tmp_path).endswith("|--version")
+    assert r.returncode == 0 and r.out.splitlines()[:2] == ["1.0.8 (gclaude)", "2.1.0 (Claude Code)"], r.out
 
 
 @on_windows
