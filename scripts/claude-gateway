@@ -786,9 +786,9 @@ case "$cmd" in
       echo "Choose one: --gclaude (the default) or --global." >&2; exit 1
     fi
     # gclaude is the default. A bare `on` on a machine already in global mode keeps refreshing that, so nobody is
-    # switched without asking.
+    # switched without asking. Under gclaude update (the installer's bare `on`), gclaude is what it refreshes.
     if [ -z "$gclaude$global" ]; then
-      if [ -n "$(current)" ]; then
+      if [ -n "$(current)" ] && [ -z "${CLAUDE_GATEWAY_UPDATE:-}" ]; then
         global=1
         echo "This machine is in global mode (plain 'claude' uses the gateway), so that is what 'on' refreshes. To use"
         echo "gclaude instead: claude-gateway off --global, then claude-gateway on."
