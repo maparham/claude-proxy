@@ -752,6 +752,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if action == "routes_key_remove":
             return {"ok": True, "removed": db.remove_routes_key(conn, u["id"], actor["id"])}
         if action == "delete":
+            if str((await _json(request)).get("confirm", "")) != u["name"]:
+                fail(400, "Type the user's name to confirm.")
             try:
                 return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
             except ValueError as e:
