@@ -32,8 +32,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import clerk, db, limits, quota, usage
+from . import clerk, db, limits, quota, tickets, usage
 from .auth import AuthError, authenticate
+from .config import LENGTHS
 from .gateway import Gateway
 
 logger = logging.getLogger("claude_proxy")
@@ -281,6 +282,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             be = gw.backend.describe()
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
+        out["tickets"] = {"enabled": cfg.tickets.enabled}
+        if is_admin(user) and cfg.tickets.enabled:
+            out["tickets"] |= {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
+                               "currencies": list(tickets.currencies(cfg)), "lengths": LENGTHS,
+                               "max_sold_pct": cfg.tickets.max_sold_pct, "how_to_buy": cfg.tickets.how_to_buy}
         return out
 
     # ---------- helpers ----------
@@ -796,6 +802,75 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if conn.execute("DELETE FROM limits WHERE user_id=? AND kind=? AND scope=?", (u["id"], kind, scope)).rowcount == 0:
             fail(404, "No such limit.")
         db.audit(conn, actor["id"], "limit_clear", f"{u['name']}:{kind}:{scope}")
+        return {"ok": True}
+
+    # ---------- paid tickets (design 2026-10-03) ----------
+
+    def ticket_call(fn, *args, **kw):
+        try:
+            return fn(*args, **kw)
+        except tickets.CapacityError as e:
+            fail(409, str(e))
+        except tickets.TicketError as e:
+            fail(400, str(e))
+
+    def need_tickets():
+        if not cfg.tickets.enabled:
+            fail(404, "Tickets are not enabled on this gateway.")
+
+    @app.get("/api/admin/rates")
+    async def rates(request: Request):
+        admin(request)
+        need_tickets()
+        now, n, out = time.time(), names(), []
+        for code, step in tickets.currencies(cfg).items():
+            if code == "USD":
+                continue
+            r = tickets.current_rate(conn, code)
+            out.append({"currency": code, "round_to": step, "rate": r["rate"] if r else None, "set_at": r["set_at"] if r else None,
+                        "set_by": n.get(r["set_by"]) if r and r["set_by"] else None, "stale": bool(r and tickets.rate_is_stale(r, now))})
+        return {"rates": out}
+
+    @app.post("/api/admin/rates")
+    async def set_rate(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        return {"ok": True, "rate": ticket_call(tickets.set_rate, conn, cfg, str(body.get("currency", "")).upper(), body.get("rate"), actor["id"])}
+
+    @app.get("/api/admin/prices")
+    async def prices(request: Request):
+        admin(request)
+        need_tickets()
+        return {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
+                "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True)}
+
+    @app.post("/api/admin/prices")
+    async def set_price(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), body.get("usd"), actor["id"])
+        return {"ok": True}
+
+    @app.post("/api/admin/discounts")
+    async def create_discount(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        try:
+            starts_at, ends_at = int(body.get("starts_at")), int(body.get("ends_at"))
+        except (TypeError, ValueError):
+            fail(400, "Need starts_at and ends_at as epoch seconds.")
+        d = ticket_call(tickets.create_discount, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), body.get("usd"),
+                        starts_at, ends_at, actor["id"])
+        return {"ok": True, "discount": d}
+
+    @app.post("/api/admin/discounts/{did}/cancel")
+    async def cancel_discount(request: Request, did: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        ticket_call(tickets.cancel_discount, conn, did, actor["id"])
         return {"ok": True}
 
     # ---------- page ----------
