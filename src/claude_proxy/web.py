@@ -498,7 +498,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "created_at": u["created_at"], "last_seen": last,
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
                         "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
-                        "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)]})
+                        "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
+                        "ticket": tickets.user_state(conn, u["id"], now) if cfg.tickets.enabled else None})
         return {"users": out}
 
     @app.get("/api/limits")
@@ -764,6 +765,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
             except ValueError as e:
                 fail(400, str(e))
+        if action == "ungate":
+            need_tickets()
+            ticket_call(tickets.ungate, conn, actor["id"], u["id"])
+            return {"ok": True}
         if action == "enable":
             if u["revoked_at"] is not None:
                 fail(400, "A revoked user cannot be re-enabled; delete them and add them again for a new key.")
@@ -872,6 +877,79 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         ticket_call(tickets.cancel_discount, conn, did, actor["id"])
         return {"ok": True}
+
+    def ticket_state(t: dict, now: float) -> str:
+        if t["cancelled_at"] is not None:
+            return "cancelled"
+        if t["effective_end"] <= now:
+            return "ended"
+        return "queued" if t["starts_at"] > now else "active"
+
+    @app.get("/api/admin/tickets")
+    async def tickets_list(request: Request, user_id: int | None = None):
+        admin(request)
+        need_tickets()
+        now, n = time.time(), names()
+        where, params = ("WHERE t.user_id=?", (user_id,)) if user_id is not None else ("", ())
+        rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
+        for t in rows:
+            t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"])}
+        return {"tickets": rows}
+
+    def grant_args(body) -> tuple:
+        return (target_user(body.get("user") or body.get("user_id")), str(body.get("tier", "")), str(body.get("length", "")),
+                str(body.get("currency") or "USD").upper())
+
+    @app.post("/api/admin/tickets/preview")
+    async def ticket_preview(request: Request):
+        admin(request)
+        need_tickets()
+        u, tier, length, currency = grant_args(await _json(request))
+        return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time())
+
+    @app.post("/api/admin/tickets")
+    async def ticket_grant(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        u, tier, length, currency = grant_args(body)
+        remove = [(str(r.get("kind", "")), str(r.get("scope") or "*")) for r in body.get("remove_limits") or [] if isinstance(r, dict)]
+        t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
+                        remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")))
+        return {"ok": True, "ticket": t}
+
+    @app.post("/api/admin/tickets/{tid}/cancel")
+    async def ticket_cancel(request: Request, tid: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        return {"ok": True, **ticket_call(tickets.cancel, conn, cfg, actor["id"], tid)}
+
+    @app.post("/api/admin/tickets/{tid}/bonus")
+    async def ticket_bonus(request: Request, tid: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        try:
+            share = float(body.get("share_pct") or 0)
+            days = int(body.get("extra_days") or 0)
+            starts_at = None if body.get("starts_at") in (None, "") else int(body["starts_at"])
+            ends_at = None if body.get("ends_at") in (None, "") else int(body["ends_at"])
+        except (TypeError, ValueError):
+            fail(400, "share_pct, extra_days, starts_at and ends_at must be numbers.")
+        r = ticket_call(tickets.add_bonus, conn, cfg, actor["id"], tid, share_pct=share, extra_days=days, starts_at=starts_at, ends_at=ends_at,
+                        note=str(body.get("note") or ""))
+        return {"ok": True, **r}
+
+    @app.get("/api/admin/capacity")
+    async def capacity(request: Request):
+        admin(request)
+        need_tickets()
+        now = time.time()
+        util = {}
+        for b in BUCKETS:
+            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+            util[b] = {"utilization_pct": att["utilization_pct"], "stale": att["stale"]}
+        return {**tickets.capacity(conn, cfg, now), "utilization": util}
 
     # ---------- page ----------
 

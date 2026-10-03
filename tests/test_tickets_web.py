@@ -87,3 +87,69 @@ async def test_session_carries_the_ticket_settings_for_admins_only(env):
     assert t["tiers"]["standard"] == {"label": "Standard", "share_pct": 25, "compare": "Claude Max 5x"} and t["how_to_buy"].startswith("Send")
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/session", headers=bearer(keys["alice"]))).json()["tickets"] == {"enabled": True}
+
+
+async def test_preview_grant_list_and_users_state(env):
+    gw, conn, cfg, ids, keys = env
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["alice"], "cost_total", "*", "5", "usd"))
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["alice"], "tokens_daily", "*", "9", "weighted"))
+    async with admin_client(gw) as c:
+        p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).json()
+        assert (p["usd"], p["amount"], p["available"], p["queued"], p["credit"], p["first_ticket"]) == (8, 7.5, True, False, True, True)
+        assert [r["kind"] for r in p["limit_rows"]] == ["tokens_daily"]
+        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR", "note": "paid 7.50",
+                                                      "remove_limits": [{"kind": "tokens_daily", "scope": "*"}]})
+        assert r.status_code == 200, r.text
+        t = r.json()["ticket"]
+        assert (t["user_name"], t["amount"], t["note"]) == ("alice", 7.5, "paid 7.50")
+        assert conn.execute("SELECT COUNT(*) FROM limits WHERE user_id=?", (ids["alice"],)).fetchone()[0] == 0
+        lst = (await c.get(f"/api/admin/tickets?user_id={ids['alice']}")).json()["tickets"]
+        assert lst[0]["id"] == t["id"] and lst[0]["state"] == "active" and lst[0]["granted_by_name"] == "admin" and lst[0]["bonuses"] == []
+        users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
+        assert users["alice"]["ticket"]["gated"] and users["alice"]["ticket"]["live"] and users["alice"]["ticket"]["current"]["id"] == t["id"]
+        assert users["admin"]["ticket"] == {"gated": False, "live": False, "current": None, "queued": None}
+        # A second grant queues after the first; the preview says so.
+        p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "day", "currency": "USD"})).json()
+        assert p["queued"] is True and p["starts_at"] == t["ends_at"]
+    actions = [r[0] for r in conn.execute("SELECT action FROM audit_log ORDER BY id")]
+    assert actions[-3:] == ["credit_removed", "limit_clear", "ticket_grant"]
+
+
+async def test_grant_refusals_map_to_400_and_409(env):
+    gw, conn, cfg, ids, keys = env
+    cfg.tickets.max_sold_pct = 5
+    async with admin_client(gw) as c:
+        assert (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
+        bob = (await c.post("/api/admin/users", json={"name": "bob"})).json()["id"]
+        r = await c.post("/api/admin/tickets", json={"user": bob, "tier": "lite", "length": "day", "currency": "USD"})
+        assert r.status_code == 409 and "Not enough capacity" in r.json()["error"]
+        assert (await c.post("/api/admin/tickets", json={"user": "nobody", "tier": "lite", "length": "day", "currency": "USD"})).status_code == 404
+        assert (await c.post("/api/admin/tickets", json={"user": bob, "tier": "gold", "length": "day", "currency": "USD"})).status_code == 400
+        conn.execute("UPDATE fx_rates SET set_at=?", (int(time.time()) - 40 * 3600,))
+        cfg.tickets.max_sold_pct = 80
+        r = await c.post("/api/admin/tickets", json={"user": bob, "tier": "lite", "length": "day", "currency": "EUR"})
+        assert r.status_code == 400 and "hours old" in r.json()["error"]
+        r = await c.post("/api/admin/tickets", json={"user": bob, "tier": "lite", "length": "day", "currency": "EUR", "confirm_stale_rate": True})
+        assert r.status_code == 200
+
+
+async def test_cancel_bonus_capacity_and_ungate(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        t = (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "standard", "length": "week", "currency": "USD"})).json()["ticket"]
+        r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": 5, "extra_days": 1, "note": "welcome"})
+        assert r.status_code == 200 and r.json()["bonus"]["note"] == "welcome" and r.json()["ticket"]["effective_end"] == t["ends_at"] + DAY
+        assert (await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": 0, "extra_days": 0})).status_code == 400
+        assert (await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": "five"})).status_code == 400
+        cap = (await c.get("/api/admin/capacity")).json()
+        assert (cap["sold_now_pct"], cap["peak_30d_pct"], cap["max_sold_pct"]) == (30, 30, 80) and set(cap["utilization"]) == {"5h", "7d"}
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/ungate")).status_code == 400          # live ticket
+        r = await c.post(f"/api/admin/tickets/{t['id']}/cancel")
+        assert r.status_code == 200 and r.json()["moved"] == 0 and r.json()["dates_kept"] is False
+        assert (await c.get("/api/admin/capacity")).json()["sold_now_pct"] == 0
+        assert (await c.post(f"/api/admin/tickets/{t['id']}/cancel")).status_code == 400
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/ungate")).status_code == 200
+        users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
+        assert users["alice"]["ticket"]["gated"] is False
+        assert (await c.get("/api/admin/tickets")).json()["tickets"][0]["state"] == "cancelled"
+    assert [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE action IN ('ticket_bonus','ticket_cancel','ungate') ORDER BY id")] == ["ticket_bonus", "ticket_cancel", "ungate"]
