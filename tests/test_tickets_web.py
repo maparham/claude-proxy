@@ -153,3 +153,78 @@ async def test_cancel_bonus_capacity_and_ungate(env):
         assert users["alice"]["ticket"]["gated"] is False
         assert (await c.get("/api/admin/tickets")).json()["tickets"][0]["state"] == "cancelled"
     assert [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE action IN ('ticket_bonus','ticket_cancel','ungate') ORDER BY id")] == ["ticket_bonus", "ticket_cancel", "ungate"]
+
+
+async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    tickets.create_discount(conn, cfg, "lite", "month", 15, now - 10, now + DAY, ids["admin"], now=now)
+    cfg.tickets.max_sold_pct = 25
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=now)
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/pricing")
+        assert r.status_code == 200
+        p = r.json()
+    assert p["currency"] == "EUR" and p["rate_set_at"] is not None and p["how_to_buy"].startswith("Send")
+    lite = next(t for t in p["tiers"] if t["tier"] == "lite")
+    assert lite["compare"] == "Claude Pro" and lite["lengths"]["month"] == {
+        "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5, "sold_out": True}   # 25 sold: nothing fits today
+    assert lite["lengths"]["week"]["sold_out"] is True and lite["lengths"]["week"]["discount_ends_at"] is None
+    assert lite["hours"] == {"sonnet": {"per_5h": None, "per_day": None}, "opus": {"per_5h": None, "per_day": None}}
+    text = r.text
+    for leaked in ("utilization", "alice", "sold_now", "shares"):
+        assert leaked not in text
+
+
+async def test_pricing_falls_back_to_usd_without_a_rate(env):
+    gw, conn, cfg, ids, keys = env
+    conn.execute("DELETE FROM fx_rates")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        p = (await c.get("/api/pricing")).json()
+        page = await c.get("/pricing")
+    assert p["currency"] == "USD" and p["rate_set_at"] is None
+    assert next(t for t in p["tiers"] if t["tier"] == "lite")["lengths"]["day"]["amount"] == 3.0
+    assert page.status_code == 200 and "pricing.js?v=" in page.text and "app.css?v=" in page.text
+    assert page.headers["content-security-policy"].startswith("default-src 'self'")
+
+
+async def test_pricing_reads_only_usage_estimates(env):
+    gw, conn, cfg, ids, keys = env
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (int(time.time()), "sonnet", "5h", 80, 1.25))
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (int(time.time()), "sonnet", "7d", 80, 0.25))
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (int(time.time()), "opus", "5h", 10, 5.0))
+    conn.execute("DELETE FROM requests")
+    conn.execute("DELETE FROM quota_snapshots")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        p = (await c.get("/api/pricing")).json()
+    lite = next(t for t in p["tiers"] if t["tier"] == "lite")
+    assert lite["hours"] == {"sonnet": {"per_5h": 4.0, "per_day": 2.8}, "opus": {"per_5h": None, "per_day": None}}   # 5/1.25; (5/7)/0.25 = 2.857
+
+
+async def test_pricing_is_404_when_tickets_are_off(env):
+    gw, conn, cfg, ids, keys = env
+    cfg.tickets.enabled = False
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/pricing")).status_code == 404
+        assert (await c.get("/pricing")).status_code == 404
+
+
+async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_account(env):
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=now - 3600)
+    tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=2, extra_days=1, note="welcome", now=now)
+    q = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "EUR", now=now)
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
+    assert me["enabled"] and me["gated"]
+    cur = me["current"]
+    assert (cur["id"], cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == (t["id"], "Lite", 5, 1, 2)
+    assert cur["effective_end"] == t["ends_at"] + DAY and cur["day_end"] == t["starts_at"] + DAY
+    assert cur["bonuses"] == [{"share_pct": 2, "note": "welcome", "ends_at": t["ends_at"] + DAY}]
+    assert (me["queued"]["id"], me["queued"]["starts_at"]) == (q["id"], t["ends_at"] + DAY)
+    assert me["prices"]["currency"] == "EUR" and me["how_to_buy"].startswith("Send")
+    for leaked in ("utilization", "sold_now", "shares", "granted_by"):
+        assert leaked not in str(me)
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/me/tickets")).status_code == 401

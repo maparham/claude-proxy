@@ -951,6 +951,44 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             util[b] = {"utilization_pct": att["utilization_pct"], "stale": att["stale"]}
         return {**tickets.capacity(conn, cfg, now), "utilization": util}
 
+    def display_currency() -> str:
+        return next(iter(cfg.tickets.currencies), "USD")
+
+    @app.get("/api/pricing")
+    async def pricing_api():
+        # Public: prices, discounts, the rate date, the usage hints and whether a purchase is possible. Nothing else.
+        need_tickets()
+        return tickets.price_table(conn, cfg, time.time(), display_currency())
+
+    @app.get("/pricing")
+    async def pricing_page():
+        need_tickets()
+        return HTMLResponse(versioned("pricing.html", ("pricing.js", "app.css")), headers=PAGE_HEADERS)
+
+    @app.get("/api/me/tickets")
+    async def me_tickets(request: Request):
+        user = principal(request)
+        if not cfg.tickets.enabled:
+            return {"enabled": False}
+        now = time.time()
+        st = tickets.user_state(conn, user["id"], now)
+        label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
+        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "how_to_buy": cfg.tickets.how_to_buy}
+        cur = st["current"]
+        if cur:
+            out["current"] = {"id": cur["id"], "tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
+                              "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
+                              "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "day_end": tickets.current_day(cur, now)[1],
+                              "bonus_share": tickets.bonus_share(conn, cur["id"], now),
+                              "bonuses": [{"share_pct": b["share_pct"], "note": b["note"], "ends_at": b["ends_at"]}
+                                          for b in tickets.active_bonuses(conn, cur["id"], now)]}
+        if st["queued"]:
+            q = st["queued"]
+            out["queued"] = {"id": q["id"], "tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+        currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
+        out["prices"] = tickets.price_table(conn, cfg, now, currency)
+        return out
+
     # ---------- page ----------
 
     @app.get("/")
@@ -964,15 +1002,19 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#authorize"
         return RedirectResponse(f"{page}/{code[:4]}-{code[4:]}" if len(code) == 8 else page)
 
+    def versioned(page: str, assets: tuple[str, ...]) -> str:
+        """The page with each asset URL carrying its content hash, so a CDN or browser cache picks up a deploy."""
+        html = (STATIC / page).read_text()
+        for name in assets:
+            v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
+            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
+        return html
+
     # Asset URLs carry a content hash, so a CDN or browser that caches them still picks up a deploy.
     @app.get("/dashboard")
     @app.get("/admin")   # the same page, offering the admin's password sign-in instead of Clerk and keys
     async def page():
-        html = (STATIC / "index.html").read_text()
-        for name in ("app.js", "app.css"):
-            v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
-            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
-        return HTMLResponse(html, headers=PAGE_HEADERS)
+        return HTMLResponse(versioned("index.html", ("app.js", "app.css")), headers=PAGE_HEADERS)
 
     @app.get("/privacy")
     async def privacy():

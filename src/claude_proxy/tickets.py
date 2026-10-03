@@ -507,3 +507,25 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
     """For the Users page: whether the user is ticket-gated and which ticket covers now or is queued next."""
     current, queued = covering(conn, user_id, now), next_queued(conn, user_id, now)
     return {"gated": is_gated(conn, user_id), "current": current, "queued": queued, "live": current is not None or queued is not None}
+
+
+def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str) -> dict:
+    """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
+    amounts, a sold-out flag and the usage hints. Nothing about who holds what. Falls back to USD without a rate."""
+    from . import estimates   # here, not at the top: estimates imports quota, which has nothing to do with tickets
+    now = _now(now)
+    rate = current_rate(conn, currency)
+    if rate is None:
+        currency, rate = "USD", current_rate(conn, "USD")
+    step = currencies(cfg)[currency]
+    tiers = []
+    for tid, t in cfg.tickets.tiers.items():
+        lengths = {}
+        for length in LENGTHS:
+            p = price_now(conn, tid, length, now)
+            lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
+                               "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
+                               "sold_out": sold_out(conn, cfg, tid, length, now)}
+        tiers.append({"tier": tid, "label": t.label, "share_pct": t.share_pct, "compare": t.compare,
+                      "hours": estimates.hours_hint(conn, t.share_pct), "lengths": lengths})
+    return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers}

@@ -319,3 +319,5 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
   .meter > span, .stack > span { forced-color-adjust: none; }
 }
 .pill[hidden] { display: none; }
+.pricing s { text-decoration-thickness: 1px; }
+.pricing .data td { vertical-align: top; }
