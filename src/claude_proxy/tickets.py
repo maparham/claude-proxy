@@ -382,3 +382,128 @@ def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now:
     except CapacityError:
         return True
     return False
+
+
+# ---------- cancel, bonus, queue moves ----------
+
+def _later_tickets(conn, user_id: int, from_t: int) -> list[dict]:
+    """The user's non-cancelled tickets starting at or after `from_t`, earliest first."""
+    return [dict(r) for r in conn.execute(f"SELECT {TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
+                                          f"AND t.starts_at>=? ORDER BY t.starts_at, t.id", (user_id, from_t))]
+
+
+def _shift(conn, cfg: Config, chain: list[dict], delta: int) -> None:
+    """Move a user's queued tickets by `delta` seconds, bonus periods with them, each re-checked at its new place.
+    Moves toward the past go earliest-first and moves toward the future latest-first, so a moving ticket never meets
+    its own neighbour. One savepoint: a move that does not fit undoes them all and raises CapacityError."""
+    conn.execute("SAVEPOINT moves")
+    try:
+        for tk in (chain if delta < 0 else reversed(chain)):
+            s, e = tk["starts_at"] + delta, tk["effective_end"] + delta
+            check_capacity(conn, cfg, tk["account_id"], tk["share_pct"], s, e, exclude=tk["id"])
+            for b in bonuses(conn, tk["id"]):
+                if b["cancelled_at"] is None and b["share_pct"] > 0:
+                    check_capacity(conn, cfg, tk["account_id"], tk["share_pct"] + b["share_pct"], b["starts_at"] + delta,
+                                   b["ends_at"] + delta, exclude=tk["id"])
+            conn.execute("UPDATE tickets SET starts_at=starts_at+?, ends_at=ends_at+? WHERE id=?", (delta, delta, tk["id"]))
+            conn.execute("UPDATE ticket_bonuses SET starts_at=starts_at+?, ends_at=ends_at+? WHERE ticket_id=? AND cancelled_at IS NULL",
+                         (delta, delta, tk["id"]))
+        conn.execute("RELEASE moves")
+    except BaseException:
+        conn.execute("ROLLBACK TO moves")
+        conn.execute("RELEASE moves")
+        raise
+
+
+def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, now: float | None = None) -> dict:
+    """Free the slice and end the ticket's bonuses. The user's queued tickets move forward to close the gap, each
+    re-checked; if one would not fit they keep their dates and `dates_kept` says so. Never refused."""
+    now = _now(now)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        t = get(conn, ticket_id)
+        if t["cancelled_at"] is not None:
+            raise TicketError("This ticket is already cancelled.")
+        conn.execute("UPDATE tickets SET cancelled_at=?, cancelled_by=? WHERE id=?", (now, actor, ticket_id))
+        conn.execute("UPDATE ticket_bonuses SET cancelled_at=?, cancelled_by=? WHERE ticket_id=? AND cancelled_at IS NULL", (now, actor, ticket_id))
+        moved, kept, reason = 0, False, None
+        chain = _later_tickets(conn, t["user_id"], t["effective_end"]) if t["user_id"] is not None else []
+        if chain:
+            shift = max(now, t["starts_at"]) - chain[0]["starts_at"]   # a queued ticket never starts in the past
+            if shift < 0:
+                try:
+                    _shift(conn, cfg, chain, shift)
+                    moved = len(chain)
+                except CapacityError as e:
+                    kept, reason = True, str(e)
+        db.audit(conn, actor, "ticket_cancel", t["user_name"], {"ticket_id": ticket_id, "moved": moved, "dates_kept": kept})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return {"ticket": get(conn, ticket_id), "moved": moved, "dates_kept": kept, "reason": reason}
+
+
+def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, share_pct=0, extra_days=0, starts_at=None,
+              ends_at=None, note: str = "", now: float | None = None) -> dict:
+    """Extra share for a period inside the ticket, extra days at the ticket's share, or both. Extra days push the user's
+    queued tickets forward; each move and the extension itself are checked against capacity, and one failure refuses
+    the whole bonus."""
+    now = _now(now)
+    share_pct = float(share_pct or 0)
+    extra_days = int(extra_days or 0)
+    if share_pct < 0 or extra_days < 0 or (share_pct == 0 and extra_days == 0):
+        raise TicketError("A bonus needs extra share above 0, extra days above 0, or both.")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        t = get(conn, ticket_id)
+        if t["cancelled_at"] is not None:
+            raise TicketError("The ticket is cancelled; bonuses go on live tickets.")
+        old_end, new_end, moved = t["effective_end"], t["effective_end"] + extra_days * DAY, 0
+        if extra_days:
+            chain = _later_tickets(conn, t["user_id"], old_end) if t["user_id"] is not None else []
+            if chain and chain[0]["starts_at"] < new_end:
+                try:
+                    _shift(conn, cfg, chain, new_end - chain[0]["starts_at"])
+                    moved = len(chain)
+                except CapacityError as e:
+                    raise CapacityError(f"The extra days would move {t['user_name']}'s queued ticket, which then does not fit: {e}") from e
+            check_capacity(conn, cfg, t["account_id"], t["share_pct"], old_end, new_end)
+        if share_pct:
+            s = max(int(now if starts_at is None else starts_at), t["starts_at"])
+            e = min(int(new_end if ends_at is None else ends_at), new_end)
+            if s >= e:
+                raise TicketError("The bonus share period must lie within the ticket's period.")
+            check_capacity(conn, cfg, t["account_id"], share_pct, s, e)
+        else:
+            s, e = old_end, new_end
+        cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
+                           "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, (note or "").strip() or None, actor, now))
+        db.audit(conn, actor, "ticket_bonus", t["user_name"], {"ticket_id": ticket_id, "bonus_id": cur.lastrowid, "share_pct": share_pct,
+                                                               "extra_days": extra_days, "starts_at": s, "ends_at": e, "moved": moved})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return {"bonus": dict(conn.execute("SELECT * FROM ticket_bonuses WHERE id=?", (cur.lastrowid,)).fetchone()),
+            "ticket": get(conn, ticket_id), "moved": moved}
+
+
+def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float | None = None) -> int:
+    """Stop the user's tickets from gating them (spec section 7, Exit). Only for a user with no active or queued
+    ticket. The tickets remain as sales records. Returns how many rows were marked."""
+    now = _now(now)
+    name = db._user_name(conn, user_id)
+    if covering(conn, user_id, now) or next_queued(conn, user_id, now):
+        raise TicketError(f"{name} has an active or queued ticket; cancel it before ungating.")
+    n = conn.execute("UPDATE tickets SET ungated_at=? WHERE user_id=? AND ungated_at IS NULL", (now, user_id)).rowcount
+    if n == 0:
+        raise TicketError(f"{name} has no tickets to ungate.")
+    db.audit(conn, actor, "ungate", name, {"tickets": n})
+    return n
+
+
+def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
+    """For the Users page: whether the user is ticket-gated and which ticket covers now or is queued next."""
+    current, queued = covering(conn, user_id, now), next_queued(conn, user_id, now)
+    return {"gated": is_gated(conn, user_id), "current": current, "queued": queued, "live": current is not None or queued is not None}

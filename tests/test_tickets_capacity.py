@@ -187,3 +187,158 @@ def test_current_day_steps_from_the_ticket_start(db):
     assert tickets.current_day(t, NOW + DAY - 1) == (NOW, NOW + DAY)
     assert tickets.current_day(t, NOW + DAY) == (NOW + DAY, NOW + 2 * DAY)
     assert tickets.current_day(t, NOW + 6 * DAY + 5) == (NOW + 6 * DAY, NOW + 7 * DAY)
+
+
+def bonus(conn, cfg, ids, tid, **kw):
+    return tickets.add_bonus(conn, cfg, ids["admin"], tid, now=kw.pop("now", NOW), **kw)
+
+
+def test_cancel_frees_the_slice_and_ends_bonuses(db):
+    conn, cfg, ids = seeded(db)
+    t = grant(conn, cfg, ids, tier="standard", length="week")
+    bonus(conn, cfg, ids, t["id"], share_pct=5, starts_at=NOW, ends_at=NOW + DAY, note="welcome")
+    assert tickets.sold_at(conn, 1, NOW + 10) == 30
+    r = tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 100)
+    assert r["ticket"]["cancelled_at"] == NOW + 100 and r["ticket"]["cancelled_by"] == ids["admin"]
+    assert tickets.sold_at(conn, 1, NOW + 200) == 0
+    assert tickets.bonuses(conn, t["id"])[0]["cancelled_at"] == NOW + 100
+    assert tickets.covering(conn, ids["alice"], NOW + 200) is None
+    assert tickets.is_gated(conn, ids["alice"])                      # a cancelled ticket still gates
+    with pytest.raises(tickets.TicketError, match="already cancelled"):
+        tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 300)
+    assert conn.execute("SELECT action FROM audit_log WHERE action='ticket_cancel'").fetchone() is not None
+
+
+def test_cancel_moves_queued_tickets_forward_to_close_the_gap(db):
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, length="week")                                  # [0, 7d)
+    b = grant(conn, cfg, ids, length="week", now=NOW + 10)                    # [7d, 14d)
+    c = grant(conn, cfg, ids, length="day", now=NOW + 20)                     # [14d, 15d)
+    bonus(conn, cfg, ids, b["id"], share_pct=1, starts_at=NOW + 8 * DAY, ends_at=NOW + 9 * DAY)
+    r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + DAY)       # active: the next one starts now
+    assert (r["moved"], r["dates_kept"]) == (2, False)
+    b2, c2 = tickets.get(conn, b["id"]), tickets.get(conn, c["id"])
+    assert (b2["starts_at"], b2["ends_at"]) == (NOW + DAY, NOW + 8 * DAY)
+    assert (c2["starts_at"], c2["ends_at"]) == (NOW + 8 * DAY, NOW + 9 * DAY)
+    bb = tickets.bonuses(conn, b["id"])[0]
+    assert (bb["starts_at"], bb["ends_at"]) == (NOW + 2 * DAY, NOW + 3 * DAY)   # bonus period moved with its ticket
+    assert tickets.covering(conn, ids["alice"], NOW + DAY)["id"] == b["id"]
+
+
+def test_cancelling_a_queued_ticket_moves_the_rest_to_its_start(db):
+    conn, cfg, ids = seeded(db)
+    grant(conn, cfg, ids, length="day")                                        # [0, 1d)
+    b = grant(conn, cfg, ids, length="day", now=NOW + 10)                      # [1d, 2d)
+    c = grant(conn, cfg, ids, length="day", now=NOW + 20)                      # [2d, 3d)
+    tickets.cancel(conn, cfg, ids["admin"], b["id"], now=NOW + 100)
+    assert tickets.get(conn, c["id"])["starts_at"] == NOW + DAY
+
+
+def test_cancel_never_refused_dates_kept_when_a_move_does_not_fit(db):
+    conn, cfg, ids = seeded(db)
+    bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
+    a = grant(conn, cfg, ids, tier="standard", length="day")                   # alice 25% day 0
+    b = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 10)     # alice 25% day 1
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day")            # bob 25% day 0
+    grant(conn, cfg, ids, who="carol", tier="standard", length="day")          # carol 25% day 0: day 0 = 75 of 80
+    cfg.tickets.max_sold_pct = 50                                              # the admin lowers the ceiling: day 0 is now over it
+    r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + 100)        # b cannot move onto day 0 (50 + 25 > 50)
+    assert (r["moved"], r["dates_kept"]) == (0, True) and "Not enough capacity" in r["reason"]
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + DAY                # b kept its date
+    assert tickets.get(conn, a["id"])["cancelled_at"] == NOW + 100             # but a is cancelled all the same
+
+
+def test_bonus_validation(db):
+    conn, cfg, ids = seeded(db)
+    t = grant(conn, cfg, ids)
+    for kw in ({}, {"share_pct": 0, "extra_days": 0}, {"share_pct": -1}, {"extra_days": -1}):
+        with pytest.raises(tickets.TicketError):
+            bonus(conn, cfg, ids, t["id"], **kw)
+    with pytest.raises(tickets.TicketError, match="within the ticket"):
+        bonus(conn, cfg, ids, t["id"], share_pct=1, starts_at=NOW + 8 * DAY, ends_at=NOW + 9 * DAY)   # after the ticket
+    tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW)
+    with pytest.raises(tickets.TicketError, match="cancelled"):
+        bonus(conn, cfg, ids, t["id"], extra_days=1)
+
+
+def test_bonus_share_is_clamped_checked_and_counted(db):
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.max_sold_pct = 30
+    t = grant(conn, cfg, ids, tier="standard", length="week")                  # 25%
+    r = bonus(conn, cfg, ids, t["id"], share_pct=5, starts_at=NOW - DAY, ends_at=NOW + 30 * DAY, note="thanks")
+    assert (r["bonus"]["starts_at"], r["bonus"]["ends_at"], r["bonus"]["note"]) == (NOW, NOW + 7 * DAY, "thanks")
+    assert tickets.bonus_share(conn, t["id"], NOW + DAY) == 5 and tickets.bonus_share(conn, t["id"], NOW + 7 * DAY) == 0
+    with pytest.raises(tickets.CapacityError):
+        bonus(conn, cfg, ids, t["id"], share_pct=1)                           # 25 + 5 + 1 > 30
+    assert conn.execute("SELECT action, target FROM audit_log WHERE action='ticket_bonus'").fetchone()[:] == ("ticket_bonus", "alice")
+
+
+def test_bonus_days_extend_at_the_ticket_share_and_push_queued_tickets(db):
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, length="week")                                   # [0, 7d)
+    b = grant(conn, cfg, ids, length="day", now=NOW + 10)                      # [7d, 8d)
+    c = grant(conn, cfg, ids, length="day", now=NOW + 20)                      # [8d, 9d)
+    r = bonus(conn, cfg, ids, a["id"], extra_days=2, note="sorry for the outage")
+    assert r["moved"] == 2 and r["ticket"]["effective_end"] == NOW + 9 * DAY and r["ticket"]["ends_at"] == NOW + 7 * DAY
+    assert (r["bonus"]["share_pct"], r["bonus"]["extra_days"], r["bonus"]["starts_at"], r["bonus"]["ends_at"]) == (0, 2, NOW + 7 * DAY, NOW + 9 * DAY)
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + 9 * DAY
+    assert tickets.get(conn, c["id"])["starts_at"] == NOW + 10 * DAY
+    assert tickets.sold_at(conn, 1, NOW + 8 * DAY) == 5                        # the extension counts at the ticket share
+    assert tickets.covering(conn, ids["alice"], NOW + 8 * DAY)["id"] == a["id"]
+    assert tickets.current_day(tickets.get(conn, a["id"]), NOW + 8 * DAY + 5) == (NOW + 8 * DAY, NOW + 9 * DAY)   # same boundaries
+
+
+def test_bonus_days_refused_when_a_moved_ticket_does_not_fit(db):
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.max_sold_pct = 50
+    bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
+    a = grant(conn, cfg, ids, tier="standard", length="day")                   # alice day 0
+    b = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 10)     # alice day 1
+    # the EUR rate from seeded() is days old by now
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 2 * DAY, confirm_stale_rate=True)     # bob day 2
+    grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=NOW + 2 * DAY, confirm_stale_rate=True)   # carol day 2: day 2 = 50
+    # An extra day on a extends it over day 1, so b must move onto day 2, which is full.
+    with pytest.raises(tickets.CapacityError, match="queued ticket"):
+        bonus(conn, cfg, ids, a["id"], extra_days=1)
+    assert tickets.get(conn, a["id"])["effective_end"] == NOW + DAY           # nothing applied
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + DAY
+    assert conn.execute("SELECT COUNT(*) FROM ticket_bonuses").fetchone()[0] == 0
+
+
+def test_bonus_days_on_an_ended_ticket_make_it_cover_now_with_the_old_day_boundaries(db):
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, length="day")                                    # [0, 1d)
+    later = NOW + DAY + 3600                                                   # an hour after it ended
+    assert tickets.covering(conn, ids["alice"], later) is None
+    bonus(conn, cfg, ids, a["id"], extra_days=1, now=later)
+    t = tickets.covering(conn, ids["alice"], later)
+    assert t["id"] == a["id"] and t["effective_end"] == NOW + 2 * DAY
+    assert tickets.current_day(t, later) == (NOW + DAY, NOW + 2 * DAY)
+
+
+def test_ungate_only_without_live_tickets(db):
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, length="day")
+    with pytest.raises(tickets.TicketError, match="active or queued"):
+        tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 100)
+    tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + 100)
+    b = grant(conn, cfg, ids, length="day", now=NOW + 200)
+    conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (NOW + 5 * DAY, NOW + 6 * DAY, b["id"]))   # queued
+    with pytest.raises(tickets.TicketError, match="active or queued"):
+        tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 300)
+    assert tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 7 * DAY) == 2
+    assert tickets.is_gated(conn, ids["alice"]) is False
+    assert conn.execute("SELECT COUNT(*) FROM tickets WHERE user_id=?", (ids["alice"],)).fetchone()[0] == 2   # records stay
+    assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()[:] == ("ungate", "alice")
+    with pytest.raises(tickets.TicketError, match="no tickets"):
+        tickets.ungate(conn, ids["admin"], ids["admin"], now=NOW)
+
+
+def test_user_state_summarises_gating_and_live_tickets(db):
+    conn, cfg, ids = seeded(db)
+    assert tickets.user_state(conn, ids["alice"], NOW) == {"gated": False, "current": None, "queued": None, "live": False}
+    a = grant(conn, cfg, ids, length="day")
+    s = tickets.user_state(conn, ids["alice"], NOW + 10)
+    assert s["gated"] and s["live"] and s["current"]["id"] == a["id"] and s["queued"] is None
+    s = tickets.user_state(conn, ids["alice"], NOW + 2 * DAY)
+    assert s == {"gated": True, "current": None, "queued": None, "live": False}
