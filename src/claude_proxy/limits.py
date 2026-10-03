@@ -12,7 +12,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import quota
+from . import quota, tickets
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 from .usage import SUMS, Totals, price_totals, priced_sql
@@ -60,6 +60,9 @@ class LimitState:
     exceeded: bool = False
     skipped: str | None = None
     estimated: bool = False
+    no_live_data: bool = False    # estimated from the user's weighted tokens because account snapshots are stale
+    resets_at: float | None = None
+    tier: str | None = None       # the ticket's tier label, for messages
 
     @property
     def pct(self) -> float | None:
@@ -71,7 +74,8 @@ class LimitState:
         return {"kind": self.kind, "scope": self.scope, "value": self.value, "unit": self.unit,
                 "current": self.current, "limit": self.limit, "remaining": self.remaining,
                 "reset_in": self.reset_in, "exceeded": self.exceeded, "skipped": self.skipped,
-                "estimated": self.estimated, "pct": self.pct}
+                "estimated": self.estimated, "pct": self.pct,
+                "no_live_data": self.no_live_data, "resets_at": self.resets_at, "tier": self.tier}
 
 
 def validate(kind: str, scope: str, value: str, unit: str | None) -> tuple[str, str, str]:
@@ -187,10 +191,94 @@ def _share_state(conn, cfg, user_id, row, now) -> LimitState:
     return st
 
 
+def _date(t: float) -> str:
+    return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(t))
+
+
+def _gated(conn, cfg, user_id) -> bool:
+    return cfg.tickets.enabled and tickets.is_gated(conn, user_id)
+
+
+def _weighted_since(conn, cfg, user_id, since, now) -> float:
+    groups = conn.execute(f"SELECT model, {SUMS} FROM requests WHERE user_id=? AND provider='anthropic' AND rejected_by IS NULL "
+                          f"AND path!=? AND ended_at>? AND ended_at<=? GROUP BY model", (user_id, COUNT_TOKENS_PATH, since, now)).fetchall()
+    return sum(price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])).weighted for g in groups)
+
+
+def _finish(st: LimitState) -> LimitState:
+    st.remaining = max(0.0, st.limit - st.current)
+    st.exceeded = st.current >= st.limit
+    return st
+
+
+def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
+    st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share, estimated=True, tier=label)
+    att = quota.attribution(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    if att["resets_at"] and att["resets_at"] > now:
+        st.resets_at, st.reset_in = att["resets_at"], max(1, int(att["resets_at"] - now))
+    if att["utilization_pct"] is not None and not att["stale"]:
+        st.current = att["shares"].get(user_id, 0.0)
+        return _finish(st)
+    rate = quota.observed_rate(conn, cfg.pricing, "5h", now)
+    if rate is None:
+        st.skipped = NO_RATE
+        return st
+    # Counting starts at the last known window start, or at the stale snapshot's reset time once that has passed.
+    start = att["window_start"] if att["window_start"] is not None else now - 5 * HOUR
+    if att["resets_at"] and att["resets_at"] <= now:
+        start = att["resets_at"]
+    st.current, st.no_live_data = _weighted_since(conn, cfg, user_id, start, now) / rate, True
+    return _finish(st)
+
+
+def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> LimitState:
+    limit = share / 7
+    st = LimitState("share_day", "*", f"{limit:g}", "pct", limit=limit, estimated=True, tier=label,
+                    resets_at=day_end, reset_in=max(1, int(day_end - now)))
+    att = quota.attribution(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    if att["utilization_pct"] is not None and not att["stale"]:
+        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, day_start, now)
+        return _finish(st)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    if rate is None:
+        st.skipped = NO_RATE
+        return st
+    st.current, st.no_live_data = _weighted_since(conn, cfg, user_id, day_start, now) / rate, True
+    return _finish(st)
+
+
+def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | None = None) -> list[LimitState]:
+    """The two share limits a ticket builds (spec section 7): share_5h against Anthropic's 5-hour window, and share_day,
+    one seventh of the share, against the weekly bucket's share attributed since the current ticket day began."""
+    t = ticket or tickets.covering(conn, user_id, now)
+    if t is None:
+        return []
+    share = t["share_pct"] + tickets.bonus_share(conn, t["id"], now)
+    label = cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]
+    day_start, day_end = tickets.current_day(t, now)
+    return [_ticket_5h(conn, cfg, user_id, share, label, now), _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now)]
+
+
+def _no_ticket_message(conn, cfg, user_id, now) -> str:
+    nxt = tickets.next_queued(conn, user_id, now)
+    if nxt:
+        return f"Your next ticket starts on {_date(nxt['starts_at'])}."
+    last = tickets.last_ended(conn, user_id, now)
+    when = _date(last["ended_at"]) if last else "an earlier date"
+    return f"Your ticket ended on {when}. {cfg.tickets.how_to_buy}".strip()
+
+
+def _perm(message: str) -> dict:
+    return {"type": "error", "error": {"type": "permission_error", "message": message}}
+
+
 def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | None = None) -> list[LimitState]:
     now = time.time() if now is None else now
+    gated = _gated(conn, cfg, user_id)
     out = []
     for row in _rows(conn, user_id):
+        if gated and row["kind"] in SHARE_BUCKETS:
+            continue   # the ticket's own share limits stand in for these while it gates the user
         if row["kind"] in WINDOWS:
             out.append(_window_state(conn, cfg, user_id, row, now))
         elif row["kind"] in TOTALS:
@@ -199,11 +287,16 @@ def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | Non
             out.append(_share_state(conn, cfg, user_id, row, now))
         else:
             out.append(LimitState(row["kind"], row["scope"], row["value"], row["unit"]))
+    if gated:
+        out.extend(ticket_states(conn, cfg, user_id, now))
     return out
 
 
-SHARE_LABELS = {"share_5h": "5-hour limit", "share_7d": "weekly limit"}
-USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit"}   # what a non-admin calls a share limit
+SHARE_LABELS = {"share_5h": "5-hour limit", "share_7d": "weekly limit", "share_day": "today's share"}
+USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit", "share_day": "today_limit"}   # what a non-admin calls a share limit
+TICKET = "ticket"                  # rejected_by: a ticket-gated user with no active ticket, or on a third-party model
+TICKET_NO_DATA = "ticket_no_data"  # rejected_by: the 503 while no usage rate was ever observed
+NO_RATE = "no usage rate observed yet"
 
 
 def _describe(st: LimitState) -> str:
@@ -211,6 +304,9 @@ def _describe(st: LimitState) -> str:
     # their own allowance, used up.
     scope = f" for models {st.scope}" if st.scope != "*" else ""
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
+    if st.kind == "share_day":
+        return (f"Today's share of your {st.tier} ticket is used up. It resets at "
+                f"{time.strftime('%H:%M UTC', time.gmtime(st.resets_at))}.")
     if st.kind in SHARE_LABELS:
         return f"Gateway {SHARE_LABELS[st.kind]}{scope} reached: {st.pct or 0:.0f}% used{wait}."
     if st.kind in TOTALS:
@@ -227,6 +323,7 @@ def user_view(st: LimitState) -> dict:
     """A limit as a non-admin sees it. Share limits become the user's own allowance (0-100% of it used),
     with nothing about the account they are a share of."""
     d = st.to_dict()
+    d.pop("resets_at", None)   # an account-side reset time; reset_in (already relative) is what a non-admin gets
     if st.kind not in SHARE_LABELS:
         return d
     used = None if st.skipped or st.current is None else st.pct
@@ -278,7 +375,16 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         return Decision(429, MAX_INFLIGHT, {"type": "error", "error": {"type": "rate_limit_error", "message":
                         f"Gateway limit max_inflight reached: {inflight} of {cfg.limits.max_inflight} requests in "
                         "flight; wait for one to finish."}}, 1)
+    gated = _gated(conn, cfg, user_id)
+    ticket = None
+    if gated:
+        ticket = tickets.covering(conn, user_id, now)
+        if ticket is None:   # every request, the model list included: there is no ticket to serve it on
+            return Decision(403, TICKET, _perm(_no_ticket_message(conn, cfg, user_id, now)))
     rows = _rows(conn, user_id)
+    if gated and third_party and not any(r["kind"].startswith("cost_") for r in rows):
+        # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set governs instead.
+        return Decision(403, TICKET, _perm("Your ticket covers Claude models only."))
     for row in rows:
         kind = row["kind"]
         if kind == "allowed_models":
@@ -295,7 +401,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         elif kind in TOTALS:
             st = _total_state(conn, cfg, user_id, row)
         elif kind in SHARE_BUCKETS:
-            if third_party:
+            if third_party or gated:
                 continue
             st = _share_state(conn, cfg, user_id, row, now)
         else:
@@ -305,6 +411,14 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         if st.exceeded:
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)
+    if gated and not is_count_tokens and not third_party:
+        for st in ticket_states(conn, cfg, user_id, now, ticket):
+            if st.skipped == NO_RATE:
+                return Decision(503, TICKET_NO_DATA, {"type": "error", "error": {"type": "api_error", "message":
+                                "Usage data is unavailable. Please retry in a minute."}}, 60)
+            if st.exceeded:
+                return Decision(429, st.kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
+                                st.reset_in or 60)
     # Everyone still on their sign-up credit shares one daily ceiling, so a crowd of new accounts can't use up the
     # subscription even if each stays within its own credit.
     if cfg.signup.free_daily_cap_usd > 0 and not is_count_tokens and any(r["kind"] in TOTALS for r in rows):
