@@ -14,6 +14,7 @@ import json
 import logging
 import re
 import sqlite3
+import statistics
 import time
 from dataclasses import dataclass
 from datetime import datetime
@@ -186,6 +187,77 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
         "window_start": win[0]["observed_at"],
         "history": history,
     }
+
+
+def _is_reset(prev, cur) -> bool:
+    """The same rule _window uses between two consecutive snapshots."""
+    if cur["resets_at"] and prev["resets_at"]:
+        return cur["resets_at"] - prev["resets_at"] > RESET_TOLERANCE_S
+    return cur["utilization_pct"] < prev["utilization_pct"]
+
+
+def _pairs(conn, pricing: Pricing, bucket: str, lo: float, now: float):
+    """Consecutive snapshot pairs of a bucket from `lo` to `now`, each with the forwarded Anthropic requests that ended
+    in between as (id, user_id, model, ended_at, weighted). Yields (prev, cur, requests)."""
+    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE bucket=? AND observed_at>=? "
+                        "AND observed_at<=? ORDER BY observed_at", (bucket, lo, now)).fetchall()
+    if len(rows) < 2:
+        return
+    span = "provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
+    bounds = (rows[0]["observed_at"], rows[-1]["observed_at"])
+    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
+    w, args = priced_sql(pricing, models, pricing.reference_input(), unpriced=raw_tokens_sql())
+    reqs = conn.execute(f"SELECT id, user_id, model, ended_at, {w} AS w FROM requests WHERE {span} ORDER BY ended_at, id",
+                        (*args, *bounds)).fetchall()
+    j = 0
+    for prev, cur in zip(rows, rows[1:]):
+        batch = []
+        while j < len(reqs) and reqs[j]["ended_at"] <= cur["observed_at"]:
+            batch.append(reqs[j])
+            j += 1
+        yield prev, cur, batch
+
+
+def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float) -> list[tuple]:
+    """(request_id, user_id, model, ended_at, points): each forwarded Anthropic request that ended after `since`, with
+    the percentage points of the bucket attributed to it: its weighted tokens' part of the rise over the snapshot pair
+    it ended in. Walking starts at the last snapshot at or before `since`, so an interval straddling `since` is split by
+    which requests ended after it. A reset restarts the high-water mark and attributes nothing for that pair."""
+    first = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket=? AND observed_at<=? ORDER BY observed_at DESC LIMIT 1",
+                         (bucket, since)).fetchone()
+    lo = first[0] if first else since
+    out, high = [], None
+    for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
+        if high is None:
+            high = prev["utilization_pct"]
+        if _is_reset(prev, cur):
+            high = cur["utilization_pct"]
+            continue
+        delta = cur["utilization_pct"] - high
+        high = max(high, cur["utilization_pct"])
+        total_w = sum(r["w"] for r in batch)
+        if delta <= 0 or total_w <= 0:
+            continue
+        out.extend((r["id"], r["user_id"], r["model"], r["ended_at"], delta * r["w"] / total_w) for r in batch if r["ended_at"] > since)
+    return out
+
+
+def attributed_since(conn: sqlite3.Connection, pricing: Pricing, bucket: str, user_id: int, since: float, now: float) -> float:
+    """The bucket's share attributed to one user's requests since `since` (a ticket day's start, spec section 7)."""
+    return sum(p for (_, uid, _, _, p) in request_shares(conn, pricing, bucket, since, now) if uid == user_id)
+
+
+def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7) -> float | None:
+    """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of snapshot pairs with
+    a rise above zero and at least one forwarded Anthropic request in between. None when no such pair exists, which can
+    only happen on an account that has never served a request. Used to estimate a share when snapshots are stale."""
+    ratios = []
+    for prev, cur, batch in _pairs(conn, pricing, bucket, now - days * 86400, now):
+        delta = cur["utilization_pct"] - prev["utilization_pct"]
+        total_w = sum(r["w"] for r in batch)
+        if not _is_reset(prev, cur) and delta > 0 and batch and total_w > 0:
+            ratios.append(total_w / delta)
+    return statistics.median(ratios) if ratios else None
 
 
 def buckets(conn: sqlite3.Connection, since: float) -> list[str]:
