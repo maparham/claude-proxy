@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from . import db, limits
+from . import db, estimates, limits
 from .config import Config, ConfigError
 from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
@@ -243,7 +243,7 @@ async def _serve(cfg: Config):
     ]
     print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
     print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
-    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_retention(conn, cfg))]
+    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_maintenance(conn, cfg))]
     running = [asyncio.create_task(s.serve()) for s in servers]
     try:
         await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
@@ -256,12 +256,15 @@ async def _serve(cfg: Config):
         await gw.aclose()
 
 
-async def _retention(conn, cfg: Config):
+async def _maintenance(conn, cfg: Config):
     while True:
         try:
             removed = db.cleanup(conn, cfg.retention_days)
             if any(removed.values()):
                 logger.info("retention cleanup: %s", removed)
+            done = estimates.refresh_if_due(conn, cfg)
+            if done:
+                logger.info("usage estimates refreshed: %s", done)
         except Exception:
             logger.exception("retention cleanup failed")
         await asyncio.sleep(6 * 3600)
