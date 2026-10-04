@@ -612,8 +612,15 @@ function userLimitsCard(me, tk) {
     <p class="sub">${c ? "The 5-hour bar follows Anthropic's window; the today bar is this ticket day's share and resets when the day ends." : `Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
     ${ticket}${limitsBlock(me.limits)}</div>`;
 }
+// "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
+function pickedLine(prices, pick) {
+  const t = pick && typeof pick === "object" ? prices.tiers.find((x) => x.tier === pick.tier) : null;
+  const len = t && { day: "a day", week: "a week", month: "a month" }[pick.length];
+  return len ? `You picked <b>${esc(t.label)}</b> for <b>${len}</b>. ` : "";
+}
 function priceListCard(tk) {
   const p = tk.prices;
+  const picked = pickedLine(p, takePick());
   const now = Date.now() / 1000 + S.tkSkew;
   // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
   const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
@@ -622,10 +629,10 @@ function priceListCard(tk) {
     ? `<div class="muted">${n}: at least ${[h.per_5h != null ? `${h.per_5h} h per 5-hour window` : null, h.per_day != null ? `${h.per_day} h per day` : null].filter(Boolean).join(", ")}</div>` : ""; }).join("");
   const cell = (l) => `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
     ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}</td>`;
-  return `<div class="card"><h3>Tickets</h3><p class="sub">Buy a slice for a day, a week or a month.${p.rate_set_at ? ` Prices converted at the rate of ${fmtDate(p.rate_set_at)}.` : ""}</p>
+  return `<div class="card" id="prices"><h3>Tickets</h3><p class="sub">Buy a slice for a day, a week or a month.${p.rate_set_at ? ` Prices converted at the rate of ${fmtDate(p.rate_set_at)}.` : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>Tier</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t.lengths[k])).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${esc(tk.how_to_buy || "")}</p></div>`;
+    </tbody></table></div><p class="sub">${picked}${esc(tk.how_to_buy || (picked ? "Ask the gateway admin." : ""))}</p></div>`;
 }
 
 function quotaBar(q) {
@@ -1499,6 +1506,22 @@ $("#dialog").addEventListener("close", hideTip);
 
 // ---------- session ----------
 
+// The tier and length a visitor picked on the home page ("Get it"), kept through sign-in in this tab; the price
+// list names it once the user is in. Taken out of the address so a reload or a shared link doesn't repeat it.
+const PICK_KEY = "cp-picked";
+(function rememberPick() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has("tier")) return;
+  try { sessionStorage.setItem(PICK_KEY, JSON.stringify({ tier: q.get("tier"), length: q.get("length") })); } catch { /* no storage: the pick is lost */ }
+  q.delete("tier"); q.delete("length");
+  history.replaceState(null, "", location.pathname + (q.size ? `?${q}` : "") + location.hash);
+})();
+function takePick() {
+  if (S.pick === undefined) {
+    try { S.pick = JSON.parse(sessionStorage.getItem(PICK_KEY) || "null"); sessionStorage.removeItem(PICK_KEY); } catch { S.pick = null; }
+  }
+  return S.pick;
+}
 function showLogin() {
   $("#app").classList.add("hidden");
   $("#login").classList.remove("hidden");
@@ -1558,6 +1581,16 @@ $("#logout").onclick = async () => {
   showLogin();
 };
 $("#who").onclick = () => nameDialog();
+// Signed in, "/" sends a user straight back here, so the button opens their own price list on the overview; an admin,
+// who has none, previews the public page (the link's own href).
+$("#pricing-btn").onclick = async (e) => {
+  if (isAdmin()) return;
+  e.preventDefault();
+  S.tab = "overview";
+  history.replaceState(null, "", "#overview");
+  await render();
+  document.getElementById("prices")?.scrollIntoView({ behavior: "smooth", block: "start" });
+};
 $("#theme-toggle").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
   document.documentElement.dataset.theme = dark ? "light" : "dark";

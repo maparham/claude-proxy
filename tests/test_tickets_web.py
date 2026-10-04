@@ -346,9 +346,9 @@ async def test_dashboard_links_the_pricing_page_only_while_tickets_are_on(env):
     gw, conn, cfg, ids, keys = env
     async with asgi_client(create_dashboard_app(gw)) as c:
         page = (await c.get("/dashboard")).text
-        assert page.count('href="/pricing"') == 2                 # the header, and the sign-in page's foot
+        assert page.count('href="/#pricing"') == 1                # the sign-in page's foot: signed out, / is the home page
+        assert page.count('href="/?home#pricing"') == 1           # the header: admins preview it, users get their own list
         assert "pricing-link hidden" not in page
-        assert 'href="/"' in (await c.get("/pricing")).text       # and back
         cfg.tickets.enabled = False
         page = (await c.get("/dashboard")).text
         assert page.count("pricing-link hidden") == 2
@@ -545,3 +545,32 @@ def test_home_escapes_tier_text(tmp_path):
 
 def test_home_says_when_prices_are_unavailable(tmp_path):
     assert _run_home(tmp_path, fail=True)["pricing"] == '<p class="muted">Prices are not available right now.</p>'
+
+
+PICK_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[2], "utf8");
+const grab = (re) => { const m = re.exec(src); if (!m) throw new Error("not found: " + re); return m[0]; };
+const code = grab(/^const esc = .*$/m) + "\n" + grab(/^function pickedLine\([\s\S]*?^}/m);
+const ctx = { String };
+vm.runInNewContext(code, ctx);
+const prices = { tiers: [{ tier: "lite", label: "Lite" }, { tier: "pro", label: "<Pro>" }] };
+console.log(JSON.stringify(JSON.parse(process.argv[3]).map((pick) => ctx.pickedLine(prices, pick))));
+"""
+
+
+def test_dashboard_names_only_a_valid_pick(tmp_path):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    harness = tmp_path / "pick.js"
+    harness.write_text(PICK_HARNESS)
+    js = Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js"
+    picks = [{"tier": "lite", "length": "week"}, {"tier": "pro", "length": "month"}, {"tier": "gone", "length": "week"},
+             {"tier": "lite", "length": "year"}, None, 7]
+    out = json.loads(subprocess.run(["node", str(harness), str(js), json.dumps(picks)], capture_output=True, text=True,
+                                    timeout=30, check=True).stdout)
+    assert out == ["You picked <b>Lite</b> for <b>a week</b>. ", "You picked <b>&lt;Pro&gt;</b> for <b>a month</b>. ", "", "", "", ""]
