@@ -18,12 +18,14 @@ credit_usd = 5.0
 free_daily_cap_usd = 20.0   # all accounts still on their credit, together, in any 24 h
 clerk_publishable_key = "pk_live_Y2xlcmsuY2xhdWRlLWRhc2gucmFoa2FyLnBybyQ"
 
-# Order emails (docs/superpowers/specs/2026-10-04-order-requests-design.md): Google Workspace SMTP with an app
-# password, SMTP_PASSWORD in gateway.env.
+# Order emails (docs/superpowers/specs/2026-10-04-order-requests-design.md). support@chartkar.app only forwards to
+# maparham40@gmail.com, so mail goes out through that Gmail account (app password "Claude Gateway" as SMTP_PASSWORD in
+# gateway.env). The From address is kept only once Gmail has support@chartkar.app as a verified "Send mail as" alias;
+# until then Gmail sends it from maparham40@gmail.com.
 [email]
 smtp_host = "smtp.gmail.com"
 smtp_port = 587
-smtp_user = "support@chartkar.app"
+smtp_user = "maparham40@gmail.com"
 from = "Claude Gateway <support@chartkar.app>"
 admin_to = "support@chartkar.app"
 
