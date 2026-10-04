@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<meta name="description" content="Use Claude Code on your team's Claude subscription, by the day, week or month.">
+<title>Claude Gateway</title>
+<link rel="stylesheet" href="/static/app.css">
+<link rel="stylesheet" href="/static/home.css">
+<script src="/static/home.js" defer></script>
+</head>
+<body class="home">
+<header class="home-top">
+  <span class="home-brand">Claude Gateway</span>
+  <a class="btn small" href="/dashboard">Sign in</a>
+</header>
+<main>
+  <section class="hero">
+    <h1>Use Claude Code on your team’s Claude subscription.</h1>
+    <p class="hero-lede">Take a share of the team’s subscription for a day, a week or a month. You sign in, connect your computer with one command, and run <code>gclaude</code>.</p>
+    <p class="hero-cta"><a class="btn primary" href="#pricing">See pricing</a> <a class="btn" href="/dashboard">Sign in</a></p>
+  </section>
+
+  <section class="how" aria-labelledby="how-h">
+    <h2 id="how-h">How it works</h2>
+    <ol>
+      <li><span class="step-n">1</span><div><b>Sign in</b> with Google, GitHub or a code sent to your email.</div></li>
+      <li><span class="step-n">2</span><div><b>Run one command</b> in the computer’s terminal. You get it after signing in.</div></li>
+      <li><span class="step-n">3</span><div><b>Approve the computer</b>, then start Claude Code with <code>gclaude</code>.</div></li>
+    </ol>
+  </section>
+
+  <section id="pricing" class="pricing-sec" aria-labelledby="pricing-h">
+    <h2 id="pricing-h">Pricing</h2>
+    <div class="length-toggle" id="length-toggle" role="group" aria-label="Ticket length">
+      <button type="button" data-length="day" aria-pressed="false">Day</button><button type="button" data-length="week" aria-pressed="true">Week</button><button type="button" data-length="month" aria-pressed="false">Month</button>
+    </div>
+    <div class="cards" id="cards"><p class="muted">Loading…</p></div>
+    <p class="muted rate-note" id="rate-note"></p>
+  </section>
+
+  <section class="faq" aria-labelledby="faq-h">
+    <h2 id="faq-h">Questions</h2>
+    <details><summary>What does a share mean?</summary><p>Your ticket reserves that percentage of the team’s subscription. Your limits are that share of Anthropic’s 5-hour window, and one seventh of it per ticket day.</p></details>
+    <details><summary>What happens when I reach my limit?</summary><p>The request that crosses the limit is still served. After that, requests are refused until the 5-hour window or the ticket day resets.</p></details>
+    <details><summary>Sonnet or Opus?</summary><p>Both are included. Opus uses your share faster, so the cards show fewer hours for it.</p></details>
+    <details><summary>What happens when my ticket ends?</summary><p>Tickets don’t renew automatically. Access stops when the ticket ends, and you buy a new one to continue.</p></details>
+    <details><summary>How do I pay?</summary><p id="how-to-buy">Ask the gateway admin.</p></details>
+    <details><summary>What do you keep about me?</summary><p>See the <a href="/privacy">privacy page</a>.</p></details>
+  </section>
+</main>
+<footer class="home-foot"><a href="/dashboard">Sign in</a> · <a href="/privacy">Privacy</a></footer>
+</body>
+</html>

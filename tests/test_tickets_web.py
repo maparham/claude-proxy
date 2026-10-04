@@ -430,3 +430,137 @@ async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
         assert r["deleted_users"] == ["alice"]
         assert [x["id"] for x in (await c.get("/api/admin/tickets?deleted=alice")).json()["tickets"]] == [t["id"]]
         assert (await c.get("/api/admin/tickets?deleted=bob")).json()["tickets"] == []
+
+
+HOME_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const [src, serverNow, clientNow, endsAt, already, dataJson, fail] = [fs.readFileSync(process.argv[2], "utf8"), +process.argv[3], +process.argv[4],
+  +process.argv[5], process.argv[6], process.argv[7], process.argv[8] === "1"];
+const data = JSON.parse(dataJson); data.now = serverNow;
+let reloads = 0, tickFn = null, onToggle = null;
+const store = {}; if (already) store[already] = "1";
+const countdownEl = { dataset: { ends: String(endsAt) }, textContent: "" };
+const els = {};
+const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventListener: (ev, fn) => { if (id === "length-toggle") onToggle = fn; } });
+const ctx = {
+  console, Intl, Math, String, Object, Number, JSON, URLSearchParams, encodeURIComponent,
+  Date: { now: () => clientNow * 1000 },
+  document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: (sel) => sel === ".countdown" ? [countdownEl] : [] },
+  location: { reload: () => { reloads++; } },
+  localStorage: { getItem: () => null },
+  sessionStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
+  setInterval: (fn) => { tickFn = fn; },
+  fetch: () => fail ? Promise.reject(new Error("down")) : Promise.resolve({ ok: true, json: () => Promise.resolve(data) }),
+};
+vm.runInNewContext(src, ctx);
+setTimeout(() => {
+  const out = { howToBuy: el("how-to-buy").textContent, pricing: el("cards").innerHTML };
+  if (!fail) {
+    out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
+    out.save = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.savePct(data.tiers[0], k)]));
+    out.hints = ctx.hintLines(data.tiers[0]);
+    onToggle({ target: { closest: () => ({ dataset: { length: "month" } }) } });
+    out.afterToggle = el("cards").innerHTML;
+    for (let i = 0; i < 3; i++) tickFn();
+  }
+  out.reloads = reloads; out.text = countdownEl.textContent;
+  console.log(JSON.stringify(out));
+}, 10);
+"""
+
+
+def _tier(tier="lite", label="Lite", compare="Claude Pro", hours=None, **lengths):
+    base = {k: {"days": d, "usd": u, "list_usd": u, "amount": u, "list_amount": u, "discount_ends_at": None, "sold_out": False}
+            for k, d, u in (("day", 1, 3), ("week", 7, 8), ("month", 30, 20))}
+    for k, v in lengths.items():
+        base[k].update(v)
+    return {"tier": tier, "label": label, "share_pct": 5, "compare": compare, "hours": hours or {}, "lengths": base}
+
+
+def _prices(*tiers, how_to_buy=""):
+    return {"currency": "USD", "rate_set_at": None, "how_to_buy": how_to_buy, "tiers": list(tiers) or [_tier()]}
+
+
+def _run_home(tmp_path, data=None, server_now=1_000_000, client_now=1_000_000, ends_at=0, already="", fail=False):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    harness = tmp_path / "home_harness.js"
+    harness.write_text(HOME_HARNESS)
+    js = Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "home.js"
+    out = subprocess.run(["node", str(harness), str(js), str(server_now), str(client_now), str(ends_at), already,
+                          json.dumps(data or _prices()), "1" if fail else "0"], capture_output=True, text=True, timeout=30, check=True).stdout
+    return json.loads(out)
+
+
+def test_home_counts_down_on_the_servers_clock(tmp_path):
+    ends = 1_001_800
+    disc = {"usd": 6, "amount": 6, "discount_ends_at": ends}
+    data = _prices(_tier(week=disc, month=disc))
+    # The visitor's clock is an hour ahead: the offer still has 30 minutes on the server's clock.
+    r = _run_home(tmp_path, data, server_now=1_000_000, client_now=1_003_600, ends_at=ends)
+    assert r["reloads"] == 0 and r["text"] == "Offer ends in 00h 30m"
+    r = _run_home(tmp_path, data, server_now=1_002_000, client_now=1_002_000, ends_at=ends)   # ended: one reload
+    assert r["reloads"] == 1
+    r = _run_home(tmp_path, data, server_now=1_002_000, client_now=1_002_000, ends_at=ends, already="pricing-reloaded-1001800")
+    assert r["reloads"] == 0 and r["text"] == "Offer ended"
+
+
+def test_home_shows_week_first_and_the_toggle_switches_length(tmp_path):
+    r = _run_home(tmp_path)
+    assert "/week" in r["pricing"] and "/month" not in r["pricing"]
+    assert "/month" in r["afterToggle"] and "/week" not in r["afterToggle"]
+
+
+def test_home_sold_out_is_per_length(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(week={"sold_out": True})))
+    assert "sold-out" in r["cards"]["week"] and "Sold out" in r["cards"]["week"] and "Get it" not in r["cards"]["week"]
+    assert "sold-out" not in r["cards"]["month"] and 'href="/dashboard?tier=lite&length=month"' in r["cards"]["month"]
+
+
+def test_home_saving_is_against_the_charged_day_price(tmp_path):
+    r = _run_home(tmp_path)
+    assert r["save"] == {"day": 0, "week": 61, "month": 77}            # 1 - 8/21, 1 - 20/90, rounded down
+    assert "Save 61% vs daily" in r["cards"]["week"] and "Save" not in r["cards"]["day"]
+
+
+def test_home_saving_is_hidden_when_nothing_is_saved(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(week={"usd": 30, "amount": 30})))
+    assert "Save" not in r["cards"]["week"]
+    r = _run_home(tmp_path, _prices(_tier(day={"usd": 0, "amount": 0, "list_usd": 0, "list_amount": 0})))   # a free day: no division by zero
+    assert r["save"]["month"] == 0 and "Save" not in r["cards"]["month"]
+
+
+def test_home_shows_a_discount_ribbon(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(week={"usd": 6, "amount": 6, "discount_ends_at": 2_000_000})))
+    assert "−25%" in r["cards"]["week"] and "<s>" in r["cards"]["week"] and "−" not in r["cards"]["month"]
+
+
+def test_home_hints_drop_missing_numbers_and_families(tmp_path):
+    hours = {"sonnet": {"per_5h": 4.0, "per_day": None}, "opus": {"per_5h": None, "per_day": None}}
+    r = _run_home(tmp_path, _prices(_tier(hours=hours)))
+    assert r["hints"] == ["Sonnet: at least 4 h per 5-hour window"]
+
+
+def test_home_highlights_the_second_tier_only(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(), _tier(tier="standard", label="Standard")))
+    first, second = r["cards"]["week"].split("</article>")[:2]
+    assert "featured" not in first and "featured" in second
+    assert "featured" not in _run_home(tmp_path)["cards"]["week"]   # one tier: nothing highlighted
+
+
+def test_home_fills_how_to_buy_with_a_fallback(tmp_path):
+    assert _run_home(tmp_path)["howToBuy"] == "Ask the gateway admin."
+    assert _run_home(tmp_path, _prices(how_to_buy="Bank transfer, then email."))["howToBuy"] == "Bank transfer, then email."
+
+
+def test_home_escapes_tier_text(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(label="<b>Lite</b>", compare="<i>Pro</i>")))
+    assert "&lt;b&gt;Lite&lt;/b&gt;" in r["cards"]["week"] and "<i>" not in r["cards"]["week"]
+
+
+def test_home_says_when_prices_are_unavailable(tmp_path):
+    assert _run_home(tmp_path, fail=True)["pricing"] == '<p class="muted">Prices are not available right now.</p>'
