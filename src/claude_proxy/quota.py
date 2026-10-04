@@ -142,6 +142,13 @@ def _window(rows: list) -> list:
     return rows[start:]
 
 
+def weighted_sql(pricing: Pricing, models) -> tuple[str, list]:
+    """SQL for one request row's weighted tokens: its list-price cost in reference-input tokens, or its raw tokens for a
+    model without a price. The one rule for every count that is turned into utilization points (attribution, the
+    observed rate, a ticket's estimates in limits), so a token weighs the same on both sides of a division."""
+    return priced_sql(pricing, models, pricing.reference_input(), unpriced=raw_tokens_sql())
+
+
 def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float | None = None,
                 stale_after_s: int = 1800) -> dict:
     now = time.time() if now is None else now
@@ -156,7 +163,7 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
     bounds = (win[0]["observed_at"], latest["observed_at"])
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
     # Weighted tokens, priced in SQL (this runs before every request under a share limit); unpriced models count raw tokens.
-    w, args = priced_sql(pricing, models, pricing.reference_input(), unpriced=raw_tokens_sql())
+    w, args = weighted_sql(pricing, models)
     weighted = conn.execute(f"SELECT user_id, ended_at, {w} FROM requests WHERE {span} ORDER BY ended_at",
                             (*args, *bounds)).fetchall()
     shares: dict[int, float] = {}
@@ -206,7 +213,7 @@ def _pairs(conn, pricing: Pricing, bucket: str, lo: float, now: float):
     span = "provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
     bounds = (rows[0]["observed_at"], rows[-1]["observed_at"])
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
-    w, args = priced_sql(pricing, models, pricing.reference_input(), unpriced=raw_tokens_sql())
+    w, args = weighted_sql(pricing, models)
     reqs = conn.execute(f"SELECT id, user_id, model, ended_at, {w} AS w FROM requests WHERE {span} ORDER BY ended_at, id",
                         (*args, *bounds)).fetchall()
     j = 0
@@ -258,18 +265,28 @@ def clear_rate_cache() -> None:
 
 
 def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> float | None:
-    ratios = []
+    """Utilization moves in whole-percent steps, so most pairs show no rise and the tokens in them belong to the next
+    step. Tokens are carried across pairs until utilization rises above its high-water mark; each rise yields carried
+    tokens ÷ rise and starts the carry again. A reset drops the carry and restarts the high-water mark."""
+    ratios, carry, high = [], 0.0, None
     for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
-        delta = cur["utilization_pct"] - prev["utilization_pct"]
-        total_w = sum(r["w"] for r in batch)
-        if not _is_reset(prev, cur) and delta > 0 and batch and total_w > 0:
-            ratios.append(total_w / delta)
+        if high is None:
+            high = prev["utilization_pct"]
+        if _is_reset(prev, cur):
+            carry, high = 0.0, cur["utilization_pct"]
+            continue
+        carry += sum(r["w"] for r in batch)
+        rise = cur["utilization_pct"] - high
+        if rise > 0:
+            if carry > 0:
+                ratios.append(carry / rise)
+            carry, high = 0.0, cur["utilization_pct"]
     return statistics.median(ratios) if ratios else None
 
 
 def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7) -> float | None:
-    """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of snapshot pairs with
-    a rise above zero and at least one forwarded Anthropic request in between. When the account has been quiet for
+    """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of rises above the
+    high-water mark, each with the forwarded Anthropic requests since the previous rise (_median_ratio). When the account has been quiet for
     that long and no such pair falls in the window, falls back to the median over the whole retained history instead,
     so a ticket user whose account merely went quiet is never locked out. None only when no qualifying pair exists at
     all, which can only happen on an account that has never served a request. Used to estimate a share when snapshots

@@ -239,3 +239,25 @@ def test_status_line_marks_shares_estimated_without_live_data(env):
     sts = limits.states(conn, cfg, ids["alice"], now=NOW + 2000)   # stale: estimated from weighted tokens
     line = _status_line(user(conn, ids["alice"]), sts, None)
     assert " · 5h 20% est. (resets in" in line and " · today 140% est. (resets in" in line
+
+
+def test_share_day_counts_the_users_own_tokens_while_snapshots_are_fresh(env):
+    """Whole-percent steps: a Lite day (0.71 points) is smaller than one step, so attribution could show 0 all day.
+    The day is measured from the user's own tokens at the observed rate, live data or not."""
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 500, i=1000)
+    fresh(conn, NOW - 400, util5=1, util7=1)   # history: 1000 weighted tokens per point
+    req(conn, ids["alice"], NOW - 200, i=800)
+    fresh(conn, NOW - 100, util5=1, util7=1)   # no new step yet: attribution says 0 since the day began
+    st = by_kind(conn, cfg, ids["alice"])
+    assert st["share_day"].current == pytest.approx(0.8) and st["share_day"].no_live_data is False
+    assert check(conn, cfg, ids["alice"]).kind == "share_day"   # 0.8 > 0.714
+
+
+def test_share_day_counts_unpriced_models_like_the_rate_does(env):
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 500, i=1000, model="mystery-model")
+    fresh(conn, NOW - 400, util5=1, util7=1)
+    req(conn, ids["alice"], NOW - 200, i=500, model="mystery-model")
+    fresh(conn, NOW - 100, util5=1, util7=1)
+    assert by_kind(conn, cfg, ids["alice"])["share_day"].current == pytest.approx(0.5)

@@ -53,7 +53,9 @@ The buyer still gets 5% of a week in total, but shaped to Anthropic's calendar r
 
 ### B. Day as the unit (chosen)
 
-Every ticket is a run of consecutive 24-hour days from its start. Each day gets one seventh of the slice share, measured as the share attributed to the user's requests since that day began. Unused share does not carry over.
+Every ticket is a run of consecutive 24-hour days from its start. Each day gets one seventh of the slice share, measured from the user's own weighted tokens since that day began, converted to weekly-bucket points at the account's observed rate (tokens per point). Unused share does not carry over.
+
+Why not the share attributed to the user's requests, as first planned: Anthropic reports utilization in whole-percent steps, and a Lite day is 0.71 points, smaller than one step. Attribution would read 0 for most of a day and then charge a whole point at once. The observed rate averages over many steps, so the day fills smoothly.
 
 Any Anthropic week holds at most seven days of a slice, so the slice draws at most its share from that week, however its tickets turn over. The capacity check stays per moment and stays correct.
 
@@ -76,7 +78,7 @@ For a Lite week ticket running Wednesday to Tuesday, Monday reset:
 | Can draw from one week, per slice | up to 2× share | share | share |
 | Buyer may spend | 5% in each of two weeks | 3.57% any time Wed–Sun, 1.43% any time Mon–Tue | 0.71% each day |
 | Flexibility inside the ticket | full | per window piece | per day |
-| How usage is measured | share of Anthropic's current week | share of Anthropic's current week | share attributed since the day began |
+| How usage is measured | share of Anthropic's current week | share of Anthropic's current week | own tokens since the day began, at the observed rate |
 | Reset shown to the user | Anthropic's weekly reset | Anthropic's weekly reset | end of the current ticket day |
 | Day ticket | special case (÷ 7) | falls out of the formula | is the unit |
 | Bonus time | any number of seconds | any number of seconds | whole days |
@@ -95,5 +97,5 @@ What it costs: a buyer cannot bank quiet days for a heavy one, and the compariso
 ## 5. When to revisit
 
 - **Buyers ask for flexibility.** Allow unused daily share to roll forward, but only within the same Anthropic week. Rolling across the reset brings the overshoot back. Rolling within the week is exactly approach A, so the two designs meet there and the switch is a change of cap, not of model.
-- **Measurement.** Approach A needs nothing new: the share of Anthropic's current week is what the gateway measures today. Approach B needs the share attributed to requests summed over an arbitrary period. If that attribution turns out to be unreliable over a day, A is the fallback.
+- **Measurement.** Approach A needs nothing new: the share of Anthropic's current week is what the gateway measures today. Approach B needs usage over an arbitrary period; attribution over a day proved too coarse (whole-percent steps), so B converts the user's own tokens at the observed rate instead. If that rate turns out to be unreliable, A is the fallback.
 - **The 5-hour bucket.** If handover overshoot there ever matters, the same proration applies: share × (hours of the current 5-hour window the ticket covers) ÷ 5.

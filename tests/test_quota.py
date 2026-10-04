@@ -292,3 +292,47 @@ def test_observed_rate_falls_back_to_the_whole_history_when_quiet_for_7_days(db)
     _req(conn, a, old - 500, 1000)
     _snap(conn, old, 2)      # 500 per point
     assert quota.observed_rate(conn, Pricing(), "5h", now) == 500
+
+
+def test_observed_rate_carries_tokens_across_pairs_without_a_rise(db):
+    """Anthropic reports whole-percent steps: one point of rise follows many snapshot pairs with no rise. All the
+    tokens since the last rise belong to that point, not only the last pair's."""
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    t = now - 5000
+    util = 0
+    _snap(conn, t, util)
+    for step in range(12):                     # a 250-token request in every pair; a rise every fourth pair
+        _req(conn, a, t + 50, 250)
+        t += 100
+        if step % 4 == 3:
+            util += 1
+        _snap(conn, t, util)
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 1000
+
+
+def test_observed_rate_drops_the_carry_at_a_reset(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    _snap(conn, now - 900, 50, resets=now)
+    _req(conn, a, now - 850, 9000)             # spent before the reset: never reaches a rise of this window
+    _snap(conn, now - 800, 50, resets=now)
+    _snap(conn, now - 700, 0, resets=now + 18000)   # the reset
+    _req(conn, a, now - 650, 1000)
+    _snap(conn, now - 600, 0, resets=now + 18000)
+    _req(conn, a, now - 550, 1000)
+    _snap(conn, now - 500, 1, resets=now + 18000)
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 2000
+
+
+def test_unpriced_models_weigh_their_raw_tokens_everywhere(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    _snap(conn, now - 300, 0)
+    _req(conn, a, now - 250, 1000, model="mystery-model")
+    _snap(conn, now - 200, 1)
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 1000
+    assert quota.attribution(conn, Pricing(), "5h", now=now)["shares"][a] == pytest.approx(1)

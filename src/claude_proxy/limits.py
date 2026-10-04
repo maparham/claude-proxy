@@ -200,9 +200,12 @@ def _gated(conn, cfg, user_id) -> bool:
 
 
 def _weighted_since(conn, cfg, user_id, since, now) -> float:
-    groups = conn.execute(f"SELECT model, {SUMS} FROM requests WHERE user_id=? AND provider='anthropic' AND rejected_by IS NULL "
-                          f"AND path!=? AND ended_at>? AND ended_at<=? GROUP BY model", (user_id, COUNT_TOKENS_PATH, since, now)).fetchall()
-    return sum(price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])).weighted for g in groups)
+    """The user's weighted Anthropic tokens that ended in (since, now], weighed as quota.observed_rate weighs them."""
+    span = "user_id=? AND provider='anthropic' AND rejected_by IS NULL AND path!=? AND ended_at>? AND ended_at<=?"
+    params = (user_id, COUNT_TOKENS_PATH, since, now)
+    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
+    w, args = quota.weighted_sql(cfg.pricing, models)
+    return float(conn.execute(f"SELECT COALESCE(SUM({w}), 0) FROM requests WHERE {span}", (*args, *params)).fetchone()[0])
 
 
 def _finish(st: LimitState) -> LimitState:
@@ -235,25 +238,27 @@ def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> Li
     limit = share / 7
     st = LimitState("share_day", "*", f"{limit:g}", "pct", limit=limit, estimated=True, tier=label,
                     resets_at=day_end, reset_in=max(1, int(day_end - now)))
-    # A cheap staleness check in place of a full attribution() walk: this runs on every request of every ticket
-    # user, and attribution()'s per-user split over the window isn't needed just to learn whether the 7d bucket
-    # is fresh. "Fresh" is attribution()'s own rule: a snapshot exists and it isn't older than stale_after_s.
+    # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
+    # whole-percent steps, and a Lite day (0.71 points) is smaller than one step, so the share attributed since the day
+    # began would read 0 for most of a day and then jump. The cheap staleness check only decides the "no live data" mark.
     newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
-    fresh = newest is not None and now - newest[0] <= cfg.quota.stale_after_s
-    if fresh:
-        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, day_start, now)
+    st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
+    used = _weighted_since(conn, cfg, user_id, day_start, now)
+    if not used and not st.no_live_data:
+        st.current = 0.0   # live data and nothing used today: no rate needed, so a young account isn't refused
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
     if rate is None:
-        st.skipped = NO_RATE
+        st.skipped, st.no_live_data = NO_RATE, False
         return st
-    st.current, st.no_live_data = _weighted_since(conn, cfg, user_id, day_start, now) / rate, True
+    st.current = used / rate
     return _finish(st)
 
 
 def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | None = None) -> list[LimitState]:
     """The two share limits a ticket builds (spec section 7): share_5h against Anthropic's 5-hour window, and share_day,
-    one seventh of the share, against the weekly bucket's share attributed since the current ticket day began."""
+    one seventh of the share, against the user's weighted tokens since the current ticket day began at the weekly
+    bucket's observed rate."""
     t = ticket or tickets.covering(conn, user_id, now)
     if t is None:
         return []
