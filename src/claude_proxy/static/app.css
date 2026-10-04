@@ -328,3 +328,4 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .good { color: var(--good-text); } .critical { color: var(--critical-text); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .form-grid .hint { grid-column: 1 / -1; }
+.ticket { padding: 10px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px; } .badge.bonus { display: inline-block; margin: 4px 4px 0 0; border-color: var(--s4); }

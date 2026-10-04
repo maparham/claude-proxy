@@ -236,7 +236,7 @@ const USER_TIPS = {
   "err:overloaded_error": "The provider is temporarily overloaded. Retry shortly.",
 };
 const ADMIN_TIPS = { ...TIPS };
-const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
+const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit", "today_limit"];   // share limits, as a non-admin's own allowance
 
 const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
 
@@ -447,24 +447,26 @@ function meter(pct) {
   const cls = pct >= 100 ? "over" : pct >= 80 ? "warn" : "";
   return `<div class="meter ${cls}"><span style="width:${Math.min(100, Math.max(0, pct || 0)).toFixed(1)}%"></span></div>`;
 }
+const USER_LABELS = { "5h_limit": "5-hour limit", weekly_limit: "weekly limit", today_limit: "today" };
 function limitLabel(l) {
   const scope = l.scope && l.scope !== "*" ? ` [${l.scope}]` : "";
-  return `${l.kind === "cost_total" ? "credit" : l.kind.replace(/_/g, " ")}${scope}`;
+  return `${USER_LABELS[l.kind] || (l.kind === "cost_total" ? "credit" : l.kind.replace(/_/g, " "))}${scope}`;
 }
 function limitValue(l) {
   if (l.kind === "allowed_models") return l.value;
   if (USER_LIMIT_KINDS.includes(l.kind)) {
     if (l.skipped || l.current == null) return "not measured right now";
-    return `${l.current.toFixed(0)}% used${l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : ""}`;
+    return `${l.current.toFixed(0)}% used${l.no_live_data ? " · estimated without live data" : ""}${l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : ""}`;
   }
   if (l.skipped) return `skipped · ${l.skipped}`;
   const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => `${v.toFixed(1)} pts` : fmtNum;
   const reset = l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : "";
-  return `${l.estimated ? "est. " : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
+  return `${l.no_live_data ? "est. (no live data) " : l.estimated ? "est. " : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";
   if (USER_LIMIT_KINDS.includes(l.kind)) return l.skipped ? "Not enforced for now. Your other limits still apply." : "";
+  if (l.no_live_data) return "No fresh report from Anthropic right now, so this is estimated from your tokens at the account's usual rate. Your ticket's limit still applies.";
   if (l.skipped) return "Not enforced right now: without a fresh report from Anthropic the share can't be estimated. Token and request limits still apply.";
   if (l.estimated) return "<b>est.</b> means estimated, not measured. <b>Resets</b> is when Anthropic resets the account bucket.";
   if (!l.reset_in) return "";
@@ -528,7 +530,7 @@ function credentialPill(c) {
 }
 
 async function renderOverview(main) {
-  const [ov, me, keys] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys")]);
+  const [ov, me, keys, tk] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), isAdmin() || !S.tickets?.enabled ? null : api("/api/me/tickets")]);
   if (ov.credential) credentialPill(ov.credential);
   const t = ov.totals[S.prefs.period] || ov.totals["24h"];
   const banners = [];
@@ -557,12 +559,10 @@ async function renderOverview(main) {
           <div id="quota-bars"></div>
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>` : ""}
-        <div class="card"><h3>${isAdmin() ? "Usage by user, last 7 days" : "Your limits"}</h3>
-          <p class="sub">${isAdmin() ? "Daily, weighted tokens." : `Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
-          ${isAdmin() ? `<div class="chart short" id="ov-users"></div>` : limitsBlock(me.limits)}
-        </div>
+        ${isAdmin() ? usersCard() : userLimitsCard(me, tk)}
       </div>
       ${machinesCard(keys.keys, S.install)}
+      ${tk ? priceListCard(tk) : ""}
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
@@ -571,6 +571,44 @@ async function renderOverview(main) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
     stackedTime($("#ov-users"), s.points, "weighted", "user", "day");
   }
+  if (tk) {
+    const tick = () => main.querySelectorAll(".countdown").forEach((el) => {
+      const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000));
+      el.textContent = s ? `Offer ends in ${Math.floor(s / 86400)}d ${String(Math.floor((s % 86400) / 3600)).padStart(2, "0")}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m ${String(s % 60).padStart(2, "0")}s` : "Offer ended";
+    });
+    tick();
+    clearInterval(S.countdown); S.countdown = setInterval(() => (document.contains(main.querySelector(".countdown")) ? tick() : clearInterval(S.countdown)), 1000);
+  }
+}
+
+function usersCard() {
+  return `<div class="card"><h3>Usage by user, last 7 days</h3><p class="sub">Daily, weighted tokens.</p><div class="chart short" id="ov-users"></div></div>`;
+}
+function userLimitsCard(me, tk) {
+  const c = tk && tk.current;
+  const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
+      <div><b>${esc(c.label)} ticket</b> · ${c.share_pct}% of the subscription</div>
+      <div class="muted">Ends ${fmtDate(c.effective_end)}${c.bonus_days ? ` <span class="badge">+${c.bonus_days} day${c.bonus_days === 1 ? "" : "s"} bonus</span>` : ""} · today ends in ${fmtDur(c.day_end - Date.now() / 1000)}</div>
+      ${c.bonuses.map((b) => `<div class="badge bonus">Bonus: +${b.share_pct}% until ${fmtDate(b.ends_at)}${b.note ? ` · ${esc(b.note)}` : ""}</div>`).join("")}
+      ${c.bonus_share ? `<p class="sub">While the bonus runs, both bars are measured against ${c.share_pct + c.bonus_share}%.</p>` : ""}
+      ${tk.queued ? `<div class="muted">Next: ${esc(tk.queued.label)} ticket from ${fmtDate(tk.queued.starts_at)}</div>` : ""}</div>`
+    : tk.queued ? `<div class="ticket"><b>Your next ticket</b> (${esc(tk.queued.label)}) starts ${fmtDate(tk.queued.starts_at)}.</div>`
+    : `<div class="ticket"><b>Your ticket has ended.</b> ${esc(tk.how_to_buy || "Ask the gateway admin.")}</div>`;
+  return `<div class="card"><h3>${c ? "Your ticket" : "Your limits"}</h3>
+    <p class="sub">${c ? "The 5-hour bar follows Anthropic's window; the today bar is this ticket day's share and resets when the day ends." : `Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
+    ${ticket}${limitsBlock(me.limits)}</div>`;
+}
+function priceListCard(tk) {
+  const p = tk.prices;
+  const L = [["day", "1 day"], ["week", "1 week"], ["month", "1 month"]];
+  const hint = (t) => Object.entries({ sonnet: "Sonnet", opus: "Opus" }).map(([f, n]) => { const h = t.hours[f]; return h && (h.per_5h != null || h.per_day != null)
+    ? `<div class="muted">${n}: at least ${[h.per_5h != null ? `${h.per_5h} h per 5-hour window` : null, h.per_day != null ? `${h.per_day} h per day` : null].filter(Boolean).join(", ")}</div>` : ""; }).join("");
+  const cell = (l) => `<td class="r">${l.discount_ends_at ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(l.amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
+    ${l.discount_ends_at ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}</td>`;
+  return `<div class="card"><h3>Tickets</h3><p class="sub">Buy a slice for a day, a week or a month.${p.rate_set_at ? ` Prices converted at the rate of ${fmtDate(p.rate_set_at)}.` : ""}</p>
+    <div class="table-wrap"><table class="data"><thead><tr><th>Tier</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
+    ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${t.share_pct}%</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t.lengths[k])).join("")}</tr>`).join("")}
+    </tbody></table></div><p class="sub">${esc(tk.how_to_buy || "")}</p></div>`;
 }
 
 function quotaBar(q) {

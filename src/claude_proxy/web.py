@@ -1150,7 +1150,8 @@ def _status_line(user, states, account) -> str:
         base, _, period = s.kind.partition("_")
         if base == "share" and account is None:
             label = _SHARE_PERIOD.get(period, period)
-            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{_resets(s)}")
+            est = " est." if s.no_live_data else ""
+            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{est}{_resets(s)}")
             continue
         if base == "share":
             label, used = f"{_SHARE_PERIOD.get(period, period)} share", lambda v: f"{v:.0f}"

@@ -326,6 +326,20 @@ back to zero, and the next request opens a new window. A user over a limit waits
   `[limits] max_inflight` (default 8) in flight at once; the next gets a 429 (`max_inflight`) with
   `retry-after: 1`. A token or cost limit can therefore be overshot by at most that many requests.
 
+## Selling tickets
+
+With a `[tickets]` section in the config (see `config.example.toml`), the gateway sells reserved slices of the
+subscription: a tier (its share of the account) for 1 day, 1 week or 1 month. Payment happens outside the app; the
+admin grants the ticket on the dashboard's **Tickets** tab, where the form shows the price, the start (now, or queued
+after the user's current ticket) and whether the period fits under `max_sold_pct`. **Pricing** holds the daily exchange
+rate, the USD prices and discounts; `/pricing` is the public price list with sold-out badges and a lower-bound
+"at least N hours of steady use" hint computed once a day from busy hours.
+
+A ticket holder is limited to their share of Anthropic's 5-hour window and to one seventh of it per ticket day; with no
+active ticket their requests get a 403 that quotes `how_to_buy`. Third-party models are not covered unless a cost
+limit is set for the user. When the ticket ends and the user is not buying again, **Ungate** on the Users page returns
+them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets-design.md`.
+
 ## Operations
 
 - `claude-proxy status` shows credential health, the latest account figures and the route keys.
