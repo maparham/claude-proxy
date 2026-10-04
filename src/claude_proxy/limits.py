@@ -371,6 +371,7 @@ def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tupl
 
 
 MAX_INFLIGHT = "max_inflight"   # rejected_by for [limits] max_inflight, the per-user concurrency cap
+UNPRICED = "unpriced_model"     # rejected_by for a model with no [pricing] entry: no limit could meter it
 
 
 def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | None, path: str,
@@ -385,6 +386,9 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         return Decision(429, MAX_INFLIGHT, {"type": "error", "error": {"type": "rate_limit_error", "message":
                         f"Gateway limit max_inflight reached: {inflight} of {cfg.limits.max_inflight} requests in "
                         "flight; wait for one to finish."}}, 1)
+    if model and not is_count_tokens and cfg.pricing.price_for(model) is None:
+        # Every cost, share and weighted limit is measured in price-weighted tokens; a model without a price would be free.
+        return Decision(403, UNPRICED, _perm(f"Model {model!r} has no price on this gateway; ask the admin to add one."))
     if not cfg.tickets.enabled and tickets.is_gated(conn, user_id):
         # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
