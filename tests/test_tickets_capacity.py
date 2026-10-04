@@ -474,3 +474,18 @@ def test_bonus_days_allowed_when_they_stop_short_of_a_started_later_ticket(db):
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + 3 * DAY
     with pytest.raises(tickets.TicketError, match="already started"):
         bonus(conn, cfg, ids, a["id"], extra_days=2, now=now)                  # [2d, 4d) would run into b
+
+
+def test_ungate_with_end_live_cancels_the_live_tickets_and_their_bonuses(db):
+    # With tickets switched off there is no Tickets tab to cancel from; Ungate does it in the same step.
+    conn, cfg, ids = seeded(db)
+    a = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW)
+    b = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW)
+    tickets.add_bonus(conn, cfg, ids["admin"], a["id"], share_pct=2, now=NOW)
+    with pytest.raises(tickets.TicketError, match="cancel it before ungating"):
+        tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 60)
+    assert tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 60, end_live=True) == 2
+    assert not tickets.is_gated(conn, ids["alice"])
+    assert {r[0] for r in conn.execute("SELECT cancelled_at FROM tickets WHERE id IN (?,?)", (a["id"], b["id"]))} == {NOW + 60}
+    assert conn.execute("SELECT cancelled_at FROM ticket_bonuses").fetchone()[0] == NOW + 60
+    assert not conn.in_transaction

@@ -136,6 +136,7 @@ const TIPS = {
   sess_cost: `What it would cost at API prices. Not billed on the subscription.`,
   sess_models: `Models the session used.`,
   act_ungate: `This user's tickets have all ended. Stop them gating the user and set ordinary limits instead; the tickets stay as sales records.`,
+  act_ungate_paused: `Tickets are switched off, so this user is refused. Cancel their remaining tickets, stop them gating the user and set ordinary limits instead; the tickets stay as sales records.`,
   act_ticket_cancel: `Frees the slice now and ends the ticket's bonuses. Their queued tickets move forward to close the gap when they fit. Refunds happen outside the app.`,
   act_ticket_bonus: `Extra share for a period, extra days at the ticket's share, or both. Checked against capacity like a ticket.`,
   capacity_sold: `What tickets and bonuses have reserved: the sum of their shares at this moment, and the highest sum over the next 30 days. Grants are refused past <b>max_sold_pct</b>.`,
@@ -596,6 +597,7 @@ function usersCard() {
   return `<div class="card"><h3>Usage by user, last 7 days</h3><p class="sub">Daily, weighted tokens.</p><div class="chart short" id="ov-users"></div></div>`;
 }
 function userLimitsCard(me, tk) {
+  if (me.paused) return `<div class="card"><h3>Your limits</h3><div class="ticket"><b>Tickets are paused.</b> Ask the gateway admin.</div></div>`;
   const c = tk && tk.current;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
       <div><b>${esc(c.label)} ticket</b> · ${fmtShare(c.share_pct)} of the subscription</div>
@@ -693,7 +695,7 @@ function userRow(u) {
   const cell = (k) => `<td class="r"><div>${fmtNum(u.usage[k].weighted)}</div><div class="muted">${fmtUsd(u.usage[k].cost_usd)}</div></td>`;
   const share = (b) => (u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`);
   return `<tr class="clickable" data-user="${u.id}">
-    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}${u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? "ticket" : "ticket queued"}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">ticket ended</span>` : ""}
+    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">tickets paused</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? "ticket" : "ticket queued"}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">ticket ended</span>` : ""}
       <div class="muted" style="font-size:12px">${esc(u.prefix)}…${u.routes_prefix ? ` · OpenCode ${esc(u.routes_prefix)}…` : ""}</div></td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
@@ -706,8 +708,9 @@ function userActions(u) {
     (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">Remove OpenCode key</button>` : "");
   const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked
     ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">Upgrade</button>` : "";
-  const ungate = u.ticket && u.ticket.gated && !u.ticket.live && !u.revoked
-    ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="act_ungate">Ungate</button>` : "";
+  const paused = u.ticket && u.ticket.paused;
+  const ungate = u.ticket && u.ticket.gated && (!u.ticket.live || paused) && !u.revoked
+    ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="${paused ? "act_ungate_paused" : "act_ungate"}">Ungate</button>` : "";
   return `<div class="row-actions">${upgrade}${ungate}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
       <button class="btn small" data-act="rename" data-id="${u.id}" data-tip="act_rename">Rename</button>
@@ -722,7 +725,7 @@ function userActions(u) {
 const stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
 
 async function renderTickets(main) {
-  const [cap, { tickets }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser ? `?user_id=${S.ticketUser}` : ""}`), api("/api/users")]);
+  const [cap, { tickets, deleted_users }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
   const pct = (v, max) => meter((100 * v) / max);
   const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${cap.utilization[b].utilization_pct.toFixed(0)}%${cap.utilization[b].stale ? " (stale)" : ""}`);
   main.innerHTML = `<section class="view"><h2>Tickets</h2>
@@ -738,12 +741,12 @@ async function renderTickets(main) {
         <p class="sub" style="margin-top:12px">Utilization is what everyone has used, ticket holders and headroom users alike.</p></div>
     </div>
     <div class="controls"><button class="btn primary" id="grant">Grant a ticket</button>
-      <select id="ticket-user"><option value="">All users</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div>
+      <select id="ticket-user"><option value="">All users</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(n)} (deleted)</option>`).join("")}</select></div>
     <div class="card table-wrap"><table class="data"><thead><tr><th>User</th><th>Tier</th><th>Period</th><th class="r">Paid</th><th>State</th><th>Bonuses</th><th>Note</th><th></th></tr></thead>
       <tbody>${tickets.map(ticketRow).join("") || `<tr><td colspan="8" class="muted">No tickets yet.</td></tr>`}</tbody></table></div>
   </section>`;
   $("#grant").onclick = () => grantDialog(users);
-  $("#ticket-user").onchange = (e) => { S.ticketUser = e.target.value ? +e.target.value : null; render(); };
+  $("#ticket-user").onchange = (e) => { const v = e.target.value; S.ticketUser = !v ? null : v.startsWith("d:") ? v : +v; render(); };
   main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((t) => t.id === +b.dataset.id), tickets)));
 }
 function ticketRow(t) {
@@ -941,6 +944,7 @@ async function userAction(act, id, u) {
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
   if (act === "delete") return deleteDialog(u);
   if (act === "ungate") {
+    if (u.ticket && u.ticket.paused && u.ticket.live && !confirmInline(`Tickets are switched off. Ungating ${u.name} cancels their remaining tickets and hands them back to hand-set limits. Continue?`)) return;
     try {
       await api(`/api/admin/users/${id}/ungate`, { method: "POST", body: {} });
       const { users } = await api("/api/users");

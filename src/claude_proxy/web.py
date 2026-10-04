@@ -499,7 +499,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
                         "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
                         "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
-                        "ticket": tickets.user_state(conn, u["id"], now) if cfg.tickets.enabled else None})
+                        "ticket": (tickets.user_state(conn, u["id"], now) | {"paused": not cfg.tickets.enabled}
+                                   if cfg.tickets.enabled or tickets.is_gated(conn, u["id"]) else None)})
         return {"users": out}
 
     @app.get("/api/limits")
@@ -541,7 +542,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         line = _status_line(user, states, account)
         if format == "text":
             return PlainTextResponse(line + "\n")
-        out = {"user": _public_user(user), "limits": limit_views(user, states), "line": line}
+        out = {"user": _public_user(user), "limits": limit_views(user, states), "line": line,
+               "paused": not cfg.tickets.enabled and tickets.is_gated(conn, user["id"])}
         if account is not None:
             out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
         return out
@@ -767,9 +769,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
             except ValueError as e:
                 fail(400, str(e))
-        if action == "ungate":
-            need_tickets()
-            ticket_call(tickets.ungate, conn, actor["id"], u["id"])
+        if action == "ungate":   # also while tickets are off: the way out of "Tickets are paused"
+            ticket_call(tickets.ungate, conn, actor["id"], u["id"], end_live=not cfg.tickets.enabled)
             return {"ok": True}
         if action == "enable":
             if u["revoked_at"] is not None:
@@ -894,17 +895,20 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return "queued" if t["starts_at"] > now else "active"
 
     @app.get("/api/admin/tickets")
-    async def tickets_list(request: Request, user_id: int | None = None):
+    async def tickets_list(request: Request, user_id: int | None = None, deleted: str | None = None):
         admin(request)
         need_tickets()
         now, n = time.time(), names()
         where, params = ("WHERE t.user_id=?", (user_id,)) if user_id is not None else ("", ())
+        if deleted is not None:   # a deleted user's tickets keep only the name stored at grant
+            where, params = "WHERE t.user_id IS NULL AND t.user_name=?", (deleted,)
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
         for t in rows:
             t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"])}
             if t["user_id"] is not None:   # the user's current name, falling back to the name stored at grant for a deleted user
                 t["user_name"] = n.get(t["user_id"], t["user_name"])
-        return {"tickets": rows}
+        gone = [r[0] for r in conn.execute("SELECT DISTINCT user_name FROM tickets WHERE user_id IS NULL ORDER BY user_name")]
+        return {"tickets": rows, "deleted_users": gone}
 
     def grant_args(body) -> tuple:
         return (target_user(body.get("user") or body.get("user_id")), str(body.get("tier", "")), str(body.get("length", "")),
@@ -924,8 +928,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         u, tier, length, currency = grant_args(body)
         remove = [(str(r.get("kind", "")), str(r.get("scope") or "*")) for r in body.get("remove_limits") or [] if isinstance(r, dict)]
-        # The price and rate the preview showed: a grant at a price the admin did not see is refused (409) and re-previewed.
-        quoted = {k: None if body.get(k) is None else _number(body[k], k) for k in ("usd", "rate")}
+        # The price and rate the preview showed: required, and a grant at a price the admin did not see is refused (409).
+        if body.get("usd") is None or body.get("rate") is None:
+            fail(400, "Preview the ticket first and send the usd and rate it showed.")
+        quoted = {k: _number(body[k], k) for k in ("usd", "rate")}
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
                         expect_usd=quoted["usd"], expect_rate=quoted["rate"])

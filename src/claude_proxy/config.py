@@ -95,6 +95,7 @@ class LimitsConfig:
 
 
 LENGTHS = {"day": 1, "week": 7, "month": 30}   # ticket lengths in days (paid-tickets design, section 3)
+ESTIMATE_DAYS = 30   # how far back the daily usage estimates read; retention must keep at least this much
 
 
 @dataclass
@@ -291,6 +292,10 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
         raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 100")
     if not t.tiers:
         raise ConfigError(f"{toml_path}: [tickets] needs at least one tier")
+    for tid, tier in t.tiers.items():
+        if tier.share_pct > t.max_sold_pct:   # it could never be sold, and nothing else would say why
+            raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] share_pct {tier.share_pct:g} is above "
+                              f"[tickets].max_sold_pct {t.max_sold_pct:g}, so it could never be sold")
     return t
 
 
@@ -351,5 +356,8 @@ class Config:
                 raise ConfigError(f"{toml_path}: bad [[routes]] entry: {e}") from e
         if "tickets" in data:
             cfg.tickets = _load_tickets(toml_path, data["tickets"])
+            if cfg.retention_days < ESTIMATE_DAYS:   # cleanup would delete what the 30-day usage estimates read
+                raise ConfigError(f"{toml_path}: retention_days must be at least {ESTIMATE_DAYS} while [tickets] is on; "
+                                  "the usage estimates read that many days")
         cfg.config_file = toml_path
         return cfg

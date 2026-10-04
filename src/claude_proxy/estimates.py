@@ -13,7 +13,7 @@ import statistics
 import time
 
 from . import quota
-from .config import Config, Pricing
+from .config import ESTIMATE_DAYS, Config, Pricing
 from .forwarder import COUNT_TOKENS_PATH
 
 DAY, HOUR = 86400, 3600
@@ -22,7 +22,7 @@ BUCKETS = ("5h", "7d")
 MIN_BUSY_HOURS = 50      # below this a family's hint is hidden
 BUSY_SPREAD_S = 20 * 60  # a busy hour: first to last request at least this far apart ...
 BUSY_REQUESTS = 10       # ... or at least this many requests
-WINDOW_DAYS = 30
+WINDOW_DAYS = ESTIMATE_DAYS
 REFRESH_AFTER_S = 23 * HOUR
 
 

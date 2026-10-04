@@ -22,6 +22,13 @@ def env(db, cfg):
     return gw, conn, cfg, ids, {"alice": alice_key}
 
 
+async def grant(c, body):
+    """Grant as the dashboard does: preview first, then send back the price and rate the preview showed."""
+    p = await c.post("/api/admin/tickets/preview", json=body)
+    quote = {k: p.json()[k] for k in ("usd", "rate")} if p.status_code == 200 else {}
+    return await c.post("/api/admin/tickets", json=quote | body)
+
+
 def last_audit(conn):
     return tuple(conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC LIMIT 1").fetchone())
 
@@ -98,7 +105,7 @@ async def test_preview_grant_list_and_users_state(env):
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).json()
         assert (p["usd"], p["amount"], p["available"], p["queued"], p["credit"], p["first_ticket"]) == (8, 7.5, True, False, True, True)
         assert [r["kind"] for r in p["limit_rows"]] == ["tokens_daily"]
-        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR", "note": "paid 7.50",
+        r = await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "EUR", "note": "paid 7.50",
                                                       "remove_limits": [{"kind": "tokens_daily", "scope": "*"}]})
         assert r.status_code == 200, r.text
         t = r.json()["ticket"]
@@ -108,7 +115,7 @@ async def test_preview_grant_list_and_users_state(env):
         assert lst[0]["id"] == t["id"] and lst[0]["state"] == "active" and lst[0]["granted_by_name"] == "admin" and lst[0]["bonuses"] == []
         users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
         assert users["alice"]["ticket"]["gated"] and users["alice"]["ticket"]["live"] and users["alice"]["ticket"]["current"]["id"] == t["id"]
-        assert users["admin"]["ticket"] == {"gated": False, "live": False, "current": None, "queued": None, "has_tickets": False}
+        assert users["admin"]["ticket"] == {"gated": False, "live": False, "current": None, "queued": None, "has_tickets": False, "paused": False}
         assert users["alice"]["ticket"]["has_tickets"] is True
         # A second grant queues after the first; the preview says so.
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "day", "currency": "USD"})).json()
@@ -121,24 +128,24 @@ async def test_grant_refusals_map_to_400_and_409(env):
     gw, conn, cfg, ids, keys = env
     cfg.tickets.max_sold_pct = 5
     async with admin_client(gw) as c:
-        assert (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
+        assert (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
         bob = (await c.post("/api/admin/users", json={"name": "bob"})).json()["id"]
-        r = await c.post("/api/admin/tickets", json={"user": bob, "tier": "lite", "length": "day", "currency": "USD"})
+        r = await grant(c, {"user": bob, "tier": "lite", "length": "day", "currency": "USD"})
         assert r.status_code == 409 and "Not enough capacity" in r.json()["error"]
-        assert (await c.post("/api/admin/tickets", json={"user": "nobody", "tier": "lite", "length": "day", "currency": "USD"})).status_code == 404
-        assert (await c.post("/api/admin/tickets", json={"user": bob, "tier": "gold", "length": "day", "currency": "USD"})).status_code == 400
+        assert (await grant(c, {"user": "nobody", "tier": "lite", "length": "day", "currency": "USD"})).status_code == 404
+        assert (await grant(c, {"user": bob, "tier": "gold", "length": "day", "currency": "USD"})).status_code == 400
         conn.execute("UPDATE fx_rates SET set_at=?", (int(time.time()) - 40 * 3600,))
         cfg.tickets.max_sold_pct = 80
-        r = await c.post("/api/admin/tickets", json={"user": bob, "tier": "lite", "length": "day", "currency": "EUR"})
+        r = await grant(c, {"user": bob, "tier": "lite", "length": "day", "currency": "EUR"})
         assert r.status_code == 400 and "hours old" in r.json()["error"]
-        r = await c.post("/api/admin/tickets", json={"user": bob, "tier": "lite", "length": "day", "currency": "EUR", "confirm_stale_rate": True})
+        r = await grant(c, {"user": bob, "tier": "lite", "length": "day", "currency": "EUR", "confirm_stale_rate": True})
         assert r.status_code == 200
 
 
 async def test_cancel_bonus_capacity_and_ungate(env):
     gw, conn, cfg, ids, keys = env
     async with admin_client(gw) as c:
-        t = (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "standard", "length": "week", "currency": "USD"})).json()["ticket"]
+        t = (await grant(c, {"user": "alice", "tier": "standard", "length": "week", "currency": "USD"})).json()["ticket"]
         r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": 5, "extra_days": 1, "note": "welcome"})
         assert r.status_code == 200 and r.json()["bonus"]["note"] == "welcome" and r.json()["ticket"]["effective_end"] == t["ends_at"] + DAY
         assert (await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": 0, "extra_days": 0})).status_code == 400
@@ -308,7 +315,7 @@ async def test_money_inputs_are_rounded_to_cents_and_bounded(env):
         r = await c.post("/api/admin/discounts", content=f'{{"tier": "lite", "length": "day", "usd": 1, "starts_at": {now}, "ends_at": 1e300}}',
                          headers={"content-type": "application/json"})
         assert r.status_code == 400
-        t = (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).json()["ticket"]
+        t = (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).json()["ticket"]
         for body in ({"extra_days": 1.5}, {"share_pct": 1e300}, {"share_pct": 101}, {"extra_days": 1e300}):
             r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json=body)
             assert r.status_code == 400, body
@@ -320,9 +327,9 @@ async def test_money_inputs_are_rounded_to_cents_and_bounded(env):
 async def test_notes_are_capped_at_200_characters(env):
     gw, conn, cfg, ids, keys = env
     async with admin_client(gw) as c:
-        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 201})
+        r = await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 201})
         assert r.status_code == 400 and "200" in r.json()["error"]
-        t = (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 200})).json()["ticket"]
+        t = (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 200})).json()["ticket"]
         r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"extra_days": 1, "note": "y" * 201})
         assert r.status_code == 400 and "200" in r.json()["error"]
 
@@ -350,7 +357,7 @@ async def test_a_locked_database_is_a_503_not_a_500(env, monkeypatch):
         raise sqlite3.OperationalError("database is locked")
     monkeypatch.setattr(tickets, "grant", locked)
     async with admin_client(gw) as c:
-        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
+        r = await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
         assert r.status_code == 503 and "try again" in r.json()["error"] and r.headers["retry-after"]
 
 
@@ -383,3 +390,43 @@ async def test_users_with_ungated_tickets_still_have_tickets(env):
     async with admin_client(gw) as c:
         users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
     assert users["alice"]["ticket"]["gated"] is False and users["alice"]["ticket"]["has_tickets"] is True   # still in the ticket filter
+
+
+async def test_a_grant_needs_the_quote_its_preview_showed(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
+        assert r.status_code == 400 and "Preview the ticket first" in r.json()["error"]
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+
+
+async def test_with_tickets_off_a_paused_user_is_shown_and_can_be_ungated(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).status_code == 200
+    cfg.tickets.enabled = False
+    async with admin_client(gw) as c:
+        users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
+        assert users["alice"]["ticket"]["paused"] and users["alice"]["ticket"]["live"]
+        assert users["admin"]["ticket"] is None                       # never gated: nothing to show while tickets are off
+        me = (await c.get("/api/me/status", headers=bearer(keys["alice"]))).json()
+        assert me["paused"] is True
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/ungate", json={})).status_code == 200
+        me = (await c.get("/api/me/status", headers=bearer(keys["alice"]))).json()
+        assert me["paused"] is False
+    assert conn.execute("SELECT cancelled_at IS NOT NULL FROM tickets").fetchone()[0] == 1
+    assert last_audit(conn) == ("ungate", "alice")
+
+
+async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        t = (await grant(c, {"user": "alice", "tier": "lite", "length": "day", "currency": "USD"})).json()["ticket"]
+        assert (await c.post(f"/api/admin/tickets/{t['id']}/cancel", json={})).status_code == 200
+        conn.execute("UPDATE tickets SET ungated_at=1")
+        dbm.revoke(conn, ids["alice"], ids["admin"])
+        dbm.delete_user(conn, ids["alice"], ids["admin"])
+        r = (await c.get("/api/admin/tickets")).json()
+        assert r["deleted_users"] == ["alice"]
+        assert [x["id"] for x in (await c.get("/api/admin/tickets?deleted=alice")).json()["tickets"]] == [t["id"]]
+        assert (await c.get("/api/admin/tickets?deleted=bob")).json()["tickets"] == []

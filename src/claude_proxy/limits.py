@@ -250,6 +250,11 @@ def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> Li
         st.current = 0.0   # live data and nothing used today: no rate needed, so a young account isn't refused
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    if rate is None and not st.no_live_data:
+        # A young account: utilization has never risen a whole point, so there is no rate yet. Live snapshots still say
+        # who moved it, and until the first rise that is nobody, so a lone first user isn't locked out by their own usage.
+        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, day_start, now)
+        return _finish(st)
     if rate is None:
         st.skipped, st.no_live_data = NO_RATE, False
         return st

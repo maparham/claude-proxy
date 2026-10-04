@@ -560,17 +560,31 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
             "ticket": get(conn, ticket_id), "moved": moved}
 
 
-def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float | None = None) -> int:
+def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float | None = None, end_live: bool = False) -> int:
     """Stop the user's tickets from gating them (spec section 7, Exit). Only for a user with no active or queued
-    ticket. The tickets remain as sales records. Returns how many rows were marked."""
+    ticket, unless `end_live`: with tickets switched off there is no Tickets tab to cancel from, so the user's active
+    and queued tickets (and their bonuses) are cancelled in the same step. The tickets remain as sales records.
+    Returns how many rows were marked."""
     now = _now(now)
     name = db._user_name(conn, user_id)
-    if covering(conn, user_id, now) or next_queued(conn, user_id, now):
+    live = conn.execute(f"SELECT t.id FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {db.TICKET_EFFECTIVE_END}>?",
+                        (user_id, now)).fetchall()
+    if live and not end_live:
         raise TicketError(f"{name} has an active or queued ticket; cancel it before ungating.")
-    n = conn.execute("UPDATE tickets SET ungated_at=? WHERE user_id=? AND ungated_at IS NULL", (now, user_id)).rowcount
-    if n == 0:
-        raise TicketError(f"{name} has no tickets to ungate.")
-    db.audit(conn, actor, "ungate", name, {"tickets": n})
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        ids = [r[0] for r in live]
+        for tid in ids:
+            conn.execute("UPDATE tickets SET cancelled_at=?, cancelled_by=? WHERE id=?", (now, actor, tid))
+            conn.execute("UPDATE ticket_bonuses SET cancelled_at=?, cancelled_by=? WHERE ticket_id=? AND cancelled_at IS NULL", (now, actor, tid))
+        n = conn.execute("UPDATE tickets SET ungated_at=? WHERE user_id=? AND ungated_at IS NULL", (now, user_id)).rowcount
+        if n == 0:
+            raise TicketError(f"{name} has no tickets to ungate.")
+        db.audit(conn, actor, "ungate", name, {"tickets": n, **({"cancelled": ids} if ids else {})})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
     return n
 
 
