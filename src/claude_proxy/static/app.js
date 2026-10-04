@@ -943,7 +943,7 @@ function bonusDialog(t, list) {
 
 // ---------- order requests: the admin's Orders tab (design 2026-10-04, section 7) ----------
 
-const ORDER_STATUSES = [["open", "Open"], ["new", "New"], ["contacted", "Contacted"], ["done", "Done"], ["declined", "Declined"], ["withdrawn", "Withdrawn"], ["all", "All"]];
+const ORDER_STATUSES = [["open", "Open orders"], ["new", "New"], ["contacted", "Contacted"], ["done", "Done"], ["declined", "Declined"], ["withdrawn", "Withdrawn"], ["all", "All orders"]];
 const isOpenOrder = (o) => o.status === "new" || o.status === "contacted";
 
 async function renderOrders(main) {
@@ -952,11 +952,11 @@ async function renderOrders(main) {
   if (S.tickets && S.tickets.orders_new !== fresh) { S.tickets.orders_new = fresh; renderTabs(); }
   main.innerHTML = `<section class="view"><h2>Orders</h2>
     <p class="lede">Requests from buyers. An order holds no capacity and takes no payment: contact the buyer, then grant the ticket from the order.</p>
-    <div class="controls">${seg("orderStatus", ORDER_STATUSES, status)}</div>
+    <div class="controls"><label for="order-status">Show</label><select id="order-status">${ORDER_STATUSES.map(([k, n]) => `<option value="${k}"${k === status ? " selected" : ""}>${n}</option>`).join("")}</select></div>
     <div class="card table-wrap"><table class="data orders"><thead><tr><th>Age</th><th>Buyer</th><th>Ticket</th><th class="r">Quoted</th><th>Message</th><th>Status</th><th>Email</th><th>Note</th><th></th></tr></thead>
       <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="9" class="muted">No ${status === "all" ? "" : `${esc(status)} `}orders.</td></tr>`}</tbody></table></div>
   </section>`;
-  wireSegs(main, render);
+  $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
   main.querySelectorAll("[data-oact]").forEach((b) => b.addEventListener("click", () => orderAction(b.dataset.oact, orders.find((o) => o.id === +b.dataset.id), users)));
 }
 // Every field a buyer typed (name, email, message) and the admin note go through esc().
