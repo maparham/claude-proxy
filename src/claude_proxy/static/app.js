@@ -141,7 +141,7 @@ const TIPS = {
   act_ticket_bonus: `Extra share for a period, extra days at the ticket's share, or both. Checked against capacity like a ticket.`,
   capacity_sold: `What tickets and bonuses have reserved: the sum of their shares at this moment, and the highest sum over the next 30 days. Grants are refused past <b>max_sold_pct</b>.`,
   capacity_util: `What everyone has actually used, as Anthropic reports it. The gap between max_sold_pct and 100 is what the admin, free-credit accounts and hand-limited users have.`,
-  sold_out_vs_queued: `/pricing asks whether a ticket starting <b>now</b> fits. A grant to someone with a live ticket starts after it, so it can succeed while the badge says sold out.`,
+  sold_out_vs_queued: `The home page asks whether a ticket starting <b>now</b> fits. A grant to someone with a live ticket starts after it, so it can succeed while the badge says sold out.`,
 };
 const KIND_TIPS = {
   requests_minute: "Requests in the last 60 seconds.",
@@ -523,6 +523,13 @@ async function render() {
   try { await view.render(main); } catch (e) {
     if (e.message !== "signed out") main.innerHTML = `<div class="banner critical"><span class="icon">!</span><span>${esc(e.message)}</span></div>`;
   }
+  if (S.toPrices) { S.toPrices = false; scrollToPrices(); }
+}
+// The user's own price list; when it didn't load (the tickets call failed), the public one.
+function scrollToPrices() {
+  const el = document.getElementById("prices");
+  if (el) el.scrollIntoView({ behavior: "smooth", block: "start" });
+  else location.href = "/?home#pricing";
 }
 
 function credentialPill(c) {
@@ -801,7 +808,7 @@ function grantDialog(users) {
     const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (discount)` : `<b>${fmtPrice(p.usd)}</b>`;
     const when = p.queued ? `queued: starts ${fmtDate(p.starts_at)}, after the user's current ticket` : `starts now`;
     const fit = p.available ? `<span class="good">The period is available.</span>` : `<span class="critical">${esc(p.reason)}</span>`;
-    const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${tipT("/pricing shows this tier as sold out right now", "sold_out_vs_queued")}; this grant starts later and fits.</span>` : "";
+    const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${tipT("The home page shows this tier as sold out right now", "sold_out_vs_queued")}; this grant starts later and fits.</span>` : "";
     $("#grant-preview", d).innerHTML = `${price} → <b>${esc(money(p.amount, p.currency))}</b> at ${p.rate} ${p.rate_set_at ? `(rate of ${fmtDate(p.rate_set_at)}${p.stale_rate ? ", <b>stale</b>" : ""})` : ""}<br>
       ${p.days} day${p.days === 1 ? "" : "s"}, ${when}: ${fmtDate(p.starts_at)} → ${fmtDate(p.ends_at)}<br>${fit}${soldOut}
       ${p.credit ? `<br><span class="muted">Their sign-up credit is removed with the ticket.</span>` : ""}`;
@@ -878,7 +885,7 @@ async function renderPricing(main) {
           `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="number" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>Discounts</h3><p class="sub">A lower USD price for one tier and length over a period. It must be below the regular price; while active it replaces the price everywhere and /pricing shows a countdown.</p>
+    <div class="card" style="margin-top:16px"><h3>Discounts</h3><p class="sub">A lower USD price for one tier and length over a period. It must be below the regular price; while active it replaces the price everywhere and the home page shows a countdown.</p>
       <form id="f-disc" class="form-grid">
         <label>Tier<select name="tier">${Object.entries(p.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)}</option>`).join("")}</select></label>
         <label>Length<select name="length">${Object.keys(p.lengths).map((l) => `<option>${esc(l)}</option>`).join("")}</select></label>
@@ -1509,13 +1516,15 @@ $("#dialog").addEventListener("close", hideTip);
 // The tier and length a visitor picked on the home page ("Get it"), kept through sign-in in this tab; the price
 // list names it once the user is in. Taken out of the address so a reload or a shared link doesn't repeat it.
 const PICK_KEY = "cp-picked";
-(function rememberPick() {
+function rememberPick() {
   const q = new URLSearchParams(location.search);
   if (!q.has("tier")) return;
   try { sessionStorage.setItem(PICK_KEY, JSON.stringify({ tier: q.get("tier"), length: q.get("length") })); } catch { /* no storage: the pick is lost */ }
   q.delete("tier"); q.delete("length");
-  history.replaceState(null, "", location.pathname + (q.size ? `?${q}` : "") + location.hash);
-})();
+  const rest = q.toString();   // not q.size: older Safari and Chrome lack it
+  history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
+}
+rememberPick();
 function takePick() {
   if (S.pick === undefined) {
     try { S.pick = JSON.parse(sessionStorage.getItem(PICK_KEY) || "null"); sessionStorage.removeItem(PICK_KEY); } catch { S.pick = null; }
@@ -1550,6 +1559,7 @@ async function boot() {
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
   showWho();
+  if (isAdmin()) takePick();   // an admin previewing the home page has no price list to name it in
   route();
   render();
 }
@@ -1558,6 +1568,8 @@ function route() {
   const h = location.hash.slice(1), m = /^user\/(\d+)$/.exec(h), a = /^authorize\/([A-Za-z-]+)$/.exec(h);
   if (m) { S.tab = "user"; S.userId = +m[1]; return true; }
   if (a) { S.tab = "authorize"; S.authCode = a[1]; return true; }
+  // An old /pricing link lands here as #pricing: a user's prices are on the overview; an admin's tab has the name.
+  if (h === "pricing" && !isAdmin()) { S.tab = "overview"; S.toPrices = true; history.replaceState(null, "", "#overview"); return true; }
   if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
   return false;
 }
@@ -1586,10 +1598,9 @@ $("#who").onclick = () => nameDialog();
 $("#pricing-btn").onclick = async (e) => {
   if (isAdmin()) return;
   e.preventDefault();
-  S.tab = "overview";
+  S.tab = "overview"; S.toPrices = true;
   history.replaceState(null, "", "#overview");
-  await render();
-  document.getElementById("prices")?.scrollIntoView({ behavior: "smooth", block: "start" });
+  render();
 };
 $("#theme-toggle").onclick = () => {
   const dark = document.documentElement.dataset.theme ? document.documentElement.dataset.theme === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;

@@ -583,3 +583,68 @@ async def test_home_promises_no_sign_in_method(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         page = (await c.get("/")).text
     assert "Google" not in page and "GitHub" not in page
+
+
+APP_FN_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[2], "utf8");
+const names = JSON.parse(process.argv[3]);
+const code = names.map((n) => { const m = new RegExp(`^function ${n}\\([\\s\\S]*?^}`, "m").exec(src); if (!m) throw new Error("not found: " + n); return m[0]; }).join("\n");
+const calls = [];
+const ctx = { JSON, console, calls, URLSearchParams: class extends URLSearchParams { get size() { return undefined; } } };   // an old browser: no .size
+vm.runInNewContext(code + "\n" + process.argv[4], ctx);
+console.log(JSON.stringify(ctx.out));
+"""
+
+
+def _app_fn(tmp_path, names, script):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    harness = tmp_path / "app_fn.js"
+    harness.write_text(APP_FN_HARNESS)
+    js = Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js"
+    out = subprocess.run(["node", str(harness), str(js), json.dumps(names), script], capture_output=True, text=True, timeout=30, check=True).stdout
+    return json.loads(out)
+
+
+ROUTE_STUBS = """
+var replaced = null, admin = false;
+var S = {}, VIEWS = { overview: {}, pricing: { admin: true } };
+var isAdmin = () => admin;
+var location = { hash: "#pricing" };
+var history = { replaceState: (a, b, u) => { replaced = u; } };
+"""
+
+
+def test_an_old_pricing_link_opens_a_users_own_price_list(tmp_path):
+    out = _app_fn(tmp_path, ["route"], ROUTE_STUBS + "route(); var out = { tab: S.tab, toPrices: S.toPrices, replaced };")
+    assert out == {"tab": "overview", "toPrices": True, "replaced": "#overview"}
+    out = _app_fn(tmp_path, ["route"], ROUTE_STUBS + "admin = true; route(); var out = { tab: S.tab, toPrices: S.toPrices ?? null };")
+    assert out == {"tab": "pricing", "toPrices": None}            # the admin's own Pricing tab
+
+
+def test_the_price_list_falls_back_to_the_home_page_when_it_did_not_load(tmp_path):
+    stubs = "var scrolled = false, location = { href: '/dashboard' };"
+    out = _app_fn(tmp_path, ["scrollToPrices"], stubs + "var document = { getElementById: () => null }; scrollToPrices(); var out = location.href;")
+    assert out == "/?home#pricing"
+    out = _app_fn(tmp_path, ["scrollToPrices"], stubs + "var document = { getElementById: () => ({ scrollIntoView: () => { scrolled = true; } }) }; scrollToPrices(); var out = [scrolled, location.href];")
+    assert out == [True, "/dashboard"]
+
+
+def test_a_pick_keeps_the_other_query_parameters_in_an_old_browser(tmp_path):
+    stubs = """var store = {}, replaced = null, PICK_KEY = "cp-picked";
+var sessionStorage = { setItem: (k, v) => { store[k] = v; } };
+var location = { search: "?tier=lite&length=week&ref=mail", pathname: "/dashboard", hash: "" };
+var history = { replaceState: (a, b, u) => { replaced = u; } };"""
+    out = _app_fn(tmp_path, ["rememberPick"], stubs + "rememberPick(); var out = [replaced, JSON.parse(store['cp-picked'])];")
+    assert out == ["/dashboard?ref=mail", {"tier": "lite", "length": "week"}]
+
+
+def test_admin_tips_no_longer_point_at_the_old_pricing_page():
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js").read_text()
+    assert "`/pricing asks" not in src and "/pricing shows" not in src   # the tips admins read
