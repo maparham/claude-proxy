@@ -108,7 +108,8 @@ async def test_preview_grant_list_and_users_state(env):
         assert lst[0]["id"] == t["id"] and lst[0]["state"] == "active" and lst[0]["granted_by_name"] == "admin" and lst[0]["bonuses"] == []
         users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
         assert users["alice"]["ticket"]["gated"] and users["alice"]["ticket"]["live"] and users["alice"]["ticket"]["current"]["id"] == t["id"]
-        assert users["admin"]["ticket"] == {"gated": False, "live": False, "current": None, "queued": None}
+        assert users["admin"]["ticket"] == {"gated": False, "live": False, "current": None, "queued": None, "has_tickets": False}
+        assert users["alice"]["ticket"]["has_tickets"] is True
         # A second grant queues after the first; the preview says so.
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "day", "currency": "USD"})).json()
         assert p["queued"] is True and p["starts_at"] == t["ends_at"]
@@ -224,6 +225,7 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
     assert "id" not in cur and "id" not in me["queued"]          # a ticket id counts the account's sales
     assert cur["effective_end"] == t["ends_at"] + DAY and cur["day_end"] == t["starts_at"] + DAY
     assert cur["bonuses"] == [{"share_pct": 2, "note": "welcome", "ends_at": t["ends_at"] + DAY}]
+    assert cur["day_bonuses"] == [] and abs(me["now"] - time.time()) < 5   # that bonus's days show with its share
     assert (me["queued"]["label"], me["queued"]["starts_at"]) == ("Lite", t["ends_at"] + DAY)
     assert me["prices"]["currency"] == "EUR" and me["how_to_buy"].startswith("Send")
     for leaked in ("utilization", "sold_now", "shares", "granted_by"):
@@ -362,3 +364,22 @@ async def test_dashboard_links_the_pricing_page_only_while_tickets_are_on(env):
         cfg.tickets.enabled = False
         page = (await c.get("/dashboard")).text
         assert page.count("pricing-link hidden") == 2
+
+
+async def test_me_tickets_shows_the_note_of_an_extra_days_bonus(env):
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now - 3600)
+    tickets.add_bonus(conn, cfg, ids["admin"], t["id"], extra_days=2, note="sorry for Tuesday", now=now)
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        cur = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
+    assert cur["bonus_days"] == 2 and cur["day_bonuses"] == [{"extra_days": 2, "note": "sorry for Tuesday"}]
+
+
+async def test_users_with_ungated_tickets_still_have_tickets(env):
+    gw, conn, cfg, ids, keys = env
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY)
+    tickets.ungate(conn, ids["admin"], ids["alice"])
+    async with admin_client(gw) as c:
+        users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
+    assert users["alice"]["ticket"]["gated"] is False and users["alice"]["ticket"]["has_tickets"] is True   # still in the ticket filter

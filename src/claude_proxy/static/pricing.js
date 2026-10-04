@@ -44,7 +44,7 @@ function cell(l, currency) {
 function render() {
   const root = document.getElementById("pricing");
   root.innerHTML = `<div class="table-wrap"><table class="data"><thead><tr><th>Tier</th>${LENGTHS.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead>
-    <tbody>${data.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b><div class="muted">${esc(t.share_pct)}% of the subscription</div>${hints(t)}</td>
+    <tbody>${data.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b><div class="muted">${esc(+(+t.share_pct).toFixed(2))}% of the subscription</div>${hints(t)}</td>
       ${LENGTHS.map(([k]) => cell(t.lengths[k], data.currency)).join("")}</tr>`).join("")}</tbody></table></div>`;
   document.getElementById("rate-note").textContent = data.rate_set_at
     ? `Prices converted at the rate of ${new Date(data.rate_set_at * 1000).toLocaleDateString()}.` : "";

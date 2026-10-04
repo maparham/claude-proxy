@@ -388,12 +388,12 @@ def test_ungate_only_without_live_tickets(db):
 
 def test_user_state_summarises_gating_and_live_tickets(db):
     conn, cfg, ids = seeded(db)
-    assert tickets.user_state(conn, ids["alice"], NOW) == {"gated": False, "current": None, "queued": None, "live": False}
+    assert tickets.user_state(conn, ids["alice"], NOW) == {"gated": False, "current": None, "queued": None, "live": False, "has_tickets": False}
     a = grant(conn, cfg, ids, length="day")
     s = tickets.user_state(conn, ids["alice"], NOW + 10)
     assert s["gated"] and s["live"] and s["current"]["id"] == a["id"] and s["queued"] is None
     s = tickets.user_state(conn, ids["alice"], NOW + 2 * DAY)
-    assert s == {"gated": True, "current": None, "queued": None, "live": False}
+    assert s == {"gated": True, "current": None, "queued": None, "live": False, "has_tickets": True}
 
 
 def test_gateway_warns_when_tickets_are_off_but_users_are_still_gated(db, caplog):

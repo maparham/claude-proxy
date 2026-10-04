@@ -575,9 +575,11 @@ def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float
 
 
 def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
-    """For the Users page: whether the user is ticket-gated and which ticket covers now or is queued next."""
+    """For the Users page: whether the user is ticket-gated, which ticket covers now or is queued next, and whether they
+    have any ticket at all (an ungated user's tickets are still sales records the Tickets tab filters by)."""
     current, queued = covering(conn, user_id, now), next_queued(conn, user_id, now)
-    return {"gated": is_gated(conn, user_id), "current": current, "queued": queued, "live": current is not None or queued is not None}
+    return {"gated": is_gated(conn, user_id), "current": current, "queued": queued, "live": current is not None or queued is not None,
+            "has_tickets": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is not None}
 
 
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str) -> dict:

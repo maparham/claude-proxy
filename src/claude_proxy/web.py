@@ -989,17 +989,22 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "how_to_buy": cfg.tickets.how_to_buy}
         cur = st["current"]
         if cur:
+            active = tickets.active_bonuses(conn, cur["id"], now)
             out["current"] = {"tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "day_end": tickets.current_day(cur, now)[1],
                               "bonus_share": tickets.bonus_share(conn, cur["id"], now),
-                              "bonuses": [{"share_pct": b["share_pct"], "note": b["note"], "ends_at": b["ends_at"]}
-                                          for b in tickets.active_bonuses(conn, cur["id"], now)]}
+                              "bonuses": [{"share_pct": b["share_pct"], "note": b["note"], "ends_at": b["ends_at"]} for b in active]}
+            # Extra days with their note; a bonus that also adds a share running now is shown with that share instead.
+            shown = {b["id"] for b in active}
+            out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
+                                             if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]
         if st["queued"]:
             q = st["queued"]
             out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         out["prices"] = tickets.price_table(conn, cfg, now, currency)
+        out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         return out
 
     # ---------- page ----------

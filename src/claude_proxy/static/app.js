@@ -7,6 +7,8 @@ const S = {
   settings: { reference_model: "claude-sonnet-5", stale_after_s: 1800 },   // replaced by /api/session
   prefs: loadPrefs(),
   colorSlots: loadSlots(),   // dimension -> {key: slot}; colour follows the entity, kept across page loads
+  tkSkew: 0,                 // server clock minus this browser's, from /api/me/tickets: discounts end on the server's clock
+  discountsEnded: new Set(), // discount ends already re-rendered for, so a server still listing one can't loop renders
 };
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -44,6 +46,7 @@ const nfFull = new Intl.NumberFormat();
 function fmtNum(v) { return v == null ? "—" : nf.format(v); }
 function fmtUsd(v) { return v == null ? "—" : v === 0 ? "$0" : v < 0.01 ? "<$0.01" : "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)); }
 const fmtPrice = (v) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;   // a USD price: whole dollars bare, otherwise cents
+const fmtShare = (v) => `${+(+v).toFixed(2)}%`;   // a share: 6.1000000000000005 reads 6.1%
 function fmtPct(v, d = 0) { return v == null ? "—" : `${v.toFixed(d)}%`; }
 function fmtDur(s) {
   if (s == null) return "—";
@@ -534,6 +537,7 @@ function credentialPill(c) {
 async function renderOverview(main) {
   const [ov, me, keys, tk] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), isAdmin() || !S.tickets?.enabled ? null : api("/api/me/tickets")]);
   if (ov.credential) credentialPill(ov.credential);
+  if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
   const t = ov.totals[S.prefs.period] || ov.totals["24h"];
   const banners = [];
   if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span><b>Claude requests will fail:</b> the gateway has no working Claude subscription login. ${isAdmin() ? `Run <code>claude-proxy login</code> on the gateway host.${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : "Ask the admin to re-link it."}</span></div>`);
@@ -574,10 +578,15 @@ async function renderOverview(main) {
     stackedTime($("#ov-users"), s.points, "weighted", "user", "day");
   }
   if (tk) {
-    const tick = () => main.querySelectorAll(".countdown").forEach((el) => {
-      const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000));
-      el.textContent = s ? `Offer ends in ${Math.floor(s / 86400)}d ${String(Math.floor((s % 86400) / 3600)).padStart(2, "0")}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m ${String(s % 60).padStart(2, "0")}s` : "Offer ended";
-    });
+    const tick = () => {
+      let ended = false;
+      main.querySelectorAll(".countdown").forEach((el) => {
+        const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000 - S.tkSkew));
+        if (!s && !S.discountsEnded.has(el.dataset.ends)) { S.discountsEnded.add(el.dataset.ends); ended = true; }
+        el.textContent = s ? `Offer ends in ${Math.floor(s / 86400)}d ${String(Math.floor((s % 86400) / 3600)).padStart(2, "0")}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m ${String(s % 60).padStart(2, "0")}s` : "Offer ended";
+      });
+      if (ended) { clearInterval(S.countdown); render(); }   // once per end: the regular price returns
+    };
     tick();
     clearInterval(S.countdown); S.countdown = setInterval(() => (document.contains(main.querySelector(".countdown")) ? tick() : clearInterval(S.countdown)), 1000);
   }
@@ -589,10 +598,11 @@ function usersCard() {
 function userLimitsCard(me, tk) {
   const c = tk && tk.current;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div><b>${esc(c.label)} ticket</b> · ${c.share_pct}% of the subscription</div>
+      <div><b>${esc(c.label)} ticket</b> · ${fmtShare(c.share_pct)} of the subscription</div>
       <div class="muted">Ends ${fmtDate(c.effective_end)}${c.bonus_days ? ` <span class="badge">+${c.bonus_days} day${c.bonus_days === 1 ? "" : "s"} bonus</span>` : ""} · today ends in ${fmtDur(c.day_end - Date.now() / 1000)}</div>
-      ${c.bonuses.map((b) => `<div class="badge bonus">Bonus: +${b.share_pct}% until ${fmtDate(b.ends_at)}${b.note ? ` · ${esc(b.note)}` : ""}</div>`).join("")}
-      ${c.bonus_share ? `<p class="sub">While the bonus runs, both bars are measured against ${c.share_pct + c.bonus_share}%.</p>` : ""}
+      ${c.bonuses.map((b) => `<div class="badge bonus">Bonus: +${fmtShare(b.share_pct)} until ${fmtDate(b.ends_at)}${b.note ? ` · ${esc(b.note)}` : ""}</div>`).join("")}
+      ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">Bonus: +${b.extra_days} day${b.extra_days === 1 ? "" : "s"} · ${esc(b.note)}</div>`).join("")}
+      ${c.bonus_share ? `<p class="sub">While the bonus runs, both bars are measured against ${fmtShare(c.share_pct + c.bonus_share)}.</p>` : ""}
       ${tk.queued ? `<div class="muted">Next: ${esc(tk.queued.label)} ticket from ${fmtDate(tk.queued.starts_at)}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket"><b>Your next ticket</b> (${esc(tk.queued.label)}) starts ${fmtDate(tk.queued.starts_at)}.</div>`
     : `<div class="ticket"><b>Your ticket has ended.</b> ${esc(tk.how_to_buy || "Ask the gateway admin.")}</div>`;
@@ -602,14 +612,17 @@ function userLimitsCard(me, tk) {
 }
 function priceListCard(tk) {
   const p = tk.prices;
+  const now = Date.now() / 1000 + S.tkSkew;
+  // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
+  const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
   const L = [["day", "1 day"], ["week", "1 week"], ["month", "1 month"]];
   const hint = (t) => Object.entries({ sonnet: "Sonnet", opus: "Opus" }).map(([f, n]) => { const h = t.hours[f]; return h && (h.per_5h != null || h.per_day != null)
     ? `<div class="muted">${n}: at least ${[h.per_5h != null ? `${h.per_5h} h per 5-hour window` : null, h.per_day != null ? `${h.per_day} h per day` : null].filter(Boolean).join(", ")}</div>` : ""; }).join("");
-  const cell = (l) => `<td class="r">${l.discount_ends_at ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(l.amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
-    ${l.discount_ends_at ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}</td>`;
+  const cell = (l) => `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
+    ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}</td>`;
   return `<div class="card"><h3>Tickets</h3><p class="sub">Buy a slice for a day, a week or a month.${p.rate_set_at ? ` Prices converted at the rate of ${fmtDate(p.rate_set_at)}.` : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>Tier</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${t.share_pct}%</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t.lengths[k])).join("")}</tr>`).join("")}
+    ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t.lengths[k])).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${esc(tk.how_to_buy || "")}</p></div>`;
 }
 
@@ -725,32 +738,32 @@ async function renderTickets(main) {
         <p class="sub" style="margin-top:12px">Utilization is what everyone has used, ticket holders and headroom users alike.</p></div>
     </div>
     <div class="controls"><button class="btn primary" id="grant">Grant a ticket</button>
-      <select id="ticket-user"><option value="">All users</option>${users.filter((u) => u.ticket && u.ticket.gated).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div>
+      <select id="ticket-user"><option value="">All users</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div>
     <div class="card table-wrap"><table class="data"><thead><tr><th>User</th><th>Tier</th><th>Period</th><th class="r">Paid</th><th>State</th><th>Bonuses</th><th>Note</th><th></th></tr></thead>
       <tbody>${tickets.map(ticketRow).join("") || `<tr><td colspan="8" class="muted">No tickets yet.</td></tr>`}</tbody></table></div>
   </section>`;
   $("#grant").onclick = () => grantDialog(users);
   $("#ticket-user").onchange = (e) => { S.ticketUser = e.target.value ? +e.target.value : null; render(); };
-  main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((t) => t.id === +b.dataset.id))));
+  main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((t) => t.id === +b.dataset.id), tickets)));
 }
 function ticketRow(t) {
   const live = t.state === "active" || t.state === "queued";
-  const bonus = t.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${b.share_pct}%` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? `+${b.extra_days} d` : ""}`).join(", ");
+  const bonus = t.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? `+${b.extra_days} d` : ""}`).join(", ");
   return `<tr><td><b>${esc(t.user_name)}</b>${t.user_id == null ? ` <span class="badge">deleted</span>` : ""}</td>
-    <td>${esc(t.tier)} <span class="muted">${t.share_pct}%</span></td>
+    <td>${esc(t.tier)} <span class="muted">${fmtShare(t.share_pct)}</span></td>
     <td class="nowrap">${fmtDate(t.starts_at)} → ${fmtDate(t.effective_end)}${t.effective_end !== t.ends_at ? ` <span class="muted">(+${Math.round((t.effective_end - t.ends_at) / 86400)} d bonus)</span>` : ""}</td>
     <td class="r">${esc(money(t.amount, t.currency))}${t.discount_id ? `<div class="muted"><s>${fmtPrice(t.list_usd)}</s> ${fmtPrice(t.usd)}</div>` : `<div class="muted">${fmtPrice(t.usd)}</div>`}</td>
     <td>${stateBadge(t.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${esc(t.note || "")}</td>
-    <td><div class="row-actions">${live ? `<button class="btn small" data-tact="bonus" data-id="${t.id}" data-tip="act_ticket_bonus">Bonus</button>
-      <button class="btn small danger" data-tact="cancel" data-id="${t.id}" data-tip="act_ticket_cancel">Cancel</button>` : ""}</div></td></tr>`;
+    <td><div class="row-actions">${live || t.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${t.id}" data-tip="act_ticket_bonus">Bonus</button>` : ""}
+      ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${t.id}" data-tip="act_ticket_cancel">Cancel</button>` : ""}</div></td></tr>`;
 }
-async function ticketAction(act, t) {
-  if (act === "bonus") return bonusDialog(t);
+async function ticketAction(act, t, list) {
+  if (act === "bonus") return bonusDialog(t, list);
   if (!confirmInline(`Cancel ${t.user_name}'s ${t.tier} ticket? The slice is freed now and its bonuses end. Refunds happen outside the app.`)) return;
   try {
     const r = await api(`/api/admin/tickets/${t.id}/cancel`, { method: "POST", body: {} });
+    render();   // the ticket is cancelled either way, and any queued tickets moved
     if (r.dates_kept) infoInline("Cancelled", `Their queued tickets kept their dates because one of them would not fit earlier: ${r.reason}`);
-    else render();
   } catch (e) { alertInline(e.message); }
 }
 function grantDialog(users) {
@@ -758,7 +771,7 @@ function grantDialog(users) {
   const d = openDialog(`<h3>Grant a ticket</h3>
     <form id="f-grant" class="form-grid">
       <label>User<select name="user" required>${users.filter((u) => !u.revoked && u.enabled).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
-      <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)} · ${t.share_pct}%</option>`).join("")}</select></label>
+      <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)} · ${fmtShare(t.share_pct)}</option>`).join("")}</select></label>
       <label>Length<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n} ${n === 1 ? "day" : "days"})</option>`).join("")}</select></label>
       <label>Currency<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label>Note (for you)<input type="text" name="note" maxlength="200" placeholder="e.g. transfer ref 1234"></label>
@@ -804,25 +817,34 @@ function grantDialog(users) {
     }
   };
 }
-function bonusDialog(t) {
+function bonusDialog(t, list) {
+  // The user's queued tickets after this one: extra days that reach the first of them move it and the rest forward (spec section 8).
+  const queued = t.user_id == null ? [] : list.filter((x) => x.user_id === t.user_id && x.id !== t.id && x.state === "queued" && x.starts_at >= t.effective_end)
+    .sort((a, b) => a.starts_at - b.starts_at);
+  const moves = (days) => (queued.length && queued[0].starts_at < t.effective_end + days * 86400 ? queued.length : 0);
   const d = openDialog(`<h3>Bonus on ${esc(t.user_name)}'s ${esc(t.tier)} ticket</h3>
-    <p class="sub">Extra share applies between the two times (clamped to the ticket). Extra days extend the ticket at its own share and move this user's queued tickets forward by the same amount.</p>
+    <p class="sub">Extra share applies between the two times (clamped to the ticket). Extra days extend the ticket at its own share and move this user's queued tickets forward as far as needed.</p>
     <form id="f-bonus" class="form-grid">
       <label>Extra share, points<input type="number" name="share_pct" min="0" step="0.1" value="0"></label>
       <label>From<input type="datetime-local" name="starts_at" value="${toLocal(Math.max(t.starts_at, Date.now() / 1000))}"></label>
       <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(t.effective_end)}"></label>
       <label>Extra days<input type="number" name="extra_days" min="0" step="1" value="0"></label>
       <label>Note (shown to the user)<input type="text" name="note" maxlength="200" placeholder="e.g. Sorry for Tuesday's outage"></label>
+      <div id="bonus-moves" class="hint" aria-live="polite"></div>
       <button class="btn primary" type="submit">Add bonus</button>
     </form><div class="error" id="bonus-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
   const f = $("#f-bonus", d);
+  const movesText = () => { const n = moves(+f.extra_days.value || 0); return n ? `These extra days move ${n} queued ticket${n === 1 ? "" : "s"} of ${t.user_name} forward.` : ""; };
+  f.extra_days.oninput = () => { $("#bonus-moves", d).textContent = movesText(); };
   f.onsubmit = async (e) => {
     e.preventDefault();
+    if (movesText() && !confirmInline(`${movesText()} Add the bonus?`)) return;
     try {
       const r = await api(`/api/admin/tickets/${t.id}/bonus`, { method: "POST", body: { share_pct: +f.share_pct.value, extra_days: +f.extra_days.value,
         starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value), note: f.note.value } });
       d.close();
-      if (r.moved) infoInline("Bonus added", `${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward by ${f.extra_days.value} day(s).`); else render();
+      render();
+      if (r.moved) infoInline("Bonus added", `${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward to start after the extended ticket.`);
     } catch (err) { $("#bonus-err", d).textContent = err.message; }
   };
 }
@@ -842,7 +864,7 @@ async function renderPricing(main) {
       </div>
       <div class="card"><h3>Regular prices, USD</h3><p class="sub">Each change is logged. Existing tickets keep what they were sold at.</p>
         <table class="data"><thead><tr><th>Tier</th>${Object.keys(p.lengths).map((l) => `<th class="r">${esc(l)}</th>`).join("")}</tr></thead><tbody>
-        ${Object.entries(p.tiers).map(([k, t]) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${t.share_pct}%</span></td>${Object.keys(p.lengths).map((l) =>
+        ${Object.entries(p.tiers).map(([k, t]) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
           `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="number" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
     </div>
