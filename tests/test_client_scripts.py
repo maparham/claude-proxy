@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import signal
 import subprocess
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -85,7 +86,10 @@ def stub():
 
 
 def run(args, env, stdin=""):
-    return subprocess.run(args, input=stdin, capture_output=True, text=True, env=env, timeout=60)
+    # SIGINT back to default: a suite started in the background inherits it ignored, and sh can't trap a signal that
+    # was ignored on entry, so the logout test's fake claude would never record the hook's Ctrl-Cs.
+    return subprocess.run(args, input=stdin, capture_output=True, text=True, env=env, timeout=60,
+                          preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))
 
 
 # ---------- statusline.sh --warn (spec 5, test 16) ----------
