@@ -314,3 +314,15 @@ def test_stale_share_5h_counts_at_most_the_last_5_hours(env):
     req(conn, ids["alice"], later - 6 * 3600, i=500)                           # 6 hours ago: an earlier 5-hour window
     req(conn, ids["alice"], later - 3600, i=300)
     assert by_kind(conn, cfg, ids["alice"], now=later)["share_5h"].current == pytest.approx(0.3)
+
+
+def test_a_young_account_with_fresh_snapshots_does_not_lock_out_its_first_ticket_user(db):
+    # Utilization has never risen a whole point, so there is no rate; the user's own requests are all that could raise it.
+    conn, cfg, ids = seeded(db)
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW - 300)
+    for k in range(5):
+        fresh(conn, NOW - 240 + 60 * k)
+        req(conn, ids["alice"], NOW - 230 + 60 * k, i=20000)
+    assert check(conn, cfg, ids["alice"], now=NOW + 10) is None
+    st = by_kind(conn, cfg, ids["alice"], now=NOW + 10)["share_day"]
+    assert (st.current, st.skipped, st.no_live_data) == (0, None, False)

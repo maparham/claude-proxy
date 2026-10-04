@@ -69,8 +69,9 @@ deploy/lightsail/install-deploy-key.sh ec2-user@<server-ip>
 ```
 
 Paid tickets and rollback: switching `[tickets]` off in `config.toml` does not free ticket users; they get
-"Tickets are paused; ask the admin." until each is ungated (Users page, or cancel then Ungate), which hands
-them back to hand-set limits. Rolling the image back to a build from before tickets is different: that code
+"Tickets are paused; ask the admin." until each is ungated. The Users page marks them "tickets paused";
+Ungate there works with tickets off, cancels any remaining tickets in the same step, and hands them back to
+hand-set limits. Rolling the image back to a build from before tickets is different: that code
 ignores ticket rows, and a ticket user's sign-up credit is already gone, so they would have no limit at all.
 Ungate them and set their limits first.
 

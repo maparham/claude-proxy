@@ -342,9 +342,9 @@ def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: 
     """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of rises above the
     high-water mark, each with the forwarded Anthropic requests since the previous rise (_median_ratio). When the account has been quiet for
     that long and no such pair falls in the window, falls back to the median over the whole retained history instead,
-    so a ticket user whose account merely went quiet is never locked out. None only when no qualifying pair exists at
-    all, which can only happen on an account that has never served a request. Used to estimate a share when snapshots
-    are stale.
+    so a ticket user whose account merely went quiet is never locked out. None when no qualifying pair exists at all:
+    utilization has never risen a whole point in retained history (a young account). Converts a ticket user's tokens
+    to points for share_day, and for share_5h while snapshots are stale.
 
     Process-local cache: this runs on the hot path (every request a stale-snapshot ticket user makes), so the result
     is cached per (connection, bucket) for RATE_CACHE_S seconds of `now`-time (not wall-clock time, so tests with a
