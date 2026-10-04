@@ -219,10 +219,11 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["enabled"] and me["gated"]
     cur = me["current"]
-    assert (cur["id"], cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == (t["id"], "Lite", 5, 1, 2)
+    assert (cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == ("Lite", 5, 1, 2)
+    assert "id" not in cur and "id" not in me["queued"]          # a ticket id counts the account's sales
     assert cur["effective_end"] == t["ends_at"] + DAY and cur["day_end"] == t["starts_at"] + DAY
     assert cur["bonuses"] == [{"share_pct": 2, "note": "welcome", "ends_at": t["ends_at"] + DAY}]
-    assert (me["queued"]["id"], me["queued"]["starts_at"]) == (q["id"], t["ends_at"] + DAY)
+    assert (me["queued"]["label"], me["queued"]["starts_at"]) == ("Lite", t["ends_at"] + DAY)
     assert me["prices"]["currency"] == "EUR" and me["how_to_buy"].startswith("Send")
     for leaked in ("utilization", "sold_now", "shares", "granted_by"):
         assert leaked not in str(me)

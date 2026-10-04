@@ -977,10 +977,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         now = time.time()
         st = tickets.user_state(conn, user["id"], now)
         label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
+        # No ticket ids: they number every sale on the account.
         out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "how_to_buy": cfg.tickets.how_to_buy}
         cur = st["current"]
         if cur:
-            out["current"] = {"id": cur["id"], "tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
+            out["current"] = {"tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "day_end": tickets.current_day(cur, now)[1],
                               "bonus_share": tickets.bonus_share(conn, cur["id"], now),
@@ -988,7 +989,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                           for b in tickets.active_bonuses(conn, cur["id"], now)]}
         if st["queued"]:
             q = st["queued"]
-            out["queued"] = {"id": q["id"], "tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+            out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         out["prices"] = tickets.price_table(conn, cfg, now, currency)
         return out
