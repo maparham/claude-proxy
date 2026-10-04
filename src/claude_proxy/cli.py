@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from . import db, estimates, limits
+from . import db, estimates, limits, orders
 from .config import Config, ConfigError
 from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
@@ -276,6 +276,12 @@ async def _maintenance(conn, cfg: Config):
                 logger.info("usage estimates refreshed: %s", done)
         except Exception:
             logger.exception("usage estimates refresh failed")
+        try:
+            cleared = orders.clear_old_ips(conn)
+            if cleared:
+                logger.info("cleared the IP of %d orders older than 30 days", cleared)
+        except Exception:
+            logger.exception("clearing old order IPs failed")
         await asyncio.sleep(6 * 3600)
 
 
