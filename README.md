@@ -342,6 +342,19 @@ active ticket their requests get a 403 that quotes `how_to_buy`. Third-party mod
 limit is set for the user. When the ticket ends and the user is not buying again, **Ungate** on the Users page returns
 them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets-design.md`.
 
+### Order requests
+
+Instead of contacting the admin by hand, a buyer files an order request; it is a request, not a payment, and holds no
+capacity. Signed-in users press **Order** next to a price in their dashboard's price list (one open order at a time,
+which they can withdraw). With `turnstile_site_key` in `[tickets]` and `TURNSTILE_SECRET` in the environment, visitors
+can also order from the home page's **Get it** buttons, behind a Cloudflare Turnstile check and per-address and daily
+limits; without it, **Get it** links to the dashboard. New orders appear on the admin's **Orders** tab (with a count of
+new ones): mark one contacted, decline it with a note, keep a private note, or **Grant ticket**, which opens the usual
+grant form filled in from the order and closes the order with the grant. A visitor's order is first linked to an existing
+account or to a new one named after its email. With an `[email]` section (password in `SMTP_PASSWORD`), the admin gets
+an email for each order and the buyer a confirmation that contains nothing they typed. Design:
+`docs/superpowers/specs/2026-10-04-order-requests-design.md`.
+
 ## Operations
 
 - `claude-proxy status` shows credential health, the latest account figures and the route keys.

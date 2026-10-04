@@ -86,6 +86,13 @@ Details:
   (build by hand with `update.sh`, not `--build`, which would overwrite that tag), with `gateway.env` (mode 600) holding
   `CLAUDE_PROXY_CREDENTIAL_KEY` and optionally `META_API_KEY`. `config.toml` is copied into the `data`
   volume as `/data/config.toml`.
+- Order requests (see the main README): `SMTP_PASSWORD` in `gateway.env` when `[email]` has an `smtp_user`, and
+  `TURNSTILE_SECRET` when `[tickets]` has a `turnstile_site_key` (the site key, made in the Cloudflare dashboard under
+  Turnstile for the dashboard's hostname, goes in `config.toml`). Recreate the container after changing `gateway.env`.
+  Visitors may place 3 orders a day per IP address. The gateway sees the address of whatever connects to it and trusts
+  `X-Forwarded-For` only from `127.0.0.1`; behind the tunnel and Docker's port mapping, or for visitors sharing an
+  address (CGNAT, an office), many visitors can look like one, and that limit then blocks them together. They can still
+  sign in to order. The `ip` column of the `orders` table shows what the gateway saw.
 - cloudflared ingress (above the catch-all `http_status:404` rule):
   ```yaml
   - hostname: claude.<domain>
