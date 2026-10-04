@@ -330,3 +330,21 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .form-grid .hint { grid-column: 1 / -1; }
 .ticket { padding: 10px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px; } .badge.bonus { display: inline-block; margin: 4px 4px 0 0; border-color: var(--s4); }
+
+/* Order requests: the buyer's order line, the Order buttons, the admin's Orders tab and the order dialogs. */
+.order-note { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin: 16px 0; }
+.order-btn { margin-top: 4px; }
+.order-btn:disabled { cursor: not-allowed; opacity: 0.55; }
+.order-msg { max-width: 32ch; white-space: pre-wrap; overflow-wrap: anywhere; }
+.badge.tab-count { margin-left: 4px; border-color: var(--s1); color: var(--s1); font-weight: 600; }
+.badge.mail { display: inline-block; margin: 0 4px 4px 0; white-space: nowrap; }
+.badge.state-new { border-color: var(--s1); color: var(--s1); }
+.badge.state-contacted { border-color: var(--s4); }
+.badge.state-done { border-color: var(--good); color: var(--good-text); }
+.badge.state-declined { border-color: var(--critical); color: var(--critical-text); }
+.form-grid label.wide { grid-column: 1 / -1; }
+.form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
+.order-price { margin: 0 0 12px; font-size: 18px; font-variant-numeric: tabular-nums; }
+dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;
+                                             min-width: 0; width: 100%; font: inherit; color: inherit; }
+dialog textarea { resize: vertical; }

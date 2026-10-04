@@ -374,3 +374,129 @@ async def test_maintenance_clears_old_ips_even_when_the_others_fail(monkeypatch,
     with pytest.raises(asyncio.CancelledError):
         await cli._maintenance(None, Config())
     assert calls == ["boom", "boom", "ips"]
+
+
+# ---------- the dashboard (static checks and node harnesses) ----------
+
+def _node_check(path):
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    subprocess.run(["node", "--check", str(path)], check=True, capture_output=True, timeout=30)
+
+
+STATIC = __import__("pathlib").Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static"
+
+
+async def test_dashboard_serves_the_orders_tab_and_the_buyer_view(env):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        js = (await c.get("/static/app.js")).text
+    assert "renderOrders" in js and "/api/admin/orders" in js and '"/api/me/orders"' in js and "order_id: pre.order_id" in js
+    assert 'orders: { label: "Orders", render: renderOrders, admin: true, feature: "tickets" }' in js
+    _node_check(STATIC / "app.js")
+
+
+# Pure helpers out of app.js, run with stand-ins for the page-wide ones they use.
+APP_STUBS = r"""
+var esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+var money = (a, c) => `${c} ${a}`;
+var fmtShare = (v) => `${v}%`;
+var fmtDate = (t) => `D${t}`;
+var fmtAgo = (t) => `A${t}`;
+var stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
+var S = { tkSkew: 0, pick: null, user: { email: null } };
+var Date = { now: () => 0 };
+"""
+BAD = '<img src=x onerror="alert(1)">'
+
+
+def _order_row(**kw):
+    base = {"id": 7, "created_at": 100, "updated_at": 100, "user_id": None, "user_name": None, "name": "Vera", "email": "vera@example.com",
+            "tier": "lite", "label": "Lite", "length": "week", "currency": "EUR", "quoted_usd": 8, "quoted_rate": 0.92, "quoted_amount": 7.5,
+            "message": "Hello", "status": "new", "admin_note": "", "admin_mail": "sent", "buyer_mail": "sent", "ip": "1.2.3.4",
+            "ticket_id": None, "suggested_user": None}
+    return base | kw
+
+
+def test_order_rows_escape_every_buyer_field(tmp_path):
+    import json
+    from tests.test_tickets_web import _app_fn
+    o = _order_row(name=BAD, email=BAD, message=BAD, admin_note=BAD, label=BAD, user_name=BAD, user_id=3)
+    html = _app_fn(tmp_path, ["orderRow", "mailState", "orderActions"], APP_STUBS + f"var out = orderRow({json.dumps(o)});")
+    assert "<img" not in html and html.count("&lt;img") >= 5
+
+
+def test_order_actions_follow_the_status_table(tmp_path):
+    import json
+    from tests.test_tickets_web import _app_fn
+    rows = [_order_row(status=s) for s in ("new", "contacted", "done", "declined", "withdrawn")]
+    out = _app_fn(tmp_path, ["orderActions"], APP_STUBS + f"var out = {json.dumps(rows)}.map(orderActions);")
+    acts = [[a for a in ("contacted", "decline", "note", "grant") if f'data-oact="{a}"' in h] for h in out]
+    assert acts == [["contacted", "decline", "note", "grant"], ["decline", "note", "grant"], ["note"], ["note"], ["note"]]
+
+
+def test_order_mail_state_names_failures(tmp_path):
+    import json
+    from tests.test_tickets_web import _app_fn
+    rows = [_order_row(admin_mail="failed", buyer_mail="sent"), _order_row(admin_mail="pending", buyer_mail="skipped"),
+            _order_row(admin_mail="off", buyer_mail="off")]
+    out = _app_fn(tmp_path, ["mailState"], APP_STUBS + f"var out = {json.dumps(rows)}.map(mailState);")
+    assert "admin email failed" in out[0] and "buyer email sent" in out[0]
+    assert "admin email pending" in out[1] and "buyer email skipped" in out[1]
+    assert "email off" in out[2] and "admin" not in out[2]
+
+
+def test_the_buyer_sees_their_order_and_never_the_admin_note(tmp_path):
+    import json
+    from tests.test_tickets_web import _app_fn
+    mine = {"id": 4, "label": "<b>Lite</b>", "tier": "lite", "length": "week", "currency": "EUR", "quoted_amount": 7.5}
+    orders_ = [mine | {"status": "new"}, mine | {"status": "contacted"}, mine | {"status": "done"}, mine | {"status": "declined"}, None]
+    out = _app_fn(tmp_path, ["myOrderCard"], APP_STUBS + f"var out = {json.dumps(orders_)}.map(myOrderCard);")
+    assert "Order received: &lt;b&gt;Lite&lt;/b&gt;, 1 week. The admin will contact you." in out[0] and 'data-my-order="withdraw"' in out[0]
+    assert 'data-my-order="withdraw"' in out[1]
+    assert "Your order is done." in out[2] and 'data-my-order="dismiss"' in out[2] and "withdraw" not in out[2]
+    assert "Your order was declined." in out[3] and 'data-my-order="dismiss"' in out[3]
+    assert out[4] == ""
+
+
+def _price_list(tmp_path, order=None, pick=None, sold_out_week=False):
+    import json
+    from tests.test_tickets_web import _tier
+    from tests.test_tickets_web import _app_fn
+    tk = {"how_to_buy": "", "prices": {"currency": "EUR", "rate_set_at": None, "tiers": [_tier(week={"sold_out": sold_out_week})]}}
+    script = APP_STUBS + f"S.pick = {json.dumps(pick)}; var out = priceListCard({json.dumps(tk)}, {json.dumps(order)});"
+    return _app_fn(tmp_path, ["priceListCard", "pickedLine", "takePick"], script)
+
+
+def test_the_price_list_offers_an_order_button_per_price(tmp_path):
+    html = _price_list(tmp_path)
+    assert html.count('data-order="lite:') == 3 and "disabled" not in html
+    sold = _price_list(tmp_path, sold_out_week=True)
+    assert 'data-order="lite:week"' not in sold and 'data-order="lite:day"' in sold
+
+
+def test_order_buttons_are_disabled_while_an_order_is_open(tmp_path):
+    assert _price_list(tmp_path, order={"status": "new"}).count("disabled") == 3
+    assert _price_list(tmp_path, order={"status": "contacted"}).count("disabled") == 3
+    assert "disabled" not in _price_list(tmp_path, order={"status": "done"})
+
+
+def test_the_home_page_pick_is_preselected(tmp_path):
+    html = _price_list(tmp_path, pick={"tier": "lite", "length": "month"})
+    btn = next(b for b in html.split("<button")[1:] if 'data-order="lite:month"' in b)
+    assert "primary" in btn
+    assert all("primary" not in b for b in html.split("<button")[1:] if 'data-order="lite:month"' not in b)
+
+
+def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
+    import json
+    from tests.test_tickets_web import _tier
+    from tests.test_tickets_web import _app_fn
+    p = {"currency": "EUR", "tiers": [_tier(label=BAD)]}
+    script = APP_STUBS + f"var p = {json.dumps(p)}; var out = [orderFormHtml(p, p.tiers[0], 'week', null), orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd')];"
+    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderCurrencies"], script)
+    assert 'name="email"' in without and 'name="email"' not in with_
+    assert "This is a request, not a payment. The admin will contact you with payment details." in with_
+    assert "<img" not in without and '<option value="EUR" selected' in with_ and '<option value="USD"' in with_
