@@ -306,6 +306,7 @@ USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit", "share_day": "
 TICKET = "ticket"                  # rejected_by: a ticket-gated user with no active ticket, or on a third-party model
 TICKET_NO_DATA = "ticket_no_data"  # rejected_by: the 503 while no usage rate was ever observed
 NO_RATE = "no usage rate observed yet"
+PAUSED = "Tickets are paused; ask the admin."   # a ticket-gated user while [tickets] is switched off
 
 
 def _describe(st: LimitState) -> str:
@@ -384,6 +385,10 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         return Decision(429, MAX_INFLIGHT, {"type": "error", "error": {"type": "rate_limit_error", "message":
                         f"Gateway limit max_inflight reached: {inflight} of {cfg.limits.max_inflight} requests in "
                         "flight; wait for one to finish."}}, 1)
+    if not cfg.tickets.enabled and tickets.is_gated(conn, user_id):
+        # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
+        # not open the account to them. The admin ungates them to hand them back to hand-set limits.
+        return Decision(403, TICKET, _perm(PAUSED))
     gated = _gated(conn, cfg, user_id)
     ticket = None
     if gated:
@@ -391,8 +396,10 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         if ticket is None:   # every request, the model list included: there is no ticket to serve it on
             return Decision(403, TICKET, _perm(_no_ticket_message(conn, cfg, user_id, now)))
     rows = _rows(conn, user_id)
-    if gated and third_party and not any(r["kind"].startswith("cost_") for r in rows):
-        # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set governs instead.
+    if gated and third_party and not any(r["kind"].startswith("cost_") and (r["scope"] == "*" or fnmatch.fnmatchcase(model or "", r["scope"]))
+                                         for r in rows):
+        # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set for
+        # this model governs instead (scoped as the loop below scopes rows).
         return Decision(403, TICKET, _perm("Your ticket covers Claude models only."))
     for row in rows:
         kind = row["kind"]

@@ -261,3 +261,25 @@ def test_share_day_counts_unpriced_models_like_the_rate_does(env):
     req(conn, ids["alice"], NOW - 200, i=500, model="mystery-model")
     fresh(conn, NOW - 100, util5=1, util7=1)
     assert by_kind(conn, cfg, ids["alice"])["share_day"].current == pytest.approx(0.5)
+
+
+def test_a_cost_limit_for_other_models_does_not_open_third_party_models(env):
+    conn, cfg, ids, t = env
+    set_limit(conn, ids["alice"], "cost_daily", 1.0, "usd", scope="claude-*")
+    d = check(conn, cfg, ids["alice"], model="muse-spark")
+    assert (d.status, d.body["error"]["message"]) == (403, "Your ticket covers Claude models only.")
+    set_limit(conn, ids["alice"], "cost_monthly", 5.0, "usd", scope="muse-*")
+    assert check(conn, cfg, ids["alice"], model="muse-spark") is None
+
+
+def test_tickets_switched_off_refuse_gated_users_instead_of_failing_open(env):
+    conn, cfg, ids, t = env
+    cfg.tickets.enabled = False                 # the grant removed alice's credit: no other limit would hold her
+    d = check(conn, cfg, ids["alice"])
+    assert (d.status, d.kind, d.body["error"]["message"]) == (403, "ticket", "Tickets are paused; ask the admin.")
+    assert check(conn, cfg, ids["alice"], model=None, path="/v1/models").status == 403
+    tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW)
+    tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 1)
+    assert check(conn, cfg, ids["alice"], now=NOW + 2) is None   # ungated: back to hand-set limits
+    bob, _ = create_user(conn, "bob")
+    assert check(conn, cfg, bob) is None        # never had a ticket: untouched
