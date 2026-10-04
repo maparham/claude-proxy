@@ -243,7 +243,8 @@ async def test_home_is_for_visitors_and_signed_in_browsers_go_to_the_dashboard(e
 async def test_home_ignores_a_stale_session_cookie(env):
     gw, conn, cfg, ids, keys = env
     async with asgi_client(create_dashboard_app(gw)) as c:
-        r = await c.get("/", cookies={"cp_session": "expired-or-junk"})
+        c.cookies.set("cp_session", "expired-or-junk")
+        r = await c.get("/")
     assert r.status_code == 200 and 'id="pricing"' in r.text
 
 
@@ -574,3 +575,11 @@ def test_dashboard_names_only_a_valid_pick(tmp_path):
     out = json.loads(subprocess.run(["node", str(harness), str(js), json.dumps(picks)], capture_output=True, text=True,
                                     timeout=30, check=True).stdout)
     assert out == ["You picked <b>Lite</b> for <b>a week</b>. ", "You picked <b>&lt;Pro&gt;</b> for <b>a month</b>. ", "", "", "", ""]
+
+
+async def test_home_promises_no_sign_in_method(env):
+    # Google, GitHub and email codes come from Clerk, which a gateway may not have; keys always work.
+    gw, conn, cfg, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        page = (await c.get("/")).text
+    assert "Google" not in page and "GitHub" not in page
