@@ -356,6 +356,8 @@ them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets
 - To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
   history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
   removes their recorded usage from totals and charts. Revoking also stops the person's OpenCode key.
+  Deleting is refused while the user holds an active or queued ticket: cancel it first. Their tickets
+  stay as sales records under the name they had.
 - Admin actions from the dashboard and the CLI go to the audit log.
 - `python scripts/demo_data.py demo.db` fills a database with synthetic traffic, for trying the dashboard.
 

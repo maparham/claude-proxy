@@ -74,3 +74,23 @@ def test_the_deploy_config_writes_out_the_default_tiers():
     cfg = Config.load(str(Path(__file__).resolve().parent.parent / "deploy" / "lightsail" / "config.toml"))
     assert cfg.tickets.tiers == TicketsConfig().tiers
 
+
+
+async def test_maintenance_runs_the_estimates_even_when_cleanup_fails(monkeypatch, caplog):
+    import asyncio
+
+    from claude_proxy import cli, db, estimates
+    calls = []
+
+    def boom(*a):
+        calls.append("cleanup")
+        raise RuntimeError("disk full")
+
+    async def stop(_):
+        raise asyncio.CancelledError
+    monkeypatch.setattr(db, "cleanup", boom)
+    monkeypatch.setattr(estimates, "refresh_if_due", lambda *a: calls.append("estimates") or {})
+    monkeypatch.setattr(cli.asyncio, "sleep", stop)
+    with pytest.raises(asyncio.CancelledError):
+        await cli._maintenance(None, Config())
+    assert calls == ["cleanup", "estimates"] and "retention cleanup failed" in caplog.text

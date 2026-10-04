@@ -28,12 +28,13 @@ class Gateway:
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)
         else:
-            # Tickets built the user's share limits while gating them; with tickets off, nothing restores
-            # the admin's own share rows, so a former ticket user runs with no share limits at all.
+            # A ticket-gated user lost their sign-up credit with their first ticket and may have no other limit, so with
+            # tickets off limits.evaluate refuses every request of theirs ("Tickets are paused; ask the admin.") until
+            # the admin ungates them. Say so at start, since nothing else tells the admin why they are refused.
             n = conn.execute("SELECT COUNT(DISTINCT user_id) FROM tickets WHERE ungated_at IS NULL AND user_id IS NOT NULL").fetchone()[0]
             if n:
-                logger.warning("tickets are off in the config but %d users are ticket-gated; they now run under "
-                               "their remaining hand limits only", n)
+                logger.warning("tickets are off in the config but %d users are ticket-gated; their requests are refused "
+                               "until each is ungated on the Users page", n)
 
     async def aclose(self) -> None:
         await self.http.aclose()

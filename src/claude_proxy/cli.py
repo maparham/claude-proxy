@@ -263,15 +263,19 @@ async def _serve(cfg: Config):
 
 async def _maintenance(conn, cfg: Config):
     while True:
+        # Each task on its own, so one failing does not skip the other.
         try:
             removed = db.cleanup(conn, cfg.retention_days)
             if any(removed.values()):
                 logger.info("retention cleanup: %s", removed)
+        except Exception:
+            logger.exception("retention cleanup failed")
+        try:
             done = estimates.refresh_if_due(conn, cfg)
             if done:
                 logger.info("usage estimates refreshed: %s", done)
         except Exception:
-            logger.exception("maintenance failed")
+            logger.exception("usage estimates refresh failed")
         await asyncio.sleep(6 * 3600)
 
 

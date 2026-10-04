@@ -46,6 +46,21 @@ isn't can make the rollback fail too, and then the backup in `/data/backups` is 
 (GitHub then emails you) if the gateway is unreachable or `"credential"` is false, i.e. the
 subscription login needs `claude-proxy login`. "Run workflow" on it checks on demand.
 
+It also fails when `"usage_fresh"` is false: Anthropic's newest 5-hour or weekly usage figure is older
+than the longer of `[quota] stale_after_s` and `poll_max_backoff_s` plus 10 minutes (40 minutes by
+default). Until fresh figures arrive, ticket holders are limited by estimates (their tokens at the
+account's usual rate) and hand-set share limits are skipped, so nothing breaks, but limits are looser.
+When it fires:
+
+1. `docker compose exec gateway claude-proxy status` shows each bucket's last figure and its age, and
+   whether the credential works. A credential that is NOT OK stops the figures too; fix it with
+   `docker compose exec -it gateway claude-proxy login`.
+2. With the credential OK, check `docker compose logs --since 2h gateway` for `usage poll` lines: a
+   rate-limited poll backs off and recovers by itself; repeated failures usually mean Anthropic is
+   having an incident (see its status page), and the figures return with the first response or poll
+   after it ends.
+3. Nothing to do on the gateway if Anthropic is down; re-run the workflow once figures are fresh again.
+
 One-time setup, and again after changing `claude-gateway-deploy` or `docker-compose.yml`, or to rotate
 the key:
 
