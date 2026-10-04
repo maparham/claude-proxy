@@ -747,7 +747,7 @@ async function ticketAction(act, t) {
   if (!confirmInline(`Cancel ${t.user_name}'s ${t.tier} ticket? The slice is freed now and its bonuses end. Refunds happen outside the app.`)) return;
   try {
     const r = await api(`/api/admin/tickets/${t.id}/cancel`, { method: "POST", body: {} });
-    if (r.dates_kept) alertInline(`Cancelled. Their queued tickets kept their dates because one of them would not fit earlier: ${r.reason}`);
+    if (r.dates_kept) infoInline("Cancelled", `Their queued tickets kept their dates because one of them would not fit earlier: ${r.reason}`);
     else render();
   } catch (e) { alertInline(e.message); }
 }
@@ -816,7 +816,7 @@ function bonusDialog(t) {
       const r = await api(`/api/admin/tickets/${t.id}/bonus`, { method: "POST", body: { share_pct: +f.share_pct.value, extra_days: +f.extra_days.value,
         starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value), note: f.note.value } });
       d.close();
-      if (r.moved) alertInline(`Bonus added. ${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward by ${f.extra_days.value} day(s).`); else render();
+      if (r.moved) infoInline("Bonus added", `${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward by ${f.extra_days.value} day(s).`); else render();
     } catch (err) { $("#bonus-err", d).textContent = err.message; }
   };
 }
@@ -1110,6 +1110,7 @@ $("#other-ways").onclick = (e) => {
 // Native confirm/alert block the page; use the dialog instead for anything but the irreversible revoke.
 function confirmInline(msg) { return window.confirm(msg); }
 function alertInline(msg) { openDialog(`<h3>Could not do that</h3><p>${esc(msg)}</p><button class="btn" data-close>OK</button>`); }
+function infoInline(title, msg) { openDialog(`<h3>${esc(title)}</h3><p>${esc(msg)}</p><button class="btn" data-close>OK</button>`); }
 
 // A <select> whose options each carry a tip. A native option popup can't show tips, so this draws its own
 // listbox; the <select> stays in the form, hidden, and remains the source of truth (changes fire "change" on it).

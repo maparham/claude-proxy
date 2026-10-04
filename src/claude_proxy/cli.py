@@ -170,8 +170,13 @@ def cmd_user_passwd(args, cfg):
 def cmd_user_delete(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
-    if not args.yes and input(f"Type the user's name to confirm deletion: ") != u["name"]:
-        sys.exit("Names differ; nothing deleted.")
+    if not args.yes:
+        try:
+            answer = input("Type the user's name to confirm deletion: ")
+        except EOFError:
+            sys.exit("No confirmation (not a terminal); pass --yes to delete without the prompt.")
+        if answer != u["name"]:
+            sys.exit("Names differ; nothing deleted.")
     try:
         n = db.delete_user(conn, u["id"])
     except ValueError as e:
@@ -266,7 +271,7 @@ async def _maintenance(conn, cfg: Config):
             if done:
                 logger.info("usage estimates refreshed: %s", done)
         except Exception:
-            logger.exception("retention cleanup failed")
+            logger.exception("maintenance failed")
         await asyncio.sleep(6 * 3600)
 
 

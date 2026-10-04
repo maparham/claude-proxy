@@ -1,3 +1,4 @@
+import logging
 import sqlite3
 import threading
 
@@ -5,6 +6,7 @@ import pytest
 
 from claude_proxy import db as dbm
 from claude_proxy import tickets
+from tests.conftest import make_gateway
 from tests.tickets_helpers import DAY, NOW, seeded, user
 
 
@@ -316,6 +318,56 @@ def test_bonus_days_on_an_ended_ticket_make_it_cover_now_with_the_old_day_bounda
     assert tickets.current_day(t, later) == (NOW + DAY, NOW + 2 * DAY)
 
 
+def test_bonus_rejects_non_finite_share_pct(db):
+    conn, cfg, ids = seeded(db)
+    t = grant(conn, cfg, ids)
+    with pytest.raises(tickets.TicketError, match="extra share above 0"):
+        bonus(conn, cfg, ids, t["id"], share_pct=float("nan"))
+    with pytest.raises(tickets.TicketError, match="extra share above 0"):
+        bonus(conn, cfg, ids, t["id"], share_pct=float("inf"))
+    assert conn.execute("SELECT COUNT(*) FROM ticket_bonuses").fetchone()[0] == 0
+
+
+def test_bonus_bounds_extra_days_to_365(db):
+    conn, cfg, ids = seeded(db)
+    t = grant(conn, cfg, ids)
+    with pytest.raises(tickets.TicketError, match="365 or fewer"):
+        bonus(conn, cfg, ids, t["id"], extra_days=366)
+    assert bonus(conn, cfg, ids, t["id"], extra_days=365)["bonus"]["extra_days"] == 365
+
+
+def test_bonus_days_refused_when_the_next_ticket_has_already_started(db):
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, length="day")                                    # [0, 1d)
+    b = grant(conn, cfg, ids, length="week", now=NOW + 10)                     # queued: [1d, 8d)
+    now = NOW + DAY + 3600                                                      # b has been active for an hour
+    assert tickets.covering(conn, ids["alice"], now)["id"] == b["id"]
+    with pytest.raises(tickets.TicketError, match="already started"):
+        bonus(conn, cfg, ids, a["id"], extra_days=2, now=now)
+    assert tickets.get(conn, a["id"])["effective_end"] == NOW + DAY             # nothing applied
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + DAY                 # b's start is untouched
+    assert conn.execute("SELECT COUNT(*) FROM ticket_bonuses").fetchone()[0] == 0
+
+
+def test_cancel_savepoint_undoes_the_first_move_when_the_second_in_the_chain_fails(db):
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.max_sold_pct = 60
+    bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
+    a = grant(conn, cfg, ids, tier="lite", length="week")                              # alice 5%, [0, 7d)
+    b = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 10)             # alice 25%, [7d, 8d)
+    c = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 20)             # alice 25%, [8d, 9d)
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + DAY)     # bob 25%, [1d, 2d)
+    grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=NOW + DAY)   # carol 25%, [1d, 2d)
+    # Cancelling a (active) tries to shift the chain [b, c] back by 7 days: b -> [0,1d) fits; c -> [1d,2d)
+    # lands on bob+carol's 50%, which is where the already-applied move to b must be undone.
+    r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW)
+    assert (r["moved"], r["dates_kept"]) == (0, True)
+    assert "Not enough capacity" in r["reason"]
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + 7 * DAY             # kept, not moved to day 0
+    assert tickets.get(conn, c["id"])["starts_at"] == NOW + 8 * DAY             # kept too
+    assert tickets.get(conn, a["id"])["cancelled_at"] == NOW                    # but a is cancelled all the same
+
+
 def test_ungate_only_without_live_tickets(db):
     conn, cfg, ids = seeded(db)
     a = grant(conn, cfg, ids, length="day")
@@ -342,3 +394,12 @@ def test_user_state_summarises_gating_and_live_tickets(db):
     assert s["gated"] and s["live"] and s["current"]["id"] == a["id"] and s["queued"] is None
     s = tickets.user_state(conn, ids["alice"], NOW + 2 * DAY)
     assert s == {"gated": True, "current": None, "queued": None, "live": False}
+
+
+def test_gateway_warns_when_tickets_are_off_but_users_are_still_gated(db, caplog):
+    conn, cfg, ids = seeded(db)
+    grant(conn, cfg, ids)                 # alice is now ticket-gated
+    cfg.tickets.enabled = False
+    with caplog.at_level(logging.WARNING, logger="claude_proxy"):
+        make_gateway(cfg, conn)
+    assert "tickets are off" in caplog.text and "1 users are ticket-gated" in caplog.text
