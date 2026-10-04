@@ -718,9 +718,9 @@ function grantDialog(users) {
   const d = openDialog(`<h3>Grant a ticket</h3>
     <form id="f-grant" class="form-grid">
       <label>User<select name="user" required>${users.filter((u) => !u.revoked && u.enabled).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
-      <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${k}">${esc(t.label)} · ${t.share_pct}%</option>`).join("")}</select></label>
-      <label>Length<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${k}">${k} (${n} ${n === 1 ? "day" : "days"})</option>`).join("")}</select></label>
-      <label>Currency<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${c}</option>`).join("")}</select></label>
+      <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)} · ${t.share_pct}%</option>`).join("")}</select></label>
+      <label>Length<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n} ${n === 1 ? "day" : "days"})</option>`).join("")}</select></label>
+      <label>Currency<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label>Note (for you)<input type="text" name="note" maxlength="200" placeholder="e.g. transfer ref 1234"></label>
       <div id="grant-preview" class="hint" aria-live="polite">…</div>
       <div id="grant-limits"></div>
@@ -797,15 +797,15 @@ async function renderPricing(main) {
           <span><input type="number" name="rate" step="any" min="0" placeholder="today's rate" required style="width:110px"> <button class="btn small" type="submit">Save</button></span></form>`).join("") || `<p class="muted">No currencies besides USD in the config.</p>`}
       </div>
       <div class="card"><h3>Regular prices, USD</h3><p class="sub">Each change is logged. Existing tickets keep what they were sold at.</p>
-        <table class="data"><thead><tr><th>Tier</th>${Object.keys(p.lengths).map((l) => `<th class="r">${l}</th>`).join("")}</tr></thead><tbody>
+        <table class="data"><thead><tr><th>Tier</th>${Object.keys(p.lengths).map((l) => `<th class="r">${esc(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, t]) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${t.share_pct}%</span></td>${Object.keys(p.lengths).map((l) =>
-          `<td class="r"><form class="price-form" data-tier="${k}" data-length="${l}"><input type="number" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
+          `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="number" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
     </div>
     <div class="card" style="margin-top:16px"><h3>Discounts</h3><p class="sub">A lower USD price for one tier and length over a period. It must be below the regular price; while active it replaces the price everywhere and /pricing shows a countdown.</p>
       <form id="f-disc" class="form-grid">
-        <label>Tier<select name="tier">${Object.entries(p.tiers).map(([k, t]) => `<option value="${k}">${esc(t.label)}</option>`).join("")}</select></label>
-        <label>Length<select name="length">${Object.keys(p.lengths).map((l) => `<option>${l}</option>`).join("")}</select></label>
+        <label>Tier<select name="tier">${Object.entries(p.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)}</option>`).join("")}</select></label>
+        <label>Length<select name="length">${Object.keys(p.lengths).map((l) => `<option>${esc(l)}</option>`).join("")}</select></label>
         <label>Price, USD<input type="number" name="usd" step="0.01" min="0.01" required></label>
         <label>From<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
         <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
@@ -875,9 +875,11 @@ async function userAction(act, id, u) {
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
   if (act === "delete") return deleteDialog(u);
   if (act === "ungate") {
-    try { await api(`/api/admin/users/${id}/ungate`, { method: "POST", body: {} }); } catch (e) { return alertInline(e.message); }
-    const { users } = await api("/api/users");
-    return limitsDialog(users.find((x) => x.id === id));   // the spec: Ungate opens the Limits dialog so hand limits get set
+    try {
+      await api(`/api/admin/users/${id}/ungate`, { method: "POST", body: {} });
+      const { users } = await api("/api/users");
+      return limitsDialog(users.find((x) => x.id === id));   // the spec: Ungate opens the Limits dialog so hand limits get set
+    } catch (e) { return alertInline(e.message); }
   }
   try {
     const r = await api(`/api/admin/users/${id}/${act}`, { method: "POST", body: {} });
