@@ -7,12 +7,16 @@ BEGIN IMMEDIATE transaction, so two requests at once cannot both pass a limit.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import re
 import sqlite3
 import time
 
-from . import db, tickets
+from . import db, mail, tickets
 from .config import LENGTHS, Config
+
+logger = logging.getLogger("claude_proxy")
 
 DAY = 86400
 NAME_MAX = 100
@@ -203,6 +207,64 @@ def set_mail(conn: sqlite3.Connection, order_id: int, which: str, state: str) ->
     if which not in ("admin_mail", "buyer_mail") or state not in MAIL_STATES:
         raise ValueError(f"bad mail state {which}={state}")
     conn.execute(f"UPDATE orders SET {which}=? WHERE id=?", (state, order_id))
+
+
+# ---------- emails (spec section 5) ----------
+
+def _label(cfg: Config, order: dict) -> str:
+    t = cfg.tickets.tiers.get(order["tier"])
+    return t.label if t else order["tier"]
+
+
+def _amount(order: dict) -> str:
+    return f"{order['quoted_amount']:,.2f} {order['currency']}"
+
+
+def admin_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
+    """(subject, body) for the admin, the only recipient of what the buyer typed. `order` may carry `user_name`."""
+    label = _label(cfg, order)
+    lines = [f"New order #{order['id']}: {label}, {order['length']} ({LENGTHS.get(order['length'], '?')} days)", "",
+             f"Name: {order['name']}", f"Email: {order['email']}", f"Account: {order.get('user_name') or 'none'}",
+             f"Quoted: {_amount(order)} (${order['quoted_usd']:g} at {order['quoted_rate']:g})", "",
+             "Message:", order["message"] or "(none)"]
+    if cfg.listener.dashboard_url:
+        lines += ["", f"Orders: {cfg.listener.dashboard_url.rstrip('/')}/dashboard#orders"]
+    return f"New order: {label} {order['length']}", "\n".join(lines) + "\n"
+
+
+def buyer_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
+    """(subject, body) for the buyer. Nothing the buyer typed goes in (no name, no message), so the form cannot carry
+    content to a stranger's inbox."""
+    label = _label(cfg, order)
+    lines = [f"Your order: a {label} ticket for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
+             f"Price at today's rate: {_amount(order)}.", ""]
+    if cfg.tickets.how_to_buy:
+        lines += ["How to pay:", cfg.tickets.how_to_buy, ""]
+    lines.append("This is a request; the admin will contact you.")
+    return f"Your order: {label} {order['length']}", "\n".join(lines) + "\n"
+
+
+async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:
+    """Send the order's pending emails, after the response. Each send runs in a thread (a slow mail server never
+    blocks the loop); its result is written back here, on the loop, the only place the shared connection is used."""
+    if cfg.email is None:
+        return
+    o = get(conn, order_id)
+    if o["user_id"] is not None:
+        o["user_name"] = db._user_name(conn, o["user_id"])
+    jobs = []
+    if o["admin_mail"] == "pending":
+        jobs.append(("admin_mail", cfg.email.admin_to, *admin_mail_text(cfg, o)))
+    if o["buyer_mail"] == "pending":
+        jobs.append(("buyer_mail", o["email"], *buyer_mail_text(cfg, o)))
+    for which, to, subject, body in jobs:
+        try:
+            await asyncio.to_thread(mail.send, cfg.email, to, subject, body)
+            state = "sent"
+        except Exception as e:
+            logger.warning("order #%d: %s to %s failed: %s", order_id, which.replace("_", " "), to, e)
+            state = "failed"
+        set_mail(conn, order_id, which, state)
 
 
 # ---------- linking a visitor order (spec section 7) ----------

@@ -446,3 +446,135 @@ def test_admin_list_filters_and_counts_new(env):
     with refused(400):
         orders.admin_list(conn, "bogus")
     assert orders.new_count(conn) == 1
+
+
+# ---------- mail texts and dispatch ----------
+
+EVIL = "<script>alert('x')</script>"
+
+
+def test_admin_mail_carries_the_buyers_text(mailing):
+    conn, cfg, ids = mailing
+    cfg.listener.dashboard_url = "https://gw.example.com/"
+    o = visitor(conn, cfg, name=f"Mallory {EVIL}", message=f"Please {EVIL}")
+    subject, body = orders.admin_mail_text(cfg, o)
+    assert subject == "New order: Lite week"
+    for needle in (f"Mallory {EVIL}", "v0@example.com", f"Please {EVIL}", "7.50 EUR", "https://gw.example.com/dashboard#orders"):
+        assert needle in body
+    assert "Account: none" in body
+    o = signed_in(conn, cfg, ids["alice"])
+    assert "Account: alice" in orders.admin_mail_text(cfg, o | {"user_name": "alice"})[1]
+
+
+def test_buyer_mail_carries_nothing_the_buyer_typed(mailing):
+    conn, cfg, ids = mailing
+    o = visitor(conn, cfg, name=f"Mallory {EVIL} http://spam.example", message=f"Buy now {EVIL} http://spam.example")
+    subject, body = orders.buyer_mail_text(cfg, o)
+    assert subject == "Your order: Lite week"
+    assert "Mallory" not in body and "Buy now" not in body and "spam" not in body and "<script>" not in body
+    assert "7.50 EUR" in body and cfg.tickets.how_to_buy in body and "This is a request; the admin will contact you." in body
+
+
+def fake_send(monkeypatch, fail=False):
+    sent = []
+
+    def send(email, to, subject, body):
+        if fail:
+            raise OSError("smtp down")
+        sent.append((to, subject))
+    monkeypatch.setattr(orders.mail, "send", send)
+    return sent
+
+
+async def test_dispatch_sends_both_and_records_sent(mailing, monkeypatch):
+    conn, cfg, ids = mailing
+    sent = fake_send(monkeypatch)
+    o = visitor(conn, cfg)
+    await orders.dispatch(conn, cfg, o["id"])
+    assert sent == [("admin@example.com", "New order: Lite week"), ("v0@example.com", "Your order: Lite week")]
+    o = orders.get(conn, o["id"])
+    assert (o["admin_mail"], o["buyer_mail"]) == ("sent", "sent")
+
+
+async def test_dispatch_failure_records_failed_and_keeps_the_order(mailing, monkeypatch, caplog):
+    conn, cfg, ids = mailing
+    fake_send(monkeypatch, fail=True)
+    o = visitor(conn, cfg)
+    await orders.dispatch(conn, cfg, o["id"])
+    o = orders.get(conn, o["id"])
+    assert (o["status"], o["admin_mail"], o["buyer_mail"]) == ("new", "failed", "failed")
+    assert "smtp down" in caplog.text
+
+
+async def test_dispatch_skips_off_and_skipped(mailing, monkeypatch):
+    conn, cfg, ids = mailing
+    sent = fake_send(monkeypatch)
+    o = visitor(conn, cfg)
+    orders.set_mail(conn, o["id"], "buyer_mail", "skipped")
+    await orders.dispatch(conn, cfg, o["id"])
+    assert [to for to, _ in sent] == ["admin@example.com"]
+    assert orders.get(conn, o["id"])["buyer_mail"] == "skipped"
+    cfg.email = None
+    sent.clear()
+    o = visitor(conn, cfg, 1)
+    await orders.dispatch(conn, cfg, o["id"])
+    assert sent == [] and orders.get(conn, o["id"])["admin_mail"] == "off"
+
+
+# ---------- grants that close an order ----------
+
+def grant(conn, cfg, ids, uid, order_id, **kw):
+    return tickets.grant(conn, cfg, ids["admin"], user(conn, uid), "lite", "week", "EUR", order_id=order_id, now=NOW + 60, **kw)
+
+
+def test_grant_with_order_id_marks_it_done(env):
+    conn, cfg, ids = env
+    o = visitor(conn, cfg)
+    orders.link(conn, cfg, ids["admin"], o["id"], user_id=ids["alice"])
+    t = grant(conn, cfg, ids, ids["alice"], o["id"])
+    o = orders.get(conn, o["id"])
+    assert (o["status"], o["ticket_id"], o["ip"]) == ("done", t["id"], None)
+    assert actions(conn)[-1] == "order_done"
+    assert orders.mine(conn, ids["alice"])["status"] == "done"
+
+
+@pytest.mark.parametrize("how", ["withdrawn", "declined", "done", "other_user", "unlinked", "missing"])
+def test_grant_refused_when_the_order_changed(env, how):
+    conn, cfg, ids = env
+    o = signed_in(conn, cfg, ids["alice"])
+    oid = o["id"]
+    if how == "withdrawn":
+        orders.withdraw(conn, ids["alice"], oid)
+    elif how in ("declined", "done"):
+        put_in(conn, oid, how)
+    elif how == "unlinked":
+        oid = visitor(conn, cfg)["id"]
+    elif how == "missing":
+        oid = 999
+    target = ids["admin"] if how == "other_user" else ids["alice"]
+    with refused(409) as e:
+        grant(conn, cfg, ids, target, oid)
+    assert e.value.status == 409 and str(e.value) == "This order was withdrawn or changed; reload."
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+    assert "ticket_grant" not in [r[0] for r in conn.execute("SELECT action FROM audit_log")]
+
+
+def test_a_failed_grant_leaves_the_order_unchanged(env):
+    conn, cfg, ids = env
+    o = signed_in(conn, cfg, ids["alice"])
+    cfg.tickets.max_sold_pct = 5
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=NOW)
+    with pytest.raises(tickets.CapacityError):
+        grant(conn, cfg, ids, ids["alice"], o["id"])
+    assert orders.get(conn, o["id"])["status"] == "new"
+    with pytest.raises(tickets.QuoteChanged):
+        cfg.tickets.max_sold_pct = 80
+        grant(conn, cfg, ids, ids["alice"], o["id"], expect_usd=1)
+    assert orders.get(conn, o["id"])["status"] == "new"
+
+
+def test_grant_without_order_id_touches_no_order(env):
+    conn, cfg, ids = env
+    o = signed_in(conn, cfg, ids["alice"])
+    grant(conn, cfg, ids, ids["alice"], None)
+    assert orders.get(conn, o["id"])["status"] == "new"
