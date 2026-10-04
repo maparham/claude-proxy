@@ -216,7 +216,7 @@ def _finish(st: LimitState) -> LimitState:
 
 def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share, estimated=True, tier=label)
-    att = quota.attribution(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
     if att["resets_at"] and att["resets_at"] > now:
         st.resets_at, st.reset_in = att["resets_at"], max(1, int(att["resets_at"] - now))
     if att["utilization_pct"] is not None and not att["stale"]:

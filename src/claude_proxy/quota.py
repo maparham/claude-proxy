@@ -196,6 +196,35 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
     }
 
 
+_att_cache: dict[tuple[int, str], tuple[tuple, dict]] = {}   # (id(conn), bucket) -> (inputs, attribution as computed)
+
+
+def _att_inputs(conn, pricing: Pricing, newest: float | None, att: dict) -> tuple:
+    """What attribution() read, cheaply: the newest snapshot, and how many requests ended inside the window it walked
+    (an index range count on idx_requests_ended)."""
+    n = 0 if att["window_start"] is None else conn.execute(
+        "SELECT COUNT(*) FROM requests WHERE ended_at > ? AND ended_at <= ?", (att["window_start"], att["observed_at"])).fetchone()[0]
+    return newest, n, id(pricing)
+
+
+def attribution_cached(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, stale_after_s: int = 1800) -> dict:
+    """attribution(), recomputed only when what it reads changes; for the hot path (a ticket's 5-hour limit runs it on
+    every request). Shares change when a new snapshot lands, and also when a request inside the walked window is
+    recorded late (a stream that finished just before another response's headers were recorded) or deleted with its
+    user, so the key is the newest snapshot time plus the count of requests that ended inside the window; requests
+    ending after the newest snapshot, the usual case, leave it alone. `now` matters only through `stale`, recomputed
+    on every call, and through the 8-day lookback, which matters once the window's first snapshot is older than that."""
+    newest = conn.execute("SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket=?", (bucket,)).fetchone()[0]
+    hit = _att_cache.get((id(conn), bucket))
+    if (hit is None or hit[0][0] != newest or (hit[1]["window_start"] is not None and hit[1]["window_start"] < now - 8 * 86400)
+            or _att_inputs(conn, pricing, newest, hit[1]) != hit[0]):
+        att = attribution(conn, pricing, bucket, now=now, stale_after_s=stale_after_s)
+        hit = (_att_inputs(conn, pricing, newest, att), att)
+        _att_cache[(id(conn), bucket)] = hit
+    att = hit[1]
+    return {**att, "stale": att["observed_at"] is None or now - att["observed_at"] > stale_after_s}
+
+
 def _is_reset(prev, cur) -> bool:
     """The same rule _window uses between two consecutive snapshots."""
     if cur["resets_at"] and prev["resets_at"]:
@@ -259,9 +288,10 @@ _rate_cache: dict[tuple[int, str], tuple[float, float | None]] = {}   # (id(conn
 
 
 def clear_rate_cache() -> None:
-    """Drop every cached observed_rate() value. Call before a test that reuses a connection id another test's cache
-    entry might still reference (tests/conftest.py's `db` fixture does this for every test)."""
+    """Drop every cached observed_rate() and attribution_cached() value. Call before a test that reuses a connection id
+    another test's cache entry might still reference (tests/conftest.py's `db` fixture does this for every test)."""
     _rate_cache.clear()
+    _att_cache.clear()
 
 
 def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> float | None:

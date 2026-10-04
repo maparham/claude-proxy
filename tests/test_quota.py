@@ -336,3 +336,26 @@ def test_unpriced_models_weigh_their_raw_tokens_everywhere(db):
     _snap(conn, now - 200, 1)
     assert quota.observed_rate(conn, Pricing(), "5h", now) == 1000
     assert quota.attribution(conn, Pricing(), "5h", now=now)["shares"][a] == pytest.approx(1)
+
+
+def test_attribution_cache_recomputes_only_when_its_inputs_change(db, monkeypatch):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    _snap(conn, 100, 0)
+    _req(conn, a, 150, 1000)
+    _snap(conn, 200, 4)
+    calls = []
+    real = quota.attribution
+    monkeypatch.setattr(quota, "attribution", lambda *args, **kw: calls.append(1) or real(*args, **kw))
+    first = quota.attribution_cached(conn, Pricing(), "5h", now=210, stale_after_s=1800)
+    again = quota.attribution_cached(conn, Pricing(), "5h", now=2100, stale_after_s=1800)
+    assert len(calls) == 1 and first["shares"] == {a: 4} and (first["stale"], again["stale"]) == (False, True)   # stale follows now
+    _req(conn, a, 250, 1000)                     # ended after the newest snapshot: shares unchanged, nothing recomputed
+    assert quota.attribution_cached(conn, Pricing(), "5h", now=215, stale_after_s=1800)["shares"] == {a: 4} and len(calls) == 1
+    _req(conn, a, 190, 1000)                     # a request recorded late, inside the last pair
+    assert quota.attribution_cached(conn, Pricing(), "5h", now=220, stale_after_s=1800)["shares"] == {a: 4} and len(calls) == 2
+    _snap(conn, 300, 6)
+    assert quota.attribution_cached(conn, Pricing(), "5h", now=310, stale_after_s=1800)["utilization_pct"] == 6 and len(calls) == 3
+    quota.clear_rate_cache()
+    quota.attribution_cached(conn, Pricing(), "5h", now=310, stale_after_s=1800)
+    assert len(calls) == 4
