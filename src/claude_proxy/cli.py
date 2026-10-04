@@ -170,6 +170,8 @@ def cmd_user_passwd(args, cfg):
 def cmd_user_delete(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
+    if not args.yes and input(f"Type the user's name to confirm deletion: ") != u["name"]:
+        sys.exit("Names differ; nothing deleted.")
     try:
         n = db.delete_user(conn, u["id"])
     except ValueError as e:
@@ -290,7 +292,7 @@ def main(argv=None):
     for action in ("enable", "disable", "revoke"):
         s = u.add_parser(action); s.add_argument("user"); s.set_defaults(func=cmd_user_state, action=action)
     s = u.add_parser("rename"); s.add_argument("user"); s.add_argument("new"); s.set_defaults(func=cmd_user_rename)
-    s = u.add_parser("delete", help="remove a revoked user and their usage history"); s.add_argument("user"); s.set_defaults(func=cmd_user_delete)
+    s = u.add_parser("delete", help="remove a revoked user and their usage history"); s.add_argument("user"); s.add_argument("--yes", action="store_true", help="skip the typed confirmation"); s.set_defaults(func=cmd_user_delete)
     s = u.add_parser("passwd", help="change an admin's dashboard password"); s.add_argument("user"); s.set_defaults(func=cmd_user_passwd)
 
     lm = sub.add_parser("limit").add_subparsers(dest="sub", required=True)

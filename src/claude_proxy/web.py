@@ -754,6 +754,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if action == "routes_key_remove":
             return {"ok": True, "removed": db.remove_routes_key(conn, u["id"], actor["id"])}
         if action == "delete":
+            if str((await _json(request)).get("confirm", "")) != u["name"]:
+                fail(400, "Type the user's name to confirm.")
             try:
                 return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
             except ValueError as e:
@@ -900,6 +902,7 @@ def _fmt_pct(v) -> str:
 
 
 _PERIOD = {"minute": "per min", "5h": "5h", "daily": "daily", "weekly": "weekly", "monthly": "monthly", "total": "credit"}
+_SHARE_PERIOD = {"5h": "5h", "7d": "week", "day": "today"}
 
 
 def _amount(v: float, unit: str) -> str:
@@ -953,11 +956,11 @@ def _status_line(user, states, account) -> str:
             continue
         base, _, period = s.kind.partition("_")
         if base == "share" and account is None:
-            label = "5h" if period == "5h" else "week"
+            label = _SHARE_PERIOD.get(period, period)
             parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{_resets(s)}")
             continue
         if base == "share":
-            label, used = f"{'5h' if period == '5h' else 'week'} share", lambda v: f"{v:.0f}"
+            label, used = f"{_SHARE_PERIOD.get(period, period)} share", lambda v: f"{v:.0f}"
         else:
             label, used = _PERIOD.get(period, period), lambda v, u=s.unit: _amount(v, u)
         if s.skipped or s.current is None:

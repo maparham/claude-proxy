@@ -203,3 +203,92 @@ def test_drop_without_reset_times_still_starts_a_window(db):
     _snap(conn, 300, 5, resets=None)
     res = quota.attribution(conn, Pricing(), "5h", now=310)
     assert res["shares"][a] == pytest.approx(3)
+
+
+def _snap7(conn, t, util, resets=10_000_000):
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (t, "header", "7d", util, resets))
+
+
+def test_request_shares_attribute_each_request_its_part_of_the_rise(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    b, _ = create_user(conn, "b")
+    _snap7(conn, 100, 10)
+    _req(conn, a, 150, 3000)       # id 1
+    _req(conn, b, 160, 1000)       # id 2
+    _snap7(conn, 200, 30)          # +20 split 3:1
+    _req(conn, a, 250, 500)        # id 3
+    _snap7(conn, 300, 32)          # +2, a alone
+    rows = quota.request_shares(conn, Pricing(), "7d", since=0, now=310)
+    assert [(r[0], r[1], round(r[4], 3)) for r in rows] == [(1, a, 15.0), (2, b, 5.0), (3, a, 2.0)]
+    assert quota.attributed_since(conn, Pricing(), "7d", a, 0, 310) == pytest.approx(17)
+    assert quota.attributed_since(conn, Pricing(), "7d", b, 0, 310) == pytest.approx(5)
+
+
+def test_request_shares_split_a_straddling_interval_by_the_requests_after_since(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    _snap7(conn, 100, 0)
+    _req(conn, a, 120, 1000)       # before the day boundary at 150
+    _req(conn, a, 180, 3000)       # after it
+    _snap7(conn, 200, 8)           # +8 over an interval that straddles 150
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=150, now=210) == pytest.approx(6)   # 3000/4000 of 8
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=0, now=210) == pytest.approx(8)
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=190, now=210) == 0
+
+
+def test_request_shares_count_both_sides_of_a_weekly_reset(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    _snap7(conn, 100, 90, resets=1000)
+    _req(conn, a, 150, 10)
+    _snap7(conn, 200, 95, resets=1000)      # +5 before the reset
+    _snap7(conn, 1100, 1, resets=700_000)   # the week reset: a drop with the reset time moving forward
+    _req(conn, a, 1150, 10)
+    _snap7(conn, 1200, 4, resets=700_000)   # +3 after it
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=0, now=1210) == pytest.approx(8)
+    # A dip with an unchanged reset time is rounding noise, not usage and not a reset.
+    _snap7(conn, 1300, 3.5, resets=700_000)
+    _req(conn, a, 1350, 10)
+    _snap7(conn, 1400, 5, resets=700_000)   # high-water was 4: +1
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=0, now=1410) == pytest.approx(9)
+
+
+def test_request_shares_with_fewer_than_two_snapshots_is_empty(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    _req(conn, a, 150, 10)
+    assert quota.request_shares(conn, Pricing(), "7d", 0, 200) == []
+    _snap7(conn, 100, 0)
+    assert quota.attributed_since(conn, Pricing(), "7d", a, 0, 200) == 0
+
+
+def test_observed_rate_is_the_median_tokens_per_point(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    _snap(conn, now - 5000, 0)
+    _req(conn, a, now - 4500, 1000)            # 1000 weighted (sonnet input = reference)
+    _snap(conn, now - 4000, 2)                 # 500 per point
+    _req(conn, a, now - 3500, 3000)
+    _snap(conn, now - 3000, 3)                 # 3000 per point
+    _snap(conn, now - 2500, 3)                 # no rise: ignored
+    _snap(conn, now - 2000, 5)                 # a rise with no request in between: ignored
+    _req(conn, a, now - 1500, 4000)
+    _snap(conn, now - 1000, 7)                 # 2000 per point
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 2000
+    assert quota.observed_rate(conn, Pricing(), "7d", now) is None   # no 7d snapshots at all: no fallback can help
+    # Quiet for the last 7 days: falls back to the median over the whole retained history instead of None.
+    assert quota.observed_rate(conn, Pricing(), "5h", now + 8 * 86400) == 2000
+
+
+def test_observed_rate_falls_back_to_the_whole_history_when_quiet_for_7_days(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 2_000_000
+    old = now - 10 * 86400   # a rate observed 10 days ago; nothing since
+    _snap(conn, old - 1000, 0)
+    _req(conn, a, old - 500, 1000)
+    _snap(conn, old, 2)      # 500 per point
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 500

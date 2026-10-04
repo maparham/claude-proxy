@@ -223,9 +223,9 @@ async def test_delete_only_revoked_users_and_their_history(env):
     gw, conn, ids, keys = env
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "requests_daily", "*", "5", "count"))
     async with admin_client(gw) as c:
-        assert (await c.post(f"/api/admin/users/{ids['bob']}/delete")).status_code == 400   # not revoked yet
+        assert (await c.post(f"/api/admin/users/{ids['bob']}/delete", json={"confirm": "bob"})).status_code == 400   # not revoked yet
         assert (await c.post(f"/api/admin/users/{ids['bob']}/revoke")).status_code == 200
-        r = await c.post(f"/api/admin/users/{ids['bob']}/delete")
+        r = await c.post(f"/api/admin/users/{ids['bob']}/delete", json={"confirm": "bob"})
         assert r.status_code == 200 and r.json()["deleted_requests"] == 1
         names = [u["name"] for u in (await c.get("/api/users")).json()["users"]]
     assert "bob" not in names

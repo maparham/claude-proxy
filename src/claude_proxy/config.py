@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import os
+import re
 import tomllib
 from dataclasses import dataclass, field
 
@@ -91,6 +92,53 @@ class LimitsConfig:
     # Requests one user may have in flight at once. Limits see only finished requests plus these, so a cost or token
     # limit can be overshot by at most this many requests.
     max_inflight: int = 8
+
+
+LENGTHS = {"day": 1, "week": 7, "month": 30}   # ticket lengths in days (paid-tickets design, section 3)
+
+
+@dataclass
+class Tier:
+    """A size of slice sold as tickets: its share of the account and its default USD prices per length."""
+    label: str
+    share_pct: float
+    compare: str = ""
+    default_usd: dict[str, float] = field(default_factory=dict)
+
+    def __post_init__(self):
+        if isinstance(self.share_pct, bool) or not isinstance(self.share_pct, (int, float)) or not 0 < self.share_pct <= 100:
+            raise TypeError("share_pct must be a number above 0 and at most 100")
+        if set(self.default_usd) != set(LENGTHS):
+            raise TypeError(f"default_usd needs exactly the keys {', '.join(LENGTHS)}")
+        for k, v in self.default_usd.items():
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                raise TypeError(f"default_usd.{k} must be a price above 0")
+
+
+@dataclass
+class Currency:
+    round_to: float = 0.01
+
+    def __post_init__(self):
+        if isinstance(self.round_to, bool) or not isinstance(self.round_to, (int, float)) or self.round_to <= 0:
+            raise TypeError("round_to must be a step above 0, e.g. 0.50")
+
+
+def _default_tiers() -> dict[str, Tier]:
+    return {
+        "lite": Tier("Lite", 5, "Claude Pro", {"day": 3, "week": 8, "month": 20}),
+        "standard": Tier("Standard", 25, "Claude Max 5x", {"day": 12, "week": 35, "month": 100}),
+    }
+
+
+@dataclass
+class TicketsConfig:
+    """Paid tickets (design 2026-10-03). `enabled` is set when the config file has a [tickets] section."""
+    enabled: bool = False
+    how_to_buy: str = ""
+    max_sold_pct: float = 80      # ceiling on what tickets and bonuses may reserve; the rest is headroom
+    tiers: dict[str, Tier] = field(default_factory=_default_tiers)
+    currencies: dict[str, Currency] = field(default_factory=dict)   # USD is built in and must not appear here
 
 
 @dataclass
@@ -208,6 +256,35 @@ def _default_routes() -> list[Route]:
     )]
 
 
+_TIER_ID = re.compile(r"^[a-z][a-z0-9_]*$")
+
+
+def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
+    t = TicketsConfig(enabled=True)
+    data = dict(data)
+    try:
+        tiers = data.pop("tiers", None)
+        if tiers is not None:
+            for tier_id in tiers:
+                if not _TIER_ID.match(tier_id):
+                    raise ConfigError(f"{toml_path}: tier id {tier_id!r} must be lowercase letters, digits and underscores")
+            t.tiers = {k: Tier(**v) for k, v in tiers.items()}
+        t.currencies = {k.upper(): Currency(**v) for k, v in data.pop("currencies", {}).items()}
+    except TypeError as e:
+        raise ConfigError(f"{toml_path}: bad [tickets] entry: {e}") from e
+    if "USD" in t.currencies:
+        raise ConfigError(f"{toml_path}: USD is built in; do not configure it under [tickets.currencies]")
+    for k, v in data.items():
+        if k == "enabled" or not hasattr(t, k):
+            raise ConfigError(f"{toml_path}: unknown key [tickets].{k}")
+        setattr(t, k, v)
+    if isinstance(t.max_sold_pct, bool) or not isinstance(t.max_sold_pct, (int, float)) or not 0 < t.max_sold_pct <= 100:
+        raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 100")
+    if not t.tiers:
+        raise ConfigError(f"{toml_path}: [tickets] needs at least one tier")
+    return t
+
+
 @dataclass
 class Config:
     listener: ListenerConfig = field(default_factory=ListenerConfig)
@@ -217,6 +294,7 @@ class Config:
     limits: LimitsConfig = field(default_factory=LimitsConfig)
     db: DBConfig = field(default_factory=DBConfig)
     signup: SignupConfig = field(default_factory=SignupConfig)
+    tickets: TicketsConfig = field(default_factory=TicketsConfig)
     pricing: Pricing = field(default_factory=Pricing)
     routes: list[Route] = field(default_factory=_default_routes)
     retention_days: int = 180
@@ -262,5 +340,7 @@ class Config:
                 cfg.routes = [Route(**r) for r in data["routes"]]
             except TypeError as e:
                 raise ConfigError(f"{toml_path}: bad [[routes]] entry: {e}") from e
+        if "tickets" in data:
+            cfg.tickets = _load_tickets(toml_path, data["tickets"])
         cfg.config_file = toml_path
         return cfg
