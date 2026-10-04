@@ -140,6 +140,18 @@ class Upstream:
         return f"{base}{path}{'?' + query if query else ''}"
 
 
+# The older of the 5-hour and weekly buckets' newest snapshots (NULL while either has none): tickets need both. Each
+# MAX is one lookup on idx_quota_bucket_time; other buckets (the per-model weekly ones) don't count.
+USAGE_FRESH_SQL = ("SELECT MIN((SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket='5h'), "
+                   "(SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket='7d'))")
+
+
+def usage_fresh_s(qc) -> int:
+    """How old the figures may be before /health says stale. An idle gateway gets figures only from the usage poll,
+    which backs off up to poll_max_backoff_s after 429s; that alone is no reason to email the admin."""
+    return max(qc.stale_after_s, qc.poll_max_backoff_s) + 600
+
+
 def create_app(gw: Gateway) -> FastAPI:
     app = FastAPI(title="claude-proxy", docs_url=None, redoc_url=None, openapi_url=None)
     app.state.gw = gw
@@ -148,8 +160,8 @@ def create_app(gw: Gateway) -> FastAPI:
     async def health():
         # Unauthenticated, so only yes/no answers: whether the subscription login works, and whether Anthropic's
         # usage figures are fresh (share limits and tickets depend on them). The detail stays on the dashboard.
-        newest = gw.conn.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0]
-        fresh = newest is not None and time.time() - newest <= gw.cfg.quota.stale_after_s
+        oldest_newest = gw.conn.execute(USAGE_FRESH_SQL).fetchone()[0]
+        fresh = oldest_newest is not None and time.time() - oldest_newest <= usage_fresh_s(gw.cfg.quota)
         return {"ok": True, "credential": gw.backend.describe().healthy, "usage_fresh": fresh}
 
     @app.api_route("/{path:path}", methods=METHODS)

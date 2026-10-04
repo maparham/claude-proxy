@@ -103,12 +103,29 @@ async def test_bearer_key_clients_still_get_401(setup, anthropic):
 
 async def test_health_reports_only_whether_the_login_works_and_usage_is_fresh(setup, db):
     gw, conn, *_ = setup
+    qc = gw.cfg.quota
+    limit = max(qc.stale_after_s, qc.poll_max_backoff_s) + 600   # an idle gateway backing off after 429s is not stale yet
+
+    def snap(bucket, age):
+        conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct) VALUES(?,?,?,?)",
+                     (time.time() - age, "header", bucket, 10))
+
     async with asgi_client(create_app(gw)) as c:
         assert (await c.get("/health")).json() == {"ok": True, "credential": True, "usage_fresh": False}   # no figures yet
-        conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct) VALUES(?,?,?,?)",
-                     (time.time() - 60, "header", "5h", 10))
+        snap("5h", 60)
+        snap("7d_opus", 60)                                                # other buckets don't count
+        assert (await c.get("/health")).json()["usage_fresh"] is False     # no weekly figure yet
+        snap("7d", limit - 60)
         assert (await c.get("/health")).json() == {"ok": True, "credential": True, "usage_fresh": True}
-        conn.execute("UPDATE quota_snapshots SET observed_at=?", (time.time() - gw.cfg.quota.stale_after_s - 60,))
+        conn.execute("DELETE FROM quota_snapshots WHERE bucket='7d'")
+        snap("7d", limit + 60)                                             # the older of the two newest decides
+        snap("7d_opus", 1)
         assert (await c.get("/health")).json()["usage_fresh"] is False
         conn.execute("DELETE FROM credentials")
         assert (await c.get("/health")).json()["credential"] is False
+
+
+def test_health_freshness_query_uses_the_bucket_index(db):
+    from claude_proxy.app import USAGE_FRESH_SQL
+    plan = " ".join(r[3] for r in db[1].execute("EXPLAIN QUERY PLAN " + USAGE_FRESH_SQL))
+    assert "idx_quota_bucket_time" in plan and "SCAN quota_snapshots" not in plan
