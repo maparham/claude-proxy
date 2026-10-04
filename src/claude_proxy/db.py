@@ -142,7 +142,91 @@ SCHEMA = [
         decision TEXT CHECK(decision IN ('approved','denied')),
         ip TEXT                     -- where the request came from, shown on the Authorize page
     )""",
+    # ---- paid tickets (design 2026-10-03) ----
+    """CREATE TABLE IF NOT EXISTS ticket_prices (
+        tier TEXT NOT NULL,
+        length TEXT NOT NULL CHECK(length IN ('day','week','month')),
+        usd REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        updated_by INTEGER,
+        PRIMARY KEY (tier, length)
+    )""",
+    """CREATE TABLE IF NOT EXISTS ticket_discounts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tier TEXT NOT NULL,
+        length TEXT NOT NULL CHECK(length IN ('day','week','month')),
+        usd REAL NOT NULL,
+        starts_at INTEGER NOT NULL,
+        ends_at INTEGER NOT NULL,
+        created_by INTEGER,
+        created_at INTEGER NOT NULL,
+        cancelled_at INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ticket_discounts_tier ON ticket_discounts(tier, length, starts_at)",
+    # A history: the newest row per currency is the current rate (local units per 1 USD).
+    """CREATE TABLE IF NOT EXISTS fx_rates (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        currency TEXT NOT NULL,
+        rate REAL NOT NULL,
+        set_at INTEGER NOT NULL,
+        set_by INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_fx_rates_currency ON fx_rates(currency, set_at)",
+    # A sales record: never deleted. Deleting the user leaves user_id NULL and user_name as it was.
+    """CREATE TABLE IF NOT EXISTS tickets (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        user_name TEXT NOT NULL,
+        account_id INTEGER NOT NULL DEFAULT 1,
+        tier TEXT NOT NULL,
+        share_pct REAL NOT NULL,            -- copied at grant: a later config change never touches a sold ticket
+        length TEXT NOT NULL CHECK(length IN ('day','week','month')),
+        days INTEGER NOT NULL,
+        starts_at INTEGER NOT NULL,
+        ends_at INTEGER NOT NULL,           -- starts_at + days * 86400; bonus days come on top (TICKET_EFFECTIVE_END)
+        list_usd REAL NOT NULL,
+        usd REAL NOT NULL,
+        discount_id INTEGER,
+        currency TEXT NOT NULL,
+        rate REAL NOT NULL,
+        amount REAL NOT NULL,
+        granted_by INTEGER,
+        granted_at INTEGER NOT NULL,
+        cancelled_at INTEGER,
+        cancelled_by INTEGER,
+        note TEXT,
+        ungated_at INTEGER                  -- set by the Ungate action: this row no longer makes its user ticket-gated
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, starts_at)",
+    "CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id, starts_at)",
+    """CREATE TABLE IF NOT EXISTS ticket_bonuses (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+        share_pct REAL NOT NULL DEFAULT 0,   -- applies between starts_at and ends_at
+        extra_days INTEGER NOT NULL DEFAULT 0,   -- extend the ticket's end at the ticket's own share
+        starts_at INTEGER NOT NULL,
+        ends_at INTEGER NOT NULL,
+        note TEXT,
+        granted_by INTEGER,
+        granted_at INTEGER NOT NULL,
+        cancelled_at INTEGER,
+        cancelled_by INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ticket_bonuses_ticket ON ticket_bonuses(ticket_id)",
+    # Written by the daily maintenance task (estimates.py), read by /pricing, which never computes anything itself.
+    """CREATE TABLE IF NOT EXISTS usage_estimates (
+        computed_at INTEGER NOT NULL,
+        family TEXT NOT NULL,
+        bucket TEXT NOT NULL,
+        busy_hours INTEGER NOT NULL,
+        p75_share_per_hour REAL,
+        PRIMARY KEY (family, bucket)
+    )""",
 ]
+
+# A ticket's effective end: ends_at plus its non-cancelled bonus days. For queries that alias tickets as `t`.
+TICKET_EFFECTIVE_END = ("(t.ends_at + 86400 * COALESCE((SELECT SUM(b.extra_days) FROM ticket_bonuses b "
+                        "WHERE b.ticket_id=t.id AND b.cancelled_at IS NULL), 0))")
 
 
 def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
@@ -346,13 +430,18 @@ def revoke(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> 
     audit(conn, actor, "revoke", _user_name(conn, user_id))
 
 
-def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> int:
-    """Remove a revoked user and their usage history. Returns the number of requests deleted."""
+def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None, now: float | None = None) -> int:
+    """Remove a revoked user and their usage history. Returns the number of requests deleted. Tickets stay as sales
+    records with user_id NULL (the FK's ON DELETE SET NULL); a user with an active or queued ticket is not deleted."""
+    now = time.time() if now is None else now
     u = conn.execute("SELECT name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
     if u is None or u["revoked_at"] is None:
         raise ValueError("Only a revoked user can be deleted; revoke them first.")
+    if conn.execute(f"SELECT 1 FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {TICKET_EFFECTIVE_END}>? LIMIT 1",
+                    (user_id, now)).fetchone():
+        raise ValueError("Cancel the user's active or queued ticket first.")
     n = conn.execute("DELETE FROM requests WHERE user_id=?", (user_id,)).rowcount
-    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits and sessions cascade
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits and sessions cascade; tickets keep user_name
     audit(conn, actor, "delete_user", u["name"], {"deleted_requests": n})
     return n
 

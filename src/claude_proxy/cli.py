@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from . import db, limits
+from . import db, estimates, limits
 from .config import Config, ConfigError
 from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
@@ -170,6 +170,13 @@ def cmd_user_passwd(args, cfg):
 def cmd_user_delete(args, cfg):
     conn = _conn(cfg)
     u = _user(conn, args.user)
+    if not args.yes:
+        try:
+            answer = input("Type the user's name to confirm deletion: ")
+        except EOFError:
+            sys.exit("No confirmation (not a terminal); pass --yes to delete without the prompt.")
+        if answer != u["name"]:
+            sys.exit("Names differ; nothing deleted.")
     try:
         n = db.delete_user(conn, u["id"])
     except ValueError as e:
@@ -241,7 +248,7 @@ async def _serve(cfg: Config):
     ]
     print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
     print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
-    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_retention(conn, cfg))]
+    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_maintenance(conn, cfg))]
     running = [asyncio.create_task(s.serve()) for s in servers]
     try:
         await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
@@ -254,14 +261,17 @@ async def _serve(cfg: Config):
         await gw.aclose()
 
 
-async def _retention(conn, cfg: Config):
+async def _maintenance(conn, cfg: Config):
     while True:
         try:
             removed = db.cleanup(conn, cfg.retention_days)
             if any(removed.values()):
                 logger.info("retention cleanup: %s", removed)
+            done = estimates.refresh_if_due(conn, cfg)
+            if done:
+                logger.info("usage estimates refreshed: %s", done)
         except Exception:
-            logger.exception("retention cleanup failed")
+            logger.exception("maintenance failed")
         await asyncio.sleep(6 * 3600)
 
 
@@ -290,7 +300,7 @@ def main(argv=None):
     for action in ("enable", "disable", "revoke"):
         s = u.add_parser(action); s.add_argument("user"); s.set_defaults(func=cmd_user_state, action=action)
     s = u.add_parser("rename"); s.add_argument("user"); s.add_argument("new"); s.set_defaults(func=cmd_user_rename)
-    s = u.add_parser("delete", help="remove a revoked user and their usage history"); s.add_argument("user"); s.set_defaults(func=cmd_user_delete)
+    s = u.add_parser("delete", help="remove a revoked user and their usage history"); s.add_argument("user"); s.add_argument("--yes", action="store_true", help="skip the typed confirmation"); s.set_defaults(func=cmd_user_delete)
     s = u.add_parser("passwd", help="change an admin's dashboard password"); s.add_argument("user"); s.set_defaults(func=cmd_user_passwd)
 
     lm = sub.add_parser("limit").add_subparsers(dest="sub", required=True)

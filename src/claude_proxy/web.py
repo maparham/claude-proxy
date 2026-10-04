@@ -32,8 +32,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import clerk, db, limits, quota, usage
+from . import clerk, db, limits, quota, tickets, usage
 from .auth import AuthError, authenticate
+from .config import LENGTHS
 from .gateway import Gateway
 
 logger = logging.getLogger("claude_proxy")
@@ -281,6 +282,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             be = gw.backend.describe()
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
+        out["tickets"] = {"enabled": cfg.tickets.enabled}
+        if is_admin(user) and cfg.tickets.enabled:
+            out["tickets"] |= {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
+                               "currencies": list(tickets.currencies(cfg)), "lengths": LENGTHS,
+                               "max_sold_pct": cfg.tickets.max_sold_pct, "how_to_buy": cfg.tickets.how_to_buy}
         return out
 
     # ---------- helpers ----------
@@ -492,7 +498,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "created_at": u["created_at"], "last_seen": last,
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
                         "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
-                        "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)]})
+                        "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
+                        "ticket": tickets.user_state(conn, u["id"], now) if cfg.tickets.enabled else None})
         return {"users": out}
 
     @app.get("/api/limits")
@@ -754,10 +761,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if action == "routes_key_remove":
             return {"ok": True, "removed": db.remove_routes_key(conn, u["id"], actor["id"])}
         if action == "delete":
+            if str((await _json(request)).get("confirm", "")) != u["name"]:
+                fail(400, "Type the user's name to confirm.")
             try:
                 return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
             except ValueError as e:
                 fail(400, str(e))
+        if action == "ungate":
+            need_tickets()
+            ticket_call(tickets.ungate, conn, actor["id"], u["id"])
+            return {"ok": True}
         if action == "enable":
             if u["revoked_at"] is not None:
                 fail(400, "A revoked user cannot be re-enabled; delete them and add them again for a new key.")
@@ -798,6 +811,188 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         db.audit(conn, actor["id"], "limit_clear", f"{u['name']}:{kind}:{scope}")
         return {"ok": True}
 
+    # ---------- paid tickets (design 2026-10-03) ----------
+
+    def ticket_call(fn, *args, **kw):
+        try:
+            return fn(*args, **kw)
+        except tickets.CapacityError as e:
+            fail(409, str(e))
+        except tickets.TicketError as e:
+            fail(400, str(e))
+
+    def need_tickets():
+        if not cfg.tickets.enabled:
+            fail(404, "Tickets are not enabled on this gateway.")
+
+    @app.get("/api/admin/rates")
+    async def rates(request: Request):
+        admin(request)
+        need_tickets()
+        now, n, out = time.time(), names(), []
+        for code, step in tickets.currencies(cfg).items():
+            if code == "USD":
+                continue
+            r = tickets.current_rate(conn, code)
+            out.append({"currency": code, "round_to": step, "rate": r["rate"] if r else None, "set_at": r["set_at"] if r else None,
+                        "set_by": n.get(r["set_by"]) if r and r["set_by"] else None, "stale": bool(r and tickets.rate_is_stale(r, now))})
+        return {"rates": out}
+
+    @app.post("/api/admin/rates")
+    async def set_rate(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        return {"ok": True, "rate": ticket_call(tickets.set_rate, conn, cfg, str(body.get("currency", "")).upper(), body.get("rate"), actor["id"])}
+
+    @app.get("/api/admin/prices")
+    async def prices(request: Request):
+        admin(request)
+        need_tickets()
+        return {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
+                "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True)}
+
+    @app.post("/api/admin/prices")
+    async def set_price(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), body.get("usd"), actor["id"])
+        return {"ok": True}
+
+    @app.post("/api/admin/discounts")
+    async def create_discount(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        try:
+            starts_at, ends_at = int(body.get("starts_at")), int(body.get("ends_at"))
+        except (TypeError, ValueError):
+            fail(400, "Need starts_at and ends_at as epoch seconds.")
+        d = ticket_call(tickets.create_discount, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), body.get("usd"),
+                        starts_at, ends_at, actor["id"])
+        return {"ok": True, "discount": d}
+
+    @app.post("/api/admin/discounts/{did}/cancel")
+    async def cancel_discount(request: Request, did: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        ticket_call(tickets.cancel_discount, conn, did, actor["id"])
+        return {"ok": True}
+
+    def ticket_state(t: dict, now: float) -> str:
+        if t["cancelled_at"] is not None:
+            return "cancelled"
+        if t["effective_end"] <= now:
+            return "ended"
+        return "queued" if t["starts_at"] > now else "active"
+
+    @app.get("/api/admin/tickets")
+    async def tickets_list(request: Request, user_id: int | None = None):
+        admin(request)
+        need_tickets()
+        now, n = time.time(), names()
+        where, params = ("WHERE t.user_id=?", (user_id,)) if user_id is not None else ("", ())
+        rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
+        for t in rows:
+            t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"])}
+            if t["user_id"] is not None:   # the user's current name, falling back to the name stored at grant for a deleted user
+                t["user_name"] = n.get(t["user_id"], t["user_name"])
+        return {"tickets": rows}
+
+    def grant_args(body) -> tuple:
+        return (target_user(body.get("user") or body.get("user_id")), str(body.get("tier", "")), str(body.get("length", "")),
+                str(body.get("currency") or "USD").upper())
+
+    @app.post("/api/admin/tickets/preview")
+    async def ticket_preview(request: Request):
+        admin(request)
+        need_tickets()
+        u, tier, length, currency = grant_args(await _json(request))
+        return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time())
+
+    @app.post("/api/admin/tickets")
+    async def ticket_grant(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        u, tier, length, currency = grant_args(body)
+        remove = [(str(r.get("kind", "")), str(r.get("scope") or "*")) for r in body.get("remove_limits") or [] if isinstance(r, dict)]
+        t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
+                        remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")))
+        return {"ok": True, "ticket": t}
+
+    @app.post("/api/admin/tickets/{tid}/cancel")
+    async def ticket_cancel(request: Request, tid: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        return {"ok": True, **ticket_call(tickets.cancel, conn, cfg, actor["id"], tid)}
+
+    @app.post("/api/admin/tickets/{tid}/bonus")
+    async def ticket_bonus(request: Request, tid: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        try:
+            share = float(body.get("share_pct") or 0)
+            days = int(body.get("extra_days") or 0)
+            starts_at = None if body.get("starts_at") in (None, "") else int(body["starts_at"])
+            ends_at = None if body.get("ends_at") in (None, "") else int(body["ends_at"])
+        except (TypeError, ValueError):
+            fail(400, "share_pct, extra_days, starts_at and ends_at must be numbers.")
+        r = ticket_call(tickets.add_bonus, conn, cfg, actor["id"], tid, share_pct=share, extra_days=days, starts_at=starts_at, ends_at=ends_at,
+                        note=str(body.get("note") or ""))
+        return {"ok": True, **r}
+
+    @app.get("/api/admin/capacity")
+    async def capacity(request: Request):
+        admin(request)
+        need_tickets()
+        now = time.time()
+        util = {}
+        for b in BUCKETS:
+            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+            util[b] = {"utilization_pct": att["utilization_pct"], "stale": att["stale"]}
+        return {**tickets.capacity(conn, cfg, now), "utilization": util}
+
+    def display_currency() -> str:
+        return next(iter(cfg.tickets.currencies), "USD")
+
+    @app.get("/api/pricing")
+    async def pricing_api():
+        # Public: prices, discounts, the rate date, the usage hints and whether a purchase is possible. Nothing else.
+        need_tickets()
+        return tickets.price_table(conn, cfg, time.time(), display_currency())
+
+    @app.get("/pricing")
+    async def pricing_page():
+        need_tickets()
+        return HTMLResponse(versioned("pricing.html", ("pricing.js", "app.css")), headers=PAGE_HEADERS)
+
+    @app.get("/api/me/tickets")
+    async def me_tickets(request: Request):
+        user = principal(request)
+        if not cfg.tickets.enabled:
+            return {"enabled": False}
+        now = time.time()
+        st = tickets.user_state(conn, user["id"], now)
+        label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
+        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "how_to_buy": cfg.tickets.how_to_buy}
+        cur = st["current"]
+        if cur:
+            out["current"] = {"id": cur["id"], "tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
+                              "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
+                              "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "day_end": tickets.current_day(cur, now)[1],
+                              "bonus_share": tickets.bonus_share(conn, cur["id"], now),
+                              "bonuses": [{"share_pct": b["share_pct"], "note": b["note"], "ends_at": b["ends_at"]}
+                                          for b in tickets.active_bonuses(conn, cur["id"], now)]}
+        if st["queued"]:
+            q = st["queued"]
+            out["queued"] = {"id": q["id"], "tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+        currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
+        out["prices"] = tickets.price_table(conn, cfg, now, currency)
+        return out
+
     # ---------- page ----------
 
     @app.get("/")
@@ -811,15 +1006,19 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#authorize"
         return RedirectResponse(f"{page}/{code[:4]}-{code[4:]}" if len(code) == 8 else page)
 
+    def versioned(page: str, assets: tuple[str, ...]) -> str:
+        """The page with each asset URL carrying its content hash, so a CDN or browser cache picks up a deploy."""
+        html = (STATIC / page).read_text()
+        for name in assets:
+            v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
+            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
+        return html
+
     # Asset URLs carry a content hash, so a CDN or browser that caches them still picks up a deploy.
     @app.get("/dashboard")
     @app.get("/admin")   # the same page, offering the admin's password sign-in instead of Clerk and keys
     async def page():
-        html = (STATIC / "index.html").read_text()
-        for name in ("app.js", "app.css"):
-            v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
-            html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
-        return HTMLResponse(html, headers=PAGE_HEADERS)
+        return HTMLResponse(versioned("index.html", ("app.js", "app.css")), headers=PAGE_HEADERS)
 
     @app.get("/privacy")
     async def privacy():
@@ -900,6 +1099,7 @@ def _fmt_pct(v) -> str:
 
 
 _PERIOD = {"minute": "per min", "5h": "5h", "daily": "daily", "weekly": "weekly", "monthly": "monthly", "total": "credit"}
+_SHARE_PERIOD = {"5h": "5h", "7d": "week", "day": "today"}
 
 
 def _amount(v: float, unit: str) -> str:
@@ -953,11 +1153,13 @@ def _status_line(user, states, account) -> str:
             continue
         base, _, period = s.kind.partition("_")
         if base == "share" and account is None:
-            label = "5h" if period == "5h" else "week"
-            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{_resets(s)}")
+            label = _SHARE_PERIOD.get(period, period)
+            est = " est." if s.no_live_data else ""
+            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{est}{_resets(s)}")
             continue
         if base == "share":
-            label, used = f"{'5h' if period == '5h' else 'week'} share", lambda v: f"{v:.0f}"
+            label = f"{_SHARE_PERIOD.get(period, period)} share"
+            used = (lambda v: f"{v:.1f}") if period == "day" else (lambda v: f"{v:.0f}")
         else:
             label, used = _PERIOD.get(period, period), lambda v, u=s.unit: _amount(v, u)
         if s.skipped or s.current is None:

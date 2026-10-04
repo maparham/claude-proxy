@@ -8,6 +8,7 @@ import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from claude_proxy import quota
 from claude_proxy.config import Config
 from claude_proxy.db import init_db
 
@@ -30,6 +31,7 @@ def credential_key(monkeypatch, isolated_home):
 
 @pytest.fixture
 def db(tmp_path):
+    quota.clear_rate_cache()   # a connection id from a previous test's cache entry could otherwise be reused
     path = str(tmp_path / "test.db")
     conn = init_db(path)
     yield path, conn
