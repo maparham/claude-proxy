@@ -350,3 +350,15 @@ async def test_a_locked_database_is_a_503_not_a_500(env, monkeypatch):
     async with admin_client(gw) as c:
         r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
         assert r.status_code == 503 and "try again" in r.json()["error"] and r.headers["retry-after"]
+
+
+async def test_dashboard_links_the_pricing_page_only_while_tickets_are_on(env):
+    gw, conn, cfg, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        page = (await c.get("/dashboard")).text
+        assert page.count('href="/pricing"') == 2                 # the header, and the sign-in page's foot
+        assert "pricing-link hidden" not in page
+        assert 'href="/"' in (await c.get("/pricing")).text       # and back
+        cfg.tickets.enabled = False
+        page = (await c.get("/dashboard")).text
+        assert page.count("pricing-link hidden") == 2

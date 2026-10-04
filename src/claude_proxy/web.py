@@ -1027,7 +1027,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/dashboard")
     @app.get("/admin")   # the same page, offering the admin's password sign-in instead of Clerk and keys
     async def page():
-        return HTMLResponse(versioned("index.html", ("app.js", "app.css")), headers=PAGE_HEADERS)
+        html = versioned("index.html", ("app.js", "app.css"))
+        if cfg.tickets.enabled:   # the header and the sign-in page link the public price list, signed in or not
+            html = html.replace("pricing-link hidden", "pricing-link")
+        return HTMLResponse(html, headers=PAGE_HEADERS)
 
     @app.get("/privacy")
     async def privacy():
