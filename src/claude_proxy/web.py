@@ -896,6 +896,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
         for t in rows:
             t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"])}
+            if t["user_id"] is not None:   # the user's current name, falling back to the name stored at grant for a deleted user
+                t["user_name"] = n.get(t["user_id"], t["user_name"])
         return {"tickets": rows}
 
     def grant_args(body) -> tuple:
@@ -1152,10 +1154,12 @@ def _status_line(user, states, account) -> str:
         base, _, period = s.kind.partition("_")
         if base == "share" and account is None:
             label = _SHARE_PERIOD.get(period, period)
-            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{_resets(s)}")
+            est = " est." if s.no_live_data else ""
+            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{est}{_resets(s)}")
             continue
         if base == "share":
-            label, used = f"{_SHARE_PERIOD.get(period, period)} share", lambda v: f"{v:.0f}"
+            label = f"{_SHARE_PERIOD.get(period, period)} share"
+            used = (lambda v: f"{v:.1f}") if period == "day" else (lambda v: f"{v:.0f}")
         else:
             label, used = _PERIOD.get(period, period), lambda v, u=s.unit: _amount(v, u)
         if s.skipped or s.current is None:

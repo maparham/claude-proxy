@@ -229,3 +229,13 @@ def test_user_view_and_status_line_name_the_day_limit(env):
     assert set(views) == {"5h_limit", "today_limit"} and views["today_limit"]["limit"] == 100.0
     line = _status_line(user(conn, ids["alice"]), sts, None)
     assert line.startswith("alice · 5h 0% (resets in") and " · today 0% (resets in 23.9 h)" in line
+
+
+def test_status_line_marks_shares_estimated_without_live_data(env):
+    from claude_proxy.web import _status_line
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 200, i=1000)
+    fresh(conn, NOW - 100, util5=1, util7=1)
+    sts = limits.states(conn, cfg, ids["alice"], now=NOW + 2000)   # stale: estimated from weighted tokens
+    line = _status_line(user(conn, ids["alice"]), sts, None)
+    assert " · 5h 20% est. (resets in" in line and " · today 140% est. (resets in" in line

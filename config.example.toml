@@ -56,3 +56,22 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # [pricing.models."my-model*"]
 # input = 1.0
 # output = 5.0
+
+# Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). Present = enabled: the dashboard gains
+# Tickets and Pricing tabs and /pricing goes public. Shares live here because changing one changes capacity; prices
+# are seeded from default_usd on first start and edited in the dashboard afterwards.
+# [tickets]
+# how_to_buy = "Send the amount by bank transfer to … and email the admin."
+# max_sold_pct = 80            # tickets and bonuses together may reserve at most this; the rest is headroom
+# [tickets.tiers.lite]
+# label = "Lite"
+# share_pct = 5
+# compare = "Claude Pro"
+# default_usd = { day = 3, week = 8, month = 20 }
+# [tickets.tiers.standard]
+# label = "Standard"
+# share_pct = 25
+# compare = "Claude Max 5x"
+# default_usd = { day = 12, week = 35, month = 100 }
+# [tickets.currencies.EUR]     # USD is built in; add a daily rate on the Pricing tab for each currency here
+# round_to = 0.50

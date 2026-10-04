@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sqlite3
 
 import httpx
@@ -8,6 +9,8 @@ from . import tickets
 from .config import Config
 from .credentials import OAuthBackend
 from .quota import Poller
+
+logger = logging.getLogger("claude_proxy")
 
 
 class Gateway:
@@ -24,6 +27,13 @@ class Gateway:
         self.poller = Poller(conn, self.backend, cfg.quota)
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)
+        else:
+            # Tickets built the user's share limits while gating them; with tickets off, nothing restores
+            # the admin's own share rows, so a former ticket user runs with no share limits at all.
+            n = conn.execute("SELECT COUNT(DISTINCT user_id) FROM tickets WHERE ungated_at IS NULL AND user_id IS NOT NULL").fetchone()[0]
+            if n:
+                logger.warning("tickets are off in the config but %d users are ticket-gated; they now run under "
+                               "their remaining hand limits only", n)
 
     async def aclose(self) -> None:
         await self.http.aclose()

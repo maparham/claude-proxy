@@ -452,8 +452,10 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
     now = _now(now)
     share_pct = float(share_pct or 0)
     extra_days = int(extra_days or 0)
-    if share_pct < 0 or extra_days < 0 or (share_pct == 0 and extra_days == 0):
+    if not math.isfinite(share_pct) or share_pct < 0 or extra_days < 0 or (share_pct == 0 and extra_days == 0):
         raise TicketError("A bonus needs extra share above 0, extra days above 0, or both.")
+    if extra_days > 365:
+        raise TicketError("Extra days must be 365 or fewer.")
     conn.execute("BEGIN IMMEDIATE")
     try:
         t = get(conn, ticket_id)
@@ -462,6 +464,8 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         old_end, new_end, moved = t["effective_end"], t["effective_end"] + extra_days * DAY, 0
         if extra_days:
             chain = _later_tickets(conn, t["user_id"], old_end) if t["user_id"] is not None else []
+            if any(tk["starts_at"] <= now for tk in chain):
+                raise TicketError("The user's next ticket has already started; extra days cannot move it.")
             if chain and chain[0]["starts_at"] < new_end:
                 try:
                     _shift(conn, cfg, chain, new_end - chain[0]["starts_at"])

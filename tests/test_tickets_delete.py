@@ -55,3 +55,13 @@ def test_cli_delete_asks_for_the_name_unless_yes(db, monkeypatch, capsys):
     monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("--yes must not prompt"))
     cli.main(["user", "delete", "bob", "--yes"])
     assert "Deleted bob" in capsys.readouterr().out
+    carol, _ = dbm.create_user(conn, "carol")
+    dbm.revoke(conn, carol)
+
+    def no_tty(prompt=""):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", no_tty)
+    with pytest.raises(SystemExit, match="No confirmation"):
+        cli.main(["user", "delete", "carol"])
+    assert conn.execute("SELECT 1 FROM users WHERE name='carol'").fetchone()

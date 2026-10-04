@@ -5,6 +5,7 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const LENGTHS = [["day", "1 day"], ["week", "1 week"], ["month", "1 month"]];
 const FAMILY = { sonnet: "Sonnet", opus: "Opus" };
 let data = null;
+let reloaded = false;   // a client clock ahead of the server must not reload every second forever
 
 function money(amount, currency) {
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount); }
@@ -43,13 +44,14 @@ function render() {
   document.getElementById("how-to-buy").textContent = data.how_to_buy || "Ask the gateway admin.";
 }
 function tick() {
-  let reload = false;
+  if (reloaded) return;   // already reloading (or a client clock stuck in the future): stop ticking
+  let ended = false;
   document.querySelectorAll(".countdown").forEach((el) => {
     const ends = +el.dataset.ends;
-    if (ends <= Date.now() / 1000) reload = true;
-    el.textContent = `Offer ends in ${countdown(ends)}`;
+    if (ends <= Date.now() / 1000) { ended = true; el.textContent = "Offer ended"; }
+    else el.textContent = `Offer ends in ${countdown(ends)}`;
   });
-  if (reload) location.reload();   // the regular price returns by itself
+  if (ended) { reloaded = true; location.reload(); }   // the regular price returns by itself
 }
 fetch("/api/pricing", { credentials: "omit" }).then((r) => r.json()).then((d) => { data = d; render(); setInterval(tick, 1000); })
   .catch(() => { document.getElementById("pricing").innerHTML = `<p class="muted">Prices are not available right now.</p>`; });
