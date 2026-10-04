@@ -4,7 +4,7 @@ import fnmatch
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
 
 def _env(name: str, default: str) -> str:
@@ -257,6 +257,7 @@ def _default_routes() -> list[Route]:
 
 
 _TIER_ID = re.compile(r"^[a-z][a-z0-9_]*$")
+_CURRENCY = re.compile(r"^[A-Z]{3}$")   # an ISO 4217 code, which the dashboard formats amounts with
 
 
 def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
@@ -270,13 +271,21 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
                     raise ConfigError(f"{toml_path}: tier id {tier_id!r} must be lowercase letters, digits and underscores")
             t.tiers = {k: Tier(**v) for k, v in tiers.items()}
         t.currencies = {k.upper(): Currency(**v) for k, v in data.pop("currencies", {}).items()}
-    except TypeError as e:
+    except (TypeError, AttributeError) as e:   # AttributeError: a key that should be a table, e.g. `currencies = 5`
         raise ConfigError(f"{toml_path}: bad [tickets] entry: {e}") from e
     if "USD" in t.currencies:
         raise ConfigError(f"{toml_path}: USD is built in; do not configure it under [tickets.currencies]")
+    for code in t.currencies:
+        if not _CURRENCY.match(code):
+            raise ConfigError(f"{toml_path}: currency {code!r} must be three letters, such as EUR")
+    if "enabled" in data:
+        raise ConfigError(f"{toml_path}: [tickets].enabled is not a setting: tickets are on while the [tickets] section exists; "
+                          "remove the [tickets] section to switch them off")
+    plain = [f.name for f in fields(TicketsConfig) if f.name not in ("enabled", "tiers", "currencies")]
     for k, v in data.items():
-        if k == "enabled" or not hasattr(t, k):
-            raise ConfigError(f"{toml_path}: unknown key [tickets].{k}")
+        if k not in plain:
+            raise ConfigError(f"{toml_path}: unknown key [tickets].{k}; [tickets] takes {', '.join(plain)}, "
+                              "[tickets.tiers.<id>] and [tickets.currencies.<code>]")
         setattr(t, k, v)
     if isinstance(t.max_sold_pct, bool) or not isinstance(t.max_sold_pct, (int, float)) or not 0 < t.max_sold_pct <= 100:
         raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 100")

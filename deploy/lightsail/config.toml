@@ -18,11 +18,25 @@ credit_usd = 5.0
 free_daily_cap_usd = 20.0   # all accounts still on their credit, together, in any 24 h
 clerk_publishable_key = "pk_live_Y2xlcmsuY2xhdWRlLWRhc2gucmFoa2FyLnBybyQ"
 
-# Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). Tiers use the built-in defaults
-# (Lite 5%, Standard 25%); prices are seeded on first start and edited on the dashboard's Pricing tab.
+# Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). The tiers are written out so the
+# capacity sold is visible here: each share_pct is the slice of the subscription one ticket reserves. Changing
+# a share changes capacity; existing tickets keep the share they were sold with. default_usd only seeds prices
+# on first start; after that they are edited on the dashboard's Pricing tab.
 [tickets]
 how_to_buy = "Send the amount by bank transfer to the admin and email them with the ticket you want."
 max_sold_pct = 80
+
+[tickets.tiers.lite]
+label = "Lite"
+share_pct = 5
+compare = "Claude Pro"
+default_usd = { day = 3, week = 8, month = 20 }
+
+[tickets.tiers.standard]
+label = "Standard"
+share_pct = 25
+compare = "Claude Max 5x"
+default_usd = { day = 12, week = 35, month = 100 }
 
 [tickets.currencies.EUR]
 round_to = 0.50

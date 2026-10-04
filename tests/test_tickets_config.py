@@ -51,6 +51,12 @@ def test_empty_tickets_section_keeps_default_tiers(tmp_path):
     ("[tickets.tiers.Bad-Id]\nlabel='X'\nshare_pct=5\ndefault_usd={day=1,week=2,month=3}\n", "tier id"),
     ("[tickets.currencies.USD]\nround_to=0.01\n", "USD"),
     ("[tickets.currencies.EUR]\nround_to=0\n", "round_to"),
+    ("[tickets.currencies.EURO]\nround_to=0.5\n", "three letters"),
+    ("[tickets.currencies.E1R]\nround_to=0.5\n", "three letters"),
+    ("[tickets]\ncurrencies = 5\n", "bad [tickets] entry"),
+    ("[tickets]\ntiers = 'lite'\n", "bad [tickets] entry"),
+    ("[tickets]\nenabled = false\n", "remove the [tickets] section"),
+    ("[tickets]\nbogus = 1\n", "how_to_buy, max_sold_pct"),
 ])
 def test_bad_tickets_config_is_refused(tmp_path, body, needle):
     with pytest.raises(ConfigError) as e:
@@ -61,3 +67,10 @@ def test_bad_tickets_config_is_refused(tmp_path, body, needle):
 def test_tier_dataclass_validates_directly():
     with pytest.raises(TypeError):
         Tier(label="X", share_pct=5, default_usd={"day": 1})
+
+
+def test_the_deploy_config_writes_out_the_default_tiers():
+    from pathlib import Path
+    cfg = Config.load(str(Path(__file__).resolve().parent.parent / "deploy" / "lightsail" / "config.toml"))
+    assert cfg.tickets.tiers == TicketsConfig().tiers
+
