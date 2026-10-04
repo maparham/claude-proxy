@@ -448,3 +448,29 @@ def test_only_the_first_ticket_removes_a_credit(db):
     assert p["first_ticket"] is False and p["credit"] is False        # a credit the admin set later is not a sign-up credit
     grant(conn, cfg, ids, length="day", now=NOW + 30)
     assert conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (ids["alice"],)).fetchone() is not None
+
+
+def test_bonus_days_on_an_ended_ticket_are_checked_from_now_not_from_the_past(db):
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.max_sold_pct = 30
+    add_user(conn, ids, "bob")
+    a = grant(conn, cfg, ids, length="day")                                    # alice lite [0, 1d)
+    # bob's standard day covered alice's old end, and has ended by now: only the past is full.
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + DAY - 7200, confirm_stale_rate=True)
+    cfg.tickets.max_sold_pct = 29                                              # 25 + 5 at alice's old end would not fit
+    now = NOW + 2 * DAY - 3600
+    r = bonus(conn, cfg, ids, a["id"], extra_days=1, now=now)
+    assert r["ticket"]["effective_end"] == NOW + 2 * DAY
+    assert tickets.covering(conn, ids["alice"], now)["id"] == a["id"]
+
+
+def test_bonus_days_allowed_when_they_stop_short_of_a_started_later_ticket(db):
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, length="day")                                    # [0, 1d)
+    b = grant(conn, cfg, ids, length="week", now=NOW + 3 * DAY, confirm_stale_rate=True)   # [3d, 10d), a gap after a
+    now = NOW + 3 * DAY + 3600                                                  # b has started
+    r = bonus(conn, cfg, ids, a["id"], extra_days=1, now=now)                  # [1d, 2d): clear of b
+    assert r["moved"] == 0 and r["ticket"]["effective_end"] == NOW + 2 * DAY
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + 3 * DAY
+    with pytest.raises(tickets.TicketError, match="already started"):
+        bonus(conn, cfg, ids, a["id"], extra_days=2, now=now)                  # [2d, 4d) would run into b

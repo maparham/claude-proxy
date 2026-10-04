@@ -263,10 +263,13 @@ def next_queued(conn: sqlite3.Connection, user_id: int, now: float) -> dict | No
 
 
 def last_ended(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
-    """The user's most recently ended ticket, with `ended_at`: its effective end, or when it was cancelled if earlier."""
+    """The user's most recently ended ticket, with `ended_at`: its effective end, or when it was cancelled if earlier.
+    A ticket cancelled before it started is skipped."""
     best = None
     for t in user_tickets(conn, user_id):
         ended = min(t["effective_end"], t["cancelled_at"]) if t["cancelled_at"] is not None else t["effective_end"]
+        if t["cancelled_at"] is not None and t["cancelled_at"] <= t["starts_at"]:
+            continue   # cancelled before it started: it never ran, so it never ended either
         if ended <= now and (best is None or ended > best["ended_at"]):
             best = {**t, "ended_at": ended}
     return best
@@ -479,29 +482,35 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         if t["cancelled_at"] is not None:
             raise TicketError("The ticket is cancelled; bonuses go on live tickets.")
         old_end, new_end, moved = t["effective_end"], t["effective_end"] + extra_days * DAY, 0
+        # Capacity is checked from now on: on a ticket that has started or ended, the past is spent either way.
         if extra_days:
             chain = _later_tickets(conn, t["user_id"], old_end) if t["user_id"] is not None else []
-            if any(tk["starts_at"] <= now for tk in chain):
-                raise TicketError("The user's next ticket has already started; extra days cannot move it.")
             if chain and chain[0]["starts_at"] < new_end:
+                # Only a ticket the extension reaches has to move, and one that has started cannot.
+                if chain[0]["starts_at"] <= now:
+                    raise TicketError("The user's next ticket has already started; the extra days would run into it.")
                 try:
                     _shift(conn, cfg, chain, new_end - chain[0]["starts_at"])
                     moved = len(chain)
                 except CapacityError as e:
                     raise CapacityError(f"The extra days would move {t['user_name']}'s queued ticket, which then does not fit: {e}") from e
-            check_capacity(conn, cfg, t["account_id"], t["share_pct"], old_end, new_end)
+            if new_end > now:
+                check_capacity(conn, cfg, t["account_id"], t["share_pct"], max(old_end, now), new_end)
         if share_pct:
             s = max(int(now if starts_at is None else starts_at), t["starts_at"])
             e = min(int(new_end if ends_at is None else ends_at), new_end)
             if s >= e:
                 raise TicketError("The bonus share period must lie within the ticket's period.")
-            check_capacity(conn, cfg, t["account_id"], share_pct, s, e)
+            if e > now:
+                check_capacity(conn, cfg, t["account_id"], share_pct, max(s, now), e)
         else:
             s, e = old_end, new_end
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
                            "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, (note or "").strip() or None, actor, now))
         # The share was checked before the extra days existed: where it reaches into them, both count.
-        verify_capacity(conn, cfg, t["account_id"], min(s, old_end) if extra_days else s, max(e, new_end))
+        hi = max(e, new_end)
+        if hi > now:
+            verify_capacity(conn, cfg, t["account_id"], max(min(s, old_end) if extra_days else s, now), hi)
         db.audit(conn, actor, "ticket_bonus", t["user_name"], {"ticket_id": ticket_id, "bonus_id": cur.lastrowid, "share_pct": share_pct,
                                                                "extra_days": extra_days, "starts_at": s, "ends_at": e, "moved": moved})
         conn.execute("COMMIT")

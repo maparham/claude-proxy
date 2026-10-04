@@ -283,3 +283,34 @@ def test_tickets_switched_off_refuse_gated_users_instead_of_failing_open(env):
     assert check(conn, cfg, ids["alice"], now=NOW + 2) is None   # ungated: back to hand-set limits
     bob, _ = create_user(conn, "bob")
     assert check(conn, cfg, bob) is None        # never had a ticket: untouched
+
+
+def test_a_ticket_cancelled_before_it_started_is_like_having_no_ticket(db):
+    conn, cfg, ids = seeded(db)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW)
+    conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (NOW + DAY, NOW + 2 * DAY, t["id"]))   # queued
+    tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 10)
+    d = check(conn, cfg, ids["alice"], now=NOW + 20)
+    assert d.status == 403
+    assert d.body["error"]["message"] == "You have no ticket. Send the amount by bank transfer and email the admin."
+
+
+def test_retry_after_and_reset_in_round_up(env):
+    conn, cfg, ids, t = env
+    fresh(conn, NOW - 60, util5=10)
+    req(conn, ids["alice"], NOW - 120, i=1000)
+    fresh(conn, NOW - 30, util5=20)
+    now = NOW + 0.5                                                            # RESET5 - now = 3499.5
+    st = by_kind(conn, cfg, ids["alice"], now=now)
+    assert st["share_5h"].reset_in == 3500 and st["share_day"].reset_in == DAY - 300
+    assert check(conn, cfg, ids["alice"], now=now).retry_after == 3500
+
+
+def test_stale_share_5h_counts_at_most_the_last_5_hours(env):
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 200, i=1000)
+    fresh(conn, NOW - 100, util5=1, util7=1)                                   # rate: 1000 per point
+    later = RESET5 + 7 * 3600                                                  # the stale reset passed 7 hours ago
+    req(conn, ids["alice"], later - 6 * 3600, i=500)                           # 6 hours ago: an earlier 5-hour window
+    req(conn, ids["alice"], later - 3600, i=300)
+    assert by_kind(conn, cfg, ids["alice"], now=later)["share_5h"].current == pytest.approx(0.3)

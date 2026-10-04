@@ -8,6 +8,7 @@ percentage points.
 from __future__ import annotations
 
 import fnmatch
+import math
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -160,7 +161,7 @@ def _window_state(conn, cfg, user_id, row, now, inflight: int = 0) -> LimitState
     current = pending + sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
                             for g in groups)
     return LimitState(kind, scope, row["value"], unit, current=current, limit=limit, remaining=max(0.0, limit - current),
-                      reset_in=max(1, int(round(start + WINDOWS[kind] - now))), exceeded=current >= limit)
+                      reset_in=max(1, math.ceil(start + WINDOWS[kind] - now)), exceeded=current >= limit)
 
 
 def _total_state(conn, cfg, user_id, row) -> LimitState:
@@ -187,7 +188,7 @@ def _share_state(conn, cfg, user_id, row, now) -> LimitState:
     st.remaining = max(0.0, limit - st.current)
     st.exceeded = st.current >= limit
     if att["resets_at"]:
-        st.reset_in = max(1, int(att["resets_at"] - now))
+        st.reset_in = max(1, math.ceil(att["resets_at"] - now))
     return st
 
 
@@ -218,7 +219,7 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share, estimated=True, tier=label)
     att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
     if att["resets_at"] and att["resets_at"] > now:
-        st.resets_at, st.reset_in = att["resets_at"], max(1, int(att["resets_at"] - now))
+        st.resets_at, st.reset_in = att["resets_at"], max(1, math.ceil(att["resets_at"] - now))
     if att["utilization_pct"] is not None and not att["stale"]:
         st.current = att["shares"].get(user_id, 0.0)
         return _finish(st)
@@ -226,10 +227,11 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     if rate is None:
         st.skipped = NO_RATE
         return st
-    # Counting starts at the last known window start, or at the stale snapshot's reset time once that has passed.
+    # Counting starts at the last known window start, or at the stale snapshot's reset time once that has passed; never
+    # more than 5 hours back, since a reset long past may have been followed by more windows than one.
     start = att["window_start"] if att["window_start"] is not None else now - 5 * HOUR
     if att["resets_at"] and att["resets_at"] <= now:
-        start = att["resets_at"]
+        start = max(att["resets_at"], now - 5 * HOUR)
     st.current, st.no_live_data = _weighted_since(conn, cfg, user_id, start, now) / rate, True
     return _finish(st)
 
@@ -237,7 +239,7 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
 def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> LimitState:
     limit = share / 7
     st = LimitState("share_day", "*", f"{limit:g}", "pct", limit=limit, estimated=True, tier=label,
-                    resets_at=day_end, reset_in=max(1, int(day_end - now)))
+                    resets_at=day_end, reset_in=max(1, math.ceil(day_end - now)))
     # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a Lite day (0.71 points) is smaller than one step, so the share attributed since the day
     # began would read 0 for most of a day and then jump. The cheap staleness check only decides the "no live data" mark.
@@ -273,8 +275,9 @@ def _no_ticket_message(conn, cfg, user_id, now) -> str:
     if nxt:
         return f"Your next ticket starts on {_date(nxt['starts_at'])}."
     last = tickets.last_ended(conn, user_id, now)
-    when = _date(last["ended_at"]) if last else "an earlier date"
-    return f"Your ticket ended on {when}. {cfg.tickets.how_to_buy}".strip()
+    if last is None:   # e.g. their only ticket was cancelled before it started
+        return f"You have no ticket. {cfg.tickets.how_to_buy}".strip()
+    return f"Your ticket ended on {_date(last['ended_at'])}. {cfg.tickets.how_to_buy}".strip()
 
 
 def _perm(message: str) -> dict:
@@ -367,7 +370,7 @@ def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tupl
     r = conn.execute(f"SELECT started_at FROM (SELECT started_at, SUM({amount}) OVER (ORDER BY started_at, id) AS cum "
                      f"FROM requests WHERE {where}) WHERE ? - cum < ? ORDER BY started_at LIMIT 1",
                      (*args, *params, spent, cap)).fetchone()
-    return spent, max(1, int(round(r[0] + DAY - now))) if r else None
+    return spent, max(1, math.ceil(r[0] + DAY - now)) if r else None
 
 
 MAX_INFLIGHT = "max_inflight"   # rejected_by for [limits] max_inflight, the per-user concurrency cap
