@@ -15,7 +15,7 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const tzOffset = () => -new Date().getTimezoneOffset() * 60;
 
 function loadPrefs() {
-  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd" };
+  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open" };
   try { return { ...d, ...JSON.parse(localStorage.getItem("cp-prefs") || "{}") }; } catch { return d; }
 }
 function loadSlots() { try { return JSON.parse(localStorage.getItem("cp-colors") || "{}"); } catch { return {}; } }
@@ -75,7 +75,7 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await r.json(); } catch { /* empty */ }
   if (r.status === 401 && !path.startsWith("/api/login")) { showLogin(); throw new Error("signed out"); }
-  if (!r.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${r.status}`), { status: r.status });
+  if (!r.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${r.status}`), { status: r.status, data });
   return data;
 }
 
@@ -491,6 +491,7 @@ const VIEWS = {
   usage: { label: "Usage over time", render: renderUsage },
   users: { label: "Users & limits", render: renderUsers, admin: true },
   tickets: { label: "Tickets", render: renderTickets, admin: true, feature: "tickets" },
+  orders: { label: "Orders", render: renderOrders, admin: true, feature: "tickets" },
   pricing: { label: "Pricing", render: renderPricing, admin: true, feature: "tickets" },
   authorize: { label: "Connect a computer", render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { label: "Account quota", render: renderQuota, admin: true },
@@ -506,7 +507,8 @@ const isAdmin = () => S.user && S.user.role === "admin";
 function renderTabs() {
   const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && (!v.feature || S.tickets?.enabled));
   const current = VIEWS[S.tab]?.parent || S.tab;
-  $("#tabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(v.label)}</button>`).join("");
+  const badge = (k) => (k === "orders" && S.tickets?.orders_new > 0 ? ` <span class="badge tab-count" aria-label="${S.tickets.orders_new} new">${S.tickets.orders_new}</span>` : "");
+  $("#tabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(v.label)}${badge(k)}</button>`).join("");
 }
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
@@ -543,7 +545,10 @@ function credentialPill(c) {
 }
 
 async function renderOverview(main) {
-  const [ov, me, keys, tk] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), isAdmin() || !S.tickets?.enabled ? null : api("/api/me/tickets")]);
+  const buyer = !isAdmin() && S.tickets?.enabled;
+  const [ov, me, keys, tk, mo] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), buyer ? api("/api/me/tickets") : null,
+    buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null]);
+  const order = mo && mo.order;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
   const t = ov.totals[S.prefs.period] || ov.totals["24h"];
@@ -576,10 +581,11 @@ async function renderOverview(main) {
         ${isAdmin() ? usersCard() : userLimitsCard(me, tk)}
       </div>
       ${machinesCard(keys.keys, S.install)}
-      ${tk ? priceListCard(tk) : ""}
+      ${tk ? myOrderCard(order) + priceListCard(tk, order) : ""}
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
+  if (tk) wireOrdering(main, tk, order);
   if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">No account figures yet. They arrive with the first response through the gateway.</p>`;
   if (isAdmin()) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
@@ -625,21 +631,82 @@ function pickedLine(prices, pick) {
   const len = t && { day: "a day", week: "a week", month: "a month" }[pick.length];
   return len ? `You picked <b>${esc(t.label)}</b> for <b>${len}</b>. ` : "";
 }
-function priceListCard(tk) {
+function priceListCard(tk, order) {
   const p = tk.prices;
-  const picked = pickedLine(p, takePick());
+  const pick = takePick();
+  const picked = pickedLine(p, pick);
+  const open = !!order && (order.status === "new" || order.status === "contacted");   // one open order at a time
   const now = Date.now() / 1000 + S.tkSkew;
   // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
   const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
   const L = [["day", "1 day"], ["week", "1 week"], ["month", "1 month"]];
   const hint = (t) => Object.entries({ sonnet: "Sonnet", opus: "Opus" }).map(([f, n]) => { const h = t.hours[f]; return h && (h.per_5h != null || h.per_day != null)
     ? `<div class="muted">${n}: at least ${[h.per_5h != null ? `${h.per_5h} h per 5-hour window` : null, h.per_day != null ? `${h.per_day} h per day` : null].filter(Boolean).join(", ")}</div>` : ""; }).join("");
-  const cell = (l) => `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
-    ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}</td>`;
+  // The home page's pick is the highlighted Order button; a sold-out price has none.
+  const orderBtn = (t, k) => `<div><button class="btn small${pick && pick.tier === t.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(t.tier)}:${k}"${open ? ` disabled title="You already have an open order."` : ""}>Order</button></div>`;
+  const cell = (t, k) => { const l = t.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
+    ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(t, k)}</td>`; };
   return `<div class="card" id="prices"><h3>Tickets</h3><p class="sub">Buy a slice for a day, a week or a month.${p.rate_set_at ? ` Prices converted at the rate of ${fmtDate(p.rate_set_at)}.` : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>Tier</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t.lengths[k])).join("")}</tr>`).join("")}
+    ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t, k)).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${picked}${esc(tk.how_to_buy || (picked ? "Ask the gateway admin." : ""))}</p></div>`;
+}
+
+// ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
+
+// The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
+function myOrderCard(o) {
+  if (!o) return "";
+  const what = `${esc(o.label)}, ${{ day: "1 day", week: "1 week", month: "1 month" }[o.length] || esc(o.length)}`;
+  if (o.status === "new" || o.status === "contacted") {
+    return `<div class="card order-note" id="my-order"><div><b>Order received: ${what}. The admin will contact you.</b>
+      <div class="muted">Quoted ${esc(money(o.quoted_amount, o.currency))} · ${o.status === "contacted" ? "the admin has been in touch" : "waiting for the admin"}</div></div>
+      <button class="btn small" data-my-order="withdraw" data-id="${o.id}">Withdraw</button></div>`;
+  }
+  const text = o.status === "done" ? "Your order is done." : o.status === "declined" ? "Your order was declined." : "";
+  return text ? `<div class="card order-note" id="my-order"><div>${text} <span class="muted">${what}</span></div>
+    <button class="btn small" data-my-order="dismiss" data-id="${o.id}">Dismiss</button></div>` : "";
+}
+// What a buyer can order in: the price list's currency and USD, which always has a rate.
+function orderCurrencies(p) { return [...new Set([p.currency, "USD"])]; }
+function orderFormHtml(p, t, len, email) {
+  const l = t.lengths[len];
+  const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
+  return `<h3>Order ${esc(t.label)}, ${{ day: "1 day", week: "1 week", month: "1 month" }[len] || esc(len)}</h3>
+    <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">at today's rate</span></p>
+    <form id="f-order" class="form-grid order-form">
+      <label>Currency<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
+      ${email ? "" : `<label class="wide">Your email<input type="email" name="email" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">The admin replies here. It is kept with this order only.</span></label>`}
+      <label class="wide">Message (optional)<textarea name="message" maxlength="1000" rows="3" placeholder="Anything the admin should know"></textarea></label>
+      <p class="hint">This is a request, not a payment. The admin will contact you with payment details.</p>
+      <button class="btn primary" type="submit">Send order</button>
+    </form><div class="error" id="order-err"></div><p><button class="btn" data-close>Cancel</button></p>`;
+}
+function orderDialog(p, t, len) {
+  const d = openDialog(orderFormHtml(p, t, len, S.user.email));
+  const f = $("#f-order", d);
+  f.currency.onchange = () => { $("#order-price", d).textContent = f.currency.selectedOptions[0].dataset.price; };
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const go = f.querySelector('button[type="submit"]');
+    go.disabled = true;
+    try {
+      await api("/api/me/orders", { method: "POST", body: { tier: t.tier, length: len, currency: f.currency.value, message: f.message.value, ...(f.email ? { email: f.email.value } : {}) } });
+      d.close(); render();
+    } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
+  };
+}
+function wireOrdering(root, tk, order) {
+  root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
+    const [tier, len] = b.dataset.order.split(":");
+    const t = tk.prices.tiers.find((x) => x.tier === tier);
+    if (t) orderDialog(tk.prices, t, len);
+  }));
+  root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
+    const act = b.dataset.myOrder;
+    if (act === "withdraw" && !confirmInline("Withdraw your order? The admin will no longer act on it.")) return;
+    try { await api(`/api/me/orders/${+b.dataset.id}/${act}`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
+  }));
 }
 
 function quotaBar(q) {
@@ -783,11 +850,14 @@ async function ticketAction(act, t, list) {
     if (r.dates_kept) infoInline("Cancelled", `Their queued tickets kept their dates because one of them would not fit earlier: ${r.reason}`);
   } catch (e) { alertInline(e.message); }
 }
-function grantDialog(users) {
+// `pre`, from an order: {order_id, user, tier, length, currency}. The user is fixed to the order's account, and the
+// grant carries order_id, so the server closes the order with it or refuses both (spec section 7).
+function grantDialog(users, pre = null) {
   const T = S.tickets;
-  const d = openDialog(`<h3>Grant a ticket</h3>
+  const pickable = pre ? users.filter((u) => u.id === pre.user) : users.filter((u) => !u.revoked && u.enabled);
+  const d = openDialog(`<h3>Grant a ticket${pre ? ` for order #${esc(pre.order_id)}` : ""}</h3>
     <form id="f-grant" class="form-grid">
-      <label>User<select name="user" required>${users.filter((u) => !u.revoked && u.enabled).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
+      <label>User<select name="user" required${pre ? " disabled" : ""}>${pickable.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
       <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)} · ${fmtShare(t.share_pct)}</option>`).join("")}</select></label>
       <label>Length<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n} ${n === 1 ? "day" : "days"})</option>`).join("")}</select></label>
       <label>Currency<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
@@ -798,6 +868,10 @@ function grantDialog(users) {
       <button class="btn primary" type="submit" id="grant-go">Grant</button>
     </form><div class="error" id="grant-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
   const f = $("#f-grant", d);
+  if (pre) {
+    ["tier", "length", "currency"].forEach((k) => { if ([...f[k].options].some((o) => o.value === pre[k])) f[k].value = pre[k]; });
+    f.note.value = `Order #${pre.order_id}`;
+  }
   let preview = null;
   const refresh = async () => {
     $("#grant-err", d).textContent = "";
@@ -826,7 +900,8 @@ function grantDialog(users) {
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate } });
+        note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate,
+        ...(pre ? { order_id: pre.order_id } : {}) } });
       d.close(); render();
     } catch (err) {
       if (err.status === 409) await refresh();
@@ -864,6 +939,101 @@ function bonusDialog(t, list) {
       if (r.moved) infoInline("Bonus added", `${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward to start after the extended ticket.`);
     } catch (err) { $("#bonus-err", d).textContent = err.message; }
   };
+}
+
+// ---------- order requests: the admin's Orders tab (design 2026-10-04, section 7) ----------
+
+const ORDER_STATUSES = [["open", "Open orders"], ["new", "New"], ["contacted", "Contacted"], ["done", "Done"], ["declined", "Declined"], ["withdrawn", "Withdrawn"], ["all", "All orders"]];
+const isOpenOrder = (o) => o.status === "new" || o.status === "contacted";
+
+async function renderOrders(main) {
+  const status = ORDER_STATUSES.some(([k]) => k === S.prefs.orderStatus) ? S.prefs.orderStatus : "open";
+  const [{ orders, new: fresh }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
+  if (S.tickets && S.tickets.orders_new !== fresh) { S.tickets.orders_new = fresh; renderTabs(); }
+  main.innerHTML = `<section class="view"><h2>Orders</h2>
+    <p class="lede">Requests from buyers. An order holds no capacity and takes no payment: contact the buyer, then grant the ticket from the order.</p>
+    <div class="controls"><label for="order-status">Show</label><select id="order-status">${ORDER_STATUSES.map(([k, n]) => `<option value="${k}"${k === status ? " selected" : ""}>${n}</option>`).join("")}</select></div>
+    <div class="card table-wrap"><table class="data orders"><thead><tr><th>Age</th><th>Buyer</th><th>Ticket</th><th class="r">Quoted</th><th>Message</th><th>Status</th><th>Email</th><th>Note</th><th></th></tr></thead>
+      <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="9" class="muted">No ${status === "all" ? "" : `${esc(status)} `}orders.</td></tr>`}</tbody></table></div>
+  </section>`;
+  $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
+  main.querySelectorAll("[data-oact]").forEach((b) => b.addEventListener("click", () => orderAction(b.dataset.oact, orders.find((o) => o.id === +b.dataset.id), users)));
+}
+// Every field a buyer typed (name, email, message) and the admin note go through esc().
+function orderRow(o) {
+  const account = o.user_id != null ? `<div class="muted">account <a class="user-link" href="#user/${o.user_id}">${esc(o.user_name || `#${o.user_id}`)}</a></div>`
+    : `<div class="muted">visitor, no account yet</div>`;
+  return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
+    <td><b>${esc(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${esc(o.email)}</a></div>${account}</td>
+    <td class="nowrap">${esc(o.label)} · ${esc(o.length)}</td>
+    <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
+    <td class="order-msg">${o.message ? esc(o.message) : `<span class="muted">—</span>`}</td>
+    <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">ticket #${esc(o.ticket_id)}</div>` : ""}</td>
+    <td>${mailState(o)}</td>
+    <td class="muted order-msg">${esc(o.admin_note) || "—"}</td>
+    <td>${orderActions(o)}</td></tr>`;
+}
+function mailState(o) {
+  if (o.admin_mail === "off" && o.buyer_mail === "off") return `<span class="muted">email off</span>`;
+  const cls = { failed: " state-cancelled", pending: " state-queued", sent: " state-active" };
+  return [["admin", o.admin_mail], ["buyer", o.buyer_mail]].map(([who, st]) => `<span class="badge mail${cls[st] || ""}">${who} email ${esc(st)}</span>`).join(" ");
+}
+// Exactly the status table: Contacted from new; Decline and Grant while open; Note always.
+function orderActions(o) {
+  const b = (act, label, cls = "") => `<button class="btn small${cls}" data-oact="${act}" data-id="${o.id}">${label}</button>`;
+  const open = o.status === "new" || o.status === "contacted";
+  return `<div class="row-actions">${o.status === "new" ? b("contacted", "Contacted") : ""}${open ? b("decline", "Decline", " danger") : ""}${b("note", "Note")}${open ? b("grant", "Grant ticket", " primary") : ""}</div>`;
+}
+async function orderAction(act, o, users) {
+  if (!o) return;
+  const post = (body) => api(`/api/admin/orders/${o.id}`, { method: "POST", body });
+  if (act === "contacted") { try { await post({ action: "contacted" }); render(); } catch (e) { alertInline(e.message); } return; }
+  if (act === "decline" || act === "note") return orderNoteDialog(o, act, post);
+  if (act !== "grant") return;
+  if (o.user_id == null) return linkDialog(o, users);
+  grantDialog(users, { order_id: o.id, user: o.user_id, tier: o.tier, length: o.length, currency: o.currency });
+}
+function orderNoteDialog(o, act, post) {
+  const decline = act === "decline";
+  const d = openDialog(`<h3>${decline ? "Decline" : "Note on"} ${esc(o.name)}'s order</h3>
+    <p class="sub">${decline ? "The note is for you; the buyer only sees that the order was declined." : "For admins only. The buyer never sees it."}</p>
+    <form id="f-onote" class="form-grid"><label class="wide">Note${decline ? " (required)" : ""}<input type="text" name="note" maxlength="200"${decline ? " required" : ""} value="${esc(decline ? "" : o.admin_note)}"></label>
+    <button class="btn ${decline ? "danger" : "primary"}" type="submit">${decline ? "Decline" : "Save"}</button></form>
+    <div class="error" id="onote-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  $("#f-onote input", d).focus();
+  $("#f-onote", d).onsubmit = async (e) => {
+    e.preventDefault();
+    try { await post({ action: decline ? "decline" : "note", note: e.target.note.value }); d.close(); render(); }
+    catch (err) { $("#onote-err", d).textContent = err.message; }
+  };
+}
+// A visitor order has no account: link one first. The suggested match is preselected but only the admin's click links it.
+function linkDialog(o, users) {
+  const live = users.filter((u) => !u.revoked);
+  const sug = o.suggested_user;
+  const d = openDialog(`<h3>Link ${esc(o.name)}'s order to an account</h3>
+    <p class="sub">The ticket goes to an account. ${sug ? `<b>${esc(sug.name)}</b> matches ${esc(o.email)}; check it is the same person.` : `No account matches ${esc(o.email)}.`}</p>
+    <form id="f-link" class="form-grid"><label class="wide">Existing account<select name="user">${sug ? "" : `<option value="">Choose…</option>`}${live.map((u) => `<option value="${u.id}"${sug && sug.id === u.id ? " selected" : ""}>${esc(u.name)}${u.email && u.email !== u.name ? ` (${esc(u.email)})` : ""}</option>`).join("")}</select></label>
+      <button class="btn primary" type="submit">Link and grant</button></form>
+    <p class="sub">Or <button class="btn small" id="link-create">Create user ${esc(o.email)}</button> <span class="muted">Only the owner of that address can later sign in to it.</span></p>
+    <div class="error" id="link-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const f = $("#f-link", d);
+  const link = async (body) => {
+    $("#link-err", d).textContent = "";
+    try {
+      const r = await api(`/api/admin/orders/${o.id}`, { method: "POST", body: { action: "link", ...body } });
+      const { users: fresh } = await api("/api/users");   // a created account is new
+      grantDialog(fresh, { order_id: o.id, user: r.order.user_id, tier: o.tier, length: o.length, currency: o.currency });
+    } catch (err) {
+      const existing = err.status === 409 && err.data && err.data.existing_user_id;
+      if (existing && [...f.user.options].some((x) => +x.value === existing)) {
+        f.user.value = String(existing);
+        $("#link-err", d).textContent = `${err.message} It is selected above: link it instead if it is the same person.`;
+      } else $("#link-err", d).textContent = err.message;
+    }
+  };
+  f.onsubmit = (e) => { e.preventDefault(); if (f.user.value) link({ user_id: +f.user.value }); else $("#link-err", d).textContent = "Choose an account, or create one."; };
+  $("#link-create", d).onclick = () => link({ create: true });
 }
 
 async function renderPricing(main) {
@@ -1610,6 +1780,12 @@ $("#theme-toggle").onclick = () => {
 };
 try { const t = localStorage.getItem("cp-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
 window.addEventListener("hashchange", () => { if (S.user && route()) render(); });
-setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["overview", "users", "user"].includes(S.tab)) render(); }, 60000);
+setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["overview", "users", "user", "orders"].includes(S.tab)) render(); }, 60000);
+// The Orders tab's count of new orders follows along on every other tab too.
+setInterval(async () => {
+  if (!S.user || document.hidden || !isAdmin() || !S.tickets?.enabled) return;
+  try { const s = await api("/api/session"); if (s.tickets && s.tickets.orders_new !== S.tickets.orders_new) { S.tickets.orders_new = s.tickets.orders_new; renderTabs(); } }
+  catch { /* the next tick tries again */ }
+}, 60000);
 
 boot();

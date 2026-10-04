@@ -1,6 +1,7 @@
 "use strict";
 // The public home page: one card per tier for the chosen length, discounts with a live countdown, usage hints and
 // sold-out lengths. Everything comes from /api/pricing; the page computes nothing about the account itself.
+// With Turnstile configured (pricing's turnstile_site_key), "Get it" opens an order dialog instead of linking to the dashboard.
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const LENGTHS = { day: ["/day", 1], week: ["/week", 7], month: ["/month", 30] };
 const FAMILY = { sonnet: "Sonnet", opus: "Opus" };
@@ -38,7 +39,7 @@ function savePct(t, len) {
   const daily = t.lengths.day.usd * LENGTHS[len][1];
   return len === "day" || !(daily > 0) ? 0 : Math.max(0, Math.floor((1 - t.lengths[len].usd / daily) * 100));
 }
-function card(t, i, len, currency) {
+function card(t, i, len, currency, ordering) {
   const l = t.lengths[len];
   const off = l.discount_ends_at && l.list_usd > 0 ? Math.round((1 - l.usd / l.list_usd) * 100) : 0;
   const save = savePct(t, len);
@@ -52,10 +53,12 @@ function card(t, i, len, currency) {
     ${save > 0 ? `<p class="save">Save ${save}% vs daily</p>` : ""}
     <ul class="hints">${hintLines(t).map((h) => `<li>${esc(h)}</li>`).join("")}</ul>
     ${l.sold_out ? `<span class="btn get" aria-disabled="true">Sold out</span>`
-      : `<a class="btn primary get" href="/dashboard?tier=${encodeURIComponent(t.tier)}&length=${len}">Get it</a>`}
+      : ordering ? `<button type="button" class="btn primary get" data-order="${esc(t.tier)}:${len}">Get it</button>`
+      : `<a class="btn primary get" href="${signInHref(t, len)}">Get it</a>`}
   </article>`;
 }
-function cardsHtml(d, len) { return d.tiers.map((t, i) => card(t, i, len, d.currency)).join(""); }
+function signInHref(t, len) { return `/dashboard?tier=${encodeURIComponent(t.tier)}&length=${len}`; }
+function cardsHtml(d, len) { return d.tiers.map((t, i) => card(t, i, len, d.currency, !!d.turnstile_site_key)).join(""); }
 function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length);
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
@@ -72,6 +75,97 @@ function tick() {
   });
   if (ended != null) { reloaded = true; markReloaded(ended); location.reload(); }   // the regular price returns by itself
 }
+// ---------- the order dialog (design 2026-10-04, section 2) ----------
+
+const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+const LENGTH_NAME = { day: "1 day", week: "1 week", month: "1 month" };
+let turnstileReady = null;   // loaded when the dialog first opens, never for a visitor who only reads the page
+let widget = null;
+function loadTurnstile() {
+  turnstileReady ??= new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = TURNSTILE_JS; s.async = true;
+    s.onload = () => resolve(window.turnstile);
+    s.onerror = () => { turnstileReady = null; reject(new Error("Turnstile did not load")); };   // the next open tries again
+    document.head.appendChild(s);
+  });
+  return turnstileReady;
+}
+// What a visitor can order in: the page's currency and USD, which always has a rate.
+function orderFormHtml(d, t, len) {
+  const l = t.lengths[len];
+  const price = (c) => money(c === "USD" ? l.usd : l.amount, c);
+  return `<h3 id="order-h">Order ${esc(t.label)}, ${LENGTH_NAME[len]}</h3>
+    <p class="order-price"><b id="order-price">${esc(price(d.currency))}</b> <span class="muted">at today’s rate</span></p>
+    <form class="form-grid order-form" novalidate>
+      <label>Name<input type="text" name="name" required maxlength="100" autocomplete="name"></label>
+      <label>Email<input type="email" name="email" required maxlength="254" autocomplete="email"></label>
+      <label>Currency<select name="currency">${[...new Set([d.currency, "USD"])].map((c) =>
+        `<option value="${esc(c)}"${c === d.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
+      <label class="wide">Message (optional)<textarea name="message" maxlength="1000" rows="3"></textarea></label>
+      <div class="turnstile wide"></div>
+      <p class="hint">This is a request, not a payment. The admin will contact you with payment details.</p>
+      <button class="btn primary" type="submit">Send order</button>
+    </form>
+    <div class="error" role="alert"></div>
+    <p class="order-alt"><a href="${esc(signInHref(t, len))}">Or sign in to order</a> <button type="button" class="btn" data-close>Cancel</button></p>`;
+}
+function dropWidget() {
+  if (widget != null) { try { window.turnstile.remove(widget); } catch { /* already gone with its container */ } }
+  widget = null;
+}
+function openOrder(tierId, len) {
+  const t = data.tiers.find((x) => x.tier === tierId);
+  if (!t || !t.lengths[len]) return;
+  const dlg = document.getElementById("order-dialog");
+  dropWidget();
+  dlg.innerHTML = orderFormHtml(data, t, len);
+  dlg.showModal();
+  const f = dlg.querySelector("form"), err = dlg.querySelector(".error"), go = f.querySelector('button[type="submit"]');
+  dlg.querySelector("[data-close]").onclick = () => dlg.close();
+  f.currency.onchange = () => { dlg.querySelector("#order-price").textContent = f.currency.selectedOptions[0].dataset.price; };
+  let token = "";
+  loadTurnstile().then((ts) => {
+    if (!dlg.open || !dlg.contains(f)) return;
+    const narrowDialog = typeof matchMedia === "function" && matchMedia("(max-width: 400px)").matches;
+    widget = ts.render(dlg.querySelector(".turnstile"), {
+      sitekey: data.turnstile_site_key, theme: document.documentElement.dataset.theme || "auto", size: narrowDialog ? "compact" : "flexible",
+      callback: (v) => { token = v; }, "expired-callback": () => { token = ""; }, "error-callback": () => { token = ""; },
+    });
+  }).catch(() => { err.textContent = "The verification could not load. Sign in to order instead."; });
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    err.textContent = "";
+    if (!f.reportValidity()) return;
+    if (!token) { err.textContent = "Please wait for the verification to finish."; return; }
+    go.disabled = true;
+    try {
+      let r;
+      try {
+        r = await fetch("/api/orders", { method: "POST", credentials: "omit", headers: { "content-type": "application/json" },
+          body: JSON.stringify({ tier: t.tier, length: len, currency: f.currency.value, name: f.name.value, email: f.email.value,
+                                 message: f.message.value, turnstile_token: token }) });
+      } catch { throw new Error("The order could not be sent; check your connection and try again."); }
+      let body = null;
+      try { body = await r.json(); } catch { /* not JSON */ }
+      if (!r.ok) throw new Error((body && body.error) || `The order could not be sent (HTTP ${r.status}).`);
+      dropWidget();
+      dlg.innerHTML = `<h3>Order received</h3><p>Order received. Check your email.</p><p><button type="button" class="btn primary" data-close>Close</button></p>`;
+      dlg.querySelector("[data-close]").onclick = () => dlg.close();
+    } catch (x) {
+      err.textContent = x.message;
+      go.disabled = false;
+      token = "";   // a token works once: the widget gives a new one
+      try { window.turnstile.reset(widget); } catch { /* not rendered */ }
+    }
+  };
+}
+document.getElementById("cards").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-order]");
+  if (!b || !data) return;
+  const k = b.dataset.order.lastIndexOf(":");
+  openOrder(b.dataset.order.slice(0, k), b.dataset.order.slice(k + 1));
+});
 document.getElementById("length-toggle").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-length]");
   if (!b || !data) return;

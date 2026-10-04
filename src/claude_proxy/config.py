@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import fnmatch
+import logging
 import os
 import re
 import tomllib
 from dataclasses import dataclass, field, fields
 
+logger = logging.getLogger("claude_proxy")
 
 def _env(name: str, default: str) -> str:
     return os.environ.get(name, default)
@@ -140,6 +142,26 @@ class TicketsConfig:
     max_sold_pct: float = 80      # ceiling on what tickets and bonuses may reserve; the rest is headroom
     tiers: dict[str, Tier] = field(default_factory=_default_tiers)
     currencies: dict[str, Currency] = field(default_factory=dict)   # USD is built in and must not appear here
+    turnstile_site_key: str = ""  # public; with TURNSTILE_SECRET, visitors can order from the home page (order requests)
+
+    def turnstile_secret(self) -> str | None:
+        return os.environ.get("TURNSTILE_SECRET") or None
+
+    def turnstile_on(self) -> bool:
+        return bool(self.turnstile_site_key and self.turnstile_secret())
+
+
+@dataclass
+class EmailConfig:
+    """[email] (order requests design, section 6): the SMTP server the order emails go out through."""
+    smtp_host: str
+    from_: str                    # `from` in the TOML file
+    admin_to: str
+    smtp_port: int = 587          # 587: STARTTLS; 465: implicit TLS
+    smtp_user: str = ""           # empty: no AUTH
+
+    def password(self) -> str | None:
+        return os.environ.get("SMTP_PASSWORD") or None
 
 
 @dataclass
@@ -290,6 +312,8 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
         setattr(t, k, v)
     if isinstance(t.max_sold_pct, bool) or not isinstance(t.max_sold_pct, (int, float)) or not 0 < t.max_sold_pct <= 100:
         raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 100")
+    if not isinstance(t.turnstile_site_key, str):
+        raise ConfigError(f"{toml_path}: [tickets].turnstile_site_key must be a string")
     if not t.tiers:
         raise ConfigError(f"{toml_path}: [tickets] needs at least one tier")
     for tid, tier in t.tiers.items():
@@ -297,6 +321,26 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
             raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] share_pct {tier.share_pct:g} is above "
                               f"[tickets].max_sold_pct {t.max_sold_pct:g}, so it could never be sold")
     return t
+
+
+def _load_email(toml_path: str, data: dict) -> EmailConfig:
+    keys = {"smtp_host": str, "from": str, "admin_to": str, "smtp_port": int, "smtp_user": str}
+    for k in data:
+        if k not in keys:
+            raise ConfigError(f"{toml_path}: unknown key [email].{k}; [email] takes {', '.join(keys)}")
+    for k in ("smtp_host", "from", "admin_to"):
+        if not data.get(k):
+            raise ConfigError(f"{toml_path}: [email].{k} is required")
+    for k, kind in keys.items():
+        v = data.get(k)
+        if v is not None and (isinstance(v, bool) or not isinstance(v, kind)):
+            raise ConfigError(f"{toml_path}: [email].{k} must be a {'whole number' if kind is int else 'string'}")
+    if "smtp_port" in data and not 0 < data["smtp_port"] < 65536:
+        raise ConfigError(f"{toml_path}: [email].smtp_port must be a port number")
+    e = EmailConfig(**{("from_" if k == "from" else k): v for k, v in data.items()})
+    if e.smtp_user and not e.password():
+        logger.warning("[email].smtp_user is set but SMTP_PASSWORD is not in the environment; every order email will fail")
+    return e
 
 
 @dataclass
@@ -309,6 +353,7 @@ class Config:
     db: DBConfig = field(default_factory=DBConfig)
     signup: SignupConfig = field(default_factory=SignupConfig)
     tickets: TicketsConfig = field(default_factory=TicketsConfig)
+    email: EmailConfig | None = None      # None without an [email] section: no mail is sent
     pricing: Pricing = field(default_factory=Pricing)
     routes: list[Route] = field(default_factory=_default_routes)
     retention_days: int = 180
@@ -359,5 +404,10 @@ class Config:
             if cfg.retention_days < ESTIMATE_DAYS:   # cleanup would delete what the 30-day usage estimates read
                 raise ConfigError(f"{toml_path}: retention_days must be at least {ESTIMATE_DAYS} while [tickets] is on; "
                                   "the usage estimates read that many days")
+            if cfg.tickets.turnstile_site_key and not cfg.tickets.turnstile_secret():
+                logger.warning("[tickets] turnstile_site_key is set but TURNSTILE_SECRET is not in the environment; "
+                               "visitors cannot order from the home page")
+        if "email" in data:
+            cfg.email = _load_email(toml_path, data["email"])
         cfg.config_file = toml_path
         return cfg

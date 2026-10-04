@@ -46,3 +46,10 @@ body.home { font-size: 15px; }
   .how ol { grid-template-columns: minmax(0, 1fr); }
   .cards { grid-template-columns: minmax(0, 1fr); }
 }
+/* The order dialog ("Get it" with Turnstile configured); app.css draws the dialog, the form grid and the buttons. */
+.order-dialog { max-width: 520px; }
+.order-dialog .order-price { margin: 0 0 14px; font-size: 20px; font-variant-numeric: tabular-nums; }
+.order-dialog .turnstile { grid-column: 1 / -1; }
+.order-dialog .turnstile:empty { display: none; }
+.order-dialog .order-alt { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; font-size: 14px; }
+@media (max-width: 400px) { .order-dialog { padding: 16px; } }

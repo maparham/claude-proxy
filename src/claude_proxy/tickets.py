@@ -367,10 +367,13 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
-          remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, now: float | None = None) -> dict:
+          remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, order_id: int | None = None,
+          now: float | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
     capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
-    `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different."""
+    `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different.
+    `order_id`: the order this sells (order requests design, section 7), marked done in the same transaction; an
+    order no longer open or linked to someone else raises orders.OrderError (409) and nothing is granted."""
     now = _now(now)
     note = _note(note)
     if not cfg.tickets.enabled:
@@ -404,6 +407,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         db.audit(conn, actor, "ticket_grant", user["name"], {"ticket_id": tid, "tier": tier, "length": length, "usd": p["usd"],
                                                             "list_usd": p["list_usd"], "currency": currency, "amount": p["amount"],
                                                             "starts_at": p["starts_at"], "ends_at": p["ends_at"]})
+        if order_id is not None:
+            from . import orders   # here, not at the top: orders imports tickets
+            orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

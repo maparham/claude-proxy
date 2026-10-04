@@ -75,3 +75,17 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # default_usd = { day = 12, week = 35, month = 100 }
 # [tickets.currencies.EUR]     # USD is built in; add a daily rate on the Pricing tab for each currency here
 # round_to = 0.50
+#
+# Order requests (docs/superpowers/specs/2026-10-04-order-requests-design.md): signed-in users order from their price
+# list. With a Turnstile site key (and TURNSTILE_SECRET in the environment) visitors can also order from the home page;
+# without the secret it logs a warning and "Get it" keeps linking to the dashboard. Put turnstile_site_key in [tickets]:
+# turnstile_site_key = "0x..."   # public; the secret is TURNSTILE_SECRET in the environment
+#
+# Email for new orders (optional; without it orders are stored and shown on the Orders tab, no mail is sent):
+# [email]
+# smtp_host = "smtp.example.com"                 # required
+# smtp_port = 587                                # default 587 with STARTTLS; 465 means implicit TLS
+# smtp_user = "gateway@example.com"              # optional; without it no AUTH is attempted
+# from = "Claude Gateway <gateway@example.com>"  # required
+# admin_to = "admin@example.com"                 # required
+# # password: SMTP_PASSWORD in the environment (required when smtp_user is set)

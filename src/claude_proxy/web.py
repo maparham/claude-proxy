@@ -32,7 +32,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import clerk, db, limits, quota, tickets, usage
+from . import clerk, db, limits, orders, quota, tickets, turnstile, usage
 from .auth import AuthError, authenticate
 from .config import LENGTHS
 from .gateway import Gateway
@@ -57,6 +57,16 @@ _DUMMY_HASH = _ph.hash("not-a-real-password")
 PAGE_HEADERS = {"Cache-Control": "no-cache, no-transform"}
 USER_CODE_LETTERS = "BCDFGHJKLMNPQRSTVWXZ"   # no vowels (no words), no look-alikes of digits
 DEVICE_TTL_S, DEVICE_INTERVAL_S = 600, 3
+# Order emails go out after the response (order requests design, section 5). asyncio keeps only weak references to
+# tasks, so each is held here until it is done.
+_mail_tasks: set[asyncio.Task] = set()
+
+
+def _mail_done(task: asyncio.Task) -> None:
+    """Drop the finished task, and log anything dispatch raised outside its per-send handling right away."""
+    _mail_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("order mail dispatch failed", exc_info=task.exception())
 
 
 def fail(status: int, message: str):
@@ -89,10 +99,12 @@ class LoginLimiter:
 
 
 class SecurityHeaders(BaseHTTPMiddleware):
-    def __init__(self, app, clerk_host: str | None = None):
+    def __init__(self, app, clerk_host: str | None = None, turnstile: bool = False):
         super().__init__(app)
-        # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame.
-        clerk, bot = (f" https://{clerk_host}", " https://challenges.cloudflare.com") if clerk_host else ("", "")
+        # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame; the home page's order
+        # dialog loads that same check (Turnstile) as a script and a frame, and needs nothing else from Cloudflare.
+        clerk = f" https://{clerk_host}" if clerk_host else ""
+        bot = " https://challenges.cloudflare.com" if clerk_host or turnstile else ""
         self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/{clerk}{bot}; "
                     f"style-src 'self' 'unsafe-inline'; img-src 'self' data:{clerk}{' https://img.clerk.com' if clerk else ''}; "
                     f"connect-src 'self'{clerk}; frame-src{bot or ' ' + repr('none')}; worker-src 'self' blob:; "
@@ -118,7 +130,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             logger.error("Clerk sign-in is off: it needs [listener] dashboard_url, the origin its tokens are made for.")
         else:
             verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http)
-    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None)
+    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None,
+                       turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
     app.state.gw = gw
     app.state.clerk = verifier
     limiter = LoginLimiter()
@@ -127,6 +140,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.exception_handler(HTTPException)
     async def _http_error(request, exc: HTTPException):
         return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
+
+    @app.exception_handler(orders.OrderError)
+    async def _order_error(request, exc: orders.OrderError):
+        # A refused link carries the existing user's id, so the dialog can offer that account instead.
+        return JSONResponse(status_code=exc.status, content={"error": str(exc), **exc.extra})
 
     # ---------- auth ----------
 
@@ -286,7 +304,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if is_admin(user) and cfg.tickets.enabled:
             out["tickets"] |= {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
                                "currencies": list(tickets.currencies(cfg)), "lengths": LENGTHS,
-                               "max_sold_pct": cfg.tickets.max_sold_pct, "how_to_buy": cfg.tickets.how_to_buy}
+                               "max_sold_pct": cfg.tickets.max_sold_pct, "how_to_buy": cfg.tickets.how_to_buy,
+                               "orders_new": orders.new_count(conn)}   # the Orders tab's badge
         return out
 
     # ---------- helpers ----------
@@ -932,9 +951,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if body.get("usd") is None or body.get("rate") is None:
             fail(400, "Preview the ticket first and send the usd and rate it showed.")
         quoted = {k: _number(body[k], k) for k in ("usd", "rate")}
+        # Granted from an order: it is marked done in the same transaction, or the grant is refused (409, OrderError).
+        order_id = None if body.get("order_id") in (None, "") else _number(body["order_id"], "order_id", whole=True)
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
-                        expect_usd=quoted["usd"], expect_rate=quoted["rate"])
+                        expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id)
         return {"ok": True, "ticket": t}
 
     @app.post("/api/admin/tickets/{tid}/cancel")
@@ -976,7 +997,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         now = time.time()
         # `now`: the page counts discounts down on the server's clock, so a visitor's clock ahead of it can't loop reloads.
-        return {**tickets.price_table(conn, cfg, now, display_currency()), "now": now}
+        out = {**tickets.price_table(conn, cfg, now, display_currency()), "now": now}
+        if cfg.tickets.turnstile_on():   # public by design: the home page's order dialog renders the widget with it
+            out["turnstile_site_key"] = cfg.tickets.turnstile_site_key
+        return out
 
     @app.get("/pricing")
     async def pricing_page():
@@ -1013,6 +1037,108 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out["prices"] = tickets.price_table(conn, cfg, now, currency)
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         return out
+
+    # ---------- order requests (design 2026-10-04) ----------
+    # OrderError raised in here becomes its own status and message (_order_error above).
+
+    def tier_label(tier: str) -> str:
+        return cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
+
+    def my_order(user_id: int) -> dict | None:
+        """What the buyer's dashboard shows: their open order, or their latest closed one until dismissed."""
+        m = orders.mine(conn, user_id)
+        return m | {"label": tier_label(m["tier"])} if m else None
+
+    def place_order(body: dict, **kw) -> dict:
+        o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
+                        currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""), **kw)
+        if cfg.email is not None:   # after the response: a slow mail server never delays it
+            task = asyncio.create_task(orders.dispatch(conn, cfg, o["id"]))
+            _mail_tasks.add(task)
+            task.add_done_callback(_mail_done)
+        return o
+
+    @app.post("/api/orders")
+    async def order_public(request: Request):
+        """A visitor's order from the home page. Only with Turnstile configured; the token is checked before anything is stored."""
+        need_tickets()
+        if not cfg.tickets.turnstile_on():
+            fail(404, "Ordering without signing in is not set up on this gateway.")
+        body = await _json(request)
+        ip = client_ip(request)
+        ticket_call(orders.visitor_limited, conn, None if ip == "unknown" else ip)   # no Cloudflare call once over a limit
+        token = str(body.get("turnstile_token") or "")
+        try:
+            ok = bool(token) and await turnstile.verify(cfg.tickets.turnstile_secret(), token, None if ip == "unknown" else ip)
+        except turnstile.TurnstileUnavailable as e:
+            logger.warning("turnstile unavailable: %s", e)
+            raise HTTPException(status_code=503, detail="The verification service is not answering; try again in a moment.",
+                                headers={"Retry-After": "30"}) from e
+        if not ok:
+            fail(400, "The verification failed; please try again.")
+        place_order(body, name=str(body.get("name") or ""), email=str(body.get("email") or ""), ip=ip)
+        return {"ok": True}   # nothing about the order: the visitor has no view of it
+
+    @app.post("/api/me/orders")
+    async def order_mine(request: Request):
+        user = principal(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        # The account email (verified by Clerk), else one typed in the dialog: stored on the order only, never in
+        # users.email, which Clerk sign-in matches against (spec section 2).
+        place_order(body, name=user["name"], email=user["email"] or str(body.get("email") or ""), user_id=user["id"])
+        return {"ok": True, "order": my_order(user["id"])}
+
+    @app.get("/api/me/orders")
+    async def orders_mine(request: Request):
+        user = principal(request)
+        need_tickets()
+        return {"order": my_order(user["id"])}
+
+    @app.post("/api/me/orders/{oid}/{action}")
+    async def order_mine_action(request: Request, oid: int, action: str):
+        user = principal(request, write=True)
+        need_tickets()
+        if action == "withdraw":
+            ticket_call(orders.withdraw, conn, user["id"], oid)
+        elif action == "dismiss":
+            ticket_call(orders.dismiss, conn, user["id"], oid)
+        else:
+            fail(404, f"Unknown action {action!r}.")
+        return {"ok": True, "order": my_order(user["id"])}
+
+    @app.get("/api/admin/orders")
+    async def orders_list(request: Request, status: str = "open"):
+        admin(request)
+        need_tickets()
+        rows = orders.admin_list(conn, status)
+        for o in rows:
+            o["label"] = tier_label(o["tier"])
+            # Offered in the link dialog, never linked by itself (spec section 7).
+            o["suggested_user"] = orders.suggest_user(conn, o) if o["user_id"] is None and o["status"] in orders.OPEN else None
+        return {"orders": rows, "new": orders.new_count(conn)}
+
+    @app.post("/api/admin/orders/{oid}")
+    async def order_action(request: Request, oid: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        action = body.get("action")
+        if action == "contacted":
+            o = ticket_call(orders.set_status, conn, actor["id"], oid, "contacted")
+        elif action == "decline":
+            o = ticket_call(orders.set_status, conn, actor["id"], oid, "declined", note=body.get("note"))
+        elif action == "note":
+            o = ticket_call(orders.set_note, conn, actor["id"], oid, body.get("note"))
+        elif action == "link":
+            create, ref = bool(body.get("create")), body.get("user_id") or body.get("user")
+            if isinstance(ref, str) and ref.isdigit() and len(ref) > 18 or isinstance(ref, int) and not 0 < ref < 2 ** 63:
+                fail(404, "No such user.")
+            uid = target_user(ref)["id"] if not create and ref not in (None, "") else None   # neither: orders.link says so
+            o = ticket_call(orders.link, conn, cfg, actor["id"], oid, user_id=uid, create=create)
+        else:
+            fail(400, "action must be contacted, decline, note or link.")
+        return {"ok": True, "order": o}
 
     # ---------- page ----------
 
