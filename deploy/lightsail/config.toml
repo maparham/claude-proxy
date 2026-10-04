@@ -17,3 +17,12 @@ enabled = true
 credit_usd = 5.0
 free_daily_cap_usd = 20.0   # all accounts still on their credit, together, in any 24 h
 clerk_publishable_key = "pk_live_Y2xlcmsuY2xhdWRlLWRhc2gucmFoa2FyLnBybyQ"
+
+# Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). Tiers use the built-in defaults
+# (Lite 5%, Standard 25%); prices are seeded on first start and edited on the dashboard's Pricing tab.
+[tickets]
+how_to_buy = "Send the amount by bank transfer to the admin and email them with the ticket you want."
+max_sold_pct = 80
+
+[tickets.currencies.EUR]
+round_to = 0.50
