@@ -962,7 +962,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def pricing_api():
         # Public: prices, discounts, the rate date, the usage hints and whether a purchase is possible. Nothing else.
         need_tickets()
-        return tickets.price_table(conn, cfg, time.time(), display_currency())
+        now = time.time()
+        # `now`: the page counts discounts down on the server's clock, so a visitor's clock ahead of it can't loop reloads.
+        return {**tickets.price_table(conn, cfg, now, display_currency()), "now": now}
 
     @app.get("/pricing")
     async def pricing_page():

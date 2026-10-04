@@ -5,14 +5,21 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const LENGTHS = [["day", "1 day"], ["week", "1 week"], ["month", "1 month"]];
 const FAMILY = { sonnet: "Sonnet", opus: "Opus" };
 let data = null;
-let reloaded = false;   // a client clock ahead of the server must not reload every second forever
+let skew = 0;           // server clock minus this browser's, in seconds: countdowns run on the server's clock
+let reloaded = false;
+const serverNow = () => Date.now() / 1000 + skew;
+// One reload per discount end, remembered across the reload itself: if the server still lists the offer
+// afterwards, the page shows it ended rather than reloading again.
+const reloadKey = (ends) => `pricing-reloaded-${ends}`;
+function reloadedFor(ends) { try { return sessionStorage.getItem(reloadKey(ends)) != null; } catch { return false; } }
+function markReloaded(ends) { try { sessionStorage.setItem(reloadKey(ends), "1"); } catch { /* no storage: reloads at most once per page */ } }
 
 function money(amount, currency) {
   try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount); }
   catch { return `${amount.toFixed(2)} ${currency}`; }
 }
 function countdown(endsAt) {
-  const s = Math.max(0, Math.floor(endsAt - Date.now() / 1000));
+  const s = Math.max(0, Math.floor(endsAt - serverNow()));
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
   return `${d ? d + "d " : ""}${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m`;
 }
@@ -44,14 +51,18 @@ function render() {
   document.getElementById("how-to-buy").textContent = data.how_to_buy || "Ask the gateway admin.";
 }
 function tick() {
-  if (reloaded) return;   // already reloading (or a client clock stuck in the future): stop ticking
-  let ended = false;
+  if (reloaded) return;
+  let ended = null;
   document.querySelectorAll(".countdown").forEach((el) => {
     const ends = +el.dataset.ends;
-    if (ends <= Date.now() / 1000) { ended = true; el.textContent = "Offer ended"; }
+    if (ends <= serverNow()) { el.textContent = "Offer ended"; if (!reloadedFor(ends)) ended = ends; }
     else el.textContent = `Offer ends in ${countdown(ends)}`;
   });
-  if (ended) { reloaded = true; location.reload(); }   // the regular price returns by itself
+  if (ended != null) { reloaded = true; markReloaded(ended); location.reload(); }   // the regular price returns by itself
 }
-fetch("/api/pricing", { credentials: "omit" }).then((r) => r.json()).then((d) => { data = d; render(); setInterval(tick, 1000); })
+fetch("/api/pricing", { credentials: "omit" }).then((r) => r.json()).then((d) => {
+  data = d;
+  if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
+  render(); setInterval(tick, 1000);
+})
   .catch(() => { document.getElementById("pricing").innerHTML = `<p class="muted">Prices are not available right now.</p>`; });
