@@ -258,6 +258,9 @@ async def _serve(cfg: Config):
         await asyncio.gather(*running, return_exceptions=True)
         for t in background:
             t.cancel()
+        from . import web
+        for t in list(web._mail_tasks):   # their mail stays "pending" (spec section 5); a send already in smtplib finishes in its thread
+            t.cancel()
         await gw.aclose()
 
 

@@ -578,3 +578,51 @@ def test_grant_without_order_id_touches_no_order(env):
     o = signed_in(conn, cfg, ids["alice"])
     grant(conn, cfg, ids, ids["alice"], None)
     assert orders.get(conn, o["id"])["status"] == "new"
+
+
+@pytest.mark.parametrize("email", ["postmaster,victim@x.com", "z<victim@x.com>", "a;b@x.com", 'a"b@x.com', "a:b@x.com", "(c)v@x.com"])
+def test_an_email_that_would_name_several_recipients_is_400(env, email):
+    conn, cfg, ids = env
+    with refused(400):
+        visitor(conn, cfg, email=email)
+
+
+def test_visitor_limited_checks_ip_and_global_without_writing(env):
+    conn, cfg, ids = env
+    for n in range(3):
+        visitor(conn, cfg, n, ip="10.9.9.9")
+    with refused(429, "Too many orders today"):
+        orders.visitor_limited(conn, "10.9.9.9", now=NOW)
+    orders.visitor_limited(conn, "10.9.9.8", now=NOW)   # another address: fine
+    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 3
+
+
+def test_link_refuses_a_revoked_user(env):
+    conn, cfg, ids = env
+    o = visitor(conn, cfg)
+    uid = add_user(conn, ids, "rex")
+    dbm.revoke(conn, uid, ids["admin"])
+    with refused(409, "revoked"):
+        orders.link(conn, cfg, ids["admin"], o["id"], user_id=uid)
+    assert orders.get(conn, o["id"])["user_id"] is None
+
+
+def test_the_buyer_view_leaves_out_name_email_and_message(env):
+    conn, cfg, ids = env
+    signed_in(conn, cfg, ids["alice"], message="private")
+    assert not {"name", "email", "message"} & set(orders.mine(conn, ids["alice"]))
+
+
+def test_mail_send_goes_only_to_the_given_address(monkeypatch):
+    from claude_proxy import mail
+    got = {}
+
+    class Fake:
+        def __init__(self, *a, **kw): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def starttls(self, **kw): pass
+        def send_message(self, msg, to_addrs=None): got["to"] = to_addrs
+    monkeypatch.setattr(mail.smtplib, "SMTP", Fake)
+    mail.send(EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com"), "v@x.com", "s", "b")
+    assert got["to"] == ["v@x.com"]

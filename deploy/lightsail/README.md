@@ -89,10 +89,11 @@ Details:
 - Order requests (see the main README): `SMTP_PASSWORD` in `gateway.env` when `[email]` has an `smtp_user`, and
   `TURNSTILE_SECRET` when `[tickets]` has a `turnstile_site_key` (the site key, made in the Cloudflare dashboard under
   Turnstile for the dashboard's hostname, goes in `config.toml`). Recreate the container after changing `gateway.env`.
-  Visitors may place 3 orders a day per IP address. The gateway sees the address of whatever connects to it and trusts
-  `X-Forwarded-For` only from `127.0.0.1`; behind the tunnel and Docker's port mapping, or for visitors sharing an
-  address (CGNAT, an office), many visitors can look like one, and that limit then blocks them together. They can still
-  sign in to order. The `ip` column of the `orders` table shows what the gateway saw.
+  Visitors may place 3 orders a day per IP address. The gateway trusts `X-Forwarded-For` only from `127.0.0.1`. Here
+  that is cloudflared (host networking, so it connects from `127.0.0.1`), and Cloudflare adds the visitor's address to
+  that header, so each visitor counts on their own. Behind a proxy on another host, or for visitors sharing an address
+  (CGNAT, an office), many visitors look like one and that limit blocks them together; they can still sign in to order.
+  The `ip` column of the `orders` table shows what the gateway saw.
 - cloudflared ingress (above the catch-all `http_status:404` rule):
   ```yaml
   - hostname: claude.<domain>

@@ -30,4 +30,4 @@ def send(email: EmailConfig, to: str, subject: str, body: str) -> None:
             s.starttls(context=ctx)
         if email.smtp_user:
             s.login(email.smtp_user, email.password() or "")
-        s.send_message(msg)
+        s.send_message(msg, to_addrs=[to])   # only the validated address, whatever the header parses to

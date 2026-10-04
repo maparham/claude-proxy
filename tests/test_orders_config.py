@@ -67,6 +67,17 @@ def test_no_warning_without_a_site_key(tmp_path, monkeypatch, caplog):
     assert "TURNSTILE_SECRET" not in caplog.text
 
 
+def test_an_smtp_user_without_a_password_warns_at_load(tmp_path, monkeypatch, caplog):
+    monkeypatch.delenv("SMTP_PASSWORD", raising=False)
+    body = '[email]\nsmtp_host = "h"\nfrom = "f@x.com"\nadmin_to = "a@x.com"\n'
+    with caplog.at_level(logging.WARNING, logger="claude_proxy"):
+        load(tmp_path, body)
+    assert "SMTP_PASSWORD" not in caplog.text                       # no user: no login, no password needed
+    with caplog.at_level(logging.WARNING, logger="claude_proxy"):
+        load(tmp_path, body + 'smtp_user = "u"\n')
+    assert "SMTP_PASSWORD" in caplog.text
+
+
 # ---------- mail.send ----------
 
 class FakeSMTP:
@@ -88,7 +99,7 @@ class FakeSMTP:
     def login(self, user, pw):
         self.calls.append(("login", user, pw))
 
-    def send_message(self, msg):
+    def send_message(self, msg, to_addrs=None):
         self.calls.append(("send", msg))
 
 
@@ -125,7 +136,7 @@ def test_port_465_is_implicit_tls(smtp):
 
 def test_send_raises_on_failure(monkeypatch):
     class Down(FakeSMTP):
-        def send_message(self, msg):
+        def send_message(self, msg, to_addrs=None):
             raise OSError("connection reset")
     monkeypatch.setattr(mail.smtplib, "SMTP", Down)
     with pytest.raises(OSError):

@@ -23,7 +23,8 @@ NAME_MAX = 100
 MESSAGE_MAX = 1000
 NOTE_MAX = 200
 EMAIL_MAX = 254
-EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+# No separators or address syntax (, ; : < > ( ) [ ] " \): a mail header would read them as several recipients.
+EMAIL = re.compile(r'^[^@\s,;:<>()\[\]"\\]+@[^@\s,;:<>()\[\]"\\]+\.[^@\s,;:<>()\[\]"\\]+$')
 VISITOR_PER_IP = VISITOR_PER_EMAIL = 3   # per 24 hours
 VISITOR_GLOBAL = 50                      # all visitor orders together, per 24 hours
 BUYER_MAILS = 3                          # confirmations to one address per 24 hours
@@ -87,6 +88,16 @@ def get(conn: sqlite3.Connection, order_id: int) -> dict:
 
 
 # ---------- placing an order ----------
+
+def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None = None) -> None:
+    """The visitor limits that need no form data (per IP, global), read-only: checked before the Turnstile call so a
+    flood costs no Cloudflare round trip. create() checks them again, with the per-email one, inside its transaction."""
+    since = _now(now) - DAY
+    if ip is not None and _count(conn, f"{VISITOR} AND ip=? AND created_at>?", (ip, since)) >= VISITOR_PER_IP:
+        raise OrderError(429, TOO_MANY)
+    if _count(conn, f"{VISITOR} AND created_at>?", (since,)) >= VISITOR_GLOBAL:
+        raise OrderError(429, BUSY)
+
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, now: float | None = None) -> dict:
@@ -187,8 +198,14 @@ def set_note(conn: sqlite3.Connection, actor: int | None, order_id: int, note, n
     """The admin's note, in any status. Never shown to the buyer."""
     note = _note(note)
     get(conn, order_id)
-    conn.execute("UPDATE orders SET admin_note=?, updated_at=? WHERE id=?", (note, _now(now), order_id))
-    db.audit(conn, actor, "order_note", f"order #{order_id}", {"note": note})
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        conn.execute("UPDATE orders SET admin_note=?, updated_at=? WHERE id=?", (note, _now(now), order_id))
+        db.audit(conn, actor, "order_note", f"order #{order_id}", {"note": note})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
     return get(conn, order_id)
 
 
@@ -301,9 +318,11 @@ def link(conn: sqlite3.Connection, cfg: Config, actor: int | None, order_id: int
                 raise OrderError(400, "The email is too long for a user name; add the user by hand.")
             user_id, _ = db.create_user(conn, email)   # its key is never shown; the buyer signs in with Clerk
             db.audit(conn, actor, "user_add", email, {"role": "user", "order_id": order_id})
-        u = conn.execute("SELECT id, name FROM users WHERE id=?", (user_id,)).fetchone()
+        u = conn.execute("SELECT id, name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
         if u is None:
             raise OrderError(404, f"No user #{user_id}.")
+        if u["revoked_at"] is not None:
+            raise OrderError(409, f"{u['name']} is revoked; link the order to an active account.")
         conn.execute("UPDATE orders SET user_id=?, updated_at=? WHERE id=?", (u["id"], now, order_id))
         db.audit(conn, actor, "order_link", f"order #{order_id}", {"user": u["name"], "created": bool(create)})
         conn.execute("COMMIT")
@@ -315,8 +334,8 @@ def link(conn: sqlite3.Connection, cfg: Config, actor: int | None, order_id: int
 
 # ---------- the buyer's view (spec section 8) ----------
 
-BUYER_FIELDS = ("id", "created_at", "updated_at", "name", "email", "tier", "length", "currency", "quoted_usd", "quoted_rate",
-                "quoted_amount", "message", "status")
+# Not name, email or message: an order linked to the wrong account must not show that account the visitor's details.
+BUYER_FIELDS = ("id", "created_at", "updated_at", "tier", "length", "currency", "quoted_usd", "quoted_rate", "quoted_amount", "status")
 
 
 def _own(conn, user_id: int, order_id: int) -> dict:

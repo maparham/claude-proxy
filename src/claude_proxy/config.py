@@ -337,7 +337,10 @@ def _load_email(toml_path: str, data: dict) -> EmailConfig:
             raise ConfigError(f"{toml_path}: [email].{k} must be a {'whole number' if kind is int else 'string'}")
     if "smtp_port" in data and not 0 < data["smtp_port"] < 65536:
         raise ConfigError(f"{toml_path}: [email].smtp_port must be a port number")
-    return EmailConfig(**{("from_" if k == "from" else k): v for k, v in data.items()})
+    e = EmailConfig(**{("from_" if k == "from" else k): v for k, v in data.items()})
+    if e.smtp_user and not e.password():
+        logger.warning("[email].smtp_user is set but SMTP_PASSWORD is not in the environment; every order email will fail")
+    return e
 
 
 @dataclass

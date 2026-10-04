@@ -167,8 +167,8 @@ async def test_signed_in_order_uses_the_account_email(env, sent):
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER | {"email": "other@example.com", "message": "hi"})
         assert r.status_code == 200, r.text
         m = r.json()["order"]
-        assert (m["status"], m["email"], m["label"], m["quoted_amount"], m["message"]) == ("new", "alice@example.com", "Lite", 7.5, "hi")
-        assert not set(HIDDEN) & set(m)
+        assert (m["status"], m["label"], m["quoted_amount"]) == ("new", "Lite", 7.5)
+        assert not set(HIDDEN) & set(m) and not {"name", "email", "message"} & set(m)   # the buyer's own details stay admin-side
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER)
         assert r.status_code == 409 and r.json()["error"] == "You already have an open order."
     await drain()
@@ -182,7 +182,8 @@ async def test_a_typed_email_is_stored_on_the_order_only(env):
     async with client(gw) as c:
         assert (await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER)).status_code == 400   # no email at all
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER | {"email": "typed@example.com"})
-        assert r.status_code == 200 and r.json()["order"]["email"] == "typed@example.com"
+        assert r.status_code == 200
+    assert only_order(conn)["email"] == "typed@example.com"
     assert user(conn, ids["alice"])["email"] is None
 
 
@@ -593,3 +594,40 @@ def test_the_visitor_dialog_offers_signing_in_and_escapes(tmp_path):
     assert "This is a request, not a payment. The admin will contact you with payment details." in form
     assert '<option value="EUR" selected' in form and '<option value="USD"' in form
     assert "<img" not in form
+
+
+async def test_over_the_ip_limit_no_cloudflare_call_is_made(env, ts):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        for n in range(3):
+            assert (await c.post("/api/orders", json=VISITOR | {"email": f"v{n}@example.com"})).status_code == 200
+        calls = len(ts.calls)
+        r = await c.post("/api/orders", json=VISITOR | {"email": "v9@example.com"})
+        assert r.status_code == 429 and len(ts.calls) == calls
+    await drain()
+
+
+async def test_link_with_an_absurd_user_id_is_404_not_500(env, ts):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        assert (await c.post("/api/orders", json=VISITOR)).status_code == 200
+    oid = only_order(conn)["id"]
+    async with admin_client(gw) as c:
+        for ref in ("99999999999999999999999", 10 ** 30):
+            r = await c.post(f"/api/admin/orders/{oid}", json={"action": "link", "user_id": ref})
+            assert r.status_code == 404, ref
+    await drain()
+
+
+async def test_a_failing_dispatch_is_logged_at_once(env, ts, monkeypatch, caplog):
+    gw, conn, cfg, ids, keys = env
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+
+    async def boom(*a):
+        raise RuntimeError("dispatch broke")
+    monkeypatch.setattr(orders, "dispatch", boom)
+    async with client(gw) as c:
+        assert (await c.post("/api/orders", json=VISITOR)).status_code == 200
+    await asyncio.gather(*list(web._mail_tasks), return_exceptions=True)
+    await asyncio.sleep(0)
+    assert "order mail dispatch failed" in caplog.text

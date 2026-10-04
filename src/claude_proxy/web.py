@@ -62,6 +62,13 @@ DEVICE_TTL_S, DEVICE_INTERVAL_S = 600, 3
 _mail_tasks: set[asyncio.Task] = set()
 
 
+def _mail_done(task: asyncio.Task) -> None:
+    """Drop the finished task, and log anything dispatch raised outside its per-send handling right away."""
+    _mail_tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("order mail dispatch failed", exc_info=task.exception())
+
+
 def fail(status: int, message: str):
     raise HTTPException(status_code=status, detail=message)
 
@@ -1048,7 +1055,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if cfg.email is not None:   # after the response: a slow mail server never delays it
             task = asyncio.create_task(orders.dispatch(conn, cfg, o["id"]))
             _mail_tasks.add(task)
-            task.add_done_callback(_mail_tasks.discard)
+            task.add_done_callback(_mail_done)
         return o
 
     @app.post("/api/orders")
@@ -1059,6 +1066,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(404, "Ordering without signing in is not set up on this gateway.")
         body = await _json(request)
         ip = client_ip(request)
+        ticket_call(orders.visitor_limited, conn, None if ip == "unknown" else ip)   # no Cloudflare call once over a limit
         token = str(body.get("turnstile_token") or "")
         try:
             ok = bool(token) and await turnstile.verify(cfg.tickets.turnstile_secret(), token, None if ip == "unknown" else ip)
@@ -1124,6 +1132,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             o = ticket_call(orders.set_note, conn, actor["id"], oid, body.get("note"))
         elif action == "link":
             create, ref = bool(body.get("create")), body.get("user_id") or body.get("user")
+            if isinstance(ref, str) and ref.isdigit() and len(ref) > 18 or isinstance(ref, int) and not 0 < ref < 2 ** 63:
+                fail(404, "No such user.")
             uid = target_user(ref)["id"] if not create and ref not in (None, "") else None   # neither: orders.link says so
             o = ticket_call(orders.link, conn, cfg, actor["id"], oid, user_id=uid, create=create)
         else:
