@@ -56,6 +56,10 @@ function fmtDur(s) {
 }
 function fmtAgo(t) { return t ? `${fmtDur(Date.now() / 1000 - t)} ago` : "never"; }
 function fmtTime(t) { return t ? new Date(t * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
+const fmtDate = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+const toLocal = (t) => { const d = new Date(t * 1000); d.setSeconds(0, 0); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };   // for <input type=datetime-local>
+const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
+const money = (amount, currency) => { try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount); } catch { return `${amount.toFixed(2)} ${currency}`; } };
 const METRICS = { weighted: "Weighted tokens", raw: "Raw tokens", cost_usd: "Est. cost (USD)", requests: "Requests" };
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
@@ -126,6 +130,12 @@ const TIPS = {
   sess_weighted: `Tokens adjusted by type and model, in {ref} input tokens. Closest to quota cost.`,
   sess_cost: `What it would cost at API prices. Not billed on the subscription.`,
   sess_models: `Models the session used.`,
+  act_ungate: `This user's tickets have all ended. Stop them gating the user and set ordinary limits instead; the tickets stay as sales records.`,
+  act_ticket_cancel: `Frees the slice now and ends the ticket's bonuses. Their queued tickets move forward to close the gap when they fit. Refunds happen outside the app.`,
+  act_ticket_bonus: `Extra share for a period, extra days at the ticket's share, or both. Checked against capacity like a ticket.`,
+  capacity_sold: `What tickets and bonuses have reserved: the sum of their shares at this moment, and the highest sum over the next 30 days. Grants are refused past <b>max_sold_pct</b>.`,
+  capacity_util: `What everyone has actually used, as Anthropic reports it. The gap between max_sold_pct and 100 is what the admin, free-credit accounts and hand-limited users have.`,
+  sold_out_vs_queued: `/pricing asks whether a ticket starting <b>now</b> fits. A grant to someone with a live ticket starts after it, so it can succeed while the badge says sold out.`,
 };
 const KIND_TIPS = {
   requests_minute: "Requests in the last 60 seconds.",
@@ -472,6 +482,8 @@ const VIEWS = {
   overview: { label: "Overview", render: renderOverview },
   usage: { label: "Usage over time", render: renderUsage },
   users: { label: "Users & limits", render: renderUsers, admin: true },
+  tickets: { label: "Tickets", render: renderTickets, admin: true, feature: "tickets" },
+  pricing: { label: "Pricing", render: renderPricing, admin: true, feature: "tickets" },
   authorize: { label: "Connect a computer", render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { label: "Account quota", render: renderQuota, admin: true },
   models: { label: "Models & cache", render: renderModels },
@@ -484,7 +496,7 @@ const VIEWS = {
 const isAdmin = () => S.user && S.user.role === "admin";
 
 function renderTabs() {
-  const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()));
+  const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && (!v.feature || S.tickets?.enabled));
   const current = VIEWS[S.tab]?.parent || S.tab;
   $("#tabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(v.label)}</button>`).join("");
 }
@@ -497,7 +509,7 @@ async function render() {
   renderTabs();
   hideTip();
   disposeCharts();
-  const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) ? VIEWS[S.tab] : VIEWS.overview;
+  const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && (!VIEWS[S.tab].feature || S.tickets?.enabled) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
   main.innerHTML = `<p class="muted">Loading…</p>`;
   try { await view.render(main); } catch (e) {
@@ -628,7 +640,7 @@ function userRow(u) {
   const cell = (k) => `<td class="r"><div>${fmtNum(u.usage[k].weighted)}</div><div class="muted">${fmtUsd(u.usage[k].cost_usd)}</div></td>`;
   const share = (b) => (u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`);
   return `<tr class="clickable" data-user="${u.id}">
-    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}
+    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}${u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? "ticket" : "ticket queued"}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">ticket ended</span>` : ""}
       <div class="muted" style="font-size:12px">${esc(u.prefix)}…${u.routes_prefix ? ` · OpenCode ${esc(u.routes_prefix)}…` : ""}</div></td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
@@ -641,13 +653,174 @@ function userActions(u) {
     (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">Remove OpenCode key</button>` : "");
   const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked
     ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">Upgrade</button>` : "";
-  return `<div class="row-actions">${upgrade}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
+  const ungate = u.ticket && u.ticket.gated && !u.ticket.live && !u.revoked
+    ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="act_ungate">Ungate</button>` : "";
+  return `<div class="row-actions">${upgrade}${ungate}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
       <button class="btn small" data-act="rename" data-id="${u.id}" data-tip="act_rename">Rename</button>
       <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
       ${opencode}
       <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? "Disable" : "Enable"}</button>
       <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">Revoke</button>`}</div>`;
+}
+
+// ---------- paid tickets (design 2026-10-03) ----------
+
+const stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
+
+async function renderTickets(main) {
+  const [cap, { tickets }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser ? `?user_id=${S.ticketUser}` : ""}`), api("/api/users")]);
+  const pct = (v, max) => meter((100 * v) / max);
+  const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${cap.utilization[b].utilization_pct.toFixed(0)}%${cap.utilization[b].stale ? " (stale)" : ""}`);
+  main.innerHTML = `<section class="view"><h2>Tickets</h2>
+    <p class="lede">Each ticket reserves a share of the subscription for its days. The gateway never sells the same capacity twice.</p>
+    <div class="grid cols-2">
+      <div class="card"><h3>Capacity${tipI("capacity_sold")}</h3>
+        <div class="limit-row"><span>Sold now</span><span class="num">${cap.sold_now_pct.toFixed(1)}% of ${cap.max_sold_pct}%</span></div>${pct(cap.sold_now_pct, cap.max_sold_pct)}
+        <div class="limit-row" style="margin-top:8px"><span>Peak, next 30 days</span><span class="num">${cap.peak_30d_pct.toFixed(1)}% of ${cap.max_sold_pct}%</span></div>${pct(cap.peak_30d_pct, cap.max_sold_pct)}
+        <p class="sub" style="margin-top:12px">Sold is what tickets may use. Headroom for everyone else: ${(100 - cap.max_sold_pct).toFixed(0)}%.</p></div>
+      <div class="card"><h3>Account utilization (reported by Anthropic)${tipI("capacity_util")}</h3>
+        <div class="limit-row"><span>5-hour bucket</span><span class="num">${util("5h")}</span></div>
+        <div class="limit-row"><span>Weekly bucket</span><span class="num">${util("7d")}</span></div>
+        <p class="sub" style="margin-top:12px">Utilization is what everyone has used, ticket holders and headroom users alike.</p></div>
+    </div>
+    <div class="controls"><button class="btn primary" id="grant">Grant a ticket</button>
+      <select id="ticket-user"><option value="">All users</option>${users.filter((u) => u.ticket && u.ticket.gated).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}</select></div>
+    <div class="card table-wrap"><table class="data"><thead><tr><th>User</th><th>Tier</th><th>Period</th><th class="r">Paid</th><th>State</th><th>Bonuses</th><th>Note</th><th></th></tr></thead>
+      <tbody>${tickets.map(ticketRow).join("") || `<tr><td colspan="8" class="muted">No tickets yet.</td></tr>`}</tbody></table></div>
+  </section>`;
+  $("#grant").onclick = () => grantDialog(users);
+  $("#ticket-user").onchange = (e) => { S.ticketUser = e.target.value ? +e.target.value : null; render(); };
+  main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((t) => t.id === +b.dataset.id))));
+}
+function ticketRow(t) {
+  const live = t.state === "active" || t.state === "queued";
+  const bonus = t.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${b.share_pct}%` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? `+${b.extra_days} d` : ""}`).join(", ");
+  return `<tr><td><b>${esc(t.user_name)}</b>${t.user_id == null ? ` <span class="badge">deleted</span>` : ""}</td>
+    <td>${esc(t.tier)} <span class="muted">${t.share_pct}%</span></td>
+    <td class="nowrap">${fmtDate(t.starts_at)} → ${fmtDate(t.effective_end)}${t.effective_end !== t.ends_at ? ` <span class="muted">(+${Math.round((t.effective_end - t.ends_at) / 86400)} d bonus)</span>` : ""}</td>
+    <td class="r">${esc(money(t.amount, t.currency))}${t.discount_id ? `<div class="muted"><s>$${t.list_usd}</s> $${t.usd}</div>` : `<div class="muted">$${t.usd}</div>`}</td>
+    <td>${stateBadge(t.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${esc(t.note || "")}</td>
+    <td><div class="row-actions">${live ? `<button class="btn small" data-tact="bonus" data-id="${t.id}" data-tip="act_ticket_bonus">Bonus</button>
+      <button class="btn small danger" data-tact="cancel" data-id="${t.id}" data-tip="act_ticket_cancel">Cancel</button>` : ""}</div></td></tr>`;
+}
+async function ticketAction(act, t) {
+  if (act === "bonus") return bonusDialog(t);
+  if (!confirmInline(`Cancel ${t.user_name}'s ${t.tier} ticket? The slice is freed now and its bonuses end. Refunds happen outside the app.`)) return;
+  try {
+    const r = await api(`/api/admin/tickets/${t.id}/cancel`, { method: "POST", body: {} });
+    if (r.dates_kept) alertInline(`Cancelled. Their queued tickets kept their dates because one of them would not fit earlier: ${r.reason}`);
+    else render();
+  } catch (e) { alertInline(e.message); }
+}
+function grantDialog(users) {
+  const T = S.tickets;
+  const d = openDialog(`<h3>Grant a ticket</h3>
+    <form id="f-grant" class="form-grid">
+      <label>User<select name="user" required>${users.filter((u) => !u.revoked && u.enabled).map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
+      <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${k}">${esc(t.label)} · ${t.share_pct}%</option>`).join("")}</select></label>
+      <label>Length<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${k}">${k} (${n} ${n === 1 ? "day" : "days"})</option>`).join("")}</select></label>
+      <label>Currency<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${c}</option>`).join("")}</select></label>
+      <label>Note (for you)<input type="text" name="note" maxlength="200" placeholder="e.g. transfer ref 1234"></label>
+      <div id="grant-preview" class="hint" aria-live="polite">…</div>
+      <div id="grant-limits"></div>
+      <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> The rate is stale; grant at it anyway</label>
+      <button class="btn primary" type="submit" id="grant-go">Grant</button>
+    </form><div class="error" id="grant-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const f = $("#f-grant", d);
+  let preview = null;
+  const refresh = async () => {
+    $("#grant-err", d).textContent = "";
+    try {
+      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value } });
+    } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<span class="muted">${esc(e.message)}</span>`; $("#grant-limits", d).innerHTML = ""; return; }
+    const p = preview;
+    const price = p.discount_id ? `<s>$${p.list_usd}</s> <b>$${p.usd}</b> (discount)` : `<b>$${p.usd}</b>`;
+    const when = p.queued ? `queued: starts ${fmtDate(p.starts_at)}, after the user's current ticket` : `starts now`;
+    const fit = p.available ? `<span class="good">The period is available.</span>` : `<span class="critical">${esc(p.reason)}</span>`;
+    const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${tipT("/pricing shows this tier as sold out right now", "sold_out_vs_queued")}; this grant starts later and fits.</span>` : "";
+    $("#grant-preview", d).innerHTML = `${price} → <b>${esc(money(p.amount, p.currency))}</b> at ${p.rate} ${p.rate_set_at ? `(rate of ${fmtDate(p.rate_set_at)}${p.stale_rate ? ", <b>stale</b>" : ""})` : ""}<br>
+      ${p.days} day${p.days === 1 ? "" : "s"}, ${when}: ${fmtDate(p.starts_at)} → ${fmtDate(p.ends_at)}<br>${fit}${soldOut}
+      ${p.credit ? `<br><span class="muted">Their sign-up credit is removed with the ticket.</span>` : ""}`;
+    $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
+    $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">Remove these hand-set limits with the grant, so they don't throttle a paying user:</p>` +
+      p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = ${esc(r.value)} ${esc(r.unit)}</label>`).join("") : "";
+    $("#grant-go", d).disabled = !p.available;
+  };
+  ["user", "tier", "length", "currency"].forEach((k) => (f[k].onchange = refresh));
+  refresh();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!preview) return;
+    const rm = [...f.querySelectorAll('input[name="rm"]:checked')].map((c) => ({ kind: preview.limit_rows[+c.value].kind, scope: preview.limit_rows[+c.value].scope }));
+    try {
+      await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
+        note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked } });
+      d.close(); render();
+    } catch (err) { $("#grant-err", d).textContent = err.message; }
+  };
+}
+function bonusDialog(t) {
+  const d = openDialog(`<h3>Bonus on ${esc(t.user_name)}'s ${esc(t.tier)} ticket</h3>
+    <p class="sub">Extra share applies between the two times (clamped to the ticket). Extra days extend the ticket at its own share and move this user's queued tickets forward by the same amount.</p>
+    <form id="f-bonus" class="form-grid">
+      <label>Extra share, points<input type="number" name="share_pct" min="0" step="0.1" value="0"></label>
+      <label>From<input type="datetime-local" name="starts_at" value="${toLocal(Math.max(t.starts_at, Date.now() / 1000))}"></label>
+      <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(t.effective_end)}"></label>
+      <label>Extra days<input type="number" name="extra_days" min="0" step="1" value="0"></label>
+      <label>Note (shown to the user)<input type="text" name="note" maxlength="200" placeholder="e.g. Sorry for Tuesday's outage"></label>
+      <button class="btn primary" type="submit">Add bonus</button>
+    </form><div class="error" id="bonus-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const f = $("#f-bonus", d);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    try {
+      const r = await api(`/api/admin/tickets/${t.id}/bonus`, { method: "POST", body: { share_pct: +f.share_pct.value, extra_days: +f.extra_days.value,
+        starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value), note: f.note.value } });
+      d.close();
+      if (r.moved) alertInline(`Bonus added. ${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward by ${f.extra_days.value} day(s).`); else render();
+    } catch (err) { $("#bonus-err", d).textContent = err.message; }
+  };
+}
+
+async function renderPricing(main) {
+  const [{ rates }, p] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices")]);
+  const price = (tier, length) => p.prices.find((x) => x.tier === tier && x.length === length)?.usd ?? "";
+  const now = Date.now() / 1000;
+  const dstate = (x) => (x.cancelled_at ? "cancelled" : x.ends_at <= now ? "ended" : x.starts_at > now ? "upcoming" : "active");
+  main.innerHTML = `<section class="view"><h2>Pricing</h2>
+    <p class="lede">Prices are in USD; buyers see them converted at today's rate. Shares live in the config file, since changing one changes capacity.</p>
+    <div class="grid cols-2">
+      <div class="card"><h3>Exchange rates</h3><p class="sub">Local units per 1 USD. A rate older than 36 hours is marked stale and the grant form asks you to confirm it.</p>
+        ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">rounds to ${r.round_to}</span>${r.stale ? ` <span class="badge">stale</span>` : ""}
+          <div class="muted" style="font-size:12px">${r.rate == null ? "no rate yet: unusable until set" : `${r.rate} · set ${fmtDate(r.set_at)} by ${esc(r.set_by || "?")}`}</div></span>
+          <span><input type="number" name="rate" step="any" min="0" placeholder="today's rate" required style="width:110px"> <button class="btn small" type="submit">Save</button></span></form>`).join("") || `<p class="muted">No currencies besides USD in the config.</p>`}
+      </div>
+      <div class="card"><h3>Regular prices, USD</h3><p class="sub">Each change is logged. Existing tickets keep what they were sold at.</p>
+        <table class="data"><thead><tr><th>Tier</th>${Object.keys(p.lengths).map((l) => `<th class="r">${l}</th>`).join("")}</tr></thead><tbody>
+        ${Object.entries(p.tiers).map(([k, t]) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${t.share_pct}%</span></td>${Object.keys(p.lengths).map((l) =>
+          `<td class="r"><form class="price-form" data-tier="${k}" data-length="${l}"><input type="number" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
+        </tbody></table></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h3>Discounts</h3><p class="sub">A lower USD price for one tier and length over a period. It must be below the regular price; while active it replaces the price everywhere and /pricing shows a countdown.</p>
+      <form id="f-disc" class="form-grid">
+        <label>Tier<select name="tier">${Object.entries(p.tiers).map(([k, t]) => `<option value="${k}">${esc(t.label)}</option>`).join("")}</select></label>
+        <label>Length<select name="length">${Object.keys(p.lengths).map((l) => `<option>${l}</option>`).join("")}</select></label>
+        <label>Price, USD<input type="number" name="usd" step="0.01" min="0.01" required></label>
+        <label>From<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
+        <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
+        <button class="btn primary" type="submit">Create discount</button></form>
+      <div class="error" id="disc-err"></div>
+      <table class="data" style="margin-top:12px"><thead><tr><th>Tier</th><th>Length</th><th class="r">USD</th><th>Period</th><th>State</th><th></th></tr></thead><tbody>
+      ${p.discounts.map((x) => `<tr><td>${esc(p.tiers[x.tier]?.label || x.tier)}</td><td>${esc(x.length)}</td><td class="r">$${x.usd}</td><td class="nowrap">${fmtDate(x.starts_at)} → ${fmtDate(x.ends_at)}</td>
+        <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">Cancel</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No discounts.</td></tr>`}
+      </tbody></table></div>
+  </section>`;
+  const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
+  main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: +f.rate.value }); }));
+  main.querySelectorAll(".price-form").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: +f.usd.value }); }));
+  $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: +f.usd.value, starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
+  main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
 }
 
 function openDialog(html) {
@@ -700,7 +873,12 @@ async function userAction(act, id, u) {
   if (act === "rename") return nameDialog(u);
   if (act === "rotate" && !confirmInline(`Rotate ${u.name}'s key? Their current key and every computer authorized under it stop working now; they need the new key to continue.`)) return;
   if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
-  if (act === "delete" && !confirmInline(`Delete ${u.name} permanently? Their recorded usage is deleted too and disappears from account totals and charts. This cannot be undone.`)) return;
+  if (act === "delete") return deleteDialog(u);
+  if (act === "ungate") {
+    try { await api(`/api/admin/users/${id}/ungate`, { method: "POST", body: {} }); } catch (e) { return alertInline(e.message); }
+    const { users } = await api("/api/users");
+    return limitsDialog(users.find((x) => x.id === id));   // the spec: Ungate opens the Limits dialog so hand limits get set
+  }
   try {
     const r = await api(`/api/admin/users/${id}/${act}`, { method: "POST", body: {} });
     if (act === "rotate") return keyDialog(`New key for ${u.name}`, r.key);
@@ -708,6 +886,17 @@ async function userAction(act, id, u) {
       "It works only for third-party models. The user runs <code>claude-gateway on --opencode --url … --routes-key …</code> with it.");
     render();
   } catch (e) { alertInline(e.message); }
+}
+function deleteDialog(u) {
+  const d = openDialog(`<h3>Delete ${esc(u.name)}</h3>
+    <p>Their recorded usage is deleted too and disappears from account totals and charts. Tickets they bought stay as sales records. This cannot be undone.</p>
+    <form id="f-del" class="form-grid"><label>Type <b>${esc(u.name)}</b> to confirm<input type="text" name="confirm" autocomplete="off" required></label>
+    <button class="btn danger" type="submit">Delete</button></form><div class="error" id="del-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  $("#f-del", d).onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api(`/api/admin/users/${u.id}/delete`, { method: "POST", body: { confirm: new FormData(e.target).get("confirm") } }); d.close(); render(); }
+    catch (err) { $("#del-err", d).textContent = err.message; }
+  };
 }
 function upgradeDialog(u) {
   const d = openDialog(`<h3>Upgrade ${esc(u.name)}</h3><p>Replaces their one-time credit with a daily allowance.</p>
@@ -1253,6 +1442,7 @@ async function boot() {
   try {
     const s = await api("/api/session");
     S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows };
+    S.tickets = s.tickets || { enabled: false };
     if (s.settings) S.settings = { ...S.settings, ...s.settings };
     Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
     $("#cred-pill").hidden = !s.credential;
