@@ -1,3 +1,4 @@
+import time
 """A machine that keeps its own claude.ai login active sends the gateway key in `x-gateway-key`
 (ANTHROPIC_CUSTOM_HEADERS); its Authorization header then carries that login's own OAuth token."""
 import json
@@ -100,9 +101,14 @@ async def test_bearer_key_clients_still_get_401(setup, anthropic):
     assert r.status_code == 401
 
 
-async def test_health_reports_only_whether_the_login_works(setup, db):
+async def test_health_reports_only_whether_the_login_works_and_usage_is_fresh(setup, db):
     gw, conn, *_ = setup
     async with asgi_client(create_app(gw)) as c:
-        assert (await c.get("/health")).json() == {"ok": True, "credential": True}
+        assert (await c.get("/health")).json() == {"ok": True, "credential": True, "usage_fresh": False}   # no figures yet
+        conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct) VALUES(?,?,?,?)",
+                     (time.time() - 60, "header", "5h", 10))
+        assert (await c.get("/health")).json() == {"ok": True, "credential": True, "usage_fresh": True}
+        conn.execute("UPDATE quota_snapshots SET observed_at=?", (time.time() - gw.cfg.quota.stale_after_s - 60,))
+        assert (await c.get("/health")).json()["usage_fresh"] is False
         conn.execute("DELETE FROM credentials")
-        assert (await c.get("/health")).json() == {"ok": True, "credential": False}
+        assert (await c.get("/health")).json()["credential"] is False

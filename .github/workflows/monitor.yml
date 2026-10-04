@@ -1,4 +1,5 @@
-# Hourly check from outside: the gateway answers through Cloudflare and its subscription login works.
+# Hourly check from outside: the gateway answers through Cloudflare, its subscription login works, and
+# Anthropic's usage figures are fresh (without them share limits and paid tickets run on estimates).
 # A failed run makes GitHub email whoever last changed this schedule. One recheck after 2 minutes keeps
 # a deploy's few-second restart from raising an alarm. Hourly keeps it near 720 of the free plan's
 # 2,000 Actions minutes a month.
@@ -23,9 +24,9 @@ jobs:
           check() {
             body=$(curl -fsS --max-time 15 https://claude.rahkar.pro/health) || { echo "unreachable"; return 1; }
             echo "$body"
-            jq -e '.ok == true and .credential == true' <<<"$body" >/dev/null
+            jq -e '.ok == true and .credential == true and .usage_fresh != false' <<<"$body" >/dev/null
           }
           check && exit 0
           echo "::warning::first check failed; rechecking in 2 minutes"
           sleep 120
-          check || { echo "::error::gateway is down or its subscription login is broken"; exit 1; }
+          check || { echo "::error::gateway is down, its subscription login is broken, or Anthropic's usage figures are stale"; exit 1; }
