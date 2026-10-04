@@ -217,6 +217,18 @@ def check_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, share
                                 f"{ceiling:g}% ceiling (max_sold_pct).")
 
 
+def verify_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, starts_at: int, ends_at: int) -> None:
+    """sold(t) <= max_sold_pct at the range's start and at every start inside it, with the changes already written.
+    For changes made of several pieces (a bonus with share and days, a ticket moved with its bonuses), which
+    check_capacity sees one at a time; call it inside the transaction or savepoint, so CapacityError undoes them."""
+    ceiling = cfg.tickets.max_sold_pct
+    for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at)}):
+        sold = sold_at(conn, account_id, point)
+        if sold > ceiling + 1e-9:
+            raise CapacityError(f"Not enough capacity: {sold:g}% would be sold at {_date(point)}, over the {ceiling:g}% "
+                                "ceiling (max_sold_pct).")
+
+
 # ---------- tickets ----------
 
 def _row(conn, sql: str, args: tuple) -> dict | None:
@@ -315,20 +327,22 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
         available, reason = False, str(e)
     rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
                                           (user["id"],))]
+    first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "length": length, "days": LENGTHS[length], "share_pct": share, **p,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
             "amount": round_local(p["usd"], rate["rate"], steps[currency]),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available,
             "limit_rows": rows,
-            "credit": conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).fetchone() is not None,
-            "first_ticket": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None}
+            # Only the first ticket takes the sign-up credit; a credit the admin sets after that stays.
+            "credit": first and conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).fetchone() is not None,
+            "first_ticket": first}
 
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, now: float | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
-    capacity check, the insert, the credit removal and any ticked limit rows, each audited."""
+    capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited."""
     now = _now(now)
     if not cfg.tickets.enabled:
         raise TicketError("Tickets are not enabled: add a [tickets] section to the config.")
@@ -349,7 +363,7 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
              p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, (note or "").strip() or None))
         tid = cur.lastrowid
-        if conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
+        if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
             db.audit(conn, actor, "credit_removed", user["name"], {"ticket_id": tid})
         for kind, scope in remove_limits:
             if conn.execute(f"DELETE FROM limits WHERE user_id=? AND kind=? AND scope=? AND {REMOVABLE}", (user["id"], kind, scope)).rowcount:
@@ -408,6 +422,9 @@ def _shift(conn, cfg: Config, chain: list[dict], delta: int) -> None:
             conn.execute("UPDATE tickets SET starts_at=starts_at+?, ends_at=ends_at+? WHERE id=?", (delta, delta, tk["id"]))
             conn.execute("UPDATE ticket_bonuses SET starts_at=starts_at+?, ends_at=ends_at+? WHERE ticket_id=? AND cancelled_at IS NULL",
                          (delta, delta, tk["id"]))
+        # Each bonus above was checked on its own; overlapping ones add up, so check the moved chain as written.
+        verify_capacity(conn, cfg, chain[0]["account_id"], min(tk["starts_at"] for tk in chain) + delta,
+                        max(tk["effective_end"] for tk in chain) + delta)
         conn.execute("RELEASE moves")
     except BaseException:
         conn.execute("ROLLBACK TO moves")
@@ -483,6 +500,8 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
             s, e = old_end, new_end
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
                            "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, (note or "").strip() or None, actor, now))
+        # The share was checked before the extra days existed: where it reaches into them, both count.
+        verify_capacity(conn, cfg, t["account_id"], min(s, old_end) if extra_days else s, max(e, new_end))
         db.audit(conn, actor, "ticket_bonus", t["user_name"], {"ticket_id": ticket_id, "bonus_id": cur.lastrowid, "share_pct": share_pct,
                                                                "extra_days": extra_days, "starts_at": s, "ends_at": e, "moved": moved})
         conn.execute("COMMIT")

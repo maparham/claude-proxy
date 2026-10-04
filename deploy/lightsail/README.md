@@ -53,6 +53,12 @@ the key:
 deploy/lightsail/install-deploy-key.sh ec2-user@<server-ip>
 ```
 
+Paid tickets and rollback: switching `[tickets]` off in `config.toml` does not free ticket users; they get
+"Tickets are paused; ask the admin." until each is ungated (Users page, or cancel then Ungate), which hands
+them back to hand-set limits. Rolling the image back to a build from before tickets is different: that code
+ignores ticket rows, and a ticket user's sign-up credit is already gone, so they would have no limit at all.
+Ungate them and set their limits first.
+
 Roll back by hand: `ssh ec2-user@<server-ip>`, `cd claude-gateway/deploy/lightsail`, list tags with
 `docker image ls claude-proxy`, write the one you want to `.env` as `GATEWAY_TAG=<tag>`, then run
 `docker compose up -d --no-build`. `update.sh` still ships the local checkout, built on the box as

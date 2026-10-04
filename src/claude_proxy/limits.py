@@ -200,9 +200,12 @@ def _gated(conn, cfg, user_id) -> bool:
 
 
 def _weighted_since(conn, cfg, user_id, since, now) -> float:
-    groups = conn.execute(f"SELECT model, {SUMS} FROM requests WHERE user_id=? AND provider='anthropic' AND rejected_by IS NULL "
-                          f"AND path!=? AND ended_at>? AND ended_at<=? GROUP BY model", (user_id, COUNT_TOKENS_PATH, since, now)).fetchall()
-    return sum(price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])).weighted for g in groups)
+    """The user's weighted Anthropic tokens that ended in (since, now], weighed as quota.observed_rate weighs them."""
+    span = "user_id=? AND provider='anthropic' AND rejected_by IS NULL AND path!=? AND ended_at>? AND ended_at<=?"
+    params = (user_id, COUNT_TOKENS_PATH, since, now)
+    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
+    w, args = quota.weighted_sql(cfg.pricing, models)
+    return float(conn.execute(f"SELECT COALESCE(SUM({w}), 0) FROM requests WHERE {span}", (*args, *params)).fetchone()[0])
 
 
 def _finish(st: LimitState) -> LimitState:
@@ -213,7 +216,7 @@ def _finish(st: LimitState) -> LimitState:
 
 def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share, estimated=True, tier=label)
-    att = quota.attribution(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
     if att["resets_at"] and att["resets_at"] > now:
         st.resets_at, st.reset_in = att["resets_at"], max(1, int(att["resets_at"] - now))
     if att["utilization_pct"] is not None and not att["stale"]:
@@ -235,25 +238,27 @@ def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> Li
     limit = share / 7
     st = LimitState("share_day", "*", f"{limit:g}", "pct", limit=limit, estimated=True, tier=label,
                     resets_at=day_end, reset_in=max(1, int(day_end - now)))
-    # A cheap staleness check in place of a full attribution() walk: this runs on every request of every ticket
-    # user, and attribution()'s per-user split over the window isn't needed just to learn whether the 7d bucket
-    # is fresh. "Fresh" is attribution()'s own rule: a snapshot exists and it isn't older than stale_after_s.
+    # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
+    # whole-percent steps, and a Lite day (0.71 points) is smaller than one step, so the share attributed since the day
+    # began would read 0 for most of a day and then jump. The cheap staleness check only decides the "no live data" mark.
     newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
-    fresh = newest is not None and now - newest[0] <= cfg.quota.stale_after_s
-    if fresh:
-        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, day_start, now)
+    st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
+    used = _weighted_since(conn, cfg, user_id, day_start, now)
+    if not used and not st.no_live_data:
+        st.current = 0.0   # live data and nothing used today: no rate needed, so a young account isn't refused
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
     if rate is None:
-        st.skipped = NO_RATE
+        st.skipped, st.no_live_data = NO_RATE, False
         return st
-    st.current, st.no_live_data = _weighted_since(conn, cfg, user_id, day_start, now) / rate, True
+    st.current = used / rate
     return _finish(st)
 
 
 def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | None = None) -> list[LimitState]:
     """The two share limits a ticket builds (spec section 7): share_5h against Anthropic's 5-hour window, and share_day,
-    one seventh of the share, against the weekly bucket's share attributed since the current ticket day began."""
+    one seventh of the share, against the user's weighted tokens since the current ticket day began at the weekly
+    bucket's observed rate."""
     t = ticket or tickets.covering(conn, user_id, now)
     if t is None:
         return []
@@ -301,6 +306,7 @@ USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit", "share_day": "
 TICKET = "ticket"                  # rejected_by: a ticket-gated user with no active ticket, or on a third-party model
 TICKET_NO_DATA = "ticket_no_data"  # rejected_by: the 503 while no usage rate was ever observed
 NO_RATE = "no usage rate observed yet"
+PAUSED = "Tickets are paused; ask the admin."   # a ticket-gated user while [tickets] is switched off
 
 
 def _describe(st: LimitState) -> str:
@@ -365,6 +371,7 @@ def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tupl
 
 
 MAX_INFLIGHT = "max_inflight"   # rejected_by for [limits] max_inflight, the per-user concurrency cap
+UNPRICED = "unpriced_model"     # rejected_by for a model with no [pricing] entry: no limit could meter it
 
 
 def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | None, path: str,
@@ -379,6 +386,13 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         return Decision(429, MAX_INFLIGHT, {"type": "error", "error": {"type": "rate_limit_error", "message":
                         f"Gateway limit max_inflight reached: {inflight} of {cfg.limits.max_inflight} requests in "
                         "flight; wait for one to finish."}}, 1)
+    if model and not is_count_tokens and cfg.pricing.price_for(model) is None:
+        # Every cost, share and weighted limit is measured in price-weighted tokens; a model without a price would be free.
+        return Decision(403, UNPRICED, _perm(f"Model {model!r} has no price on this gateway; ask the admin to add one."))
+    if not cfg.tickets.enabled and tickets.is_gated(conn, user_id):
+        # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
+        # not open the account to them. The admin ungates them to hand them back to hand-set limits.
+        return Decision(403, TICKET, _perm(PAUSED))
     gated = _gated(conn, cfg, user_id)
     ticket = None
     if gated:
@@ -386,8 +400,10 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         if ticket is None:   # every request, the model list included: there is no ticket to serve it on
             return Decision(403, TICKET, _perm(_no_ticket_message(conn, cfg, user_id, now)))
     rows = _rows(conn, user_id)
-    if gated and third_party and not any(r["kind"].startswith("cost_") for r in rows):
-        # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set governs instead.
+    if gated and third_party and not any(r["kind"].startswith("cost_") and (r["scope"] == "*" or fnmatch.fnmatchcase(model or "", r["scope"]))
+                                         for r in rows):
+        # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set for
+        # this model governs instead (scoped as the loop below scopes rows).
         return Decision(403, TICKET, _perm("Your ticket covers Claude models only."))
     for row in rows:
         kind = row["kind"]

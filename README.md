@@ -289,6 +289,8 @@ Sessions tab, just without titles, and its own title-generation request is bille
 
 ## Limits
 
+A request for a model with no `[pricing]` entry is refused for everyone (403): every limit is measured in price-weighted tokens, so an unpriced model would be free. Add a price for a new model in `[pricing.models]`.
+
 Set in the dashboard (Users & limits → Limits) or the CLI:
 
 ```sh

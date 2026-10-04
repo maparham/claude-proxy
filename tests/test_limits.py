@@ -253,3 +253,13 @@ def test_scoped_window_opens_with_a_matching_request(env):
     req(conn, uid, NOW - 3600, model="claude-opus-5")
     s = limits.states(conn, cfg, uid, now=NOW)[0]
     assert (s.current, s.reset_in) == (1, 86400 - 3600)
+
+
+def test_unpriced_models_are_refused_for_everyone(env):
+    conn, cfg, uid = env
+    d = check(conn, cfg, uid, model="claude-unknown-9")
+    assert (d.status, d.kind) == (403, "unpriced_model")
+    assert d.body["error"]["message"] == "Model 'claude-unknown-9' has no price on this gateway; ask the admin to add one."
+    assert check(conn, cfg, uid, model="claude-unknown-9", path="/v1/messages/count_tokens") is None   # costs nothing
+    assert check(conn, cfg, uid, model=None, path="/v1/models") is None
+    assert check(conn, cfg, uid, model="claude-sonnet-5-20260101") is None

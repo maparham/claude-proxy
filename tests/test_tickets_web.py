@@ -219,12 +219,68 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["enabled"] and me["gated"]
     cur = me["current"]
-    assert (cur["id"], cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == (t["id"], "Lite", 5, 1, 2)
+    assert (cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == ("Lite", 5, 1, 2)
+    assert "id" not in cur and "id" not in me["queued"]          # a ticket id counts the account's sales
     assert cur["effective_end"] == t["ends_at"] + DAY and cur["day_end"] == t["starts_at"] + DAY
     assert cur["bonuses"] == [{"share_pct": 2, "note": "welcome", "ends_at": t["ends_at"] + DAY}]
-    assert (me["queued"]["id"], me["queued"]["starts_at"]) == (q["id"], t["ends_at"] + DAY)
+    assert (me["queued"]["label"], me["queued"]["starts_at"]) == ("Lite", t["ends_at"] + DAY)
     assert me["prices"]["currency"] == "EUR" and me["how_to_buy"].startswith("Send")
     for leaked in ("utilization", "sold_now", "shares", "granted_by"):
         assert leaked not in str(me)
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/me/tickets")).status_code == 401
+
+
+async def test_pricing_api_says_the_servers_time(env):
+    gw, conn, cfg, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        p = (await c.get("/api/pricing")).json()
+    assert abs(p["now"] - time.time()) < 5          # the page counts down on the server's clock, not the visitor's
+
+
+PRICING_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const [src, serverNow, clientNow, endsAt, already] = [fs.readFileSync(process.argv[2], "utf8"), +process.argv[3], +process.argv[4], +process.argv[5], process.argv[6]];
+let reloads = 0, tickFn = null;
+const store = {}; if (already) store[already] = "1";
+const countdownEl = { dataset: { ends: String(endsAt) }, textContent: "" };
+const el = () => ({ innerHTML: "", textContent: "" });
+const ctx = {
+  console, Intl, Math, String, Object, Number, JSON,
+  Date: { now: () => clientNow * 1000 },
+  document: { getElementById: el, querySelectorAll: () => [countdownEl] },
+  location: { reload: () => { reloads++; } },
+  sessionStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
+  setInterval: (fn) => { tickFn = fn; },
+  fetch: () => Promise.resolve({ json: () => Promise.resolve({ now: serverNow, currency: "EUR", rate_set_at: null, how_to_buy: "",
+    tiers: [{ tier: "lite", label: "Lite", share_pct: 5, compare: "x", hours: {},
+      lengths: Object.fromEntries(["day", "week", "month"].map((k) => [k, { amount: 1, list_amount: 2, discount_ends_at: endsAt, sold_out: false }])) }] }) }),
+};
+vm.runInNewContext(src, ctx);
+setTimeout(() => { for (let i = 0; i < 3; i++) tickFn(); console.log(JSON.stringify({ reloads, text: countdownEl.textContent })); }, 10);
+"""
+
+
+def _run_pricing(tmp_path, server_now, client_now, ends_at, already=""):
+    import json
+    import shutil
+    import subprocess
+    from pathlib import Path
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    harness = tmp_path / "harness.js"
+    harness.write_text(PRICING_HARNESS)
+    js = Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "pricing.js"
+    out = subprocess.run(["node", str(harness), str(js), str(server_now), str(client_now), str(ends_at), already],
+                         capture_output=True, text=True, timeout=30, check=True).stdout
+    return json.loads(out)
+
+
+def test_pricing_page_counts_down_on_the_servers_clock(tmp_path):
+    # The visitor's clock is an hour ahead: the offer still has 30 minutes on the server's clock.
+    r = _run_pricing(tmp_path, server_now=1_000_000, client_now=1_003_600, ends_at=1_001_800)
+    assert r["reloads"] == 0 and r["text"] == "Offer ends in 00h 30m"
+    r = _run_pricing(tmp_path, server_now=1_002_000, client_now=1_002_000, ends_at=1_001_800)   # ended: one reload
+    assert r["reloads"] == 1
+    r = _run_pricing(tmp_path, server_now=1_002_000, client_now=1_002_000, ends_at=1_001_800, already="pricing-reloaded-1001800")
+    assert r["reloads"] == 0 and r["text"] == "Offer ended"   # already reloaded once for this end: never again

@@ -239,3 +239,47 @@ def test_status_line_marks_shares_estimated_without_live_data(env):
     sts = limits.states(conn, cfg, ids["alice"], now=NOW + 2000)   # stale: estimated from weighted tokens
     line = _status_line(user(conn, ids["alice"]), sts, None)
     assert " · 5h 20% est. (resets in" in line and " · today 140% est. (resets in" in line
+
+
+def test_share_day_counts_the_users_own_tokens_while_snapshots_are_fresh(env):
+    """Whole-percent steps: a Lite day (0.71 points) is smaller than one step, so attribution could show 0 all day.
+    The day is measured from the user's own tokens at the observed rate, live data or not."""
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 500, i=1000)
+    fresh(conn, NOW - 400, util5=1, util7=1)   # history: 1000 weighted tokens per point
+    req(conn, ids["alice"], NOW - 200, i=800)
+    fresh(conn, NOW - 100, util5=1, util7=1)   # no new step yet: attribution says 0 since the day began
+    st = by_kind(conn, cfg, ids["alice"])
+    assert st["share_day"].current == pytest.approx(0.8) and st["share_day"].no_live_data is False
+    assert check(conn, cfg, ids["alice"]).kind == "share_day"   # 0.8 > 0.714
+
+
+def test_share_day_counts_unpriced_models_like_the_rate_does(env):
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 500, i=1000, model="mystery-model")
+    fresh(conn, NOW - 400, util5=1, util7=1)
+    req(conn, ids["alice"], NOW - 200, i=500, model="mystery-model")
+    fresh(conn, NOW - 100, util5=1, util7=1)
+    assert by_kind(conn, cfg, ids["alice"])["share_day"].current == pytest.approx(0.5)
+
+
+def test_a_cost_limit_for_other_models_does_not_open_third_party_models(env):
+    conn, cfg, ids, t = env
+    set_limit(conn, ids["alice"], "cost_daily", 1.0, "usd", scope="claude-*")
+    d = check(conn, cfg, ids["alice"], model="muse-spark")
+    assert (d.status, d.body["error"]["message"]) == (403, "Your ticket covers Claude models only.")
+    set_limit(conn, ids["alice"], "cost_monthly", 5.0, "usd", scope="muse-*")
+    assert check(conn, cfg, ids["alice"], model="muse-spark") is None
+
+
+def test_tickets_switched_off_refuse_gated_users_instead_of_failing_open(env):
+    conn, cfg, ids, t = env
+    cfg.tickets.enabled = False                 # the grant removed alice's credit: no other limit would hold her
+    d = check(conn, cfg, ids["alice"])
+    assert (d.status, d.kind, d.body["error"]["message"]) == (403, "ticket", "Tickets are paused; ask the admin.")
+    assert check(conn, cfg, ids["alice"], model=None, path="/v1/models").status == 403
+    tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW)
+    tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 1)
+    assert check(conn, cfg, ids["alice"], now=NOW + 2) is None   # ungated: back to hand-set limits
+    bob, _ = create_user(conn, "bob")
+    assert check(conn, cfg, bob) is None        # never had a ticket: untouched
