@@ -222,6 +222,33 @@ SCHEMA = [
         p75_share_per_hour REAL,
         PRIMARY KEY (family, bucket)
     )""",
+    # ---- order requests (design 2026-10-04) ----
+    # A request to buy a ticket, never removed. Deleting the user leaves user_id NULL and name and email as they were.
+    """CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,   -- NULL: a visitor order not linked to an account
+        name TEXT NOT NULL,
+        email TEXT NOT NULL,                -- for a signed-in user, the account email or the one typed (never written to users)
+        tier TEXT NOT NULL,
+        length TEXT NOT NULL CHECK(length IN ('day','week','month')),
+        currency TEXT NOT NULL,
+        quoted_usd REAL NOT NULL,           -- the price the dialog showed; for reference, a grant re-prices
+        quoted_rate REAL NOT NULL,
+        quoted_amount REAL NOT NULL,
+        message TEXT NOT NULL DEFAULT '',
+        status TEXT NOT NULL CHECK(status IN ('new','contacted','done','declined','withdrawn')),
+        admin_note TEXT NOT NULL DEFAULT '',
+        ticket_id INTEGER REFERENCES tickets(id),
+        ip TEXT,                            -- a visitor's address, for the per-IP limit; cleared on close and after 30 days
+        admin_mail TEXT NOT NULL CHECK(admin_mail IN ('pending','sent','failed','off','skipped')),
+        buyer_mail TEXT NOT NULL CHECK(buyer_mail IN ('pending','sent','failed','off','skipped')),
+        seen_at INTEGER                     -- the buyer dismissed this closed order
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)",
 ]
 
 # A ticket's effective end: ends_at plus its non-cancelled bonus days. For queries that alias tickets as `t`.
