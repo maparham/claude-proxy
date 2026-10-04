@@ -500,3 +500,96 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     assert 'name="email"' in without and 'name="email"' not in with_
     assert "This is a request, not a payment. The admin will contact you with payment details." in with_
     assert "<img" not in without and '<option value="EUR" selected' in with_ and '<option value="USD"' in with_
+
+
+# ---------- the home page's order dialog ----------
+
+async def test_home_csp_allows_turnstile_only_when_it_is_on(env, monkeypatch):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        csp = (await c.get("/")).headers["content-security-policy"]
+    assert "challenges.cloudflare.com" not in csp and "frame-src 'none'" in csp
+    cfg.tickets.turnstile_site_key = "0xSITE"
+    monkeypatch.setenv("TURNSTILE_SECRET", "sec")
+    async with client(gw) as c:
+        r = await c.get("/")
+    csp = dict(d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";"))
+    assert "https://challenges.cloudflare.com" in csp["script-src"] and "https://challenges.cloudflare.com" in csp["frame-src"]
+    assert "challenges.cloudflare.com" not in csp["connect-src"] and "challenges.cloudflare.com" not in csp["default-src"]
+    assert 'id="order-dialog"' in r.text
+
+
+async def test_home_js_orders_through_the_public_endpoint(env):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        js = (await c.get("/static/home.js")).text
+    assert '"/api/orders"' in js and "turnstile/v0/api.js?render=explicit" in js and "turnstile_token" in js
+    _node_check(STATIC / "home.js")
+
+
+HOME_ORDER_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[2], "utf8");
+const data = JSON.parse(process.argv[3]);
+const created = [];
+const els = {};
+const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventListener: () => {} });
+const ctx = {
+  console, Intl, Math, String, Object, Number, JSON, encodeURIComponent, Promise, Date,
+  document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: () => [],
+              head: { appendChild: (s) => created.push(s.src) }, createElement: () => ({}) },
+  location: { reload: () => {} }, localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null, setItem: () => {} },
+  setInterval: () => {},
+  fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve(data) }),
+};
+ctx.window = ctx;
+vm.runInNewContext(src, ctx);
+setTimeout(() => {
+  const out = { atLoad: created.length };
+  out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
+  out.form = ctx.orderFormHtml(data, data.tiers[0], "week");
+  ctx.loadTurnstile(); ctx.loadTurnstile();
+  out.scripts = created;
+  console.log(JSON.stringify(out));
+}, 10);
+"""
+
+
+def _run_home_order(tmp_path, data):
+    import json
+    import shutil
+    import subprocess
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    harness = tmp_path / "home_order.js"
+    harness.write_text(HOME_ORDER_HARNESS)
+    out = subprocess.run(["node", str(harness), str(STATIC / "home.js"), json.dumps(data)], capture_output=True, text=True, timeout=30, check=True).stdout
+    return json.loads(out)
+
+
+def test_with_turnstile_get_it_opens_the_order_dialog(tmp_path):
+    from tests.test_tickets_web import _prices, _tier
+    data = _prices(_tier(week={"sold_out": True})) | {"turnstile_site_key": "0xSITE"}
+    r = _run_home_order(tmp_path, data)
+    assert 'data-order="lite:month"' in r["cards"]["month"] and 'href="/dashboard?tier=' not in r["cards"]["month"]
+    assert "Sold out" in r["cards"]["week"] and "data-order" not in r["cards"]["week"]          # sold out still can't be ordered
+    assert r["atLoad"] == 0                                                                      # the script waits for the dialog
+    assert r["scripts"] == ["https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"]   # and loads once
+
+
+def test_without_turnstile_get_it_stays_a_link(tmp_path):
+    from tests.test_tickets_web import _prices
+    r = _run_home_order(tmp_path, _prices())
+    assert 'href="/dashboard?tier=lite&length=week"' in r["cards"]["week"] and "data-order" not in r["cards"]["week"]
+
+
+def test_the_visitor_dialog_offers_signing_in_and_escapes(tmp_path):
+    from tests.test_tickets_web import _prices, _tier
+    data = _prices(_tier(label=BAD)) | {"turnstile_site_key": "0xSITE", "currency": "EUR"}
+    form = _run_home_order(tmp_path, data)["form"]
+    assert '<a href="/dashboard?tier=lite&amp;length=week">Or sign in to order</a>' in form
+    for field in ('name="name"', 'name="email"', 'name="currency"', 'name="message"', 'class="turnstile'):
+        assert field in form
+    assert "This is a request, not a payment. The admin will contact you with payment details." in form
+    assert '<option value="EUR" selected' in form and '<option value="USD"' in form
+    assert "<img" not in form

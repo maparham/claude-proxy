@@ -92,10 +92,12 @@ class LoginLimiter:
 
 
 class SecurityHeaders(BaseHTTPMiddleware):
-    def __init__(self, app, clerk_host: str | None = None):
+    def __init__(self, app, clerk_host: str | None = None, turnstile: bool = False):
         super().__init__(app)
-        # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame.
-        clerk, bot = (f" https://{clerk_host}", " https://challenges.cloudflare.com") if clerk_host else ("", "")
+        # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame; the home page's order
+        # dialog loads that same check (Turnstile) as a script and a frame, and needs nothing else from Cloudflare.
+        clerk = f" https://{clerk_host}" if clerk_host else ""
+        bot = " https://challenges.cloudflare.com" if clerk_host or turnstile else ""
         self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/{clerk}{bot}; "
                     f"style-src 'self' 'unsafe-inline'; img-src 'self' data:{clerk}{' https://img.clerk.com' if clerk else ''}; "
                     f"connect-src 'self'{clerk}; frame-src{bot or ' ' + repr('none')}; worker-src 'self' blob:; "
@@ -121,7 +123,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             logger.error("Clerk sign-in is off: it needs [listener] dashboard_url, the origin its tokens are made for.")
         else:
             verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http)
-    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None)
+    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None,
+                       turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
     app.state.gw = gw
     app.state.clerk = verifier
     limiter = LoginLimiter()
