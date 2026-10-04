@@ -403,3 +403,36 @@ def test_gateway_warns_when_tickets_are_off_but_users_are_still_gated(db, caplog
     with caplog.at_level(logging.WARNING, logger="claude_proxy"):
         make_gateway(cfg, conn)
     assert "tickets are off" in caplog.text and "1 users are ticket-gated" in caplog.text
+
+
+def test_cancel_does_not_move_two_overlapping_bonuses_onto_a_crowded_day(db):
+    """Each bonus fits on its own at the new place; together, where they overlap, they pass the ceiling."""
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, tier="lite", length="week")                       # alice 5%, [0, 7d)
+    b = grant(conn, cfg, ids, tier="standard", length="week", now=NOW + 10)     # alice 25%, queued [7d, 14d)
+    bonus(conn, cfg, ids, b["id"], share_pct=10, starts_at=NOW + 8 * DAY, ends_at=NOW + 10 * DAY)
+    bonus(conn, cfg, ids, b["id"], share_pct=10, starts_at=NOW + 9 * DAY, ends_at=NOW + 11 * DAY)   # 45% on [9d, 10d)
+    add_user(conn, ids, "bob")
+    grant(conn, cfg, ids, who="bob", tier="standard", length="week")
+    for name in ("c1", "c2", "c3"):
+        add_user(conn, ids, name)
+        grant(conn, cfg, ids, who=name, tier="lite", length="week")             # others: 25 + 3 x 5 = 40% on [0, 7d)
+    r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW)               # b would land on [0, 7d): 40 + 25 + 20 = 85 > 80
+    assert (r["moved"], r["dates_kept"]) == (0, True) and "Not enough capacity" in r["reason"]
+    assert tickets.get(conn, b["id"])["starts_at"] == NOW + 7 * DAY
+    assert [x["starts_at"] for x in tickets.bonuses(conn, b["id"])] == [NOW + 8 * DAY, NOW + 9 * DAY]
+    assert max(tickets.sold_at(conn, 1, NOW + k * DAY + 1) for k in range(14)) <= 80
+
+
+def test_bonus_with_share_and_days_is_checked_as_written(db):
+    """Extra share reaching into the extra days counts the ticket's own share there too."""
+    conn, cfg, ids = seeded(db)
+    a = grant(conn, cfg, ids, tier="standard", length="week")                   # alice 25%, [0, 7d)
+    for name in ("bob", "carol"):
+        add_user(conn, ids, name)
+        grant(conn, cfg, ids, who=name, tier="standard", length="day", now=NOW + 7 * DAY, confirm_stale_rate=True)   # 50% on [7d, 8d)
+    with pytest.raises(tickets.CapacityError):                                  # [7d, 8d): 50 + 25 + 10 = 85 > 80
+        bonus(conn, cfg, ids, a["id"], share_pct=10, extra_days=1, starts_at=NOW + 6 * DAY)
+    assert tickets.get(conn, a["id"])["effective_end"] == NOW + 7 * DAY        # nothing applied
+    assert conn.execute("SELECT COUNT(*) FROM ticket_bonuses").fetchone()[0] == 0
+    bonus(conn, cfg, ids, a["id"], share_pct=5, extra_days=1, starts_at=NOW + 6 * DAY)   # 80 exactly: fits

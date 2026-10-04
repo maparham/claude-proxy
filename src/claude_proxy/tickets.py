@@ -217,6 +217,18 @@ def check_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, share
                                 f"{ceiling:g}% ceiling (max_sold_pct).")
 
 
+def verify_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, starts_at: int, ends_at: int) -> None:
+    """sold(t) <= max_sold_pct at the range's start and at every start inside it, with the changes already written.
+    For changes made of several pieces (a bonus with share and days, a ticket moved with its bonuses), which
+    check_capacity sees one at a time; call it inside the transaction or savepoint, so CapacityError undoes them."""
+    ceiling = cfg.tickets.max_sold_pct
+    for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at)}):
+        sold = sold_at(conn, account_id, point)
+        if sold > ceiling + 1e-9:
+            raise CapacityError(f"Not enough capacity: {sold:g}% would be sold at {_date(point)}, over the {ceiling:g}% "
+                                "ceiling (max_sold_pct).")
+
+
 # ---------- tickets ----------
 
 def _row(conn, sql: str, args: tuple) -> dict | None:
@@ -408,6 +420,9 @@ def _shift(conn, cfg: Config, chain: list[dict], delta: int) -> None:
             conn.execute("UPDATE tickets SET starts_at=starts_at+?, ends_at=ends_at+? WHERE id=?", (delta, delta, tk["id"]))
             conn.execute("UPDATE ticket_bonuses SET starts_at=starts_at+?, ends_at=ends_at+? WHERE ticket_id=? AND cancelled_at IS NULL",
                          (delta, delta, tk["id"]))
+        # Each bonus above was checked on its own; overlapping ones add up, so check the moved chain as written.
+        verify_capacity(conn, cfg, chain[0]["account_id"], min(tk["starts_at"] for tk in chain) + delta,
+                        max(tk["effective_end"] for tk in chain) + delta)
         conn.execute("RELEASE moves")
     except BaseException:
         conn.execute("ROLLBACK TO moves")
@@ -483,6 +498,8 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
             s, e = old_end, new_end
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
                            "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, (note or "").strip() or None, actor, now))
+        # The share was checked before the extra days existed: where it reaches into them, both count.
+        verify_capacity(conn, cfg, t["account_id"], min(s, old_end) if extra_days else s, max(e, new_end))
         db.audit(conn, actor, "ticket_bonus", t["user_name"], {"ticket_id": ticket_id, "bonus_id": cur.lastrowid, "share_pct": share_pct,
                                                                "extra_days": extra_days, "starts_at": s, "ends_at": e, "moved": moved})
         conn.execute("COMMIT")
