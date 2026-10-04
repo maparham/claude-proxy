@@ -125,21 +125,29 @@ def classify_429(headers) -> str:
     return "upstream_request_scoped"
 
 
-def _window(rows: list) -> list:
-    """The snapshots of the current window: everything after the last reset.
+def _window_index(rows: list) -> int:
+    """Where the current window starts in `rows`: the index of the first snapshot after the last reset.
 
     A reset is the reset time moving forward. Headers and the usage endpoint round differently, so a
     small dip with an unchanged reset time is noise; a drop only means a reset when reset times are unknown.
     """
     start = 0
     for i in range(1, len(rows)):
-        prev, cur = rows[i - 1], rows[i]
-        if cur["resets_at"] and prev["resets_at"]:
-            if cur["resets_at"] - prev["resets_at"] > RESET_TOLERANCE_S:
-                start = i
-        elif cur["utilization_pct"] < prev["utilization_pct"]:
+        if _is_reset(rows[i - 1], rows[i]):
             start = i
-    return rows[start:]
+    return start
+
+
+def _window(rows: list) -> list:
+    """The snapshots of the current window: everything after the last reset."""
+    return rows[_window_index(rows):]
+
+
+def _reset_time(prev, cur) -> float | None:
+    """When the reset between two consecutive snapshots happened, if known: the old window's reset time, when it falls
+    by the newer snapshot. Usage after it is the new window's rise from 0, owed to the requests that ended after it."""
+    r = prev["resets_at"]
+    return r if r and r <= cur["observed_at"] else None
 
 
 def weighted_sql(pricing: Pricing, models) -> tuple[str, list]:
@@ -156,21 +164,25 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
                         "AND observed_at >= ? ORDER BY observed_at", (bucket, now - 8 * 86400)).fetchall()
     if not rows:
         return {"bucket": bucket, "utilization_pct": None, "resets_at": None, "observed_at": None,
-                "stale": True, "shares": {}, "unattributed": None, "window_start": None, "history": []}
-    win = _window(rows)
+                "stale": True, "shares": {}, "unattributed": None, "window_start": None, "counted_from": None, "history": []}
+    start = _window_index(rows)
+    win = rows[start:]
     latest = win[-1]
+    # The window's first snapshot already holds what was used since the reset; with the reset time known, that rise
+    # from 0 goes to the requests that ended between the reset and that snapshot.
+    reset_at = _reset_time(rows[start - 1], win[0]) if start else None
     span = "provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
-    bounds = (win[0]["observed_at"], latest["observed_at"])
+    bounds = (win[0]["observed_at"] if reset_at is None else max(reset_at, rows[start - 1]["observed_at"]), latest["observed_at"])
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
     # Weighted tokens, priced in SQL (this runs before every request under a share limit); unpriced models count raw tokens.
     w, args = weighted_sql(pricing, models)
     weighted = conn.execute(f"SELECT user_id, ended_at, {w} FROM requests WHERE {span} ORDER BY ended_at",
                             (*args, *bounds)).fetchall()
     shares: dict[int, float] = {}
-    history = [{"t": win[0]["observed_at"], "utilization_pct": win[0]["utilization_pct"], "shares": {}}]
-    high = win[0]["utilization_pct"]   # only rises above the high-water mark are new usage
+    history = []
+    high = 0.0 if reset_at is not None else win[0]["utilization_pct"]   # only rises above the high-water mark are new usage
     j = 0
-    for cur in win[1:]:
+    for cur in win:
         by_user: dict[int, float] = {}
         while j < len(weighted) and weighted[j][1] <= cur["observed_at"]:
             uid, _, w = weighted[j]
@@ -192,6 +204,7 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
         "shares": shares,
         "unattributed": max(0.0, latest["utilization_pct"] - sum(shares.values())),
         "window_start": win[0]["observed_at"],
+        "counted_from": bounds[0],
         "history": history,
     }
 
@@ -202,8 +215,8 @@ _att_cache: dict[tuple[int, str], tuple[tuple, dict]] = {}   # (id(conn), bucket
 def _att_inputs(conn, pricing: Pricing, newest: float | None, att: dict) -> tuple:
     """What attribution() read, cheaply: the newest snapshot, and how many requests ended inside the window it walked
     (an index range count on idx_requests_ended)."""
-    n = 0 if att["window_start"] is None else conn.execute(
-        "SELECT COUNT(*) FROM requests WHERE ended_at > ? AND ended_at <= ?", (att["window_start"], att["observed_at"])).fetchone()[0]
+    n = 0 if att["counted_from"] is None else conn.execute(
+        "SELECT COUNT(*) FROM requests WHERE ended_at > ? AND ended_at <= ?", (att["counted_from"], att["observed_at"])).fetchone()[0]
     return newest, n, id(pricing)
 
 
@@ -258,7 +271,8 @@ def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, sinc
     """(request_id, user_id, model, ended_at, points): each forwarded Anthropic request that ended after `since`, with
     the percentage points of the bucket attributed to it: its weighted tokens' part of the rise over the snapshot pair
     it ended in. Walking starts at the last snapshot at or before `since`, so an interval straddling `since` is split by
-    which requests ended after it. A reset restarts the high-water mark and attributes nothing for that pair."""
+    which requests ended after it. A reset restarts the high-water mark; its pair's rise from 0 goes to the requests that
+    ended after the reset time, or to nobody when that time is unknown (attribution() does the same)."""
     first = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket=? AND observed_at<=? ORDER BY observed_at DESC LIMIT 1",
                          (bucket, since)).fetchone()
     lo = first[0] if first else since
@@ -267,10 +281,15 @@ def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, sinc
         if high is None:
             high = prev["utilization_pct"]
         if _is_reset(prev, cur):
+            # The new window's rise from 0, owed to the requests that ended after the reset when its time is known.
+            reset_at = _reset_time(prev, cur)
             high = cur["utilization_pct"]
-            continue
-        delta = cur["utilization_pct"] - high
-        high = max(high, cur["utilization_pct"])
+            if reset_at is None:
+                continue
+            delta, batch = cur["utilization_pct"], [r for r in batch if r["ended_at"] > reset_at]
+        else:
+            delta = cur["utilization_pct"] - high
+            high = max(high, cur["utilization_pct"])
         total_w = sum(r["w"] for r in batch)
         if delta <= 0 or total_w <= 0:
             continue

@@ -359,3 +359,32 @@ def test_attribution_cache_recomputes_only_when_its_inputs_change(db, monkeypatc
     quota.clear_rate_cache()
     quota.attribution_cached(conn, Pricing(), "5h", now=310, stale_after_s=1800)
     assert len(calls) == 4
+
+
+def test_attribution_gives_the_rise_after_a_known_reset_to_the_requests_after_it(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    b, _ = create_user(conn, "b")
+    _snap(conn, 100, 40, resets=1000)
+    _req(conn, b, 900, 10)                  # before the reset at 1000: the old window's
+    _req(conn, a, 1050, 10)                 # after it
+    _snap(conn, 1100, 3, resets=19000)      # the new window's first snapshot already holds 3 points
+    res = quota.attribution(conn, Pricing(), "5h", now=1110)
+    assert res["shares"] == {a: pytest.approx(3)} and res["unattributed"] == pytest.approx(0)
+    # Without a reset time the reset is only a drop, and the first point stays unattributed as before.
+    conn.execute("UPDATE quota_snapshots SET resets_at=NULL")
+    res = quota.attribution(conn, Pricing(), "5h", now=1110)
+    assert res["shares"] == {} and res["unattributed"] == pytest.approx(3)
+
+
+def test_request_shares_give_the_rise_after_a_known_reset_to_the_requests_after_it(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    b, _ = create_user(conn, "b")
+    _snap7(conn, 100, 90, resets=1000)
+    _req(conn, b, 900, 10)                  # the old week's
+    _req(conn, a, 1050, 10)
+    _snap7(conn, 1100, 2, resets=700_000)   # the reset at 1000; 2 points used since
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=0, now=1110) == pytest.approx(2)
+    assert quota.attributed_since(conn, Pricing(), "7d", b, since=0, now=1110) == 0
+    assert quota.attributed_since(conn, Pricing(), "7d", a, since=1060, now=1110) == 0
