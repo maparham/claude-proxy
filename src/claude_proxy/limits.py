@@ -235,8 +235,12 @@ def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> Li
     limit = share / 7
     st = LimitState("share_day", "*", f"{limit:g}", "pct", limit=limit, estimated=True, tier=label,
                     resets_at=day_end, reset_in=max(1, int(day_end - now)))
-    att = quota.attribution(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
-    if att["utilization_pct"] is not None and not att["stale"]:
+    # A cheap staleness check in place of a full attribution() walk: this runs on every request of every ticket
+    # user, and attribution()'s per-user split over the window isn't needed just to learn whether the 7d bucket
+    # is fresh. "Fresh" is attribution()'s own rule: a snapshot exists and it isn't older than stale_after_s.
+    newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
+    fresh = newest is not None and now - newest[0] <= cfg.quota.stale_after_s
+    if fresh:
         st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, day_start, now)
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)

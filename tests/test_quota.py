@@ -278,5 +278,17 @@ def test_observed_rate_is_the_median_tokens_per_point(db):
     _req(conn, a, now - 1500, 4000)
     _snap(conn, now - 1000, 7)                 # 2000 per point
     assert quota.observed_rate(conn, Pricing(), "5h", now) == 2000
-    assert quota.observed_rate(conn, Pricing(), "7d", now) is None
-    assert quota.observed_rate(conn, Pricing(), "5h", now + 8 * 86400) is None   # older than 7 days
+    assert quota.observed_rate(conn, Pricing(), "7d", now) is None   # no 7d snapshots at all: no fallback can help
+    # Quiet for the last 7 days: falls back to the median over the whole retained history instead of None.
+    assert quota.observed_rate(conn, Pricing(), "5h", now + 8 * 86400) == 2000
+
+
+def test_observed_rate_falls_back_to_the_whole_history_when_quiet_for_7_days(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 2_000_000
+    old = now - 10 * 86400   # a rate observed 10 days ago; nothing since
+    _snap(conn, old - 1000, 0)
+    _req(conn, a, old - 500, 1000)
+    _snap(conn, old, 2)      # 500 per point
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 500

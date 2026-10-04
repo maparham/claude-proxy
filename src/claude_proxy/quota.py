@@ -247,17 +247,46 @@ def attributed_since(conn: sqlite3.Connection, pricing: Pricing, bucket: str, us
     return sum(p for (_, uid, _, _, p) in request_shares(conn, pricing, bucket, since, now) if uid == user_id)
 
 
-def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7) -> float | None:
-    """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of snapshot pairs with
-    a rise above zero and at least one forwarded Anthropic request in between. None when no such pair exists, which can
-    only happen on an account that has never served a request. Used to estimate a share when snapshots are stale."""
+RATE_CACHE_S = 300   # observed_rate's cache lifetime, measured in the `now` argument so synthetic-clock tests behave
+_rate_cache: dict[tuple[int, str], tuple[float, float | None]] = {}   # (id(conn), bucket) -> (computed_at_now, rate)
+
+
+def clear_rate_cache() -> None:
+    """Drop every cached observed_rate() value. Call before a test that reuses a connection id another test's cache
+    entry might still reference (tests/conftest.py's `db` fixture does this for every test)."""
+    _rate_cache.clear()
+
+
+def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> float | None:
     ratios = []
-    for prev, cur, batch in _pairs(conn, pricing, bucket, now - days * 86400, now):
+    for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
         delta = cur["utilization_pct"] - prev["utilization_pct"]
         total_w = sum(r["w"] for r in batch)
         if not _is_reset(prev, cur) and delta > 0 and batch and total_w > 0:
             ratios.append(total_w / delta)
     return statistics.median(ratios) if ratios else None
+
+
+def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7) -> float | None:
+    """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of snapshot pairs with
+    a rise above zero and at least one forwarded Anthropic request in between. When the account has been quiet for
+    that long and no such pair falls in the window, falls back to the median over the whole retained history instead,
+    so a ticket user whose account merely went quiet is never locked out. None only when no qualifying pair exists at
+    all, which can only happen on an account that has never served a request. Used to estimate a share when snapshots
+    are stale.
+
+    Process-local cache: this runs on the hot path (every request a stale-snapshot ticket user makes), so the result
+    is cached per (connection, bucket) for RATE_CACHE_S seconds of `now`-time (not wall-clock time, so tests with a
+    synthetic clock get a correctly-expiring cache); clear_rate_cache() drops every entry."""
+    key = (id(conn), bucket)
+    cached = _rate_cache.get(key)
+    if cached is not None and now - cached[0] < RATE_CACHE_S:
+        return cached[1]
+    rate = _median_ratio(conn, pricing, bucket, now - days * 86400, now)
+    if rate is None:
+        rate = _median_ratio(conn, pricing, bucket, 0, now)   # the whole retained history, not just the last `days`
+    _rate_cache[key] = (now, rate)
+    return rate
 
 
 def buckets(conn: sqlite3.Connection, since: float) -> list[str]:

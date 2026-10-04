@@ -186,6 +186,20 @@ def test_stale_snapshot_estimates_from_weighted_tokens_at_the_observed_rate(env)
     assert check(conn, cfg, ids["alice"], now=later).kind == "share_day"
 
 
+def test_ticket_user_with_only_an_8_day_old_rate_gets_an_estimate_not_a_503(env):
+    conn, cfg, ids, t = env
+    old = NOW - 8 * DAY                                                         # a rate observed well outside the 7-day lookback
+    req(conn, ids["alice"], old - 25, i=1000)
+    fresh(conn, old - 50)                                                       # util 0, both buckets
+    fresh(conn, old, util5=1, util7=1)                                          # +1 point: rate 1000 per point, 8 days before NOW
+    mid = NOW + 2000                                                            # the fixture's own fresh() snapshot is stale by now too
+    st = by_kind(conn, cfg, ids["alice"], now=mid)
+    assert st["share_5h"].no_live_data is True and st["share_5h"].skipped is None
+    assert st["share_day"].no_live_data is True and st["share_day"].skipped is None
+    assert st["share_day"].current == 0.0                                       # the ticket's day has no usage of its own
+    assert check(conn, cfg, ids["alice"], now=mid) is None                       # estimated from the old rate, not a 503
+
+
 def test_ticket_user_gets_503_when_no_rate_was_ever_observed(db):
     conn, cfg, ids = seeded(db)
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW)
