@@ -43,6 +43,7 @@ const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1, notation: 
 const nfFull = new Intl.NumberFormat();
 function fmtNum(v) { return v == null ? "—" : nf.format(v); }
 function fmtUsd(v) { return v == null ? "—" : v === 0 ? "$0" : v < 0.01 ? "<$0.01" : "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)); }
+const fmtPrice = (v) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;   // a USD price: whole dollars bare, otherwise cents
 function fmtPct(v, d = 0) { return v == null ? "—" : `${v.toFixed(d)}%`; }
 function fmtDur(s) {
   if (s == null) return "—";
@@ -71,7 +72,7 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await r.json(); } catch { /* empty */ }
   if (r.status === 401 && !path.startsWith("/api/login")) { showLogin(); throw new Error("signed out"); }
-  if (!r.ok) throw new Error((data && data.error) || `HTTP ${r.status}`);
+  if (!r.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${r.status}`), { status: r.status });
   return data;
 }
 
@@ -738,7 +739,7 @@ function ticketRow(t) {
   return `<tr><td><b>${esc(t.user_name)}</b>${t.user_id == null ? ` <span class="badge">deleted</span>` : ""}</td>
     <td>${esc(t.tier)} <span class="muted">${t.share_pct}%</span></td>
     <td class="nowrap">${fmtDate(t.starts_at)} → ${fmtDate(t.effective_end)}${t.effective_end !== t.ends_at ? ` <span class="muted">(+${Math.round((t.effective_end - t.ends_at) / 86400)} d bonus)</span>` : ""}</td>
-    <td class="r">${esc(money(t.amount, t.currency))}${t.discount_id ? `<div class="muted"><s>$${t.list_usd}</s> $${t.usd}</div>` : `<div class="muted">$${t.usd}</div>`}</td>
+    <td class="r">${esc(money(t.amount, t.currency))}${t.discount_id ? `<div class="muted"><s>${fmtPrice(t.list_usd)}</s> ${fmtPrice(t.usd)}</div>` : `<div class="muted">${fmtPrice(t.usd)}</div>`}</td>
     <td>${stateBadge(t.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${esc(t.note || "")}</td>
     <td><div class="row-actions">${live ? `<button class="btn small" data-tact="bonus" data-id="${t.id}" data-tip="act_ticket_bonus">Bonus</button>
       <button class="btn small danger" data-tact="cancel" data-id="${t.id}" data-tip="act_ticket_cancel">Cancel</button>` : ""}</div></td></tr>`;
@@ -774,7 +775,7 @@ function grantDialog(users) {
       preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<span class="muted">${esc(e.message)}</span>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
-    const price = p.discount_id ? `<s>$${p.list_usd}</s> <b>$${p.usd}</b> (discount)` : `<b>$${p.usd}</b>`;
+    const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (discount)` : `<b>${fmtPrice(p.usd)}</b>`;
     const when = p.queued ? `queued: starts ${fmtDate(p.starts_at)}, after the user's current ticket` : `starts now`;
     const fit = p.available ? `<span class="good">The period is available.</span>` : `<span class="critical">${esc(p.reason)}</span>`;
     const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${tipT("/pricing shows this tier as sold out right now", "sold_out_vs_queued")}; this grant starts later and fits.</span>` : "";
@@ -793,10 +794,14 @@ function grantDialog(users) {
     if (!preview) return;
     const rm = [...f.querySelectorAll('input[name="rm"]:checked')].map((c) => ({ kind: preview.limit_rows[+c.value].kind, scope: preview.limit_rows[+c.value].scope }));
     try {
+      // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked } });
+        note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate } });
       d.close(); render();
-    } catch (err) { $("#grant-err", d).textContent = err.message; }
+    } catch (err) {
+      if (err.status === 409) await refresh();
+      $("#grant-err", d).textContent = err.message;
+    }
   };
 }
 function bonusDialog(t) {
@@ -851,7 +856,7 @@ async function renderPricing(main) {
         <button class="btn primary" type="submit">Create discount</button></form>
       <div class="error" id="disc-err"></div>
       <table class="data" style="margin-top:12px"><thead><tr><th>Tier</th><th>Length</th><th class="r">USD</th><th>Period</th><th>State</th><th></th></tr></thead><tbody>
-      ${p.discounts.map((x) => `<tr><td>${esc(p.tiers[x.tier]?.label || x.tier)}</td><td>${esc(x.length)}</td><td class="r">$${x.usd}</td><td class="nowrap">${fmtDate(x.starts_at)} → ${fmtDate(x.ends_at)}</td>
+      ${p.discounts.map((x) => `<tr><td>${esc(p.tiers[x.tier]?.label || x.tier)}</td><td>${esc(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} → ${fmtDate(x.ends_at)}</td>
         <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">Cancel</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No discounts.</td></tr>`}
       </tbody></table></div>
   </section>`;

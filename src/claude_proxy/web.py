@@ -126,7 +126,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.exception_handler(HTTPException)
     async def _http_error(request, exc: HTTPException):
-        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail})
+        return JSONResponse(status_code=exc.status_code, content={"error": exc.detail}, headers=exc.headers)
 
     # ---------- auth ----------
 
@@ -816,10 +816,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def ticket_call(fn, *args, **kw):
         try:
             return fn(*args, **kw)
-        except tickets.CapacityError as e:
+        except (tickets.CapacityError, tickets.QuoteChanged) as e:
             fail(409, str(e))
         except tickets.TicketError as e:
             fail(400, str(e))
+        except sqlite3.OperationalError as e:
+            # BEGIN IMMEDIATE waits out busy_timeout, then gives up while another writer (e.g. the CLI) holds the lock.
+            if "locked" not in str(e) and "busy" not in str(e):
+                raise
+            raise HTTPException(status_code=503, detail="The database is busy; try again in a few seconds.",
+                                headers={"Retry-After": "5"}) from e
 
     def need_tickets():
         if not cfg.tickets.enabled:
@@ -843,7 +849,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        return {"ok": True, "rate": ticket_call(tickets.set_rate, conn, cfg, str(body.get("currency", "")).upper(), body.get("rate"), actor["id"])}
+        return {"ok": True, "rate": ticket_call(tickets.set_rate, conn, cfg, str(body.get("currency", "")).upper(),
+                                                _number(body.get("rate"), "The rate"), actor["id"])}
 
     @app.get("/api/admin/prices")
     async def prices(request: Request):
@@ -857,7 +864,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), body.get("usd"), actor["id"])
+        ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), _number(body.get("usd"), "The price"),
+                    actor["id"])
         return {"ok": True}
 
     @app.post("/api/admin/discounts")
@@ -865,12 +873,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        try:
-            starts_at, ends_at = int(body.get("starts_at")), int(body.get("ends_at"))
-        except (TypeError, ValueError):
-            fail(400, "Need starts_at and ends_at as epoch seconds.")
-        d = ticket_call(tickets.create_discount, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), body.get("usd"),
-                        starts_at, ends_at, actor["id"])
+        starts_at = _number(body.get("starts_at"), "starts_at (epoch seconds)", whole=True)
+        ends_at = _number(body.get("ends_at"), "ends_at (epoch seconds)", whole=True)
+        d = ticket_call(tickets.create_discount, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")),
+                        _number(body.get("usd"), "The discounted price"), starts_at, ends_at, actor["id"])
         return {"ok": True, "discount": d}
 
     @app.post("/api/admin/discounts/{did}/cancel")
@@ -918,8 +924,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         u, tier, length, currency = grant_args(body)
         remove = [(str(r.get("kind", "")), str(r.get("scope") or "*")) for r in body.get("remove_limits") or [] if isinstance(r, dict)]
+        # The price and rate the preview showed: a grant at a price the admin did not see is refused (409) and re-previewed.
+        quoted = {k: None if body.get(k) is None else _number(body[k], k) for k in ("usd", "rate")}
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
-                        remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")))
+                        remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
+                        expect_usd=quoted["usd"], expect_rate=quoted["rate"])
         return {"ok": True, "ticket": t}
 
     @app.post("/api/admin/tickets/{tid}/cancel")
@@ -933,13 +942,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        try:
-            share = float(body.get("share_pct") or 0)
-            days = int(body.get("extra_days") or 0)
-            starts_at = None if body.get("starts_at") in (None, "") else int(body["starts_at"])
-            ends_at = None if body.get("ends_at") in (None, "") else int(body["ends_at"])
-        except (TypeError, ValueError):
-            fail(400, "share_pct, extra_days, starts_at and ends_at must be numbers.")
+        share = _number(body.get("share_pct") or 0, "share_pct")
+        days = _number(body.get("extra_days") or 0, "extra_days", whole=True)
+        starts_at = None if body.get("starts_at") in (None, "") else _number(body["starts_at"], "starts_at", whole=True)
+        ends_at = None if body.get("ends_at") in (None, "") else _number(body["ends_at"], "ends_at", whole=True)
         r = ticket_call(tickets.add_bonus, conn, cfg, actor["id"], tid, share_pct=share, extra_days=days, starts_at=starts_at, ends_at=ends_at,
                         note=str(body.get("note") or ""))
         return {"ok": True, **r}
@@ -1037,6 +1043,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return FileResponse(path, headers={"Cache-Control": "public, max-age=31536000, immutable" if v else "no-cache"})
 
     return app
+
+
+def _number(v, what: str, whole: bool = False):
+    """A number from a request body: finite and of a sane size, so NaN, Infinity or 1e300 is a 400 here rather than a
+    500 further on; with `whole`, a whole number (1.5 is refused, not truncated)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float, str)):
+        fail(400, f"{what} must be a number.")
+    try:
+        n = float(v)
+    except ValueError:
+        fail(400, f"{what} must be a number.")
+    if not math.isfinite(n) or abs(n) > 1e12:
+        fail(400, f"{what} must be a finite number of sensible size.")
+    if whole:
+        if not n.is_integer():
+            fail(400, f"{what} must be a whole number.")
+        return int(n)
+    return n
 
 
 async def _json(request: Request) -> dict:

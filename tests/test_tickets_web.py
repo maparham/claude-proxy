@@ -1,3 +1,4 @@
+import sqlite3
 import time
 
 import pytest
@@ -284,3 +285,68 @@ def test_pricing_page_counts_down_on_the_servers_clock(tmp_path):
     assert r["reloads"] == 1
     r = _run_pricing(tmp_path, server_now=1_002_000, client_now=1_002_000, ends_at=1_001_800, already="pricing-reloaded-1001800")
     assert r["reloads"] == 0 and r["text"] == "Offer ended"   # already reloaded once for this end: never again
+
+
+async def test_money_inputs_are_rounded_to_cents_and_bounded(env):
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    async with admin_client(gw) as c:
+        assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9.999})).status_code == 200
+        assert {(x["tier"], x["length"]): x["usd"] for x in (await c.get("/api/admin/prices")).json()["prices"]}[("lite", "week")] == 10
+        r = await c.post("/api/admin/discounts", json={"tier": "lite", "length": "week", "usd": 6.004, "starts_at": now, "ends_at": now + DAY})
+        assert r.status_code == 200 and r.json()["discount"]["usd"] == 6
+        assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "day", "usd": 0.001})).status_code == 400
+        for raw in ('{"tier": "lite", "length": "day", "usd": NaN}', '{"tier": "lite", "length": "day", "usd": Infinity}',
+                    '{"tier": "lite", "length": "day", "usd": 1e300}', '{"tier": "lite", "length": "day", "usd": 1e6}'):
+            r = await c.post("/api/admin/prices", content=raw, headers={"content-type": "application/json"})
+            assert r.status_code == 400, raw
+        for rate in ("NaN", "1e300", "0", "1e10"):
+            r = await c.post("/api/admin/rates", content=f'{{"currency": "EUR", "rate": {rate}}}', headers={"content-type": "application/json"})
+            assert r.status_code == 400, rate
+        r = await c.post("/api/admin/discounts", content=f'{{"tier": "lite", "length": "day", "usd": 1, "starts_at": {now}, "ends_at": 1e300}}',
+                         headers={"content-type": "application/json"})
+        assert r.status_code == 400
+        t = (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).json()["ticket"]
+        for body in ({"extra_days": 1.5}, {"share_pct": 1e300}, {"share_pct": 101}, {"extra_days": 1e300}):
+            r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json=body)
+            assert r.status_code == 400, body
+        r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", content='{"share_pct": NaN, "extra_days": 1}', headers={"content-type": "application/json"})
+        assert r.status_code == 400
+    assert conn.execute("SELECT COUNT(*) FROM ticket_bonuses").fetchone()[0] == 0
+
+
+async def test_notes_are_capped_at_200_characters(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 201})
+        assert r.status_code == 400 and "200" in r.json()["error"]
+        t = (await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 200})).json()["ticket"]
+        r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"extra_days": 1, "note": "y" * 201})
+        assert r.status_code == 400 and "200" in r.json()["error"]
+
+
+async def test_grant_refused_when_the_price_or_rate_changed_since_the_preview(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).json()
+        assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9})).status_code == 200
+        body = {"user": "alice", "tier": "lite", "length": "week", "currency": "EUR", "usd": p["usd"], "rate": p["rate"]}
+        r = await c.post("/api/admin/tickets", json=body)
+        assert r.status_code == 409 and "price" in r.json()["error"]
+        assert (await c.post("/api/admin/rates", json={"currency": "EUR", "rate": 0.95})).status_code == 200
+        r = await c.post("/api/admin/tickets", json=body | {"usd": 9})
+        assert r.status_code == 409 and "rate" in r.json()["error"]
+        r = await c.post("/api/admin/tickets", json=body | {"usd": 9, "rate": 0.95})
+        assert r.status_code == 200 and r.json()["ticket"]["usd"] == 9
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 1
+
+
+async def test_a_locked_database_is_a_503_not_a_500(env, monkeypatch):
+    gw, conn, cfg, ids, keys = env
+
+    def locked(*a, **kw):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(tickets, "grant", locked)
+    async with admin_client(gw) as c:
+        r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
+        assert r.status_code == 503 and "try again" in r.json()["error"] and r.headers["retry-after"]

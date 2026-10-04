@@ -19,6 +19,9 @@ ACCOUNT_ID = 1   # step 1 has exactly one account (spec section 1)
 
 STALE_RATE_S = 36 * 3600
 USD_ROUND_TO = 0.01
+MAX_USD = 100_000          # generous ceilings: anything above is a typo, not a price
+MAX_RATE = 1e9             # local units per 1 USD; leaves room for currencies counted in the millions
+NOTE_MAX = 200             # the dashboard's maxlength
 
 
 class TicketError(Exception):
@@ -29,6 +32,10 @@ class CapacityError(TicketError):
     """The period would push what is sold over max_sold_pct."""
 
 
+class QuoteChanged(TicketError):
+    """The price or rate moved between the grant form's preview and the grant."""
+
+
 def _date(t: float) -> str:
     return time.strftime("%Y-%m-%d %H:%M UTC", time.gmtime(t))
 
@@ -37,10 +44,27 @@ def _now(now) -> int:
     return int(time.time() if now is None else now)
 
 
-def _positive(v, what: str) -> float:
+def _positive(v, what: str, ceiling: float) -> float:
     if isinstance(v, bool) or not isinstance(v, (int, float)) or not math.isfinite(v) or v <= 0:
         raise TicketError(f"{what} must be a number above 0.")
+    if v >= ceiling:
+        raise TicketError(f"{what} must be below {ceiling:,.0f}.")
     return float(v)
+
+
+def _usd(v, what: str) -> float:
+    """A USD amount, rounded to cents."""
+    usd = round(_positive(v, what, MAX_USD), 2)
+    if usd <= 0:
+        raise TicketError(f"{what} must be at least $0.01.")
+    return usd
+
+
+def _note(note) -> str | None:
+    note = (note or "").strip()
+    if len(note) > NOTE_MAX:
+        raise TicketError(f"A note is at most {NOTE_MAX} characters.")
+    return note or None
 
 
 # ---------- money (spec section 6) ----------
@@ -73,7 +97,7 @@ def rate_is_stale(rate: dict, now: float) -> bool:
 def set_rate(conn: sqlite3.Connection, cfg: Config, currency: str, rate, actor: int | None, now: float | None = None) -> dict:
     if currency not in cfg.tickets.currencies:
         raise TicketError(f"{currency!r} is not a configured currency; add [tickets.currencies.{currency}] to the config first.")
-    rate = _positive(rate, "The rate (local units per 1 USD)")
+    rate = _positive(rate, "The rate (local units per 1 USD)", MAX_RATE)
     conn.execute("INSERT INTO fx_rates(currency, rate, set_at, set_by) VALUES(?,?,?,?)", (currency, rate, _now(now), actor))
     db.audit(conn, actor, "rate_set", currency, {"rate": rate})
     return current_rate(conn, currency)
@@ -97,7 +121,7 @@ def regular_price(conn: sqlite3.Connection, tier: str, length: str) -> float:
 
 def set_price(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, usd, actor: int | None, now: float | None = None) -> None:
     _check_tier_length(cfg, tier, length)
-    usd = _positive(usd, "The price")
+    usd = _usd(usd, "The price")
     conn.execute("INSERT OR REPLACE INTO ticket_prices(tier, length, usd, updated_at, updated_by) VALUES(?,?,?,?,?)",
                  (tier, length, usd, _now(now), actor))
     db.audit(conn, actor, "price_set", f"{tier}:{length}", {"usd": usd})
@@ -118,7 +142,7 @@ def create_discount(conn: sqlite3.Connection, cfg: Config, tier: str, length: st
                     now: float | None = None) -> dict:
     now = _now(now)
     _check_tier_length(cfg, tier, length)
-    usd = _positive(usd, "The discounted price")
+    usd = _usd(usd, "The discounted price")
     starts_at, ends_at = int(starts_at), int(ends_at)
     if starts_at >= ends_at:
         raise TicketError("A discount must start before it ends.")
@@ -343,10 +367,12 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
-          remove_limits=(), confirm_stale_rate: bool = False, now: float | None = None) -> dict:
+          remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, now: float | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
-    capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited."""
+    capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
+    `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different."""
     now = _now(now)
+    note = _note(note)
     if not cfg.tickets.enabled:
         raise TicketError("Tickets are not enabled: add a [tickets] section to the config.")
     if user["revoked_at"] is not None:
@@ -356,6 +382,10 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
     conn.execute("BEGIN IMMEDIATE")
     try:
         p = preview(conn, cfg, user, tier, length, currency, now)
+        if expect_usd is not None and abs(p["usd"] - expect_usd) > 1e-9:
+            raise QuoteChanged(f"The price is now ${p['usd']:g}, not ${expect_usd:g} as shown; check the new price and grant again.")
+        if expect_rate is not None and abs(p["rate"] - expect_rate) > 1e-12:
+            raise QuoteChanged(f"The {currency} rate is now {p['rate']:g}, not {expect_rate:g} as shown; check the new amount and grant again.")
         if p["stale_rate"] and not confirm_stale_rate:
             raise TicketError(f"The {currency} rate is {int((now - p['rate_set_at']) // 3600)} hours old. Confirm to grant at it "
                               "anyway, or set today's rate first.")
@@ -364,7 +394,7 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, length, days, starts_at, ends_at, list_usd, usd, "
             "discount_id, currency, rate, amount, granted_by, granted_at, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
-             p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, (note or "").strip() or None))
+             p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, note))
         tid = cur.lastrowid
         if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
             db.audit(conn, actor, "credit_removed", user["name"], {"ticket_id": tid})
@@ -470,12 +500,21 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
     queued tickets forward; each move and the extension itself are checked against capacity, and one failure refuses
     the whole bonus."""
     now = _now(now)
-    share_pct = float(share_pct or 0)
-    extra_days = int(extra_days or 0)
-    if not math.isfinite(share_pct) or share_pct < 0 or extra_days < 0 or (share_pct == 0 and extra_days == 0):
+    note = _note(note)
+    share_pct, extra_days = share_pct or 0, extra_days or 0
+    if isinstance(share_pct, bool) or not isinstance(share_pct, (int, float)) or isinstance(extra_days, bool) \
+            or not isinstance(extra_days, (int, float)):
+        raise TicketError("Extra share and extra days must be numbers.")
+    if not math.isfinite(share_pct) or share_pct < 0 or not math.isfinite(extra_days) or extra_days < 0 \
+            or (share_pct == 0 and extra_days == 0):
         raise TicketError("A bonus needs extra share above 0, extra days above 0, or both.")
+    if extra_days != int(extra_days):
+        raise TicketError("Extra days must be a whole number.")
     if extra_days > 365:
         raise TicketError("Extra days must be 365 or fewer.")
+    if share_pct > 100:
+        raise TicketError("Extra share is at most 100 points.")
+    share_pct, extra_days = float(share_pct), int(extra_days)
     conn.execute("BEGIN IMMEDIATE")
     try:
         t = get(conn, ticket_id)
@@ -506,7 +545,7 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         else:
             s, e = old_end, new_end
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
-                           "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, (note or "").strip() or None, actor, now))
+                           "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, note, actor, now))
         # The share was checked before the extra days existed: where it reaches into them, both count.
         hi = max(e, new_end)
         if hi > now:
