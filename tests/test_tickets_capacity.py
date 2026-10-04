@@ -436,3 +436,15 @@ def test_bonus_with_share_and_days_is_checked_as_written(db):
     assert tickets.get(conn, a["id"])["effective_end"] == NOW + 7 * DAY        # nothing applied
     assert conn.execute("SELECT COUNT(*) FROM ticket_bonuses").fetchone()[0] == 0
     bonus(conn, cfg, ids, a["id"], share_pct=5, extra_days=1, starts_at=NOW + 6 * DAY)   # 80 exactly: fits
+
+
+def test_only_the_first_ticket_removes_a_credit(db):
+    conn, cfg, ids = seeded(db)
+    t = grant(conn, cfg, ids, length="day")
+    tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 10)
+    tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 20)
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,'cost_total','*','3','usd',0)", (ids["alice"],))
+    p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "EUR", NOW + 30)
+    assert p["first_ticket"] is False and p["credit"] is False        # a credit the admin set later is not a sign-up credit
+    grant(conn, cfg, ids, length="day", now=NOW + 30)
+    assert conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (ids["alice"],)).fetchone() is not None

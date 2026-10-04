@@ -327,20 +327,22 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
         available, reason = False, str(e)
     rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
                                           (user["id"],))]
+    first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "length": length, "days": LENGTHS[length], "share_pct": share, **p,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
             "amount": round_local(p["usd"], rate["rate"], steps[currency]),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available,
             "limit_rows": rows,
-            "credit": conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).fetchone() is not None,
-            "first_ticket": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None}
+            # Only the first ticket takes the sign-up credit; a credit the admin sets after that stays.
+            "credit": first and conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).fetchone() is not None,
+            "first_ticket": first}
 
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, now: float | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
-    capacity check, the insert, the credit removal and any ticked limit rows, each audited."""
+    capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited."""
     now = _now(now)
     if not cfg.tickets.enabled:
         raise TicketError("Tickets are not enabled: add a [tickets] section to the config.")
@@ -361,7 +363,7 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
              p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, (note or "").strip() or None))
         tid = cur.lastrowid
-        if conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
+        if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
             db.audit(conn, actor, "credit_removed", user["name"], {"ticket_id": tid})
         for kind, scope in remove_limits:
             if conn.execute(f"DELETE FROM limits WHERE user_id=? AND kind=? AND scope=? AND {REMOVABLE}", (user["id"], kind, scope)).rowcount:
