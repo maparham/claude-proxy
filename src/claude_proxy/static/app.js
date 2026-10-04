@@ -823,11 +823,11 @@ function bonusDialog(t, list) {
     .sort((a, b) => a.starts_at - b.starts_at);
   const moves = (days) => (queued.length && queued[0].starts_at < t.effective_end + days * 86400 ? queued.length : 0);
   const d = openDialog(`<h3>Bonus on ${esc(t.user_name)}'s ${esc(t.tier)} ticket</h3>
-    <p class="sub">Extra share applies between the two times (clamped to the ticket). Extra days extend the ticket at its own share and move this user's queued tickets forward as far as needed.</p>
+    <p class="sub">Extra share applies between the two times (clamped to the ticket; an empty Until means its end, extra days included, which an ended ticket needs). Extra days extend the ticket at its own share and move this user's queued tickets forward as far as needed.</p>
     <form id="f-bonus" class="form-grid">
       <label>Extra share, points<input type="number" name="share_pct" min="0" step="0.1" value="0"></label>
       <label>From<input type="datetime-local" name="starts_at" value="${toLocal(Math.max(t.starts_at, Date.now() / 1000))}"></label>
-      <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(t.effective_end)}"></label>
+      <label>Until<input type="datetime-local" name="ends_at" value="${t.effective_end > Date.now() / 1000 ? toLocal(t.effective_end) : ""}" placeholder="the ticket's end"></label>
       <label>Extra days<input type="number" name="extra_days" min="0" step="1" value="0"></label>
       <label>Note (shown to the user)<input type="text" name="note" maxlength="200" placeholder="e.g. Sorry for Tuesday's outage"></label>
       <div id="bonus-moves" class="hint" aria-live="polite"></div>

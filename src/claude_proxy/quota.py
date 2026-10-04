@@ -316,15 +316,20 @@ def clear_rate_cache() -> None:
 def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> float | None:
     """Utilization moves in whole-percent steps, so most pairs show no rise and the tokens in them belong to the next
     step. Tokens are carried across pairs until utilization rises above its high-water mark; each rise yields carried
-    tokens ÷ rise and starts the carry again. A reset drops the carry and restarts the high-water mark."""
+    tokens ÷ rise and starts the carry again. A reset drops the carry; when its time is known, the new window starts
+    from 0 with the tokens of the requests after it, otherwise it restarts at the newer snapshot with nothing."""
     ratios, carry, high = [], 0.0, None
     for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
         if high is None:
             high = prev["utilization_pct"]
         if _is_reset(prev, cur):
-            carry, high = 0.0, cur["utilization_pct"]
-            continue
-        carry += sum(r["w"] for r in batch)
+            reset_at = _reset_time(prev, cur)
+            if reset_at is None:
+                carry, high = 0.0, cur["utilization_pct"]
+                continue
+            carry, high = sum(r["w"] for r in batch if r["ended_at"] > reset_at), 0.0
+        else:
+            carry += sum(r["w"] for r in batch)
         rise = cur["utilization_pct"] - high
         if rise > 0:
             if carry > 0:

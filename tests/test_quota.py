@@ -327,6 +327,17 @@ def test_observed_rate_drops_the_carry_at_a_reset(db):
     assert quota.observed_rate(conn, Pricing(), "5h", now) == 2000
 
 
+def test_observed_rate_counts_the_rise_after_a_known_reset(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    _snap(conn, now - 900, 50, resets=now - 600)
+    _req(conn, a, now - 700, 9000)             # before the reset: belongs to the old window
+    _req(conn, a, now - 550, 3000)             # after it: the new window's first point
+    _snap(conn, now - 500, 1, resets=now + 18000)
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 3000
+
+
 def test_unpriced_models_weigh_their_raw_tokens_everywhere(db):
     conn = db[1]
     a, _ = create_user(conn, "a")
