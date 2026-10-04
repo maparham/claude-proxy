@@ -146,8 +146,11 @@ def create_app(gw: Gateway) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        # Unauthenticated, so only a yes/no about the subscription login; the detail stays on the dashboard.
-        return {"ok": True, "credential": gw.backend.describe().healthy}
+        # Unauthenticated, so only yes/no answers: whether the subscription login works, and whether Anthropic's
+        # usage figures are fresh (share limits and tickets depend on them). The detail stays on the dashboard.
+        newest = gw.conn.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0]
+        fresh = newest is not None and time.time() - newest <= gw.cfg.quota.stale_after_s
+        return {"ok": True, "credential": gw.backend.describe().healthy, "usage_fresh": fresh}
 
     @app.api_route("/{path:path}", methods=METHODS)
     async def proxy(request: Request, path: str):
