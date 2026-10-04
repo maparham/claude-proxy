@@ -190,10 +190,10 @@ async def test_pricing_falls_back_to_usd_without_a_rate(env):
     conn.execute("DELETE FROM fx_rates")
     async with asgi_client(create_dashboard_app(gw)) as c:
         p = (await c.get("/api/pricing")).json()
-        page = await c.get("/pricing")
+        page = await c.get("/")
     assert p["currency"] == "USD" and p["rate_set_at"] is None
     assert next(t for t in p["tiers"] if t["tier"] == "lite")["lengths"]["day"]["amount"] == 3.0
-    assert page.status_code == 200 and "pricing.js?v=" in page.text and "app.css?v=" in page.text
+    assert page.status_code == 200 and "home.js?v=" in page.text and "home.css?v=" in page.text and "app.css?v=" in page.text
     assert page.headers["content-security-policy"].startswith("default-src 'self'")
 
 
@@ -216,6 +216,35 @@ async def test_pricing_is_404_when_tickets_are_off(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/pricing")).status_code == 404
         assert (await c.get("/pricing")).status_code == 404
+        for path in ("/", "/?home"):
+            r = await c.get(path)
+            assert (r.status_code, r.headers["location"]) == (307, "/dashboard")
+
+
+async def test_pricing_moved_to_the_home_page(env):
+    gw, conn, cfg, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/pricing")
+    assert (r.status_code, r.headers["location"]) == (308, "/#pricing")
+
+
+async def test_home_is_for_visitors_and_signed_in_browsers_go_to_the_dashboard(env):
+    gw, conn, cfg, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        page = await c.get("/")
+        assert page.status_code == 200 and 'id="pricing"' in page.text and 'name="robots" content="noindex"' in page.text
+        assert 'href="/dashboard"' in page.text
+    async with admin_client(gw) as c:
+        r = await c.get("/")
+        assert (r.status_code, r.headers["location"]) == (307, "/dashboard")
+        assert (await c.get("/?home")).status_code == 200            # the admin previews the public page
+
+
+async def test_home_ignores_a_stale_session_cookie(env):
+    gw, conn, cfg, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/", cookies={"cp_session": "expired-or-junk"})
+    assert r.status_code == 200 and 'id="pricing"' in r.text
 
 
 async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_account(env):
@@ -246,54 +275,6 @@ async def test_pricing_api_says_the_servers_time(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         p = (await c.get("/api/pricing")).json()
     assert abs(p["now"] - time.time()) < 5          # the page counts down on the server's clock, not the visitor's
-
-
-PRICING_HARNESS = r"""
-const fs = require("fs"), vm = require("vm");
-const [src, serverNow, clientNow, endsAt, already] = [fs.readFileSync(process.argv[2], "utf8"), +process.argv[3], +process.argv[4], +process.argv[5], process.argv[6]];
-let reloads = 0, tickFn = null;
-const store = {}; if (already) store[already] = "1";
-const countdownEl = { dataset: { ends: String(endsAt) }, textContent: "" };
-const el = () => ({ innerHTML: "", textContent: "" });
-const ctx = {
-  console, Intl, Math, String, Object, Number, JSON,
-  Date: { now: () => clientNow * 1000 },
-  document: { getElementById: el, querySelectorAll: () => [countdownEl] },
-  location: { reload: () => { reloads++; } },
-  sessionStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
-  setInterval: (fn) => { tickFn = fn; },
-  fetch: () => Promise.resolve({ json: () => Promise.resolve({ now: serverNow, currency: "EUR", rate_set_at: null, how_to_buy: "",
-    tiers: [{ tier: "lite", label: "Lite", share_pct: 5, compare: "x", hours: {},
-      lengths: Object.fromEntries(["day", "week", "month"].map((k) => [k, { amount: 1, list_amount: 2, discount_ends_at: endsAt, sold_out: false }])) }] }) }),
-};
-vm.runInNewContext(src, ctx);
-setTimeout(() => { for (let i = 0; i < 3; i++) tickFn(); console.log(JSON.stringify({ reloads, text: countdownEl.textContent })); }, 10);
-"""
-
-
-def _run_pricing(tmp_path, server_now, client_now, ends_at, already=""):
-    import json
-    import shutil
-    import subprocess
-    from pathlib import Path
-    if not shutil.which("node"):
-        pytest.skip("no node here")
-    harness = tmp_path / "harness.js"
-    harness.write_text(PRICING_HARNESS)
-    js = Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "pricing.js"
-    out = subprocess.run(["node", str(harness), str(js), str(server_now), str(client_now), str(ends_at), already],
-                         capture_output=True, text=True, timeout=30, check=True).stdout
-    return json.loads(out)
-
-
-def test_pricing_page_counts_down_on_the_servers_clock(tmp_path):
-    # The visitor's clock is an hour ahead: the offer still has 30 minutes on the server's clock.
-    r = _run_pricing(tmp_path, server_now=1_000_000, client_now=1_003_600, ends_at=1_001_800)
-    assert r["reloads"] == 0 and r["text"] == "Offer ends in 00h 30m"
-    r = _run_pricing(tmp_path, server_now=1_002_000, client_now=1_002_000, ends_at=1_001_800)   # ended: one reload
-    assert r["reloads"] == 1
-    r = _run_pricing(tmp_path, server_now=1_002_000, client_now=1_002_000, ends_at=1_001_800, already="pricing-reloaded-1001800")
-    assert r["reloads"] == 0 and r["text"] == "Offer ended"   # already reloaded once for this end: never again
 
 
 async def test_money_inputs_are_rounded_to_cents_and_bounded(env):

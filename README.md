@@ -334,7 +334,7 @@ With a `[tickets]` section in the config (see `config.example.toml`), the gatewa
 subscription: a tier (its share of the account) for 1 day, 1 week or 1 month. Payment happens outside the app; the
 admin grants the ticket on the dashboard's **Tickets** tab, where the form shows the price, the start (now, or queued
 after the user's current ticket) and whether the period fits under `max_sold_pct`. **Pricing** holds the daily exchange
-rate, the USD prices and discounts; `/pricing` is the public price list with sold-out badges and a lower-bound
+rate, the USD prices and discounts; the home page (`/`, for visitors) shows the prices as tier cards with sold-out lengths and a lower-bound
 "at least N hours of steady use" hint computed once a day from busy hours.
 
 A ticket holder is limited to their share of Anthropic's 5-hour window and to one seventh of it per ticket day; with no

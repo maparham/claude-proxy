@@ -980,8 +980,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/pricing")
     async def pricing_page():
+        # The price list lives on the home page now; old links land on its pricing section.
         need_tickets()
-        return HTMLResponse(versioned("pricing.html", ("pricing.js", "app.css")), headers=PAGE_HEADERS)
+        return RedirectResponse("/#pricing", status_code=308)
 
     @app.get("/api/me/tickets")
     async def me_tickets(request: Request):
@@ -1016,8 +1017,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     # ---------- page ----------
 
     @app.get("/")
-    async def root():
-        return RedirectResponse("/dashboard")
+    async def root(request: Request, home: str | None = None):
+        # Visitors get the home page; a signed-in browser goes on to its dashboard unless it asks for the page (?home,
+        # the admin's preview). A stale cookie counts as signed out, or the visitor would land on a sign-in screen.
+        signed_in = db.find_session(conn, request.cookies.get(COOKIE, "")) is not None
+        if not cfg.tickets.enabled or (signed_in and home is None):
+            return RedirectResponse("/dashboard")
+        return HTMLResponse(versioned("home.html", ("home.js", "home.css", "app.css")), headers=PAGE_HEADERS)
 
     @app.get("/d/{code}")
     @app.get("/D/{code}")   # as the QR code spells it
