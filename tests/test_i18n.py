@@ -89,3 +89,30 @@ def test_css_has_no_physical_sides_outside_the_tooltip():
     lines = [l for l in css.splitlines() if re.search(r"\b(margin|padding|border)-(left|right)\b|text-align:\s*(left|right)|(^|[;{\s])(left|right):", l)
              and not l.lstrip().startswith("#tip")]
     assert lines == []
+
+
+FMT = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const app = fs.readFileSync(process.argv[2], "utf8");
+const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js"), "utf8");
+const grab = (re) => { const m = re.exec(app); if (!m) throw new Error("not found: " + re); return m[0]; };
+const block = grab(/^\/\/ i18n-formatters:start[\s\S]*?^\/\/ i18n-formatters:end$/m);
+const ctx = { console, Intl, Date, Math, Number, String, localStorage: { getItem: () => process.argv[3] } };
+vm.runInNewContext(i18n + "\n" + block + "\n;this.out = [fmtNum(24900000), fmtUsd(12.5), fmtDur(9000), num('۲۵'), num('٣٫5'), bdi('<a>')];", ctx);
+console.log(JSON.stringify(ctx.out));
+"""
+
+
+def _fmt(tmp_path, lang):
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    h = tmp_path / "fmt.js"
+    h.write_text(FMT)
+    return json.loads(subprocess.run(["node", str(h), str(STATIC / "app.js"), lang], capture_output=True, text=True, timeout=30, check=True).stdout)
+
+
+def test_formatters_follow_the_language(tmp_path):
+    assert _fmt(tmp_path, "en") == ["24.9M", "$12.50", "2h 30m", 25, 3.5, "<bdi>&lt;a&gt;</bdi>"]
+    fa = _fmt(tmp_path, "fa")
+    assert fa[1] == "$۱۲٫۵۰" and fa[2] == "۲ ساعت و ۳۰ دقیقه" and fa[3] == 25 and fa[4] == 3.5
+    assert re.search(r"[۰-۹]", fa[0])

@@ -11,7 +11,6 @@ const S = {
   discountsEnded: new Set(), // discount ends already re-rendered for, so a server still listing one can't loop renders
 };
 const $ = (sel, root = document) => root.querySelector(sel);
-const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const tzOffset = () => -new Date().getTimezoneOffset() * 60;
 // The page's own text in the chosen language (i18n.js), and the switch between Persian and English.
 applyStatic();
@@ -45,29 +44,40 @@ function topKeys(totals, max = 7) {
   return keys.length <= max + 1 ? keys : keys.slice(0, max);
 }
 
-const nf = new Intl.NumberFormat("en-US", { maximumFractionDigits: 1, notation: "compact" });   // 24.9M, never "24.9m" (minutes?)
-const nfFull = new Intl.NumberFormat();
+// i18n-formatters:start
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const bdi = (v) => `<bdi>${esc(v)}</bdi>`;   // a name, id or address inside translated text keeps its own direction
+// Persian keyboards type Persian digits (U+06F0..9; Arabic ones U+0660..9, and U+066B as the decimal point);
+// number fields read them as 0-9.
+const asciiDigits = (s) => s.replace(/[\u06F0-\u06F9]/g, (d) => d.charCodeAt(0) - 0x6F0).replace(/[\u0660-\u0669]/g, (d) => d.charCodeAt(0) - 0x660).replace(/\u066B/g, ".");
+const num = (v) => Number(asciiDigits(String(v ?? "").trim()));
+const nf = new Intl.NumberFormat(LOC, { maximumFractionDigits: 1, notation: "compact" });   // 24.9M, never "24.9m" (minutes?)
+const nfFull = new Intl.NumberFormat(LOC);
+const nfFix = (d) => new Intl.NumberFormat(LOC, { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: false });
+const nf0 = nfFix(0), nf2 = nfFix(2);
 function fmtNum(v) { return v == null ? "—" : nf.format(v); }
-function fmtUsd(v) { return v == null ? "—" : v === 0 ? "$0" : v < 0.01 ? "<$0.01" : "$" + (v >= 100 ? v.toFixed(0) : v.toFixed(2)); }
-const fmtPrice = (v) => `$${Number.isInteger(v) ? v : v.toFixed(2)}`;   // a USD price: whole dollars bare, otherwise cents
-const fmtShare = (v) => `${+(+v).toFixed(2)}%`;   // a share: 6.1000000000000005 reads 6.1%
-function fmtPct(v, d = 0) { return v == null ? "—" : `${v.toFixed(d)}%`; }
+function fmtUsd(v) { return v == null ? "—" : v === 0 ? `$${nf0.format(0)}` : v < 0.01 ? `<$${nf2.format(0.01)}` : "$" + (v >= 100 ? nf0 : nf2).format(v); }
+const fmtPrice = (v) => `$${Number.isInteger(v) ? nf0.format(v) : nf2.format(v)}`;   // a USD price: whole dollars bare, otherwise cents
+const fmtShare = (v) => `${new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 }).format(+v)}%`;   // 6.1000000000000005 reads 6.1%
+function fmtPct(v, d = 0) { return v == null ? "—" : `${nfFix(d).format(v)}%`; }
 function fmtDur(s) {
   if (s == null) return "—";
   s = Math.max(0, Math.round(s));
-  if (s < 60) return `${s}s`;
+  const u = (n, unit) => t(`dur.${unit}`, { n: nf0.format(n) });
+  if (s < 60) return u(s, "s");
   // Two largest units, e.g. "2h 30m"; the second is dropped when it is zero.
   const [big, bigU, small, smallU] = s < 3600 ? [Math.floor(s / 60), "m", s % 60, "s"]
     : s < 86400 ? [Math.floor(s / 3600), "h", Math.floor(s % 3600 / 60), "m"]
     : [Math.floor(s / 86400), "d", Math.floor(s % 86400 / 3600), "h"];
-  return small ? `${big}${bigU} ${small}${smallU}` : `${big}${bigU}`;
+  return small ? t("dur.join", { a: u(big, bigU), b: u(small, smallU) }) : u(big, bigU);
 }
-function fmtAgo(t) { return t ? `${fmtDur(Date.now() / 1000 - t)} ago` : "never"; }
-function fmtTime(t) { return t ? new Date(t * 1000).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
-const fmtDate = (t) => (t ? new Date(t * 1000).toLocaleString(undefined, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+function fmtAgo(t_) { return t_ ? t("app.ago", { d: fmtDur(Date.now() / 1000 - t_) }) : t("app.never"); }
+function fmtTime(t_) { return t_ ? new Date(t_ * 1000).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
+const fmtDate = (t_) => (t_ ? new Date(t_ * 1000).toLocaleString(LOC, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
+const money = (amount, currency) => { try { return new Intl.NumberFormat(LOC, { style: "currency", currency }).format(amount); } catch { return `${nf2.format(amount)} ${currency}`; } };
+// i18n-formatters:end
 const toLocal = (t) => { const d = new Date(t * 1000); d.setSeconds(0, 0); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };   // for <input type=datetime-local>
 const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
-const money = (amount, currency) => { try { return new Intl.NumberFormat(undefined, { style: "currency", currency }).format(amount); } catch { return `${amount.toFixed(2)} ${currency}`; } };
 const METRICS = { weighted: "Weighted tokens", raw: "Raw tokens", cost_usd: "Est. cost (USD)", requests: "Requests" };
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
@@ -924,22 +934,22 @@ function bonusDialog(t, list) {
   const d = openDialog(`<h3>Bonus on ${esc(t.user_name)}'s ${esc(t.tier)} ticket</h3>
     <p class="sub">Extra share applies between the two times (clamped to the ticket; an empty Until means its end, extra days included, which an ended ticket needs). Extra days extend the ticket at its own share and move this user's queued tickets forward as far as needed.</p>
     <form id="f-bonus" class="form-grid">
-      <label>Extra share, points<input type="number" name="share_pct" min="0" step="0.1" value="0"></label>
+      <label>Extra share, points<input type="text" inputmode="decimal" dir="ltr" name="share_pct" min="0" step="0.1" value="0"></label>
       <label>From<input type="datetime-local" name="starts_at" value="${toLocal(Math.max(t.starts_at, Date.now() / 1000))}"></label>
       <label>Until<input type="datetime-local" name="ends_at" value="${t.effective_end > Date.now() / 1000 ? toLocal(t.effective_end) : ""}" placeholder="the ticket's end"></label>
-      <label>Extra days<input type="number" name="extra_days" min="0" step="1" value="0"></label>
+      <label>Extra days<input type="text" inputmode="decimal" dir="ltr" name="extra_days" min="0" step="1" value="0"></label>
       <label>Note (shown to the user)<input type="text" name="note" maxlength="200" placeholder="e.g. Sorry for Tuesday's outage"></label>
       <div id="bonus-moves" class="hint" aria-live="polite"></div>
       <button class="btn primary" type="submit">Add bonus</button>
     </form><div class="error" id="bonus-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
   const f = $("#f-bonus", d);
-  const movesText = () => { const n = moves(+f.extra_days.value || 0); return n ? `These extra days move ${n} queued ticket${n === 1 ? "" : "s"} of ${t.user_name} forward.` : ""; };
+  const movesText = () => { const n = moves(num(f.extra_days.value) || 0); return n ? `These extra days move ${n} queued ticket${n === 1 ? "" : "s"} of ${t.user_name} forward.` : ""; };
   f.extra_days.oninput = () => { $("#bonus-moves", d).textContent = movesText(); };
   f.onsubmit = async (e) => {
     e.preventDefault();
     if (movesText() && !confirmInline(`${movesText()} Add the bonus?`)) return;
     try {
-      const r = await api(`/api/admin/tickets/${t.id}/bonus`, { method: "POST", body: { share_pct: +f.share_pct.value, extra_days: +f.extra_days.value,
+      const r = await api(`/api/admin/tickets/${t.id}/bonus`, { method: "POST", body: { share_pct: num(f.share_pct.value), extra_days: num(f.extra_days.value),
         starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value), note: f.note.value } });
       d.close();
       render();
@@ -1054,19 +1064,19 @@ async function renderPricing(main) {
       <div class="card"><h3>Exchange rates</h3><p class="sub">Local units per 1 USD. A rate older than 36 hours is marked stale and the grant form asks you to confirm it.</p>
         ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">rounds to ${r.round_to}</span>${r.stale ? ` <span class="badge">stale</span>` : ""}
           <div class="muted" style="font-size:12px">${r.rate == null ? "no rate yet: unusable until set" : `${r.rate} · set ${fmtDate(r.set_at)} by ${esc(r.set_by || "?")}`}</div></span>
-          <span><input type="number" name="rate" step="any" min="0" placeholder="today's rate" required style="width:110px"> <button class="btn small" type="submit">Save</button></span></form>`).join("") || `<p class="muted">No currencies besides USD in the config.</p>`}
+          <span><input type="text" inputmode="decimal" dir="ltr" name="rate" step="any" min="0" placeholder="today's rate" required style="width:110px"> <button class="btn small" type="submit">Save</button></span></form>`).join("") || `<p class="muted">No currencies besides USD in the config.</p>`}
       </div>
       <div class="card"><h3>Regular prices, USD</h3><p class="sub">Each change is logged. Existing tickets keep what they were sold at.</p>
         <table class="data"><thead><tr><th>Tier</th>${Object.keys(p.lengths).map((l) => `<th class="r">${esc(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, t]) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
-          `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="number" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
+          `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
     </div>
     <div class="card" style="margin-top:16px"><h3>Discounts</h3><p class="sub">A lower USD price for one tier and length over a period. It must be below the regular price; while active it replaces the price everywhere and the home page shows a countdown.</p>
       <form id="f-disc" class="form-grid">
         <label>Tier<select name="tier">${Object.entries(p.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)}</option>`).join("")}</select></label>
         <label>Length<select name="length">${Object.keys(p.lengths).map((l) => `<option>${esc(l)}</option>`).join("")}</select></label>
-        <label>Price, USD<input type="number" name="usd" step="0.01" min="0.01" required></label>
+        <label>Price, USD<input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" required></label>
         <label>From<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
         <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
         <button class="btn primary" type="submit">Create discount</button></form>
@@ -1077,9 +1087,9 @@ async function renderPricing(main) {
       </tbody></table></div>
   </section>`;
   const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
-  main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: +f.rate.value }); }));
-  main.querySelectorAll(".price-form").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: +f.usd.value }); }));
-  $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: +f.usd.value, starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
+  main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }); }));
+  main.querySelectorAll(".price-form").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: num(f.usd.value) }); }));
+  $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
 }
 
@@ -1163,11 +1173,11 @@ function deleteDialog(u) {
 }
 function upgradeDialog(u) {
   const d = openDialog(`<h3>Upgrade ${esc(u.name)}</h3><p>Replaces their one-time credit with a daily allowance.</p>
-    <form id="f-up" class="form-grid"><label>Dollars a day<input type="number" name="daily" min="1" step="any" value="100" required></label>
+    <form id="f-up" class="form-grid"><label>Dollars a day<input type="text" inputmode="decimal" dir="ltr" name="daily" min="1" step="any" value="100" required></label>
     <button class="btn primary" type="submit">Upgrade</button></form><div class="error" id="up-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
   $("#f-up", d).onsubmit = async (e) => {
     e.preventDefault();
-    try { await api(`/api/admin/users/${u.id}/upgrade`, { method: "POST", body: { cost_daily: +new FormData(e.target).get("daily") } }); d.close(); render(); }
+    try { await api(`/api/admin/users/${u.id}/upgrade`, { method: "POST", body: { cost_daily: num(new FormData(e.target).get("daily")) } }); d.close(); render(); }
     catch (err) { $("#up-err").textContent = err.message; }
   };
 }
@@ -1456,7 +1466,7 @@ function limitsDialog(u) {
   f.onsubmit = async (e) => {
     e.preventDefault();
     try {
-      await api("/api/admin/limits", { method: "POST", body: { user: u.id, kind: f.kind.value, value: f.value.value, unit: f.unit.value, scope: f.scope.value || "*" } });
+      await api("/api/admin/limits", { method: "POST", body: { user: u.id, kind: f.kind.value, value: asciiDigits(f.value.value), unit: f.unit.value, scope: f.scope.value || "*" } });
       d.close(); render();
     } catch (err) { $("#lim-err").textContent = err.message; }
   };

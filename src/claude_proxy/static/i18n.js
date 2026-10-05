@@ -40,6 +40,13 @@ const I18N = {
     "login.submit": "Sign in",
     "login.key_label": "Gateway key",
     "login.submit_key": "Sign in with key",
+    "dur.s": "{n}s",
+    "dur.m": "{n}m",
+    "dur.h": "{n}h",
+    "dur.d": "{n}d",
+    "dur.join": "{a} {b}",
+    "app.ago": "{d} ago",
+    "app.never": "never",
     // en:end
   },
   fa: {
@@ -79,6 +86,13 @@ const I18N = {
     "login.submit": "ورود",
     "login.key_label": "کلید درگاه",
     "login.submit_key": "ورود با کلید",
+    "dur.s": "{n} ثانیه",
+    "dur.m": "{n} دقیقه",
+    "dur.h": "{n} ساعت",
+    "dur.d": "{n} روز",
+    "dur.join": "{a} و {b}",
+    "app.ago": "{d} پیش",
+    "app.never": "هرگز",
     // fa:end
   },
 };
