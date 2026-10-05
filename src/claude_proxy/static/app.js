@@ -47,6 +47,7 @@ function topKeys(totals, max = 7) {
 // i18n-formatters:start
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const bdi = (v) => `<bdi>${esc(v)}</bdi>`;   // a name, id or address inside translated text keeps its own direction
+const iso = (v) => `\u2068${v}\u2069`;   // the same for plain text (textContent, confirm()): first-strong isolate
 // Persian keyboards type Persian digits (U+06F0..9; Arabic ones U+0660..9, and U+066B as the decimal point);
 // number fields read them as 0-9.
 const asciiDigits = (s) => s.replace(/[\u06F0-\u06F9]/g, (d) => d.charCodeAt(0) - 0x6F0).replace(/[\u0660-\u0669]/g, (d) => d.charCodeAt(0) - 0x660).replace(/\u066B/g, ".");
@@ -632,13 +633,13 @@ async function renderUsage(main) {
 async function renderUsers(main) {
   const [{ users }, lim] = await Promise.all([api("/api/users"), api("/api/limits")]);
   S.kinds = lim.kinds;
-  main.innerHTML = `<section class="view"><h2>Users & limits</h2>
-    <p class="lede">Each person has their own gateway key. Limits are checked before every request against that person's recorded usage; share limits compare an ${tipT("estimated share", "share")} of the account's quota.</p>
-    <div class="controls"><button class="btn primary" id="add-user">Add user</button></div>
+  main.innerHTML = `<section class="view"><h2>${t("tab.users")}</h2>
+    <p class="lede">${t("users.lede", { share: tipT(t("users.est_share"), "share") })}</p>
+    <div class="controls"><button class="btn primary" id="add-user">${t("users.add")}</button></div>
     <div class="card table-wrap"><table class="data"><thead><tr>
-      <th>User${tipI("key_prefix", "About the key prefix")}</th><th class="r">24 h</th><th class="r">7 d</th><th class="r">30 d</th><th class="r">Est. share 5 h / 7 d, pts${tipI("share_col")}</th><th>Limits${tipI("limits_col")}</th><th>Last request</th><th></th></tr></thead>
+      <th>${t("app.user")}${tipI("key_prefix", t("users.about_prefix"))}</th><th class="r">${t("range.1d")}</th><th class="r">${t("range.7d")}</th><th class="r">${t("range.30d")}</th><th class="r">${t("users.share_col")}${tipI("share_col")}</th><th>${t("users.limits")}${tipI("limits_col")}</th><th>${t("users.last_request")}</th><th></th></tr></thead>
       <tbody>${users.map(userRow).join("")}</tbody></table></div>
-    <p class="muted" style="font-size:12px;margin-top:8px">Usage columns are weighted tokens, with estimated cost underneath. Concurrent requests from one user can each pass a check before either is recorded, so a limit can be overshot by about one request per open session.</p>
+    <p class="muted" style="font-size:12px;margin-top:8px">${t("users.foot")}</p>
   </section>`;
   $("#add-user").onclick = addUserDialog;
   wireUserActions(main, users);
@@ -652,12 +653,12 @@ function wireUserActions(root, users) {
 }
 
 function userRow(u) {
-  const state = u.revoked ? `<span class="badge">revoked</span>` : !u.enabled ? `<span class="badge">disabled</span>` : "";
+  const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
   const cell = (k) => `<td class="r"><div>${fmtNum(u.usage[k].weighted)}</div><div class="muted">${fmtUsd(u.usage[k].cost_usd)}</div></td>`;
-  const share = (b) => (u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`);
+  const share = (b) => (u.share[b] == null ? "—" : nfFix(1).format(u.share[b]));
   return `<tr class="clickable" data-user="${u.id}">
-    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-right:6px"></span><a class="user-link" href="#user/${u.id}"><b>${esc(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">tickets paused</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? "ticket" : "ticket queued"}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">ticket ended</span>` : ""}
-      <div class="muted" style="font-size:12px">${esc(u.prefix)}…${u.routes_prefix ? ` · OpenCode ${esc(u.routes_prefix)}…` : ""}</div></td>
+    <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}
+      <div class="muted" style="font-size:12px"><bdi>${esc(u.prefix)}…</bdi>${u.routes_prefix ? ` · OpenCode <bdi>${esc(u.routes_prefix)}…</bdi>` : ""}</div></td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
@@ -665,20 +666,20 @@ function userRow(u) {
     <td>${userActions(u)}</td></tr>`;
 }
 function userActions(u) {
-  const opencode = `<button class="btn small" data-act="routes_key" data-id="${u.id}" data-tip="act_routes_key">${u.routes_prefix ? "New OpenCode key" : "OpenCode key"}</button>` +
-    (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">Remove OpenCode key</button>` : "");
+  const opencode = `<button class="btn small" data-act="routes_key" data-id="${u.id}" data-tip="act_routes_key">${u.routes_prefix ? t("users.new_opencode") : t("users.opencode")}</button>` +
+    (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">${t("users.remove_opencode")}</button>` : "");
   const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked
-    ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">Upgrade</button>` : "";
+    ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">${t("users.upgrade")}</button>` : "";
   const paused = u.ticket && u.ticket.paused;
   const ungate = u.ticket && u.ticket.gated && (!u.ticket.live || paused) && !u.revoked
-    ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="${paused ? "act_ungate_paused" : "act_ungate"}">Ungate</button>` : "";
-  return `<div class="row-actions">${upgrade}${ungate}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">Delete</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>${opencode}` : `
-      <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">Limits</button>
-      <button class="btn small" data-act="rename" data-id="${u.id}" data-tip="act_rename">Rename</button>
-      <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">Rotate key</button>
+    ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="${paused ? "act_ungate_paused" : "act_ungate"}">${t("users.ungate")}</button>` : "";
+  return `<div class="row-actions">${upgrade}${ungate}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">${t("users.delete")}</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">${t("users.limits")}</button>${opencode}` : `
+      <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">${t("users.limits")}</button>
+      <button class="btn small" data-act="rename" data-id="${u.id}" data-tip="act_rename">${t("users.rename")}</button>
+      <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">${t("users.rotate")}</button>
       ${opencode}
-      <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? "Disable" : "Enable"}</button>
-      <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">Revoke</button>`}</div>`;
+      <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? t("users.disable") : t("users.enable")}</button>
+      <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">${t("users.revoke")}</button>`}</div>`;
 }
 
 // ---------- paid tickets (design 2026-10-03) ----------
@@ -963,19 +964,20 @@ function openDialog(html) {
   d.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { d.close(); render(); }));
   return d;
 }
-function keyDialog(title, key, how = "The user sets it as <code>ANTHROPIC_AUTH_TOKEN</code>.") {
-  openDialog(`<h3>${esc(title)}</h3><p>Copy this key now; it is not shown again. ${how}</p>
-    <code class="key" id="new-key">${esc(key)}</code><p><button class="btn" id="copy-key">Copy</button> <button class="btn primary" data-close>Done</button></p>`);
-  $("#copy-key").onclick = async () => { try { await navigator.clipboard.writeText(key); $("#copy-key").textContent = "Copied"; } catch { /* clipboard blocked */ } };
+function keyDialog(title, key, how = t("key.how_default")) {
+  openDialog(`<h3>${title}</h3><p>${t("key.copy_now")} ${how}</p>
+    <code class="key" id="new-key">${esc(key)}</code><p><button class="btn" id="copy-key">${t("key.copy")}</button> <button class="btn primary" data-close>${t("app.done")}</button></p>`);
+  $("#copy-key").onclick = async () => { try { await navigator.clipboard.writeText(key); $("#copy-key").textContent = t("key.copied"); } catch { /* clipboard blocked */ } };
 }
-function showWho() { $("#who").textContent = `${S.user.name} · ${S.user.role}`; }
+function showWho() { $("#who").textContent = `${iso(S.user.name)} · ${t(`role.${S.user.role}`)}`; }
 // Without `u`: the signed-in user renames themselves; with it, an admin renames that user.
 function nameDialog(u) {
   const self = !u, name = self ? S.user.name : u.name;
-  const d = openDialog(`<h3>${self ? "Your name" : `Rename ${esc(name)}`}</h3><p>Shown on this dashboard and in ${self ? "gclaude's" : "their"} status line.${(self ? isAdmin() : u.role === "admin") ? ` ${self ? "You also sign" : "They also sign"} in with it as the admin username.` : ""}</p>
-    <form id="f-name" class="form-grid"><label>Name<input type="text" name="name" required maxlength="64" value="${esc(name)}"></label>
-    <button class="btn primary" type="submit">Save</button></form><div class="error" id="name-err"></div>
-    <p><button class="btn" data-close>Cancel</button></p>`);
+  const admin = self ? isAdmin() : u.role === "admin";
+  const d = openDialog(`<h3>${self ? t("name.your") : t("name.rename", { name: bdi(name) })}</h3><p>${self ? t("name.shown_self") : t("name.shown_other")}${admin ? ` ${self ? t("name.admin_self") : t("name.admin_other")}` : ""}</p>
+    <form id="f-name" class="form-grid"><label>${t("name.name")}<input type="text" name="name" required maxlength="64" value="${esc(name)}"></label>
+    <button class="btn primary" type="submit">${t("app.save")}</button></form><div class="error" id="name-err"></div>
+    <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   $("#f-name input", d).select();
   $("#f-name", d).onsubmit = async (e) => {
     e.preventDefault();
@@ -988,15 +990,15 @@ function nameDialog(u) {
   };
 }
 function addUserDialog() {
-  const d = openDialog(`<h3>Add user</h3><form id="f-add" class="form-grid">
-    <label>Name<input type="text" name="name" required maxlength="64"></label>
-    <label><span>Role${tipI("role")}</span><select name="role"><option value="user">user</option><option value="admin">admin</option></select></label>
-    <button class="btn primary" type="submit">Create</button></form><div class="error" id="add-err"></div>
-    <p><button class="btn" data-close>Cancel</button></p>`);
+  const d = openDialog(`<h3>${t("users.add")}</h3><form id="f-add" class="form-grid">
+    <label>${t("name.name")}<input type="text" name="name" required maxlength="64"></label>
+    <label><span>${t("users.role")}${tipI("role")}</span><select name="role"><option value="user">${t("role.user")}</option><option value="admin">${t("role.admin")}</option></select></label>
+    <button class="btn primary" type="submit">${t("users.create")}</button></form><div class="error" id="add-err"></div>
+    <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   $("#f-add", d).onsubmit = async (e) => {
     e.preventDefault();
     const f = new FormData(e.target);
-    try { const r = await api("/api/admin/users", { method: "POST", body: { name: f.get("name"), role: f.get("role") } }); keyDialog(`Key for ${r.name}`, r.key); }
+    try { const r = await api("/api/admin/users", { method: "POST", body: { name: f.get("name"), role: f.get("role") } }); keyDialog(t("key.for", { name: bdi(r.name) }), r.key); }
     catch (err) { $("#add-err").textContent = err.message; }
   };
 }
@@ -1004,11 +1006,11 @@ async function userAction(act, id, u) {
   if (act === "limits") return limitsDialog(u);
   if (act === "upgrade") return upgradeDialog(u);
   if (act === "rename") return nameDialog(u);
-  if (act === "rotate" && !confirmInline(`Rotate ${u.name}'s key? Their current key and every computer authorized under it stop working now; they need the new key to continue.`)) return;
-  if (act === "revoke" && !confirmInline(`Revoke ${u.name}? Their key stops working immediately and cannot be re-enabled.`)) return;
+  if (act === "rotate" && !confirmInline(t("users.confirm_rotate", { name: iso(u.name) }))) return;
+  if (act === "revoke" && !confirmInline(t("users.confirm_revoke", { name: iso(u.name) }))) return;
   if (act === "delete") return deleteDialog(u);
   if (act === "ungate") {
-    if (u.ticket && u.ticket.paused && u.ticket.live && !confirmInline(`Tickets are switched off. Ungating ${u.name} cancels their remaining tickets and hands them back to hand-set limits. Continue?`)) return;
+    if (u.ticket && u.ticket.paused && u.ticket.live && !confirmInline(t("users.confirm_ungate", { name: iso(u.name) }))) return;
     try {
       await api(`/api/admin/users/${id}/ungate`, { method: "POST", body: {} });
       const { users } = await api("/api/users");
@@ -1017,17 +1019,16 @@ async function userAction(act, id, u) {
   }
   try {
     const r = await api(`/api/admin/users/${id}/${act}`, { method: "POST", body: {} });
-    if (act === "rotate") return keyDialog(`New key for ${u.name}`, r.key);
-    if (act === "routes_key") return keyDialog(`OpenCode key for ${u.name}`, r.key,
-      "It works only for third-party models. The user runs <code>claude-gateway on --opencode --url … --routes-key …</code> with it.");
+    if (act === "rotate") return keyDialog(t("key.new_for", { name: bdi(u.name) }), r.key);
+    if (act === "routes_key") return keyDialog(t("key.opencode_for", { name: bdi(u.name) }), r.key, t("key.how_opencode"));
     render();
   } catch (e) { alertInline(e.message); }
 }
 function deleteDialog(u) {
-  const d = openDialog(`<h3>Delete ${esc(u.name)}</h3>
-    <p>Their recorded usage is deleted too and disappears from account totals and charts. Tickets they bought stay as sales records. This cannot be undone.</p>
-    <form id="f-del" class="form-grid"><label>Type <b>${esc(u.name)}</b> to confirm<input type="text" name="confirm" autocomplete="off" required></label>
-    <button class="btn danger" type="submit">Delete</button></form><div class="error" id="del-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const d = openDialog(`<h3>${t("users.delete_title", { name: bdi(u.name) })}</h3>
+    <p>${t("users.delete_body")}</p>
+    <form id="f-del" class="form-grid"><label>${t("users.delete_type", { name: `<b>${bdi(u.name)}</b>` })}<input type="text" name="confirm" autocomplete="off" required></label>
+    <button class="btn danger" type="submit">${t("users.delete")}</button></form><div class="error" id="del-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   $("#f-del", d).onsubmit = async (e) => {
     e.preventDefault();
     try { await api(`/api/admin/users/${u.id}/delete`, { method: "POST", body: { confirm: new FormData(e.target).get("confirm") } }); d.close(); render(); }
@@ -1035,9 +1036,9 @@ function deleteDialog(u) {
   };
 }
 function upgradeDialog(u) {
-  const d = openDialog(`<h3>Upgrade ${esc(u.name)}</h3><p>Replaces their one-time credit with a daily allowance.</p>
-    <form id="f-up" class="form-grid"><label>Dollars a day<input type="text" inputmode="decimal" dir="ltr" name="daily" min="1" step="any" value="100" required></label>
-    <button class="btn primary" type="submit">Upgrade</button></form><div class="error" id="up-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const d = openDialog(`<h3>${t("users.upgrade_title", { name: bdi(u.name) })}</h3><p>${t("users.upgrade_body")}</p>
+    <form id="f-up" class="form-grid"><label>${t("users.dollars_day")}<input type="text" inputmode="decimal" dir="ltr" name="daily" min="1" step="any" value="100" required></label>
+    <button class="btn primary" type="submit">${t("users.upgrade")}</button></form><div class="error" id="up-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   $("#f-up", d).onsubmit = async (e) => {
     e.preventDefault();
     try { await api(`/api/admin/users/${u.id}/upgrade`, { method: "POST", body: { cost_daily: num(new FormData(e.target).get("daily")) } }); d.close(); render(); }
@@ -1206,8 +1207,8 @@ $("#other-ways").onclick = (e) => {
 
 // Native confirm/alert block the page; use the dialog instead for anything but the irreversible revoke.
 function confirmInline(msg) { return window.confirm(msg); }
-function alertInline(msg) { openDialog(`<h3>Could not do that</h3><p>${esc(msg)}</p><button class="btn" data-close>OK</button>`); }
-function infoInline(title, msg) { openDialog(`<h3>${esc(title)}</h3><p>${esc(msg)}</p><button class="btn" data-close>OK</button>`); }
+function alertInline(msg) { openDialog(`<h3>${t("app.could_not")}</h3><p>${esc(msg)}</p><button class="btn" data-close>${t("app.ok")}</button>`); }
+function infoInline(title, msg) { openDialog(`<h3>${esc(title)}</h3><p>${esc(msg)}</p><button class="btn" data-close>${t("app.ok")}</button>`); }
 
 // A <select> whose options each carry a tip. A native option popup can't show tips, so this draws its own
 // listbox; the <select> stays in the form, hidden, and remains the source of truth (changes fire "change" on it).
@@ -1294,33 +1295,33 @@ function tipSelect(sel, tipFor) {
 
 function limitsDialog(u) {
   const kinds = S.kinds || {};
-  const d = openDialog(`<h3>Limits for ${esc(u.name)}</h3>
-    <div id="lim-list">${u.limits.length ? u.limits.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)} = <b>${esc(l.value)}</b> <span class="muted">${esc(l.unit)}</span></span>
-      <button class="btn small danger" data-del="${esc(l.kind)}" data-scope="${esc(l.scope)}">Remove</button></div>`).join("") : `<p class="muted">No limits yet.</p>`}</div>
-    <h3 style="margin-top:16px">Set a limit</h3>
+  const d = openDialog(`<h3>${t("lim.title", { name: bdi(u.name) })}</h3>
+    <div id="lim-list">${u.limits.length ? u.limits.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)} = <b><bdi>${esc(l.value)}</bdi></b> <span class="muted">${esc(t(`unitname.${l.unit}`))}</span></span>
+      <button class="btn small danger" data-del="${esc(l.kind)}" data-scope="${esc(l.scope)}">${t("lim.remove")}</button></div>`).join("") : `<p class="muted">${t("lim.none_yet")}</p>`}</div>
+    <h3 style="margin-top:16px">${t("lim.set")}</h3>
     <form id="f-lim" class="form-grid">
-      <label><span>Kind${tipI("kind", "About the selected kind")}</span><select name="kind">${Object.keys(kinds).map((k) => `<option value="${esc(k)}">${esc(k.replace(/_/g, " "))}</option>`).join("")}</select></label>
-      <label><span>Value${tipI("value")}</span><input type="text" name="value" required placeholder="e.g. 500000"></label>
-      <label><span>Unit${tipI("unit", "About the selected unit")}</span><select name="unit"></select></label>
-      <label><span>Models (glob)${tipI("scope")}</span><input type="text" name="scope" value="*"></label>
-      <button class="btn primary" type="submit">Save</button>
+      <label><span>${t("lim.kind")}${tipI("kind", t("lim.about_kind"))}</span><select name="kind">${Object.keys(kinds).map((k) => `<option value="${esc(k)}">${esc(t(`kname.${k}`))}</option>`).join("")}</select></label>
+      <label><span>${t("lim.value")}${tipI("value")}</span><input type="text" name="value" dir="ltr" required placeholder="${esc(t("lim.eg", { v: "500000" }))}"></label>
+      <label><span>${t("lim.unit")}${tipI("unit", t("lim.about_unit"))}</span><select name="unit"></select></label>
+      <label><span>${t("lim.models_glob")}${tipI("scope")}</span><input type="text" name="scope" dir="ltr" value="*"></label>
+      <button class="btn primary" type="submit">${t("app.save")}</button>
     </form>
     <div class="hint" id="lim-hint" aria-live="polite"></div>
-    <div class="error" id="lim-err"></div><p><button class="btn" data-close>Close</button></p>`);
+    <div class="error" id="lim-err"></div><p><button class="btn" data-close>${t("app.close")}</button></p>`);
   const f = $("#f-lim", d);
-  tipSelect(f.kind, (k) => `<span class="th">${esc(k.replace(/_/g, " "))}</span><p>${KIND_SHORT[k] || KIND_TIPS[k] || ""}</p>`);
+  tipSelect(f.kind, (k) => `<span class="th">${esc(t(`kname.${k}`))}</span><p>${KIND_SHORT[k] || KIND_TIPS[k] || ""}</p>`);
   // The Kind and Unit dots and the hint line describe whatever is selected; each Kind item also has its own short tip.
   const syncHint = () => {
     const k = f.kind.value, unit = f.unit.value;
     d.querySelector('[data-tip="kind"]').dataset.tipHtml = TIPS[`kind:${k}`] || `<b>${esc(k)}</b>`;
-    d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(unit)}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
+    d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(t(`unitname.${unit}`))}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
     f.value.placeholder = LIMIT_PLACEHOLDER[unit] || "";
-    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(k.replace(/_/g, " "))}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
-      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(unit)}</b>: ${UNIT_TIPS[unit]}${f.unit.disabled ? " The only unit for this kind." : ""}` : ""));
+    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(t(`kname.${k}`))}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
+      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(t(`unitname.${unit}`))}</b>: ${UNIT_TIPS[unit]}${f.unit.disabled ? t("lim.only_unit") : ""}` : ""));
   };
   const syncUnits = () => {
     const k = f.kind.value;
-    f.unit.innerHTML = (kinds[k] || []).map((x) => `<option>${esc(x)}</option>`).join("");
+    f.unit.innerHTML = (kinds[k] || []).map((x) => `<option value="${esc(x)}">${esc(t(`unitname.${x}`))}</option>`).join("");
     f.unit.disabled = f.unit.options.length < 2;   // requests_* only take count, share_* only pct: nothing to pick
     f.scope.disabled = k === "allowed_models";
     syncHint();
@@ -1348,60 +1349,61 @@ async function renderUser(main) {
   S.kinds = lim.kinds;
   const u = users.find((x) => x.id === id);
   if (!u) {
-    main.innerHTML = `<section class="view"><p><a href="#users">← All users</a></p><p class="muted">There is no user with this id; they may have been deleted.</p></section>`;
+    main.innerHTML = `<section class="view"><p><a href="#users">${t("user.back")}</a></p><p class="muted">${t("user.gone")}</p></section>`;
     return;
   }
   const [ov, series, models, heat, sess, errs, reqs, keys] = await Promise.all([
     api(`/api/overview?user_id=${id}`), api(`/api/series?range=${range}&granularity=${gran}&split=model&${q}`),
     api(`/api/models?range=${range}&${q}`), api(`/api/heatmap?range=${range}&${q}`), api(`/api/sessions?range=${range}&${q}`),
     api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`), api(`/api/keys?user_id=${id}`)]);
-  const t = ov.totals[period];
-  const state = u.revoked ? `<span class="badge">revoked</span>` : !u.enabled ? `<span class="badge">disabled</span>` : "";
-  const share = (b, label) => `<div class="card tile"><div class="label">Est. share, ${label}${tipI("share")}</div>
-    <div class="value">${u.share[b] == null ? "—" : `${u.share[b].toFixed(1)}`}</div><div class="foot">${u.share[b] == null ? "no fresh report from Anthropic" : `points of the account's ${label} bucket`}</div></div>`;
-  const span = { "24h": "last 24 hours", "7d": "last 7 days", "30d": "last 30 days" }[period];
+  const tot = ov.totals[period];
+  const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
+  const share = (b) => `<div class="card tile"><div class="label">${t("user.est_share", { bucket: t(`quota.bucket_${b}`) })}${tipI("share")}</div>
+    <div class="value">${u.share[b] == null ? "—" : nfFix(1).format(u.share[b])}</div><div class="foot">${u.share[b] == null ? t("user.no_report") : t("user.points_of", { bucket: t(`quota.bucket_${b}`) })}</div></div>`;
+  const span = t(`user.span_${period}`);
+  const none = `<p class="muted">${t("models.none")}</p>`;
   main.innerHTML = `
     <section class="view">
-      <p class="crumb"><a href="#users">← All users</a></p>
-      <h2><span class="dot" style="background:${colorFor("user", u.name)};margin-right:8px"></span>${esc(u.name)} ${u.role === "admin" ? `<span class="badge">admin</span>` : ""} ${state}</h2>
-      <p class="lede">Key <code>${esc(u.prefix)}…</code> · added ${fmtTime(u.created_at)} · last request ${fmtAgo(u.last_seen)}</p>
-      <div class="controls">${seg("userPeriod", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], period)}<span class="spacer"></span>${userActions(u)}</div>
+      <p class="crumb"><a href="#users">${t("user.back")}</a></p>
+      <h2><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:8px"></span>${bdi(u.name)} ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}</h2>
+      <p class="lede">${t("user.lede", { key: `<code>${esc(u.prefix)}…</code>`, added: fmtTime(u.created_at), last: fmtAgo(u.last_seen) })}</p>
+      <div class="controls">${seg("userPeriod", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], period)}<span class="spacer"></span>${userActions(u)}</div>
       <div class="tiles">
-        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${t.requests >= 1000 ? `${esc(nfFull.format(t.requests))} forwarded` : "forwarded to a provider"}</div></div>
-        <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
-        <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
-        <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">not billed on the subscription</div></div>
-        ${share("5h", "5-hour")}${share("7d", "7-day")}
+        <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
+        <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
+        <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
+        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${t("ov.not_billed")}</div></div>
+        ${share("5h")}${share("7d")}
       </div>
       <div class="grid cols-2">
-        <div class="card"><h3>Limits${tipI("limits_col")}</h3><p class="sub">Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.</p>${limitsBlock(u.limits)}</div>
-        <div class="card table-wrap"><h3>Models</h3><p class="sub">${esc(span)}, largest first.</p>${models.models.length ? `<table class="data"><thead><tr><th>Model</th><th class="r">Requests</th><th class="r">Weighted</th><th class="r">Est. cost</th><th class="r">Cache hits${tipI("cache_ratio")}</th></tr></thead><tbody>
-          ${models.models.map((m) => `<tr><td>${esc(m.model || NO_MODEL)}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
-          </tbody></table>` : `<p class="muted">No requests in range.</p>`}</div>
+        <div class="card"><h3>${t("users.limits")}${tipI("limits_col")}</h3><p class="sub">${t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>${limitsBlock(u.limits)}</div>
+        <div class="card table-wrap"><h3>${t("sess.models")}</h3><p class="sub">${t("user.span_largest", { span })}</p>${models.models.length ? `<table class="data"><thead><tr><th>${t("errs.model")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.cache_hits")}${tipI("cache_ratio")}</th></tr></thead><tbody>
+          ${models.models.map((m) => `<tr><td>${bdi(m.model || seriesLabel(NO_MODEL))}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
+          </tbody></table>` : none}</div>
       </div>
-      <div class="card" style="margin-top:16px"><h3>Weighted tokens per ${gran}, by model${tipI("weighted")}</h3><p class="sub">${esc(span)}.</p><div class="chart" id="u-usage"></div></div>
+      <div class="card" style="margin-top:16px"><h3>${t(`user.weighted_per_${gran}`)}${tipI("weighted")}</h3><p class="sub">${t("user.span_dot", { span })}</p><div class="chart" id="u-usage"></div></div>
       <div class="grid cols-2" style="margin-top:16px">
-        <div class="card"><h3>Activity</h3><p class="sub">Requests by weekday and hour, your local time, ${esc(span)}.</p><div class="heat-wrap"><div class="chart" id="u-heat"></div></div></div>
-        <div class="card table-wrap"><h3>Recent errors</h3><p class="sub">${esc(span)}.</p>${errs.recent.length ? `<table class="data"><thead><tr><th>When</th><th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
-          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
-          </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div>
+        <div class="card"><h3>${t("tab.activity")}</h3><p class="sub">${t("user.activity_sub", { span })}</p><div class="heat-wrap"><div class="chart" id="u-heat"></div></div></div>
+        <div class="card table-wrap"><h3>${t("user.recent_errors")}</h3><p class="sub">${t("user.span_dot", { span })}</p>${errs.recent.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("errs.kind")}</th><th>${t("errs.model")}</th><th class="r">${t("errs.status")}</th></tr></thead><tbody>
+          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+          </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div>
       </div>
-      <div class="card table-wrap" style="margin-top:16px"><h3>Sessions</h3><p class="sub">${esc(span)}, most recently active first.</p>${sess.sessions.length ? sessionsTable(sess.sessions, false) : `<p class="muted">No sessions in range.</p>`}</div>
-      <div class="card table-wrap" style="margin-top:16px"><h3>Recent requests${tipI("recent_requests")}</h3><p class="sub">The last ${reqs.requests.length} requests at any time, newest first; the range above doesn't apply.</p>${reqs.requests.length ? `<table class="data"><thead><tr><th>When</th><th>Model</th><th>Session</th><th class="r">Input</th><th class="r">Output</th><th class="r">Cache read</th><th class="r">Cache write</th><th class="r">Weighted</th><th class="r">Est. cost</th><th class="r">Took</th><th>Result</th></tr></thead><tbody>
-        ${reqs.requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${esc(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
+      <div class="card table-wrap" style="margin-top:16px"><h3>${t("tab.sessions")}</h3><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false) : `<p class="muted">${t("user.no_sessions")}</p>`}</div>
+      <div class="card table-wrap" style="margin-top:16px"><h3>${t("user.recent_requests")}${tipI("recent_requests")}</h3><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
+        ${reqs.requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
           <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
           <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`).join("")}
-        </tbody></table>` : `<p class="muted">No requests yet.</p>`}</div>
+        </tbody></table>` : `<p class="muted">${t("user.no_requests")}</p>`}</div>
       ${machinesCard(keys.keys, null, u.name)}
     </section>`;
   wireSegs(main, render);
   wireUserActions(main, users);
   wireMachines(main);
   if (series.points.length) stackedTime($("#u-usage"), series.points, "weighted", "model", gran);
-  else $("#u-usage").outerHTML = `<p class="muted">No requests in range.</p>`;
+  else $("#u-usage").outerHTML = none;
   if (heat.cells.length) heatmap($("#u-heat"), heat.cells);
-  else $("#u-heat").outerHTML = `<p class="muted">No requests in range.</p>`;
+  else $("#u-heat").outerHTML = none;
 }
 
 async function renderQuota(main) {
