@@ -459,7 +459,7 @@ def test_the_buyer_sees_their_order_and_never_the_admin_note(tmp_path):
     mine = {"id": 4, "label": "<b>Lite</b>", "tier": "lite", "length": "week", "currency": "EUR", "quoted_amount": 7.5}
     orders_ = [mine | {"status": "new"}, mine | {"status": "contacted"}, mine | {"status": "done"}, mine | {"status": "declined"}, None]
     out = _app_fn(tmp_path, ["myOrderCard"], APP_STUBS + f"var out = {json.dumps(orders_)}.map(myOrderCard);")
-    assert "Order received: &lt;b&gt;Lite&lt;/b&gt;, 1 week. The admin will contact you." in out[0] and 'data-my-order="withdraw"' in out[0]
+    assert "Order received: <bdi>&lt;b&gt;Lite&lt;/b&gt;</bdi>, 1 week. The admin will contact you." in out[0] and 'data-my-order="withdraw"' in out[0]
     assert 'data-my-order="withdraw"' in out[1]
     assert "Your order is done." in out[2] and 'data-my-order="dismiss"' in out[2] and "withdraw" not in out[2]
     assert "Your order was declined." in out[3] and 'data-my-order="dismiss"' in out[3]

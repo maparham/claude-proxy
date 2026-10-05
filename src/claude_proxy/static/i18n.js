@@ -698,6 +698,7 @@ const I18N = {
     "auth.cancelled_text": "The computer was not connected. You can close this page.",
     "login.hide_other_ways": "Hide other ways to sign in",
     "login.admin_hint": "Sign in as the admin.",
+    "kname.share_day": "share day",
     // en:end
   },
   fa: {
@@ -1395,6 +1396,7 @@ const I18N = {
     "auth.cancelled_text": "رایانه متصل نشد. می‌توانید این صفحه را ببندید.",
     "login.hide_other_ways": "پنهان کردن راه‌های دیگر ورود",
     "login.admin_hint": "به‌عنوان مدیر وارد شوید.",
+    "kname.share_day": "سهم روزانه",
     // fa:end
   },
 };
@@ -1406,6 +1408,13 @@ const LOC = LANG === "fa" ? "fa-IR" : "en-US";
 if (typeof document !== "undefined") {
   document.documentElement.lang = LANG;
   document.documentElement.dir = LANG === "fa" ? "rtl" : "ltr";
+  // Persian's font, added from script so the page never waits on Google (slow or blocked for many Persian readers):
+  // until it arrives, or if it never does, the system font shows.
+  if (LANG === "fa") {
+    const font = document.createElement("link");
+    font.rel = "stylesheet"; font.href = "https://fonts.googleapis.com/css2?family=Vazirmatn:wght@100..900&display=swap";
+    document.head.append(font);
+  }
 }
 
 // The active language's text, else English's, else the key itself; {name} filled from vars, unescaped (callers pass

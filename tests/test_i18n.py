@@ -82,7 +82,6 @@ def test_the_page_offers_the_switch_and_marks_its_text():
     html = (STATIC / "index.html").read_text()
     assert 'id="lang-toggle"' in html and 'id="lang-signin"' in html
     assert html.count("data-i18n") >= 30
-    assert "fonts.googleapis.com/css2?family=Vazirmatn" in html
 
 
 def test_css_has_no_physical_sides_outside_the_tooltip():
@@ -99,7 +98,7 @@ const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js")
 const grab = (re) => { const m = re.exec(app); if (!m) throw new Error("not found: " + re); return m[0]; };
 const block = grab(/^\/\/ i18n-formatters:start[\s\S]*?^\/\/ i18n-formatters:end$/m);
 const ctx = { console, Intl, Date, Math, Number, String, localStorage: { getItem: () => process.argv[3] } };
-vm.runInNewContext(i18n + "\n" + block + "\n;this.out = [fmtNum(24900000), fmtUsd(12.5), fmtDur(9000), num('۲۵'), num('٣٫5'), bdi('<a>')];", ctx);
+vm.runInNewContext(i18n + "\n" + block + "\n;this.out = [fmtNum(24900000), fmtUsd(12.5), fmtDur(9000), num('۲۵'), num('٣٫5'), bdi('<a>'), num('۱٬۲۳۴٬۵۶۷'), num('1,234.5')];", ctx);
 console.log(JSON.stringify(ctx.out));
 """
 
@@ -113,7 +112,7 @@ def _fmt(tmp_path, lang):
 
 
 def test_formatters_follow_the_language(tmp_path):
-    assert _fmt(tmp_path, "en") == ["24.9M", "$12.50", "2h 30m", 25, 3.5, "<bdi>&lt;a&gt;</bdi>"]
+    assert _fmt(tmp_path, "en") == ["24.9M", "$12.50", "2h 30m", 25, 3.5, "<bdi>&lt;a&gt;</bdi>", 1234567, 1234.5]   # grouped, as the page shows them
     fa = _fmt(tmp_path, "fa")
     assert fa[1] == "$۱۲٫۵۰" and fa[2] == "۲ ساعت و ۳۰ دقیقه" and fa[3] == 25 and fa[4] == 3.5
     assert re.search(r"[۰-۹]", fa[0])
@@ -150,3 +149,23 @@ def test_clerk_persian_is_vendored_and_loaded_only_for_persian():
     assert "export { faIR }" in vend and "@clerk/localizations@4.21.2" in vend.splitlines()[0]
     js = (STATIC / "app.js").read_text()
     assert 'import("/static/clerk-fa-IR.js")' in js and "localization" in js
+
+
+def test_a_server_value_without_a_label_reads_as_itself(tmp_path):
+    from tests.test_tickets_web import _app_fn
+    out = _app_fn(tmp_path, ["labelOf", "limitLabel"], 'var out = [limitLabel({ kind: "share_30d", scope: "*" }), limitLabel({ kind: "share_day", scope: "*" }), labelOf("role.", "owner")];')
+    assert out == ["share 30d", "share day", "owner"]
+
+
+
+
+def test_the_persian_font_never_blocks_the_page():
+    html = (STATIC / "index.html").read_text()
+    assert "fonts.googleapis.com" not in html   # a slow or blocked Google must not hold the first paint
+    assert "fonts.googleapis.com/css2?family=Vazirmatn" in (STATIC / "i18n.js").read_text()
+
+
+def test_pages_are_read_as_utf8_on_any_system():
+    # Windows defaults read_text() to cp1252, which can't decode the Persian in index.html: every page read names UTF-8.
+    src = (STATIC.parent / "web.py").read_text(encoding="utf-8")
+    assert re.findall(r"\.read_text\(\)", src) == []
