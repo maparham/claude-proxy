@@ -112,7 +112,7 @@ function offerEnded() {
 }
 // After a sent order. Only a queued confirmation is promised: there is none without [email] or past the buyer cap.
 function receivedHtml(email, confirmation) {
-  return `<h3>${t("home.order_received")}</h3><p>${t("home.admin_contact", { email: `<b>${esc(email)}</b>` })}${confirmation ? ` ${t("home.confirmation_coming")}` : ""}</p>
+  return `<h3>${t("home.order_received")}</h3><p>${t("home.admin_contact", { email: `<b>${bdi(email)}</b>` })}${confirmation ? ` ${t("home.confirmation_coming")}` : ""}</p>
     <p><button type="button" class="btn primary" data-close>${t("app.close")}</button></p>`;
 }
 function loadTurnstile() {
@@ -183,7 +183,7 @@ function openOrder(tierId, len) {
       } catch { throw new Error(t("home.order_not_sent")); }
       let body = null;
       try { body = await r.json(); } catch { /* not JSON */ }
-      if (!r.ok) throw new Error((body && body.error) || t("home.order_not_sent_status", { status: r.status }));
+      if (!r.ok) throw new Error((body && body.error && errMsg(body.error)) || t("home.order_not_sent_status", { status: r.status }));
       dropWidget();
       dlg.innerHTML = receivedHtml(f.email.value, !!(body && body.confirmation));
       dlg.querySelector("[data-close]").onclick = () => dlg.close();

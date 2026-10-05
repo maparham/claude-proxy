@@ -20,7 +20,7 @@ from playwright.sync_api import sync_playwright
 TABS = ["overview", "usage", "users", "user/2", "tickets", "orders", "pricing", "quota", "models", "activity", "sessions", "errors", "audit"]
 USER_TABS = ["overview", "usage", "models", "activity", "sessions", "errors"]
 LATIN_OK = (r"Claude Code|Claude|Anthropic|Opus|Sonnet|Haiku|gclaude|claude-gateway|claude-proxy|OpenCode|Muse|Meta|Google|GitHub|Clerk|API|"
-            r"USD|EUR|IRR|macOS|Linux|Windows|PowerShell|JSON|CSRF|Lite|Standard|Pro|Max|English")
+            r"USD|EUR|IRR|IRT|macOS|Linux|Windows|PowerShell|JSON|CSRF|Lite|Standard|Pro|Max|English")
 
 # Text nodes shown to the reader, minus the places that stay Latin on purpose.
 WALK = """(sel) => {
@@ -113,6 +113,7 @@ def run(args) -> int:
                 page.on("console", lambda m: "i18n: missing" in m.text and warns.append(m.text))
                 page.goto(f"{args.base}/?home")
                 page.wait_for_selector("body.home")
+                page.wait_for_function("typeof data !== 'undefined' && !!data")   # /api/pricing resolved: cards, countdowns, ribbon are real
                 keys = set(page.evaluate("Object.keys(I18N.en)"))
                 where = f"home @{width}"
                 scan(page, lang, where, keys, findings, "body.home, dialog[open]")

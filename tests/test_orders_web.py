@@ -670,8 +670,8 @@ async def test_the_public_response_says_whether_a_confirmation_was_queued(env, t
 def test_the_received_message_promises_an_email_only_when_one_was_queued(tmp_path):
     from tests.test_tickets_web import _prices
     queued, not_queued = _run_home_order(tmp_path, _prices() | {"turnstile_site_key": "0xSITE"})["received"]
-    assert "The admin will contact you at <b>v@x.yz</b>." in queued and "A confirmation email is on its way." in queued
-    assert "&lt;v&gt;@x.yz" in not_queued and "confirmation" not in not_queued
+    assert "The admin will contact you at <b><bdi>v@x.yz</bdi></b>." in queued and "A confirmation email is on its way." in queued
+    assert "<bdi>&lt;v&gt;@x.yz</bdi>" in not_queued and "confirmation" not in not_queued
     assert "Check your email" not in queued + not_queued
 
 

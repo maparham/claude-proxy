@@ -4,6 +4,7 @@ import json
 import re
 import shutil
 import subprocess
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -91,6 +92,47 @@ def test_the_home_page_offers_the_switch_and_marks_its_text():
     assert html.startswith('<!doctype html>\n<html lang="fa" dir="rtl">')
     assert 'id="lang-toggle"' in html and '/static/i18n.js' in html
     assert html.count("data-i18n") >= 20
+
+
+# Elements whose text is filled by home.js at runtime (via t()), not by applyStatic()'s data-i18n pass.
+_HOME_DYNAMIC_IDS = {"cards", "rate-note", "how-to-buy"}
+_HOME_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
+
+
+class _TextCoverageParser(HTMLParser):
+    """Walks an HTML document; `uncovered` collects visible text outside any data-i18n(-attr) element or dynamic placeholder."""
+
+    def __init__(self):
+        super().__init__()
+        self.stack = [("", False, False)]   # (tag, covered-by-self-or-ancestor, skip-by-self-or-ancestor)
+        self.uncovered = []
+
+    def handle_starttag(self, tag, attrs):
+        if tag in _HOME_VOID_TAGS:
+            return
+        attrs = dict(attrs)
+        _, parent_covered, parent_skip = self.stack[-1]
+        covered = parent_covered or "data-i18n" in attrs or "data-i18n-attr" in attrs
+        skip = parent_skip or tag in ("script", "style", "title") or attrs.get("id") in _HOME_DYNAMIC_IDS
+        self.stack.append((tag, covered, skip))
+
+    def handle_endtag(self, tag):
+        if len(self.stack) > 1:
+            self.stack.pop()
+
+    def handle_data(self, data):
+        _, covered, skip = self.stack[-1]
+        text = data.strip()
+        if not text or covered or skip or re.fullmatch(r"[\W_]+", text):   # punctuation-only separators ("·") need no key
+            return
+        self.uncovered.append(text)
+
+
+def test_every_home_page_text_node_is_translated_or_dynamic():
+    # Catches a static string reverting to hardcoded text without its data-i18n marker — the >= 20 count above would not.
+    parser = _TextCoverageParser()
+    parser.feed((STATIC / "home.html").read_text())
+    assert parser.uncovered == []
 
 
 def test_css_has_no_physical_sides_outside_the_tooltip():
