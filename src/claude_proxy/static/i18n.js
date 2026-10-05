@@ -698,6 +698,7 @@ const I18N = {
     "auth.cancelled_text": "The computer was not connected. You can close this page.",
     "login.hide_other_ways": "Hide other ways to sign in",
     "login.admin_hint": "Sign in as the admin.",
+    "kname.share_day": "share day",
     // en:end
   },
   fa: {
@@ -1395,6 +1396,7 @@ const I18N = {
     "auth.cancelled_text": "رایانه متصل نشد. می‌توانید این صفحه را ببندید.",
     "login.hide_other_ways": "پنهان کردن راه‌های دیگر ورود",
     "login.admin_hint": "به‌عنوان مدیر وارد شوید.",
+    "kname.share_day": "سهم روزانه",
     // fa:end
   },
 };
