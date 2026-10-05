@@ -42,8 +42,8 @@ WALK = """(sel) => {
 }"""
 
 
-def scan(page, lang: str, where: str, keys: set[str], findings: list[str]) -> None:
-    for s in page.evaluate(WALK, "#app:not(.hidden), #login:not(.hidden), dialog[open]"):
+def scan(page, lang: str, where: str, keys: set[str], findings: list[str], sel: str = "#app:not(.hidden), #login:not(.hidden), dialog[open]") -> None:
+    for s in page.evaluate(WALK, sel):
         if "undefined" in s or re.search(r"\bNaN\b", s):
             findings.append(f"[{lang}] {where}: {s[:120]!r}")
         if any(k in s for k in re.findall(r"\b[a-z]+\.[a-z0-9_.:]+\b", s) if k in keys):
@@ -104,6 +104,37 @@ def run(args) -> int:
                                     page.keyboard.press("Escape")
                     findings += [f"[{lang}] {who}: {w}" for w in sorted(set(warns))]
                     ctx.close()
+        for lang in ("fa", "en"):
+            for width in (1280, 375):
+                ctx = browser.new_context(viewport={"width": width, "height": 900}, bypass_csp=True)
+                ctx.add_init_script(f"try {{ localStorage.setItem('cp-lang', '{lang}'); }} catch {{}}")
+                page = ctx.new_page()
+                warns: list[str] = []
+                page.on("console", lambda m: "i18n: missing" in m.text and warns.append(m.text))
+                page.goto(f"{args.base}/?home")
+                page.wait_for_selector("body.home")
+                keys = set(page.evaluate("Object.keys(I18N.en)"))
+                where = f"home @{width}"
+                scan(page, lang, where, keys, findings, "body.home, dialog[open]")
+                if page.evaluate("document.documentElement.scrollWidth > innerWidth + 1"):
+                    findings.append(f"[{lang}] {where}: page scrolls sideways")
+                page.locator("#length-toggle button").nth(2).click()   # month: a longer price, a save line, maybe a ribbon
+                page.wait_for_timeout(200)
+                scan(page, lang, f"{where} month", keys, findings, "body.home, dialog[open]")
+                for d in page.locator(".faq details").all():
+                    d.locator("summary").click()
+                page.wait_for_timeout(100)
+                scan(page, lang, f"{where} faq open", keys, findings, "body.home, dialog[open]")
+                page.screenshot(path=str(shots / f"{lang}-home-{width}.png"), full_page=True)
+                # The order dialog needs Turnstile configured to open from a click; call it directly to scan its text
+                # without depending on challenges.cloudflare.com being reachable from this run.
+                if page.evaluate("typeof openOrder === 'function' && !!data && data.tiers.length"):
+                    page.evaluate("openOrder(data.tiers[0].tier, 'week')")
+                    page.wait_for_timeout(200)
+                    scan(page, lang, f"{where} order dialog", keys, findings, "body.home, dialog[open]")
+                    page.screenshot(path=str(shots / f"{lang}-home-{width}-order.png"))
+                findings += [f"[{lang}] home: {w}" for w in sorted(set(warns))]
+                ctx.close()
         browser.close()
     for f in dict.fromkeys(findings):
         print(f)
