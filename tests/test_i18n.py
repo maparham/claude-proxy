@@ -163,3 +163,9 @@ def test_the_persian_font_never_blocks_the_page():
     html = (STATIC / "index.html").read_text()
     assert "fonts.googleapis.com" not in html   # a slow or blocked Google must not hold the first paint
     assert "fonts.googleapis.com/css2?family=Vazirmatn" in (STATIC / "i18n.js").read_text()
+
+
+def test_pages_are_read_as_utf8_on_any_system():
+    # Windows defaults read_text() to cp1252, which can't decode the Persian in index.html: every page read names UTF-8.
+    src = (STATIC.parent / "web.py").read_text(encoding="utf-8")
+    assert re.findall(r"\.read_text\(\)", src) == []

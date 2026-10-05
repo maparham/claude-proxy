@@ -1227,7 +1227,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     def versioned(page: str, assets: tuple[str, ...]) -> str:
         """The page with each asset URL carrying its content hash, so a CDN or browser cache picks up a deploy."""
-        html = (STATIC / page).read_text()
+        html = (STATIC / page).read_text(encoding="utf-8")
         for name in assets:
             v = hashlib.sha256((STATIC / name).read_bytes()).hexdigest()[:12]
             html = html.replace(f'"/static/{name}"', f'"/static/{name}?v={v}"')
@@ -1245,7 +1245,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/privacy")
     async def privacy():
         # Linked from the Google sign-in consent screen, which requires a privacy policy.
-        html = (STATIC / "privacy.html").read_text().replace("after 180 days", f"after {cfg.retention_days} days")
+        html = (STATIC / "privacy.html").read_text(encoding="utf-8").replace("after 180 days", f"after {cfg.retention_days} days")
         return HTMLResponse(html, headers=PAGE_HEADERS)
 
     @app.get("/static/{name}")
