@@ -19,6 +19,7 @@ privacy page and server-rendered mail stay English for now.
 ## Strings: `static/i18n.js`
 
 A new script loaded before `app.js`, served and versioned like it (`versioned("index.html", ("i18n.js", "app.js", "app.css"))`).
+`applyStatic()` runs once from `app.js` at start-up.
 
 - `const I18N = { en: {...}, fa: {...} }` is a flat map keyed by dotted ids (`tab.overview`, `login.title`, `tip.weighted`).
 - `LANG` is `"fa"` or `"en"`. It is read from `localStorage` (`cp-lang`) inside try/catch and falls back to `"fa"`.
@@ -42,8 +43,10 @@ load and again after a switch. The English text stays in the HTML as the no-JS f
 
 ## Direction and layout
 
-- `setLang(lang)` sets `<html lang>` to `fa` or `en` and `dir` to `rtl` or `ltr`, saves the choice, runs
-  `applyStatic()`, then re-renders: the sign-in screen, or the current tab plus the header.
+- `index.html` ships as `<html lang="fa" dir="rtl">`. `i18n.js` loads without `defer` in `<head>` and, when the
+  saved choice is English, sets `lang="en" dir="ltr"` before the body paints.
+- `setLang(lang)` saves the choice and reloads the page. The address (and so the open tab) is kept. A reload
+  rebuilds the formatters, charts and the Clerk widget in the new language without any re-render code.
 - The 24 `left`/`right` rules in `app.css` move to logical properties (`margin-inline-start`, `inset-inline-end`,
   `text-align: start`, `border-inline-start`). Icons with a direction (chevrons, arrows) get
   `[dir=rtl] … { transform: scaleX(-1) }`.
@@ -58,8 +61,7 @@ load and again after a switch. The English text stays in the HTML as the no-JS f
 ## Numbers and dates
 
 Every formatter in `app.js` (`nf`, `nfFull`, `fmtNum`, `fmtUsd`, `fmtPct`, `fmtShare`, `fmtDur`, `fmtAgo`,
-`fmtTime`, `fmtDate`, `money`) takes its locale from `LOC` (`"fa-IR"` or `"en-US"`). The formatters are rebuilt by
-`setLang`.
+`fmtTime`, `fmtDate`, `money`, `timeLabel`, `axisLabels`) takes its locale from `LOC` (`"fa-IR"` or `"en-US"`).
 
 - `fmtUsd` and `fmtPrice` keep the `$` sign and format the digits with the locale's formatter.
 - `fmtDur` units come from keys (`ث`/`د`/`س`/`ر` in Persian, `s`/`m`/`h`/`d` in English). The text "… ago"
@@ -75,15 +77,16 @@ follows the page font. `OTHER` ("Other") stays as the internal key, and only its
 ## Server messages
 
 `api()` keeps `data.error` as the message. Before showing one, `errMsg(e)` checks a `err.*` map in the
-dictionaries keyed by the exact English text. Matches are shown in Persian, and anything unknown is shown as-is
-(English). The map starts with the messages a user can hit: sign-in, key, limit, ticket and order errors.
+dictionaries keyed by the exact English text, then an `ERR_PATTERNS` list of `[RegExp, key]` for the f-string
+messages (`No user 'x'.`, `Too many … Try again in 12s.`), whose groups fill the key's `{1}`, `{2}`. Matches are
+shown in Persian, and anything unknown is shown as-is (English). The map starts with the messages a user can hit: sign-in, key, limit, ticket and order errors.
 
 ## Clerk
 
-When `LANG` is `fa`, `setupClerk()` passes Clerk's `faIR` localization. It is loaded from
-`${npm}/@clerk/localizations@3/dist/index.browser.js` if that bundle exists on the Frontend API host. If it
-fails to load, the widget shows in English, and sign-in still works. A switch after Clerk has mounted re-mounts
-the widget.
+Clerk's Frontend API host does not serve `@clerk/localizations`. The `faIR` object from
+`@clerk/localizations@4.21.2/dist/fa-IR.mjs` (an ES module with no imports, ~100 KB) is vendored as
+`static/clerk-fa-IR.js`. When `LANG` is `fa`, `setupClerk()` does `import("/static/clerk-fa-IR.js")` and passes
+`localization: faIR` to `Clerk.load`. If the import fails, the widget shows in English, and sign-in still works.
 
 ## Tests
 
@@ -94,7 +97,7 @@ the widget.
 - The existing node harnesses (`APP_FN_HARNESS`, `PICK_HARNESS`) load `i18n.js` first with `LANG = "en"`, so
   the current English assertions keep passing. String-presence checks on `app.js` that look for English labels
   (such as `label: "Orders"`) are updated to check for the key.
-- CSP test: the page's CSP lists the Google Fonts hosts.
+- CSP test: the page's CSP lists the Google Fonts hosts (`style-src` and `font-src`).
 - Manual (Playwright, local gateway with seeded data): sign-in screen, Overview, Users, user detail, Sessions,
   Tickets/Orders and dialogs, each in `fa` and `en`, in light and dark, at desktop width and 375px. The check
   confirms no horizontal scroll, no stray English in `fa`, and Latin islands that read correctly.
