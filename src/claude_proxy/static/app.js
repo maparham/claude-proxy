@@ -9,6 +9,7 @@ const S = {
   colorSlots: loadSlots(),   // dimension -> {key: slot}; colour follows the entity, kept across page loads
   tkSkew: 0,                 // server clock minus this browser's, from /api/me/tickets: discounts end on the server's clock
   discountsEnded: new Set(), // discount ends already re-rendered for, so a server still listing one can't loop renders
+  paymentId: null,           // #payment/<id> from the ZarinPal callback redirect: shown once, then cleared
 };
 const $ = (sel, root = document) => root.querySelector(sel);
 const tzOffset = () => -new Date().getTimezoneOffset() * 60;
@@ -489,6 +490,16 @@ async function renderOverview(main) {
     tick();
     clearInterval(S.countdown); S.countdown = setInterval(() => (document.contains(main.querySelector(".countdown")) ? tick() : clearInterval(S.countdown)), 1000);
   }
+  if (S.paymentId) {
+    const id = S.paymentId; S.paymentId = null;
+    api(`/api/me/payments/${id}`).then((p) => {
+      const what = t("ord.what", { label: esc(p.label), len: lengthName(p.length) });
+      const msg = { paid: t("pay.paid", { ref: esc(p.ref_id), what }), paid_unfulfilled: t("pay.unfulfilled", { ref: esc(p.ref_id) }),
+        cancelled: t("pay.cancelled"), failed: t("pay.failed", { msg: esc(p.error_shown || "") }), expired: t("pay.expired"),
+        started: t("pay.pending") }[p.status];
+      if (msg) alertInline(msg);
+    }).catch(() => {});
+  }
 }
 
 function usersCard() {
@@ -555,9 +566,11 @@ function myOrderCard(o) {
 }
 // What a buyer can order in: the price list's currency and USD, which always has a rate.
 function orderCurrencies(p) { return [...new Set([p.currency, "USD"])]; }
-function orderFormHtml(p, tier, len, email) {
+function orderFormHtml(p, tier, len, email, payL, pay) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
+  const payBtn = payL && !payL.sold_out
+    ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payL.amount, pay.currency)) })}</button>` : "";
   return `<h3>${t("ord.title", { what: t("ord.what", { label: bdi(tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form id="f-order" class="form-grid order-form">
@@ -566,10 +579,12 @@ function orderFormHtml(p, tier, len, email) {
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <p class="hint">${t("ord.not_payment")}</p>
       <button class="btn primary" type="submit">${t("ord.send")}</button>
+      ${payBtn}
     </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`;
 }
-function orderDialog(p, tier, len) {
-  const d = openDialog(orderFormHtml(p, tier, len, S.user.email));
+function orderDialog(p, tier, len, pay) {
+  const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
+  const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay));
   const f = $("#f-order", d);
   f.currency.onchange = () => { $("#order-price", d).textContent = f.currency.selectedOptions[0].dataset.price; };
   f.onsubmit = async (e) => {
@@ -581,12 +596,21 @@ function orderDialog(p, tier, len) {
       d.close(); render();
     } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
   };
+  const pb = $("#order-pay", d);
+  if (pb) pb.onclick = async () => {
+    if (f.email && !f.email.reportValidity()) return;
+    pb.disabled = true; pb.textContent = t("pay.going");
+    try {
+      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, ...(f.email ? { email: f.email.value } : {}) } });
+      location.href = r.url;
+    } catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payL.amount, pay.currency)) }); $("#order-err", d).textContent = err.message; }
+  };
 }
 function wireOrdering(root, tk, order) {
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
-    if (tier) orderDialog(tk.prices, tier, len);
+    if (tier) orderDialog(tk.prices, tier, len, tk.pay);
   }));
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
@@ -843,8 +867,8 @@ async function renderOrders(main) {
   main.innerHTML = `<section class="view"><h2>${t("tab.orders")}</h2>
     <p class="lede">${t("ord.lede")}</p>
     <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select></div>
-    <div class="card table-wrap"><table class="data orders"><thead><tr><th>${t("ord.age")}</th><th>${t("ord.buyer")}</th><th>${t("ord.ticket")}</th><th class="r">${t("ord.quoted_col")}</th><th>${t("ord.message_col")}</th><th>${t("errs.status")}</th><th>${t("ord.email_col")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
-      <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="9" class="muted">${t(`ord.none_${status}`)}</td></tr>`}</tbody></table></div>
+    <div class="card table-wrap"><table class="data orders"><thead><tr><th>${t("ord.age")}</th><th>${t("ord.buyer")}</th><th>${t("ord.ticket")}</th><th class="r">${t("ord.quoted_col")}</th><th>${t("ord.message_col")}</th><th>${t("errs.status")}</th><th>${t("pay.col")}</th><th>${t("ord.email_col")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="10" class="muted">${t(`ord.none_${status}`)}</td></tr>`}</tbody></table></div>
   </section>`;
   $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
   main.querySelectorAll("[data-oact]").forEach((b) => b.addEventListener("click", () => orderAction(b.dataset.oact, orders.find((o) => o.id === +b.dataset.id), users)));
@@ -859,6 +883,7 @@ function orderRow(o) {
     <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
     <td class="order-msg">${o.message ? bdi(o.message) : `<span class="muted">—</span>`}</td>
     <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">${t("ord.ticket_n", { id: esc(o.ticket_id) })}</div>` : ""}</td>
+    <td class="nowrap">${o.payment ? `${stateBadge2(o.payment.status)}${o.payment.ref_id ? `<div class="muted" dir="ltr">${esc(o.payment.ref_id)} · ${esc(o.payment.card_pan || "")}</div>` : ""}` : `<span class="muted">—</span>`}</td>
     <td>${mailState(o)}</td>
     <td class="muted order-msg">${o.admin_note ? bdi(o.admin_note) : "—"}</td>
     <td>${orderActions(o)}</td></tr>`;
@@ -868,6 +893,10 @@ function mailState(o) {
   const cls = { failed: " state-cancelled", pending: " state-queued", sent: " state-active" };
   const st = (s) => esc(I18N.en[`ord.mail_${s}`] ? t(`ord.mail_${s}`) : s);
   return [["admin", o.admin_mail], ["buyer", o.buyer_mail]].map(([who, s]) => `<span class="badge mail${cls[s] || ""}">${t("ord.mail_state", { who: t(`ord.who_${who}`), st: st(s) })}</span>`).join(" ");
+}
+function stateBadge2(s) {
+  const cls = { paid: " state-active", paid_unfulfilled: " state-cancelled", started: " state-queued" };
+  return `<span class="badge${cls[s] || ""}">${t(`pay.st_${s}`)}</span>`;
 }
 // Exactly the status table: Contacted from new; Decline and Grant while open; Note always.
 function orderActions(o) {
@@ -1641,6 +1670,8 @@ function route() {
   if (a) { S.tab = "authorize"; S.authCode = a[1]; return true; }
   // An old /pricing link lands here as #pricing: a user's prices are on the overview; an admin's tab has the name.
   if (h === "pricing" && !isAdmin()) { S.tab = "overview"; S.toPrices = true; history.replaceState(null, "", "#overview"); return true; }
+  const pm = /^payment\/(\d+)$/.exec(h);
+  if (pm) { S.tab = "overview"; S.paymentId = +pm[1]; history.replaceState(null, "", "#overview"); return true; }
   if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
   return false;
 }
