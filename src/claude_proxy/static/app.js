@@ -77,7 +77,11 @@ function fmtDur(s) {
 function fmtAgo(t_) { return t_ ? t("app.ago", { d: fmtDur(Date.now() / 1000 - t_) }) : t("app.never"); }
 function fmtTime(t_) { return t_ ? new Date(t_ * 1000).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
 const fmtDate = (t_) => (t_ ? new Date(t_ * 1000).toLocaleString(LOC, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
-const money = (amount, currency) => { try { return new Intl.NumberFormat(LOC, { style: "currency", currency }).format(amount); } catch { return `${nf2.format(amount)} ${currency}`; } };
+// Toman isn't an ISO currency, so Intl would print "IRT 1,250,000.00": it's whole numbers and its own name.
+const money = (amount, currency) => {
+  if (currency === "IRT") return t("cur.toman", { v: new Intl.NumberFormat(LOC, { maximumFractionDigits: 0 }).format(Math.round(amount)) });
+  try { return new Intl.NumberFormat(LOC, { style: "currency", currency }).format(amount); } catch { return `${nf2.format(amount)} ${currency}`; }
+};
 // i18n-formatters:end
 const toLocal = (t) => { const d = new Date(t * 1000); d.setSeconds(0, 0); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };   // for <input type=datetime-local>
 const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
@@ -353,7 +357,7 @@ function limitValue(l) {
     if (l.skipped || l.current == null) return t("lim.not_measured");
     return `${t("lim.used_pct", { v: nf0.format(l.current) })}${l.no_live_data ? t("lim.est_no_live") : ""}${reset}`;
   }
-  if (l.skipped) return t("lim.skipped", { why: l.skipped });
+  if (l.skipped) return t("lim.skipped", { why: iso(l.skipped) });
   const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => t("lim.pts", { v: nfFix(1).format(v) }) : fmtNum;
   return `${l.no_live_data ? t("lim.est_nolive_prefix") : l.estimated ? t("lim.est_prefix") : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
 }
@@ -580,7 +584,7 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
   return `<h3>${t("ord.title", { what: t("ord.what", { label: bdi(tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form id="f-order" class="form-grid order-form">
-      <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
+      <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">${t("ord.email_note")}</span></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <p class="hint">${t("ord.not_payment")}</p>
@@ -728,14 +732,14 @@ async function renderTickets(main) {
   const [cap, { tickets, deleted_users }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
   const pct = (v, max) => meter((100 * v) / max);
   const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${fmtPct(cap.utilization[b].utilization_pct)}${cap.utilization[b].stale ? ` (${t("quota.stale")})` : ""}`);
-  const of = (v) => t("tk.of", { v: fmtPct(v, 1), max: fmtPct(cap.max_sold_pct) });
+  const of = (v) => t("tk.of", { v: fmtPct(v, 1), max: fmtShare(cap.max_sold_pct) });
   main.innerHTML = `<section class="view"><h2>${t("tab.tickets")}</h2>
     <p class="lede">${t("tk.lede")}</p>
     <div class="grid cols-2">
       <div class="card"><h3>${t("tk.capacity")}${tipI("capacity_sold")}</h3>
         <div class="limit-row"><span>${t("tk.sold_now")}</span><span class="num">${of(cap.sold_now_pct)}</span></div>${pct(cap.sold_now_pct, cap.max_sold_pct)}
         <div class="limit-row" style="margin-top:8px"><span>${t("tk.peak")}</span><span class="num">${of(cap.peak_30d_pct)}</span></div>${pct(cap.peak_30d_pct, cap.max_sold_pct)}
-        <p class="sub" style="margin-top:12px">${t("tk.headroom", { v: fmtPct(100 - cap.max_sold_pct) })}</p></div>
+        <p class="sub" style="margin-top:12px">${t("tk.headroom", { v: fmtShare(100 - cap.max_sold_pct) })}</p></div>
       <div class="card"><h3>${t("tk.util_title")}${tipI("capacity_util")}</h3>
         <div class="limit-row"><span>${t("tk.bucket_5h")}</span><span class="num">${util("5h")}</span></div>
         <div class="limit-row"><span>${t("tk.bucket_7d")}</span><span class="num">${util("7d")}</span></div>
@@ -767,7 +771,7 @@ async function ticketAction(act, tk, list) {
   try {
     const r = await api(`/api/admin/tickets/${tk.id}/cancel`, { method: "POST", body: {} });
     render();   // the ticket is cancelled either way, and any queued tickets moved
-    if (r.dates_kept) infoInline(t("tk.cancelled"), t("tk.dates_kept", { reason: r.reason }));
+    if (r.dates_kept) infoInline(t("tk.cancelled"), t("tk.dates_kept", { reason: iso(r.reason) }));
   } catch (e) { alertInline(e.message); }
 }
 // `pre`, from an order: {order_id, user, tier, length, currency}. The user is fixed to the order's account, and the
@@ -801,7 +805,7 @@ function grantDialog(users, pre = null) {
     const p = preview;
     const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${t("tk.discount")})` : `<b>${fmtPrice(p.usd)}</b>`;
     const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : t("tk.starts_now");
-    const fit = p.available ? `<span class="good">${t("tk.available")}</span>` : `<span class="critical">${esc(p.reason)}</span>`;
+    const fit = p.available ? `<span class="good">${t("tk.available")}</span>` : `<span class="critical">${bdi(p.reason)}</span>`;
     const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</span>` : "";
     $("#grant-preview", d).innerHTML = `${price} ${t("app.arrow")} <b>${esc(money(p.amount, p.currency))}</b> ${t("tk.at_rate", { rate: nfFull.format(p.rate) })} ${p.rate_set_at ? `(${t("tk.rate_of", { date: fmtDate(p.rate_set_at) })}${p.stale_rate ? `${t("app.list_sep")}<b>${t("quota.stale")}</b>` : ""})` : ""}<br>
       ${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}<br>${fit}${soldOut}
@@ -1171,7 +1175,7 @@ function setupClerk() {
     await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
     await loadScript(`${npm}/@clerk/clerk-js@6/dist/clerk.browser.js`, { "data-clerk-publishable-key": cfg.clerk.publishable_key });
     // Clerk's own Persian text (vendored: its Frontend API does not serve localizations); English if it fails to load.
-    const localization = LANG === "fa" ? await import("/static/clerk-fa-IR.js").then((m) => m.faIR, () => undefined) : undefined;
+    const localization = LANG === "fa" ? await import(document.querySelector("meta[name=clerk-fa-ir]").content).then((m) => m.faIR, () => undefined) : undefined;
     await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor }, ...(localization && { localization }) });
     window.Clerk.addListener(({ session }) => { if (session && !S.user && !$("#login").classList.contains("hidden")) clerkExchange(); });
     return window.Clerk;
@@ -1693,6 +1697,7 @@ if (ADMIN_PAGE) {
   $("#form-admin").classList.remove("hidden");
   $("#form-key").classList.add("hidden");
   $("#login-hint span[data-i18n]").textContent = t("login.admin_hint");
+  $("#login-hint .tip-i").remove();   // gateway keys are not how the admin signs in
 }
 $("#logout").onclick = async () => {
   await api("/api/logout", { method: "POST", body: {} }).catch(() => {});

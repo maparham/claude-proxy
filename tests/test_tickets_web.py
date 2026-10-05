@@ -682,3 +682,9 @@ def test_admin_tips_no_longer_point_at_the_old_pricing_page():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js").read_text()
     assert "`/pricing asks" not in src and "/pricing shows" not in src   # the tips admins read
+
+
+def test_home_shows_toman_as_whole_numbers(tmp_path):
+    data = _prices(_tier(week={"amount": 1250000.4, "list_amount": 1250000.4})) | {"currency": "IRT"}
+    r = _run_home(tmp_path, data)
+    assert "1,250,000 Toman" in r["cards"]["week"] and "IRT" not in r["cards"]["week"]

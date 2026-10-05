@@ -201,7 +201,30 @@ def test_clerk_persian_is_vendored_and_loaded_only_for_persian():
     vend = (STATIC / "clerk-fa-IR.js").read_text()
     assert "export { faIR }" in vend and "@clerk/localizations@4.21.2" in vend.splitlines()[0]
     js = (STATIC / "app.js").read_text()
-    assert 'import("/static/clerk-fa-IR.js")' in js and "localization" in js
+    # The URL comes from the page, which carries the file's content hash, so a cache can't keep an old copy.
+    assert 'import(document.querySelector("meta[name=clerk-fa-ir]").content)' in js and "localization" in js
+    assert '<meta name="clerk-fa-ir" content="/static/clerk-fa-IR.js">' in (STATIC / "index.html").read_text()
+
+
+MONEY = r"""
+const fs = require("fs"), vm = require("vm"), path = require("path");
+const app = fs.readFileSync(process.argv[2], "utf8");
+const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js"), "utf8");
+const block = /^\/\/ i18n-formatters:start[\s\S]*?^\/\/ i18n-formatters:end$/m.exec(app)[0];
+const ctx = { console, Intl, Date, Math, Number, String, localStorage: { getItem: () => process.argv[3] } };
+vm.runInNewContext(i18n + "\n" + block + "\n;this.out = [money(1250000.4, 'IRT'), money(7.5, 'USD')];", ctx);
+console.log(JSON.stringify(ctx.out));
+"""
+
+
+def test_toman_prices_are_whole_numbers_with_its_name(tmp_path):
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    h = tmp_path / "money.js"
+    h.write_text(MONEY)
+    run = lambda lang: json.loads(subprocess.run(["node", str(h), str(STATIC / "app.js"), lang], capture_output=True, text=True, timeout=30, check=True).stdout)
+    assert run("en") == ["1,250,000 Toman", "$7.50"]
+    assert run("fa")[0] == "۱٬۲۵۰٬۰۰۰ تومان"
 
 
 def test_a_server_value_without_a_label_reads_as_itself(tmp_path):

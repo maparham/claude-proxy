@@ -750,11 +750,8 @@ const I18N = {
     "home.get_it": "Get it",
     "home.rate_note": "Prices converted at the rate of {date}.",
     "home.h_per_5h": "{n} h per 5-hour window",
-    "home.h_per_day": "{n} h per day",
-    "home.at_least": "{model}: at least {what}",
     "home.countdown_full": "{d}d {h}h {m}m",
     "home.countdown": "{h}h {m}m",
-    "home.name": "Name",
     "home.sign_in_instead": "Or sign in to order",
     "home.order_received": "Order received",
     "home.admin_contact": "The admin will contact you at {email}.",
@@ -765,6 +762,8 @@ const I18N = {
     "home.order_not_sent_status": "The order could not be sent (HTTP {status}).",
     "home.offer_ended_mid": "The offer ended while you were ordering; this is the regular price. {rest}",
     "home.prices_unavailable": "Prices are not available right now.",
+    "cur.toman": "{v} Toman",
+    "cur.IRT": "Toman",
     // en:end
   },
   fa: {
@@ -1514,11 +1513,8 @@ const I18N = {
     "home.get_it": "دریافت",
     "home.rate_note": "قیمت‌ها با نرخ {date} تبدیل شده‌اند.",
     "home.h_per_5h": "{n} ساعت در هر پنجرهٔ ۵ ساعته",
-    "home.h_per_day": "{n} ساعت در روز",
-    "home.at_least": "{model}: دست‌کم {what}",
     "home.countdown_full": "{d} روز و {h} ساعت و {m} دقیقه",
     "home.countdown": "{h} ساعت و {m} دقیقه",
-    "home.name": "نام",
     "home.sign_in_instead": "یا برای سفارش وارد شوید",
     "home.order_received": "سفارش دریافت شد",
     "home.admin_contact": "مدیر با شما به نشانی {email} تماس می‌گیرد.",
@@ -1529,6 +1525,8 @@ const I18N = {
     "home.order_not_sent_status": "سفارش ارسال نشد (HTTP {status}).",
     "home.offer_ended_mid": "پیشنهاد در حین سفارش شما تمام شد؛ این قیمت عادی است. {rest}",
     "home.prices_unavailable": "تعرفه‌ها اکنون در دسترس نیستند.",
+    "cur.toman": "{v} تومان",
+    "cur.IRT": "تومان",
     // fa:end
   },
 };

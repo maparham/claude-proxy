@@ -26,6 +26,7 @@ applyStatic();
 document.getElementById("lang-toggle").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
 
 function money(amount, currency) {
+  if (currency === "IRT") return t("cur.toman", { v: new Intl.NumberFormat(LOC, { maximumFractionDigits: 0 }).format(Math.round(amount)) });   // not ISO: Intl would print "IRT 1,250,000.00"
   try { return new Intl.NumberFormat(LOC, { style: "currency", currency }).format(amount); }
   catch { return `${nf0.format(amount)} ${currency}`; }
 }
@@ -41,8 +42,8 @@ function countdown(endsAt) {
 function hintLines(t_) {
   return Object.entries(FAMILY).map(([fam, name]) => {
     const h = (t_.hours || {})[fam] || {};
-    const parts = [h.per_5h != null ? t("home.h_per_5h", { n: nf0.format(h.per_5h) }) : null, h.per_day != null ? t("home.h_per_day", { n: nf0.format(h.per_day) }) : null].filter(Boolean);
-    return parts.length ? t("home.at_least", { model: name, what: parts.join(t("app.list_sep")) }) : null;   // Sonnet/Opus: fixed brand names, not server data
+    const parts = [h.per_5h != null ? t("home.h_per_5h", { n: nf0.format(h.per_5h) }) : null, h.per_day != null ? t("price.h_per_day", { n: nf0.format(h.per_day) }) : null].filter(Boolean);
+    return parts.length ? t("price.at_least", { model: name, what: parts.join(t("app.list_sep")) }) : null;   // Sonnet/Opus: fixed brand names, not server data
   }).filter(Boolean);
 }
 // What a week or a month saves against buying the day ticket every day, on the charged prices (discounts count).
@@ -132,10 +133,10 @@ function orderFormHtml(d, t_, len) {
   return `<h3 id="order-h">${t("ord.title", { what: t("ord.what", { label: bdi(t_.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(d.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form class="form-grid order-form" novalidate>
-      <label>${t("home.name")}<input type="text" name="name" required maxlength="100" autocomplete="name"></label>
+      <label>${t("name.name")}<input type="text" name="name" required maxlength="100" autocomplete="name"></label>
       <label>${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email"></label>
       <label>${t("ord.currency")}<select name="currency">${[...new Set([d.currency, "USD"])].map((c) =>
-        `<option value="${esc(c)}"${c === d.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
+        `<option value="${esc(c)}"${c === d.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3"></textarea></label>
       <div class="turnstile wide"></div>
       <p class="hint">${t("ord.not_payment")}</p>

@@ -116,24 +116,34 @@ def run(args) -> int:
                 page.wait_for_function("typeof data !== 'undefined' && !!data")   # /api/pricing resolved: cards, countdowns, ribbon are real
                 keys = set(page.evaluate("Object.keys(I18N.en)"))
                 where = f"home @{width}"
-                scan(page, lang, where, keys, findings, "body.home, dialog[open]")
+                scan(page, lang, where, keys, findings, "body.home")
                 if page.evaluate("document.documentElement.scrollWidth > innerWidth + 1"):
                     findings.append(f"[{lang}] {where}: page scrolls sideways")
-                page.locator("#length-toggle button").nth(2).click()   # month: a longer price, a save line, maybe a ribbon
-                page.wait_for_timeout(200)
-                scan(page, lang, f"{where} month", keys, findings, "body.home, dialog[open]")
+                for i, name in ((0, "day"), (2, "month")):   # week is the default; month adds a save line, maybe a ribbon
+                    page.locator("#length-toggle button").nth(i).click()
+                    page.wait_for_timeout(200)
+                    scan(page, lang, f"{where} {name}", keys, findings, "body.home")
                 for d in page.locator(".faq details").all():
                     d.locator("summary").click()
                 page.wait_for_timeout(100)
-                scan(page, lang, f"{where} faq open", keys, findings, "body.home, dialog[open]")
+                scan(page, lang, f"{where} faq open", keys, findings, "body.home")
                 page.screenshot(path=str(shots / f"{lang}-home-{width}.png"), full_page=True)
                 # The order dialog needs Turnstile configured to open from a click; call it directly to scan its text
                 # without depending on challenges.cloudflare.com being reachable from this run.
-                if page.evaluate("typeof openOrder === 'function' && !!data && data.tiers.length"):
-                    page.evaluate("openOrder(data.tiers[0].tier, 'week')")
-                    page.wait_for_timeout(200)
-                    scan(page, lang, f"{where} order dialog", keys, findings, "body.home, dialog[open]")
+                tiers = page.evaluate("typeof openOrder === 'function' && data ? data.tiers.map((x) => x.tier) : []")
+                for tier in tiers:
+                    for ln in ("day", "week", "month"):
+                        page.evaluate("([t, l]) => { const d = document.getElementById('order-dialog'); if (d.open) d.close(); openOrder(t, l); }", [tier, ln])
+                        page.wait_for_timeout(150)
+                        scan(page, lang, f"{where} order {tier}/{ln}", keys, findings, "dialog[open]")
+                if tiers:
                     page.screenshot(path=str(shots / f"{lang}-home-{width}-order.png"))
+                    # A failed send, as the server words it, then the sent state, without passing Turnstile.
+                    page.evaluate("() => { const e = document.querySelector('#order-dialog .error'); if (e) e.textContent = errMsg('The verification failed; please try again.'); }")
+                    scan(page, lang, f"{where} order error", keys, findings, "dialog[open]")
+                    page.evaluate("() => { document.getElementById('order-dialog').innerHTML = receivedHtml('buyer@example.com', true); }")
+                    scan(page, lang, f"{where} order received", keys, findings, "dialog[open]")
+                    page.screenshot(path=str(shots / f"{lang}-home-{width}-received.png"))
                 findings += [f"[{lang}] home: {w}" for w in sorted(set(warns))]
                 ctx.close()
         browser.close()
