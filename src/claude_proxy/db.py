@@ -249,6 +249,22 @@ SCHEMA = [
     "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_orders_user ON orders(user_id)",
+    # Online payments (payments design, section 3): one row per attempt at paying an order through ZarinPal.
+    """CREATE TABLE IF NOT EXISTS payments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER NOT NULL REFERENCES orders(id),
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        amount INTEGER NOT NULL,            -- Toman, the order's quote when the payment started
+        authority TEXT NOT NULL UNIQUE,
+        status TEXT NOT NULL CHECK(status IN ('started','cancelled','failed','expired','paid','paid_unfulfilled')),
+        ref_id TEXT,
+        card_pan TEXT,                      -- ZarinPal's masked card number; the card hash is never stored
+        error TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)",
+    "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status, created_at)",
 ]
 
 # A ticket's effective end: ends_at plus its non-cancelled bonus days. For queries that alias tickets as `t`.

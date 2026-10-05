@@ -102,9 +102,10 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
 
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
-           user_id: int | None = None, ip: str | None = None, now: float | None = None) -> dict:
+           user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None) -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
-    Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429)."""
+    Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
+    `notify=False`: no new-order emails (an order paid online)."""
     now = _now(now)
     if tier not in cfg.tickets.tiers:
         raise OrderError(400, f"Unknown tier {tier!r}.")
@@ -143,7 +144,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
         usd = tickets.price_now(conn, tier, length, now)["usd"]
         amount = tickets.round_local(usd, rate["rate"], steps[currency])
-        if cfg.email is None:
+        if cfg.email is None or not notify:   # notify=False: a payment order, mailed when paid instead (payments design, section 5)
             admin_mail = buyer_mail = "off"
         else:
             # The cap exists for signed-in users, who have no per-email order limit (spec section 5, Buyer cap).

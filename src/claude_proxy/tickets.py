@@ -368,12 +368,14 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, order_id: int | None = None,
-          now: float | None = None) -> dict:
+          paid: bool = False, after=None, now: float | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
     capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
     `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different.
     `order_id`: the order this sells (order requests design, section 7), marked done in the same transaction; an
-    order no longer open or linked to someone else raises orders.OrderError (409) and nothing is granted."""
+    order no longer open or linked to someone else raises orders.OrderError (409) and nothing is granted.
+    `paid`: the order was paid online (payments design, section 4): it sells at the order's quote, whatever the price
+    and rate are now, with no stale-rate confirmation. `after(ticket_id)`: called inside the transaction, last."""
     now = _now(now)
     note = _note(note)
     if not cfg.tickets.enabled:
@@ -382,16 +384,24 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         raise TicketError(f"{user['name']} is revoked.")
     if not user["enabled"]:
         raise TicketError(f"{user['name']} is disabled; enable them first.")
+    if paid and order_id is None:
+        raise TicketError("A paid grant needs the order it pays for.")
     conn.execute("BEGIN IMMEDIATE")
     try:
         p = preview(conn, cfg, user, tier, length, currency, now)
-        if expect_usd is not None and abs(p["usd"] - expect_usd) > 1e-9:
-            raise QuoteChanged(f"The price is now ${p['usd']:g}, not ${expect_usd:g} as shown; check the new price and grant again.")
-        if expect_rate is not None and abs(p["rate"] - expect_rate) > 1e-12:
-            raise QuoteChanged(f"The {currency} rate is now {p['rate']:g}, not {expect_rate:g} as shown; check the new amount and grant again.")
-        if p["stale_rate"] and not confirm_stale_rate:
-            raise TicketError(f"The {currency} rate is {int((now - p['rate_set_at']) // 3600)} hours old. Confirm to grant at it "
-                              "anyway, or set today's rate first.")
+        if paid:
+            q = conn.execute("SELECT quoted_usd, quoted_rate, quoted_amount FROM orders WHERE id=?", (order_id,)).fetchone()
+            if q is None:
+                raise TicketError(f"Order #{order_id} does not exist.")
+            p = p | {"usd": q["quoted_usd"], "rate": q["quoted_rate"], "amount": q["quoted_amount"]}
+        else:
+            if expect_usd is not None and abs(p["usd"] - expect_usd) > 1e-9:
+                raise QuoteChanged(f"The price is now ${p['usd']:g}, not ${expect_usd:g} as shown; check the new price and grant again.")
+            if expect_rate is not None and abs(p["rate"] - expect_rate) > 1e-12:
+                raise QuoteChanged(f"The {currency} rate is now {p['rate']:g}, not {expect_rate:g} as shown; check the new amount and grant again.")
+            if p["stale_rate"] and not confirm_stale_rate:
+                raise TicketError(f"The {currency} rate is {int((now - p['rate_set_at']) // 3600)} hours old. Confirm to grant at it "
+                                  "anyway, or set today's rate first.")
         check_capacity(conn, cfg, ACCOUNT_ID, p["share_pct"], p["starts_at"], p["ends_at"])
         cur = conn.execute(
             "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, length, days, starts_at, ends_at, list_usd, usd, "
@@ -410,6 +420,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         if order_id is not None:
             from . import orders   # here, not at the top: orders imports tickets
             orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)
+        if after is not None:
+            after(tid)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
