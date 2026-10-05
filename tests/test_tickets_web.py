@@ -646,6 +646,17 @@ var history = { replaceState: (a, b, u) => { replaced = u; } };"""
     assert out == ["/dashboard?ref=mail", {"tier": "lite", "length": "week"}]
 
 
+def test_payment_notice_escapes_apostrophes_and_ampersands_only_once(tmp_path):
+    # alertInline() esc()s the whole string it's handed, so paymentNoticeMsg() must not esc() ref_id/label/error_shown
+    # itself, or a ZarinPal message like "-51: Don't & retry" would show as "Don&amp;#39;t &amp;amp; retry".
+    import json
+    stubs = 'const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : len);\n'
+    payment = {"status": "failed", "error_shown": "-51: Don't & retry", "label": "Lite", "length": "month", "ref_id": "123"}
+    out = _app_fn(tmp_path, ["paymentNoticeMsg"], stubs + f"var out = paymentNoticeMsg({json.dumps(payment)});")
+    assert "Don't & retry" in out
+    assert "&amp;" not in out and "&#39;" not in out
+
+
 def test_admin_tips_no_longer_point_at_the_old_pricing_page():
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js").read_text()
