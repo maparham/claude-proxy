@@ -1,4 +1,5 @@
 """Payments design, section 4: start, callback, expiry, with ZarinPal faked."""
+import asyncio
 import sqlite3
 import time
 
@@ -252,6 +253,26 @@ async def test_rate_change_during_payment_keeps_the_paid_amount(env):
     p = await payments.callback(conn, cfg, payments.get(conn, r["payment_id"])["authority"], "OK")
     o = orders.get(conn, p["order_id"])
     assert conn.execute("SELECT amount FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone()[0] == 1250000
+
+
+async def test_concurrent_callbacks_mark_changed_exactly_once(env, monkeypatch):
+    """Two callbacks racing on the same authority (review fix round 1): only the one that actually moves the
+    payment to paid/paid_unfulfilled is marked changed=True, so the web layer sends the mail only once."""
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+    real_verify = zp.verify
+
+    async def yielding_verify(*a, **kw):
+        await asyncio.sleep(0)   # let the other callback run up to its own verify before either resumes
+        return await real_verify(*a, **kw)
+    monkeypatch.setattr(zarinpal, "verify", yielding_verify)
+
+    r1, r2 = await asyncio.gather(payments.callback(conn, cfg, p0["authority"], "OK"),
+                                  payments.callback(conn, cfg, p0["authority"], "OK"))
+    assert sum(1 for res in (r1, r2) if res.get("changed")) == 1
+    assert {r1["status"], r2["status"]} == {"paid"}
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 1
 
 
 async def test_unknown_authority(env):

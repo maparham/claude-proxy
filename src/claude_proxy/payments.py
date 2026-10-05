@@ -86,7 +86,11 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
 
 async def callback(conn: sqlite3.Connection, cfg: Config, authority: str, status: str, now: float | None = None) -> dict:
     """The buyer came back from ZarinPal (section 4, Callback). Idempotent: a payment that is no longer `started` is
-    returned as it is, without asking ZarinPal again."""
+    returned as it is, without asking ZarinPal again. The returned dict carries `"changed": True` only when THIS
+    call is the one that moved the payment to paid or paid_unfulfilled (the _fulfil/_unfulfilled paths); every
+    other return has no such key. Two callbacks racing on the same authority can both verify before either writes
+    (both read `status == "started"` before either awaits ZarinPal), so the caller must use this flag, not the
+    payment's status alone, to decide whether to send mail -- otherwise both would send it."""
     row = conn.execute("SELECT * FROM payments WHERE authority=?", (authority,)).fetchone()
     if row is None:
         raise PaymentError(404, "No such payment.")
@@ -123,7 +127,7 @@ def _unfulfilled(conn: sqlite3.Connection, p: dict, ref_id: str, card_pan: str |
     db.audit(conn, p["user_id"], "payment_unfulfilled", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id,
                                                                                      "reason": reason})
     logger.warning("payment #%d (ref %s) verified but not granted: %s", p["id"], ref_id, reason)
-    return get(conn, p["id"])
+    return {**get(conn, p["id"]), "changed": True}
 
 
 def _close(conn: sqlite3.Connection, p: dict, status: str, now: int, **cols) -> None:
@@ -152,7 +156,7 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
         _unfulfilled(conn, p, ref_id, card_pan, now, str(e))
         if not isinstance(e, (tickets.TicketError, orders.OrderError)):
             raise   # unexpected (e.g. sqlite3.OperationalError): the payment is recorded, then the error still surfaces
-    return get(conn, p["id"])
+    return {**get(conn, p["id"]), "changed": True}
 
 
 def expire(conn: sqlite3.Connection, now: float | None = None) -> int:

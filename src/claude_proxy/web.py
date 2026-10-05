@@ -1134,13 +1134,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/pay/callback")
     async def pay_callback(Authority: str = "", Status: str = ""):
         # No session: the authority names the payment, and its ticket only ever goes to the payment's own user.
-        before = conn.execute("SELECT status FROM payments WHERE authority=?", (Authority,)).fetchone()
         try:
             p = await payments.callback(conn, cfg, Authority, Status)
         except payments.PaymentError:
             return HTMLResponse("<!doctype html><title>Payment not found</title><p>This payment link is not known.</p>",
                                 status_code=404, headers=PAGE_HEADERS)
-        if before and before["status"] == "started" and p["status"] in ("paid", "paid_unfulfilled") and cfg.email is not None:
+        # p["changed"] (set only on the call that actually moved the payment): two callbacks can race on the same
+        # authority and both see it paid, so the status alone would send the mail twice.
+        if p.get("changed") and p["status"] in ("paid", "paid_unfulfilled") and cfg.email is not None:
             task = asyncio.create_task(payments.send_mails(conn, cfg, p["id"]))
             _mail_tasks.add(task)
             task.add_done_callback(_mail_done)

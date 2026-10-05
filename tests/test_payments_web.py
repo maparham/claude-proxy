@@ -110,6 +110,41 @@ async def test_callback_is_served_on_the_home_host(env):
         assert (await c.get("/pay/callback?Authority=nope&Status=OK")).status_code == 404   # served, not redirected
 
 
+async def test_payment_result_hides_the_internal_reason_when_unfulfilled(env, monkeypatch):
+    gw, conn, cfg, ids, keys, zp = env
+
+    def full(*a, **k):
+        raise tickets.CapacityError("sold out")
+    async with client(gw) as c:
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        auth = r.json()["url"].rsplit("/", 1)[1]
+        monkeypatch.setattr(tickets, "check_capacity", full)   # capacity is gone by the time the callback grants
+        await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        me = (await c.get(f"/api/me/payments/{r.json()['payment_id']}", headers=bearer(keys["alice"]))).json()
+    assert me["status"] == "paid_unfulfilled" and me["error_shown"] is None   # "sold out" never reaches the buyer
+
+
+async def test_payment_result_shows_zarinpals_message_when_failed(env):
+    gw, conn, cfg, ids, keys, zp = env
+    zp.verify_answer = zarinpal.ZarinpalRefused(-51, "Session is not valid, session is not active paid try.")
+    async with client(gw) as c:
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        auth = r.json()["url"].rsplit("/", 1)[1]
+        await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        me = (await c.get(f"/api/me/payments/{r.json()['payment_id']}", headers=bearer(keys["alice"]))).json()
+    assert me["status"] == "failed" and me["error_shown"] == "-51: Session is not valid, session is not active paid try."
+
+
+async def test_pay_needs_csrf_for_cookie_session(env):
+    gw, conn, cfg, ids, keys, zp = env
+    async with client(gw) as c:
+        r = await c.post("/api/login/key", json={"key": keys["alice"]})
+        assert r.status_code == 200, r.text
+        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week"})).status_code == 403   # cookie, no CSRF
+        c.headers["x-csrf-token"] = r.json()["csrf"]
+        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week"})).status_code == 200
+
+
 async def test_mail_once_per_payment(env, monkeypatch):
     gw, conn, cfg, ids, keys, zp = env
     from claude_proxy import mail, web
