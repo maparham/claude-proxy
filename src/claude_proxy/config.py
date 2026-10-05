@@ -42,6 +42,9 @@ class ListenerConfig:
     # authorizing in the browser: the install command, the authorize link and the origin Clerk tokens must come from.
     public_url: str = ""
     dashboard_url: str = ""
+    # Optional: another host (e.g. the apex domain) that serves the public home page; its sign-in links and install
+    # commands go on to dashboard_url, since Clerk's tokens are made for that origin only.
+    home_url: str = ""
 
 
 @dataclass

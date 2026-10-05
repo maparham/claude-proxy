@@ -121,6 +121,22 @@ class SecurityHeaders(BaseHTTPMiddleware):
         return resp
 
 
+class HomeHost(BaseHTTPMiddleware):
+    """On [listener] home_url's host only the home page and what it uses are served; the rest is the dashboard's."""
+    PUBLIC = ("/", "/privacy", "/api/pricing", "/api/orders")
+
+    def __init__(self, app, home_host: str, dashboard: str):
+        super().__init__(app)
+        self.home_host, self.dashboard = home_host, dashboard
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if request.url.hostname == self.home_host and path not in self.PUBLIC and not path.startswith("/static/"):
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"{self.dashboard}{path}{query}", status_code=302)
+        return await call_next(request)
+
+
 def create_dashboard_app(gw: Gateway) -> FastAPI:
     app = FastAPI(title="claude-proxy dashboard", docs_url=None, redoc_url=None, openapi_url=None)
     conn, cfg = gw.conn, gw.cfg
@@ -132,6 +148,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http)
     app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None,
                        turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
+    if cfg.listener.home_url and cfg.listener.dashboard_url:
+        app.add_middleware(HomeHost, home_host=urlsplit(cfg.listener.home_url).hostname,
+                           dashboard=cfg.listener.dashboard_url.rstrip("/"))
     app.state.gw = gw
     app.state.clerk = verifier
     limiter = LoginLimiter()

@@ -15,6 +15,7 @@ Tunnels → aws-vps → Routes → Add route → Published application:
 |---|---|
 | `claude.rahkar.pro` | `http://127.0.0.1:18480` |
 | `claude-dash.rahkar.pro` | `http://127.0.0.1:18481` |
+| `rahkar.pro` | `http://127.0.0.1:18481` (the home page, `[listener] home_url`) |
 
 (`apply-tunnel.sh` is for a tunnel run from a local config file.)
 

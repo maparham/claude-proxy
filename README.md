@@ -130,6 +130,7 @@ People can create their own account and connect their computers without the admi
 [listener]
 public_url = "https://claude.example.com"            # where people reach the gateway
 dashboard_url = "https://claude-dash.example.com"    # and the dashboard
+home_url = "https://example.com"                    # optional: the home page on another host; sign-in goes to dashboard_url
 
 [signup]
 enabled = true

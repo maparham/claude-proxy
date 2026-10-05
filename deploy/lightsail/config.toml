@@ -7,6 +7,7 @@ secure_cookies = true
 # Where people reach the two listeners, for sign-up and `claude-gateway on` authorizing in the browser.
 public_url = "https://claude.rahkar.pro"
 dashboard_url = "https://claude-dash.rahkar.pro"
+home_url = "https://rahkar.pro"                 # the home page; sign-in links go on to dashboard_url
 
 [db]
 path = "/data/claude_proxy.db"
