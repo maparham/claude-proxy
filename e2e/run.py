@@ -252,7 +252,7 @@ def authorize_in_the_browser(link: str, code: str, key: str, label: str, shots: 
             expect(page.locator(".authorize")).to_contain_text(label)
             page.screenshot(path=str(shots / "1-authorize.png"))
             page.click("#az-yes")
-            expect(page.locator(".authorize h2")).to_have_text("Authorized", timeout=15000)
+            expect(page.locator("#az-done")).to_have_text("تأیید شد", timeout=15000)   # the dashboard opens in Persian
             page.screenshot(path=str(shots / "2-authorized.png"))
         except Exception:
             page.screenshot(path=str(shots / "failed.png"))

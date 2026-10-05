@@ -409,6 +409,7 @@ var fmtAgo = (t) => `A${t}`;
 var bdi = (v) => `<bdi>${esc(v)}</bdi>`;
 var nfFix = (d) => new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: false });
 var nf0 = nfFix(0), nf2 = nfFix(2), nfFull = new Intl.NumberFormat("en-US");
+var lengthName = (l) => ({ day: "1 day", week: "1 week", month: "1 month" }[l] || esc(l));
 var stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
 var S = { tkSkew: 0, pick: null, user: { email: null } };
 var Date = { now: () => 0 };

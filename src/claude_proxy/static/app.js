@@ -533,36 +533,37 @@ function priceListCard(tk, order) {
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
 
+const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : esc(len));
 // The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
 function myOrderCard(o) {
   if (!o) return "";
-  const what = `${esc(o.label)}, ${{ day: "1 day", week: "1 week", month: "1 month" }[o.length] || esc(o.length)}`;
+  const what = t("ord.what", { label: esc(o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
-    return `<div class="card order-note" id="my-order"><div><b>Order received: ${what}. The admin will contact you.</b>
-      <div class="muted">Quoted ${esc(money(o.quoted_amount, o.currency))} · ${o.status === "contacted" ? "the admin has been in touch" : "waiting for the admin"}</div></div>
-      <button class="btn small" data-my-order="withdraw" data-id="${o.id}">Withdraw</button></div>`;
+    return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
+      <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div></div>
+      <button class="btn small" data-my-order="withdraw" data-id="${o.id}">${t("ord.withdraw")}</button></div>`;
   }
-  const text = o.status === "done" ? "Your order is done." : o.status === "declined" ? "Your order was declined." : "";
+  const text = o.status === "done" ? t("ord.done") : o.status === "declined" ? t("ord.declined") : "";
   return text ? `<div class="card order-note" id="my-order"><div>${text} <span class="muted">${what}</span></div>
-    <button class="btn small" data-my-order="dismiss" data-id="${o.id}">Dismiss</button></div>` : "";
+    <button class="btn small" data-my-order="dismiss" data-id="${o.id}">${t("ord.dismiss")}</button></div>` : "";
 }
 // What a buyer can order in: the price list's currency and USD, which always has a rate.
 function orderCurrencies(p) { return [...new Set([p.currency, "USD"])]; }
-function orderFormHtml(p, t, len, email) {
-  const l = t.lengths[len];
+function orderFormHtml(p, tier, len, email) {
+  const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
-  return `<h3>Order ${esc(t.label)}, ${{ day: "1 day", week: "1 week", month: "1 month" }[len] || esc(len)}</h3>
-    <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">at today's rate</span></p>
+  return `<h3>${t("ord.title", { what: t("ord.what", { label: esc(tier.label), len: lengthName(len) }) })}</h3>
+    <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form id="f-order" class="form-grid order-form">
-      <label>Currency<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
-      ${email ? "" : `<label class="wide">Your email<input type="email" name="email" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">The admin replies here. It is kept with this order only.</span></label>`}
-      <label class="wide">Message (optional)<textarea name="message" maxlength="1000" rows="3" placeholder="Anything the admin should know"></textarea></label>
-      <p class="hint">This is a request, not a payment. The admin will contact you with payment details.</p>
-      <button class="btn primary" type="submit">Send order</button>
-    </form><div class="error" id="order-err"></div><p><button class="btn" data-close>Cancel</button></p>`;
+      <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
+      ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">${t("ord.email_note")}</span></label>`}
+      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
+      <p class="hint">${t("ord.not_payment")}</p>
+      <button class="btn primary" type="submit">${t("ord.send")}</button>
+    </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`;
 }
-function orderDialog(p, t, len) {
-  const d = openDialog(orderFormHtml(p, t, len, S.user.email));
+function orderDialog(p, tier, len) {
+  const d = openDialog(orderFormHtml(p, tier, len, S.user.email));
   const f = $("#f-order", d);
   f.currency.onchange = () => { $("#order-price", d).textContent = f.currency.selectedOptions[0].dataset.price; };
   f.onsubmit = async (e) => {
@@ -570,20 +571,20 @@ function orderDialog(p, t, len) {
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
     try {
-      await api("/api/me/orders", { method: "POST", body: { tier: t.tier, length: len, currency: f.currency.value, message: f.message.value, ...(f.email ? { email: f.email.value } : {}) } });
+      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: f.currency.value, message: f.message.value, ...(f.email ? { email: f.email.value } : {}) } });
       d.close(); render();
     } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
   };
 }
 function wireOrdering(root, tk, order) {
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
-    const [tier, len] = b.dataset.order.split(":");
-    const t = tk.prices.tiers.find((x) => x.tier === tier);
-    if (t) orderDialog(tk.prices, t, len);
+    const [tierId, len] = b.dataset.order.split(":");
+    const tier = tk.prices.tiers.find((x) => x.tier === tierId);
+    if (tier) orderDialog(tk.prices, tier, len);
   }));
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
-    if (act === "withdraw" && !confirmInline("Withdraw your order? The admin will no longer act on it.")) return;
+    if (act === "withdraw" && !confirmInline(t("ord.confirm_withdraw"))) return;
     try { await api(`/api/me/orders/${+b.dataset.id}/${act}`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
 }
@@ -684,51 +685,53 @@ function userActions(u) {
 
 // ---------- paid tickets (design 2026-10-03) ----------
 
-const stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
+// A ticket's, order's or discount's state, in the page's language; the class keeps the raw state for its colour.
+const stateBadge = (s) => `<span class="badge state-${s}">${esc(I18N.en[`state.${s}`] ? t(`state.${s}`) : s)}</span>`;
 
 async function renderTickets(main) {
   const [cap, { tickets, deleted_users }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
   const pct = (v, max) => meter((100 * v) / max);
-  const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${cap.utilization[b].utilization_pct.toFixed(0)}%${cap.utilization[b].stale ? " (stale)" : ""}`);
-  main.innerHTML = `<section class="view"><h2>Tickets</h2>
-    <p class="lede">Each ticket reserves a share of the subscription for its days. The gateway never sells the same capacity twice.</p>
+  const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${fmtPct(cap.utilization[b].utilization_pct)}${cap.utilization[b].stale ? ` (${t("quota.stale")})` : ""}`);
+  const of = (v) => t("tk.of", { v: fmtPct(v, 1), max: fmtPct(cap.max_sold_pct) });
+  main.innerHTML = `<section class="view"><h2>${t("tab.tickets")}</h2>
+    <p class="lede">${t("tk.lede")}</p>
     <div class="grid cols-2">
-      <div class="card"><h3>Capacity${tipI("capacity_sold")}</h3>
-        <div class="limit-row"><span>Sold now</span><span class="num">${cap.sold_now_pct.toFixed(1)}% of ${cap.max_sold_pct}%</span></div>${pct(cap.sold_now_pct, cap.max_sold_pct)}
-        <div class="limit-row" style="margin-top:8px"><span>Peak, next 30 days</span><span class="num">${cap.peak_30d_pct.toFixed(1)}% of ${cap.max_sold_pct}%</span></div>${pct(cap.peak_30d_pct, cap.max_sold_pct)}
-        <p class="sub" style="margin-top:12px">Sold is what tickets may use. Headroom for everyone else: ${(100 - cap.max_sold_pct).toFixed(0)}%.</p></div>
-      <div class="card"><h3>Account utilization (reported by Anthropic)${tipI("capacity_util")}</h3>
-        <div class="limit-row"><span>5-hour bucket</span><span class="num">${util("5h")}</span></div>
-        <div class="limit-row"><span>Weekly bucket</span><span class="num">${util("7d")}</span></div>
-        <p class="sub" style="margin-top:12px">Utilization is what everyone has used, ticket holders and headroom users alike.</p></div>
+      <div class="card"><h3>${t("tk.capacity")}${tipI("capacity_sold")}</h3>
+        <div class="limit-row"><span>${t("tk.sold_now")}</span><span class="num">${of(cap.sold_now_pct)}</span></div>${pct(cap.sold_now_pct, cap.max_sold_pct)}
+        <div class="limit-row" style="margin-top:8px"><span>${t("tk.peak")}</span><span class="num">${of(cap.peak_30d_pct)}</span></div>${pct(cap.peak_30d_pct, cap.max_sold_pct)}
+        <p class="sub" style="margin-top:12px">${t("tk.headroom", { v: fmtPct(100 - cap.max_sold_pct) })}</p></div>
+      <div class="card"><h3>${t("tk.util_title")}${tipI("capacity_util")}</h3>
+        <div class="limit-row"><span>${t("tk.bucket_5h")}</span><span class="num">${util("5h")}</span></div>
+        <div class="limit-row"><span>${t("tk.bucket_7d")}</span><span class="num">${util("7d")}</span></div>
+        <p class="sub" style="margin-top:12px">${t("tk.util_sub")}</p></div>
     </div>
-    <div class="controls"><button class="btn primary" id="grant">Grant a ticket</button>
-      <select id="ticket-user"><option value="">All users</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(n)} (deleted)</option>`).join("")}</select></div>
-    <div class="card table-wrap"><table class="data"><thead><tr><th>User</th><th>Tier</th><th>Period</th><th class="r">Paid</th><th>State</th><th>Bonuses</th><th>Note</th><th></th></tr></thead>
-      <tbody>${tickets.map(ticketRow).join("") || `<tr><td colspan="8" class="muted">No tickets yet.</td></tr>`}</tbody></table></div>
+    <div class="controls"><button class="btn primary" id="grant">${t("tk.grant")}</button>
+      <select id="ticket-user"><option value="">${t("tk.all_users")}</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(t("tk.deleted_name", { name: n }))}</option>`).join("")}</select></div>
+    <div class="card table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${tickets.map(ticketRow).join("") || `<tr><td colspan="8" class="muted">${t("tk.none")}</td></tr>`}</tbody></table></div>
   </section>`;
   $("#grant").onclick = () => grantDialog(users);
   $("#ticket-user").onchange = (e) => { const v = e.target.value; S.ticketUser = !v ? null : v.startsWith("d:") ? v : +v; render(); };
-  main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((t) => t.id === +b.dataset.id), tickets)));
+  main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
 }
-function ticketRow(t) {
-  const live = t.state === "active" || t.state === "queued";
-  const bonus = t.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? `+${b.extra_days} d` : ""}`).join(", ");
-  return `<tr><td><b>${esc(t.user_name)}</b>${t.user_id == null ? ` <span class="badge">deleted</span>` : ""}</td>
-    <td>${esc(t.tier)} <span class="muted">${fmtShare(t.share_pct)}</span></td>
-    <td class="nowrap">${fmtDate(t.starts_at)} → ${fmtDate(t.effective_end)}${t.effective_end !== t.ends_at ? ` <span class="muted">(+${Math.round((t.effective_end - t.ends_at) / 86400)} d bonus)</span>` : ""}</td>
-    <td class="r">${esc(money(t.amount, t.currency))}${t.discount_id ? `<div class="muted"><s>${fmtPrice(t.list_usd)}</s> ${fmtPrice(t.usd)}</div>` : `<div class="muted">${fmtPrice(t.usd)}</div>`}</td>
-    <td>${stateBadge(t.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${esc(t.note || "")}</td>
-    <td><div class="row-actions">${live || t.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${t.id}" data-tip="act_ticket_bonus">Bonus</button>` : ""}
-      ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${t.id}" data-tip="act_ticket_cancel">Cancel</button>` : ""}</div></td></tr>`;
+function ticketRow(tk) {
+  const live = tk.state === "active" || tk.state === "queued";
+  const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
+  return `<tr><td><b>${bdi(tk.user_name)}</b>${tk.user_id == null ? ` <span class="badge">${t("tk.deleted")}</span>` : ""}</td>
+    <td>${bdi(tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
+    <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${tk.effective_end !== tk.ends_at ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(Math.round((tk.effective_end - tk.ends_at) / 86400)) })})</span>` : ""}</td>
+    <td class="r">${esc(money(tk.amount, tk.currency))}${tk.discount_id ? `<div class="muted"><s>${fmtPrice(tk.list_usd)}</s> ${fmtPrice(tk.usd)}</div>` : `<div class="muted">${fmtPrice(tk.usd)}</div>`}</td>
+    <td>${stateBadge(tk.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
+    <td><div class="row-actions">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
+      ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${tk.id}" data-tip="act_ticket_cancel">${t("app.cancel_ticket")}</button>` : ""}</div></td></tr>`;
 }
-async function ticketAction(act, t, list) {
-  if (act === "bonus") return bonusDialog(t, list);
-  if (!confirmInline(`Cancel ${t.user_name}'s ${t.tier} ticket? The slice is freed now and its bonuses end. Refunds happen outside the app.`)) return;
+async function ticketAction(act, tk, list) {
+  if (act === "bonus") return bonusDialog(tk, list);
+  if (!confirmInline(t("tk.confirm_cancel", { name: iso(tk.user_name), tier: iso(tk.tier) }))) return;
   try {
-    const r = await api(`/api/admin/tickets/${t.id}/cancel`, { method: "POST", body: {} });
+    const r = await api(`/api/admin/tickets/${tk.id}/cancel`, { method: "POST", body: {} });
     render();   // the ticket is cancelled either way, and any queued tickets moved
-    if (r.dates_kept) infoInline("Cancelled", `Their queued tickets kept their dates because one of them would not fit earlier: ${r.reason}`);
+    if (r.dates_kept) infoInline(t("tk.cancelled"), t("tk.dates_kept", { reason: r.reason }));
   } catch (e) { alertInline(e.message); }
 }
 // `pre`, from an order: {order_id, user, tier, length, currency}. The user is fixed to the order's account, and the
@@ -736,18 +739,18 @@ async function ticketAction(act, t, list) {
 function grantDialog(users, pre = null) {
   const T = S.tickets;
   const pickable = pre ? users.filter((u) => u.id === pre.user) : users.filter((u) => !u.revoked && u.enabled);
-  const d = openDialog(`<h3>Grant a ticket${pre ? ` for order #${esc(pre.order_id)}` : ""}</h3>
+  const d = openDialog(`<h3>${pre ? t("tk.grant_for_order", { id: esc(pre.order_id) }) : t("tk.grant")}</h3>
     <form id="f-grant" class="form-grid">
-      <label>User<select name="user" required${pre ? " disabled" : ""}>${pickable.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
-      <label>Tier<select name="tier">${Object.entries(T.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)} · ${fmtShare(t.share_pct)}</option>`).join("")}</select></label>
-      <label>Length<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${n} ${n === 1 ? "day" : "days"})</option>`).join("")}</select></label>
-      <label>Currency<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
-      <label>Note (for you)<input type="text" name="note" maxlength="200" placeholder="e.g. transfer ref 1234"></label>
+      <label>${t("app.user")}<select name="user" required${pre ? " disabled" : ""}>${pickable.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
+      <label>${t("price.tier")}<select name="tier">${Object.entries(T.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(x.label)} · ${fmtShare(x.share_pct)}</option>`).join("")}</select></label>
+      <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
+      <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
+      <label>${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
       <div id="grant-preview" class="hint" aria-live="polite">…</div>
       <div id="grant-limits"></div>
-      <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> The rate is stale; grant at it anyway</label>
-      <button class="btn primary" type="submit" id="grant-go">Grant</button>
-    </form><div class="error" id="grant-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+      <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
+      <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button>
+    </form><div class="error" id="grant-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   const f = $("#f-grant", d);
   if (pre) {
     ["tier", "length", "currency"].forEach((k) => { if ([...f[k].options].some((o) => o.value === pre[k])) f[k].value = pre[k]; });
@@ -760,16 +763,16 @@ function grantDialog(users, pre = null) {
       preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<span class="muted">${esc(e.message)}</span>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
-    const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (discount)` : `<b>${fmtPrice(p.usd)}</b>`;
-    const when = p.queued ? `queued: starts ${fmtDate(p.starts_at)}, after the user's current ticket` : `starts now`;
-    const fit = p.available ? `<span class="good">The period is available.</span>` : `<span class="critical">${esc(p.reason)}</span>`;
-    const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${tipT("The home page shows this tier as sold out right now", "sold_out_vs_queued")}; this grant starts later and fits.</span>` : "";
-    $("#grant-preview", d).innerHTML = `${price} → <b>${esc(money(p.amount, p.currency))}</b> at ${p.rate} ${p.rate_set_at ? `(rate of ${fmtDate(p.rate_set_at)}${p.stale_rate ? ", <b>stale</b>" : ""})` : ""}<br>
-      ${p.days} day${p.days === 1 ? "" : "s"}, ${when}: ${fmtDate(p.starts_at)} → ${fmtDate(p.ends_at)}<br>${fit}${soldOut}
-      ${p.credit ? `<br><span class="muted">Their sign-up credit is removed with the ticket.</span>` : ""}`;
+    const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${t("tk.discount")})` : `<b>${fmtPrice(p.usd)}</b>`;
+    const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : t("tk.starts_now");
+    const fit = p.available ? `<span class="good">${t("tk.available")}</span>` : `<span class="critical">${esc(p.reason)}</span>`;
+    const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</span>` : "";
+    $("#grant-preview", d).innerHTML = `${price} ${t("app.arrow")} <b>${esc(money(p.amount, p.currency))}</b> ${t("tk.at_rate", { rate: nfFull.format(p.rate) })} ${p.rate_set_at ? `(${t("tk.rate_of", { date: fmtDate(p.rate_set_at) })}${p.stale_rate ? `${t("app.list_sep")}<b>${t("quota.stale")}</b>` : ""})` : ""}<br>
+      ${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}<br>${fit}${soldOut}
+      ${p.credit ? `<br><span class="muted">${t("tk.credit_removed")}</span>` : ""}`;
     $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
-    $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">Remove these hand-set limits with the grant, so they don't throttle a paying user:</p>` +
-      p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = ${esc(r.value)} ${esc(r.unit)}</label>`).join("") : "";
+    $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">${t("tk.remove_limits")}</p>` +
+      p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(t(`unitname.${r.unit}`))}</label>`).join("") : "";
     $("#grant-go", d).disabled = !p.available;
   };
   ["user", "tier", "length", "currency"].forEach((k) => (f[k].onchange = refresh));
@@ -790,80 +793,81 @@ function grantDialog(users, pre = null) {
     }
   };
 }
-function bonusDialog(t, list) {
+function bonusDialog(tk, list) {
   // The user's queued tickets after this one: extra days that reach the first of them move it and the rest forward (spec section 8).
-  const queued = t.user_id == null ? [] : list.filter((x) => x.user_id === t.user_id && x.id !== t.id && x.state === "queued" && x.starts_at >= t.effective_end)
+  const queued = tk.user_id == null ? [] : list.filter((x) => x.user_id === tk.user_id && x.id !== tk.id && x.state === "queued" && x.starts_at >= tk.effective_end)
     .sort((a, b) => a.starts_at - b.starts_at);
-  const moves = (days) => (queued.length && queued[0].starts_at < t.effective_end + days * 86400 ? queued.length : 0);
-  const d = openDialog(`<h3>Bonus on ${esc(t.user_name)}'s ${esc(t.tier)} ticket</h3>
-    <p class="sub">Extra share applies between the two times (clamped to the ticket; an empty Until means its end, extra days included, which an ended ticket needs). Extra days extend the ticket at its own share and move this user's queued tickets forward as far as needed.</p>
+  const moves = (days) => (queued.length && queued[0].starts_at < tk.effective_end + days * 86400 ? queued.length : 0);
+  const d = openDialog(`<h3>${t("tk.bonus_title", { name: bdi(tk.user_name), tier: bdi(tk.tier) })}</h3>
+    <p class="sub">${t("tk.bonus_sub")}</p>
     <form id="f-bonus" class="form-grid">
-      <label>Extra share, points<input type="text" inputmode="decimal" dir="ltr" name="share_pct" min="0" step="0.1" value="0"></label>
-      <label>From<input type="datetime-local" name="starts_at" value="${toLocal(Math.max(t.starts_at, Date.now() / 1000))}"></label>
-      <label>Until<input type="datetime-local" name="ends_at" value="${t.effective_end > Date.now() / 1000 ? toLocal(t.effective_end) : ""}" placeholder="the ticket's end"></label>
-      <label>Extra days<input type="text" inputmode="decimal" dir="ltr" name="extra_days" min="0" step="1" value="0"></label>
-      <label>Note (shown to the user)<input type="text" name="note" maxlength="200" placeholder="e.g. Sorry for Tuesday's outage"></label>
+      <label>${t("tk.extra_share")}<input type="text" inputmode="decimal" dir="ltr" name="share_pct" min="0" step="0.1" value="0"></label>
+      <label>${t("tk.from")}<input type="datetime-local" name="starts_at" value="${toLocal(Math.max(tk.starts_at, Date.now() / 1000))}"></label>
+      <label>${t("tk.until")}<input type="datetime-local" name="ends_at" value="${tk.effective_end > Date.now() / 1000 ? toLocal(tk.effective_end) : ""}" placeholder="${esc(t("tk.until_ph"))}"></label>
+      <label>${t("tk.extra_days")}<input type="text" inputmode="decimal" dir="ltr" name="extra_days" min="0" step="1" value="0"></label>
+      <label>${t("tk.note_user")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_user_ph"))}"></label>
       <div id="bonus-moves" class="hint" aria-live="polite"></div>
-      <button class="btn primary" type="submit">Add bonus</button>
-    </form><div class="error" id="bonus-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+      <button class="btn primary" type="submit">${t("tk.add_bonus")}</button>
+    </form><div class="error" id="bonus-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   const f = $("#f-bonus", d);
-  const movesText = () => { const n = moves(num(f.extra_days.value) || 0); return n ? `These extra days move ${n} queued ticket${n === 1 ? "" : "s"} of ${t.user_name} forward.` : ""; };
+  const movesText = () => { const n = moves(num(f.extra_days.value) || 0); return n ? plural("tk.moves", n, { n: nf0.format(n), name: iso(tk.user_name) }) : ""; };
   f.extra_days.oninput = () => { $("#bonus-moves", d).textContent = movesText(); };
   f.onsubmit = async (e) => {
     e.preventDefault();
-    if (movesText() && !confirmInline(`${movesText()} Add the bonus?`)) return;
+    if (movesText() && !confirmInline(t("tk.confirm_bonus", { moves: movesText() }))) return;
     try {
-      const r = await api(`/api/admin/tickets/${t.id}/bonus`, { method: "POST", body: { share_pct: num(f.share_pct.value), extra_days: num(f.extra_days.value),
+      const r = await api(`/api/admin/tickets/${tk.id}/bonus`, { method: "POST", body: { share_pct: num(f.share_pct.value), extra_days: num(f.extra_days.value),
         starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value), note: f.note.value } });
       d.close();
       render();
-      if (r.moved) infoInline("Bonus added", `${r.moved} queued ticket${r.moved === 1 ? "" : "s"} moved forward to start after the extended ticket.`);
+      if (r.moved) infoInline(t("tk.bonus_added"), plural("tk.moved", r.moved, { n: nf0.format(r.moved) }));
     } catch (err) { $("#bonus-err", d).textContent = err.message; }
   };
 }
 
 // ---------- order requests: the admin's Orders tab (design 2026-10-04, section 7) ----------
 
-const ORDER_STATUSES = [["open", "Open orders"], ["new", "New"], ["contacted", "Contacted"], ["done", "Done"], ["declined", "Declined"], ["withdrawn", "Withdrawn"], ["all", "All orders"]];
+const ORDER_STATUSES = ["open", "new", "contacted", "done", "declined", "withdrawn", "all"];
 const isOpenOrder = (o) => o.status === "new" || o.status === "contacted";
 
 async function renderOrders(main) {
-  const status = ORDER_STATUSES.some(([k]) => k === S.prefs.orderStatus) ? S.prefs.orderStatus : "open";
+  const status = ORDER_STATUSES.includes(S.prefs.orderStatus) ? S.prefs.orderStatus : "open";
   const [{ orders, new: fresh }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
   if (S.tickets && S.tickets.orders_new !== fresh) { S.tickets.orders_new = fresh; renderTabs(); }
-  main.innerHTML = `<section class="view"><h2>Orders</h2>
-    <p class="lede">Requests from buyers. An order holds no capacity and takes no payment: contact the buyer, then grant the ticket from the order.</p>
-    <div class="controls"><label for="order-status">Show</label><select id="order-status">${ORDER_STATUSES.map(([k, n]) => `<option value="${k}"${k === status ? " selected" : ""}>${n}</option>`).join("")}</select></div>
-    <div class="card table-wrap"><table class="data orders"><thead><tr><th>Age</th><th>Buyer</th><th>Ticket</th><th class="r">Quoted</th><th>Message</th><th>Status</th><th>Email</th><th>Note</th><th></th></tr></thead>
-      <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="9" class="muted">No ${status === "all" ? "" : `${esc(status)} `}orders.</td></tr>`}</tbody></table></div>
+  main.innerHTML = `<section class="view"><h2>${t("tab.orders")}</h2>
+    <p class="lede">${t("ord.lede")}</p>
+    <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select></div>
+    <div class="card table-wrap"><table class="data orders"><thead><tr><th>${t("ord.age")}</th><th>${t("ord.buyer")}</th><th>${t("ord.ticket")}</th><th class="r">${t("ord.quoted_col")}</th><th>${t("ord.message_col")}</th><th>${t("errs.status")}</th><th>${t("ord.email_col")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="9" class="muted">${t(`ord.none_${status}`)}</td></tr>`}</tbody></table></div>
   </section>`;
   $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
   main.querySelectorAll("[data-oact]").forEach((b) => b.addEventListener("click", () => orderAction(b.dataset.oact, orders.find((o) => o.id === +b.dataset.id), users)));
 }
 // Every field a buyer typed (name, email, message) and the admin note go through esc().
 function orderRow(o) {
-  const account = o.user_id != null ? `<div class="muted">account <a class="user-link" href="#user/${o.user_id}">${esc(o.user_name || `#${o.user_id}`)}</a></div>`
-    : `<div class="muted">visitor, no account yet</div>`;
+  const account = o.user_id != null ? `<div class="muted">${t("ord.account")} <a class="user-link" href="#user/${o.user_id}">${bdi(o.user_name || `#${o.user_id}`)}</a></div>`
+    : `<div class="muted">${t("ord.visitor")}</div>`;
   return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
-    <td><b>${esc(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${esc(o.email)}</a></div>${account}</td>
-    <td class="nowrap">${esc(o.label)} · ${esc(o.length)}</td>
+    <td><b>${bdi(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${bdi(o.email)}</a></div>${account}</td>
+    <td class="nowrap">${bdi(o.label)} · ${lengthName(o.length)}</td>
     <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
-    <td class="order-msg">${o.message ? esc(o.message) : `<span class="muted">—</span>`}</td>
-    <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">ticket #${esc(o.ticket_id)}</div>` : ""}</td>
+    <td class="order-msg">${o.message ? bdi(o.message) : `<span class="muted">—</span>`}</td>
+    <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">${t("ord.ticket_n", { id: esc(o.ticket_id) })}</div>` : ""}</td>
     <td>${mailState(o)}</td>
-    <td class="muted order-msg">${esc(o.admin_note) || "—"}</td>
+    <td class="muted order-msg">${o.admin_note ? bdi(o.admin_note) : "—"}</td>
     <td>${orderActions(o)}</td></tr>`;
 }
 function mailState(o) {
-  if (o.admin_mail === "off" && o.buyer_mail === "off") return `<span class="muted">email off</span>`;
+  if (o.admin_mail === "off" && o.buyer_mail === "off") return `<span class="muted">${t("ord.mail_off_all")}</span>`;
   const cls = { failed: " state-cancelled", pending: " state-queued", sent: " state-active" };
-  return [["admin", o.admin_mail], ["buyer", o.buyer_mail]].map(([who, st]) => `<span class="badge mail${cls[st] || ""}">${who} email ${esc(st)}</span>`).join(" ");
+  const st = (s) => esc(I18N.en[`ord.mail_${s}`] ? t(`ord.mail_${s}`) : s);
+  return [["admin", o.admin_mail], ["buyer", o.buyer_mail]].map(([who, s]) => `<span class="badge mail${cls[s] || ""}">${t("ord.mail_state", { who: t(`ord.who_${who}`), st: st(s) })}</span>`).join(" ");
 }
 // Exactly the status table: Contacted from new; Decline and Grant while open; Note always.
 function orderActions(o) {
   const b = (act, label, cls = "") => `<button class="btn small${cls}" data-oact="${act}" data-id="${o.id}">${label}</button>`;
   const open = o.status === "new" || o.status === "contacted";
-  return `<div class="row-actions">${o.status === "new" ? b("contacted", "Contacted") : ""}${open ? b("decline", "Decline", " danger") : ""}${b("note", "Note")}${open ? b("grant", "Grant ticket", " primary") : ""}</div>`;
+  return `<div class="row-actions">${o.status === "new" ? b("contacted", t("ord.act_contacted")) : ""}${open ? b("decline", t("ord.act_decline"), " danger") : ""}${b("note", t("tk.note"))}${open ? b("grant", t("ord.act_grant"), " primary") : ""}</div>`;
 }
 async function orderAction(act, o, users) {
   if (!o) return;
@@ -876,11 +880,11 @@ async function orderAction(act, o, users) {
 }
 function orderNoteDialog(o, act, post) {
   const decline = act === "decline";
-  const d = openDialog(`<h3>${decline ? "Decline" : "Note on"} ${esc(o.name)}'s order</h3>
-    <p class="sub">${decline ? "The note is for you; the buyer only sees that the order was declined." : "For admins only. The buyer never sees it."}</p>
-    <form id="f-onote" class="form-grid"><label class="wide">Note${decline ? " (required)" : ""}<input type="text" name="note" maxlength="200"${decline ? " required" : ""} value="${esc(decline ? "" : o.admin_note)}"></label>
-    <button class="btn ${decline ? "danger" : "primary"}" type="submit">${decline ? "Decline" : "Save"}</button></form>
-    <div class="error" id="onote-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const d = openDialog(`<h3>${t(decline ? "ord.decline_title" : "ord.note_title", { name: bdi(o.name) })}</h3>
+    <p class="sub">${decline ? t("ord.decline_sub") : t("ord.note_sub")}</p>
+    <form id="f-onote" class="form-grid"><label class="wide">${decline ? t("ord.note_required") : t("tk.note")}<input type="text" name="note" maxlength="200"${decline ? " required" : ""} value="${esc(decline ? "" : o.admin_note)}"></label>
+    <button class="btn ${decline ? "danger" : "primary"}" type="submit">${decline ? t("ord.act_decline") : t("app.save")}</button></form>
+    <div class="error" id="onote-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   $("#f-onote input", d).focus();
   $("#f-onote", d).onsubmit = async (e) => {
     e.preventDefault();
@@ -892,12 +896,12 @@ function orderNoteDialog(o, act, post) {
 function linkDialog(o, users) {
   const live = users.filter((u) => !u.revoked);
   const sug = o.suggested_user;
-  const d = openDialog(`<h3>Link ${esc(o.name)}'s order to an account</h3>
-    <p class="sub">The ticket goes to an account. ${sug ? `<b>${esc(sug.name)}</b> matches ${esc(o.email)}; check it is the same person.` : `No account matches ${esc(o.email)}.`}</p>
-    <form id="f-link" class="form-grid"><label class="wide">Existing account<select name="user">${sug ? "" : `<option value="">Choose…</option>`}${live.map((u) => `<option value="${u.id}"${sug && sug.id === u.id ? " selected" : ""}>${esc(u.name)}${u.email && u.email !== u.name ? ` (${esc(u.email)})` : ""}</option>`).join("")}</select></label>
-      <button class="btn primary" type="submit">Link and grant</button></form>
-    <p class="sub">Or <button class="btn small" id="link-create">Create user ${esc(o.email)}</button> <span class="muted">Only the owner of that address can later sign in to it.</span></p>
-    <div class="error" id="link-err"></div><p><button class="btn" data-close>Cancel</button></p>`);
+  const d = openDialog(`<h3>${t("ord.link_title", { name: bdi(o.name) })}</h3>
+    <p class="sub">${t("ord.link_sub")} ${sug ? t("ord.link_match", { name: bdi(sug.name), email: bdi(o.email) }) : t("ord.link_nomatch", { email: bdi(o.email) })}</p>
+    <form id="f-link" class="form-grid"><label class="wide">${t("ord.existing")}<select name="user">${sug ? "" : `<option value="">${t("ord.choose")}</option>`}${live.map((u) => `<option value="${u.id}"${sug && sug.id === u.id ? " selected" : ""}>${esc(u.name)}${u.email && u.email !== u.name ? ` (${esc(u.email)})` : ""}</option>`).join("")}</select></label>
+      <button class="btn primary" type="submit">${t("ord.link_grant")}</button></form>
+    <p class="sub">${t("ord.or")} <button class="btn small" id="link-create">${t("ord.create_user", { email: bdi(o.email) })}</button> <span class="muted">${t("ord.owner_only")}</span></p>
+    <div class="error" id="link-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   const f = $("#f-link", d);
   const link = async (body) => {
     $("#link-err", d).textContent = "";
@@ -909,11 +913,11 @@ function linkDialog(o, users) {
       const existing = err.status === 409 && err.data && err.data.existing_user_id;
       if (existing && [...f.user.options].some((x) => +x.value === existing)) {
         f.user.value = String(existing);
-        $("#link-err", d).textContent = `${err.message} It is selected above: link it instead if it is the same person.`;
+        $("#link-err", d).textContent = `${err.message} ${t("ord.selected_above")}`;
       } else $("#link-err", d).textContent = err.message;
     }
   };
-  f.onsubmit = (e) => { e.preventDefault(); if (f.user.value) link({ user_id: +f.user.value }); else $("#link-err", d).textContent = "Choose an account, or create one."; };
+  f.onsubmit = (e) => { e.preventDefault(); if (f.user.value) link({ user_id: +f.user.value }); else $("#link-err", d).textContent = t("ord.choose_or_create"); };
   $("#link-create", d).onclick = () => link({ create: true });
 }
 
@@ -922,32 +926,32 @@ async function renderPricing(main) {
   const price = (tier, length) => p.prices.find((x) => x.tier === tier && x.length === length)?.usd ?? "";
   const now = Date.now() / 1000;
   const dstate = (x) => (x.cancelled_at ? "cancelled" : x.ends_at <= now ? "ended" : x.starts_at > now ? "upcoming" : "active");
-  main.innerHTML = `<section class="view"><h2>Pricing</h2>
-    <p class="lede">Prices are in USD; buyers see them converted at today's rate. Shares live in the config file, since changing one changes capacity.</p>
+  main.innerHTML = `<section class="view"><h2>${t("tab.pricing")}</h2>
+    <p class="lede">${t("pr.lede")}</p>
     <div class="grid cols-2">
-      <div class="card"><h3>Exchange rates</h3><p class="sub">Local units per 1 USD. A rate older than 36 hours is marked stale and the grant form asks you to confirm it.</p>
-        ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">rounds to ${r.round_to}</span>${r.stale ? ` <span class="badge">stale</span>` : ""}
-          <div class="muted" style="font-size:12px">${r.rate == null ? "no rate yet: unusable until set" : `${r.rate} · set ${fmtDate(r.set_at)} by ${esc(r.set_by || "?")}`}</div></span>
-          <span><input type="text" inputmode="decimal" dir="ltr" name="rate" step="any" min="0" placeholder="today's rate" required style="width:110px"> <button class="btn small" type="submit">Save</button></span></form>`).join("") || `<p class="muted">No currencies besides USD in the config.</p>`}
+      <div class="card"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
+        ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
+          <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { rate: nfFull.format(r.rate), date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
+          <span><input type="text" inputmode="decimal" dir="ltr" name="rate" step="any" min="0" placeholder="${esc(t("pr.todays_rate"))}" required style="width:110px"> <button class="btn small" type="submit">${t("app.save")}</button></span></form>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
       </div>
-      <div class="card"><h3>Regular prices, USD</h3><p class="sub">Each change is logged. Existing tickets keep what they were sold at.</p>
-        <table class="data"><thead><tr><th>Tier</th>${Object.keys(p.lengths).map((l) => `<th class="r">${esc(l)}</th>`).join("")}</tr></thead><tbody>
-        ${Object.entries(p.tiers).map(([k, t]) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
-          `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">Save</button></form></td>`).join("")}</tr>`).join("")}
+      <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
+        <table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
+        ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${bdi(x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
+          `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">${t("app.save")}</button></form></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>Discounts</h3><p class="sub">A lower USD price for one tier and length over a period. It must be below the regular price; while active it replaces the price everywhere and the home page shows a countdown.</p>
+    <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
-        <label>Tier<select name="tier">${Object.entries(p.tiers).map(([k, t]) => `<option value="${esc(k)}">${esc(t.label)}</option>`).join("")}</select></label>
-        <label>Length<select name="length">${Object.keys(p.lengths).map((l) => `<option>${esc(l)}</option>`).join("")}</select></label>
-        <label>Price, USD<input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" required></label>
-        <label>From<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
-        <label>Until<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
-        <button class="btn primary" type="submit">Create discount</button></form>
+        <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(x.label)}</option>`).join("")}</select></label>
+        <label>${t("tk.length")}<select name="length">${Object.keys(p.lengths).map((l) => `<option value="${esc(l)}">${lengthName(l)}</option>`).join("")}</select></label>
+        <label>${t("pr.price_usd")}<input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" required></label>
+        <label>${t("tk.from")}<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
+        <label>${t("tk.until")}<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
+        <button class="btn primary" type="submit">${t("pr.create_discount")}</button></form>
       <div class="error" id="disc-err"></div>
-      <table class="data" style="margin-top:12px"><thead><tr><th>Tier</th><th>Length</th><th class="r">USD</th><th>Period</th><th>State</th><th></th></tr></thead><tbody>
-      ${p.discounts.map((x) => `<tr><td>${esc(p.tiers[x.tier]?.label || x.tier)}</td><td>${esc(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} → ${fmtDate(x.ends_at)}</td>
-        <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">Cancel</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">No discounts.</td></tr>`}
+      <table class="data" style="margin-top:12px"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.length")}</th><th class="r">USD</th><th>${t("tk.period")}</th><th>${t("tk.state")}</th><th></th></tr></thead><tbody>
+      ${p.discounts.map((x) => `<tr><td>${bdi(p.tiers[x.tier]?.label || x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
+        <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">${t("app.cancel_ticket")}</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("pr.no_discounts")}</td></tr>`}
       </tbody></table></div>
   </section>`;
   const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
@@ -1049,24 +1053,24 @@ function upgradeDialog(u) {
 // ---------- computers: keys authorized in the browser by claude-gateway on ----------
 
 function machinesCard(keys, install, owner) {
-  const rows = keys.map((k) => `<tr><td><b>${esc(k.label)}</b></td><td class="muted"><code>${esc(k.key_prefix)}…</code></td>
-    <td class="nowrap">${fmtTime(k.created_at)}</td><td class="muted nowrap">${k.last_used_at ? fmtAgo(k.last_used_at) : "not yet"}</td>
-    <td class="muted nowrap">${k.client_version ? esc(k.client_version) : "—"}</td>
-    <td><button class="btn small danger" data-key-remove="${k.id}" data-label="${esc(k.label)}">Remove</button></td></tr>`).join("");
-  return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? "Computers" : "Your computers"}</h3>
-    ${install ? `<p class="sub">To set up a computer, run this in its terminal. It opens this page to authorize it, then sets up <code>gclaude</code>.</p>
-      ${[["macOS / Linux", install.unix], ["Windows (PowerShell)", install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
+  const rows = keys.map((k) => `<tr><td><b>${bdi(k.label)}</b></td><td class="muted"><code>${esc(k.key_prefix)}…</code></td>
+    <td class="nowrap">${fmtTime(k.created_at)}</td><td class="muted nowrap">${k.last_used_at ? fmtAgo(k.last_used_at) : t("pc.not_yet")}</td>
+    <td class="muted nowrap">${k.client_version ? bdi(k.client_version) : "—"}</td>
+    <td><button class="btn small danger" data-key-remove="${k.id}" data-label="${esc(k.label)}">${t("lim.remove")}</button></td></tr>`).join("");
+  return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? t("pc.computers") : t("pc.your_computers")}</h3>
+    ${install ? `<p class="sub">${t("pc.setup")}</p>
+      ${[[t("login.os_unix"), install.unix], [t("pc.windows_ps"), install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
         `<p class="muted install-os">${os}</p>
-      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">Copy</button></div>`).join("")}` : ""}
-    ${keys.length ? `<table class="data"><thead><tr><th>Computer</th><th>Key</th><th>Authorized</th><th>Last used</th><th>gclaude${tipI("gclaude_version", "About the gclaude version")}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-      : `<p class="muted">${owner ? "No computers authorized in the browser." : "None authorized in the browser yet."}</p>`}</div>`;
+      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`).join("")}` : ""}
+    ${keys.length ? `<table class="data"><thead><tr><th>${t("pc.computer")}</th><th>${t("pc.key")}</th><th>${t("pc.authorized")}</th><th>${t("pc.last_used")}</th><th>gclaude${tipI("gclaude_version", t("pc.about_version"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="muted">${owner ? t("pc.none_owner") : t("pc.none_yet")}</p>`}</div>`;
 }
 function wireMachines(root) {
   root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = "Copied"; } catch { /* clipboard blocked */ }
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = t("key.copied"); } catch { /* clipboard blocked */ }
   }));
   root.querySelectorAll("[data-key-remove]").forEach((b) => (b.onclick = async () => {
-    if (!confirmInline(`Remove ${b.dataset.label}? Its key stops working at once; the next gclaude there asks to sign in again.`)) return;
+    if (!confirmInline(t("pc.confirm_remove", { label: iso(b.dataset.label) }))) return;
     try { await api(`/api/keys/${b.dataset.keyRemove}/remove`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
 }
@@ -1078,24 +1082,24 @@ async function renderAuthorize(main) {
   try { req = await api(`/api/device/${encodeURIComponent(code)}`); }
   catch (e) {
     if (e.message === "signed out") throw e;
-    main.innerHTML = `<section class="view"><div class="card authorize"><h2>Nothing to authorize</h2><p>${esc(e.message)}</p><p><a href="#overview">Go to the dashboard</a></p></div></section>`;
+    main.innerHTML = `<section class="view"><div class="card authorize"><h2>${t("auth.nothing")}</h2><p>${esc(e.message)}</p><p><a href="#overview">${t("auth.go_dashboard")}</a></p></div></section>`;
     return;
   }
   main.innerHTML = `<section class="view"><div class="card authorize">
-    <h2>Connect a computer</h2>
-    <p>A computer that calls itself <b>${esc(req.label)}</b> asks to use the gateway as <b>${esc(S.user.name)}</b>, through <code>gclaude</code>.
-      It asked ${fmtAgo(req.created_at)} from ${esc(req.ip || "an unknown address")}${req.ip && req.ip !== req.your_ip ? ` <b>(not this browser's address, ${esc(req.your_ip)})</b>` : ""}.</p>
-    <p>Check that your terminal shows this code:</p><div class="user-code">${esc(req.user_code)}</div>
-    <p class="muted">Only authorize if you just ran <code>gclaude</code> or the install command yourself: if someone sent you this link, cancel. The computer gets a key of its own, which you can remove later under Your computers.</p>
-    <p><button class="btn primary" id="az-yes">Authorize</button> <button class="btn" id="az-no">Cancel</button></p></div></section>`;
+    <h2>${t("tab.authorize")}</h2>
+    <p>${t("auth.asks", { label: `<b>${bdi(req.label)}</b>`, name: `<b>${bdi(S.user.name)}</b>` })}
+      ${t("auth.asked", { ago: fmtAgo(req.created_at), ip: req.ip ? bdi(req.ip) : t("auth.unknown_ip") })}${req.ip && req.ip !== req.your_ip ? ` <b>(${t("auth.not_this", { ip: bdi(req.your_ip) })})</b>` : ""}.</p>
+    <p>${t("auth.check_code")}</p><div class="user-code" dir="ltr">${esc(req.user_code)}</div>
+    <p class="muted">${t("auth.only_if")}</p>
+    <p><button class="btn primary" id="az-yes">${t("auth.authorize")}</button> <button class="btn" id="az-no">${t("app.cancel")}</button></p></div></section>`;
   const decide = async (decision, title, text) => {
     main.querySelectorAll(".authorize button").forEach((b) => (b.disabled = true));
     try { await api(`/api/device/${encodeURIComponent(req.user_code)}/${decision}`, { method: "POST", body: {} }); }
     catch (e) { main.querySelectorAll(".authorize button").forEach((b) => (b.disabled = false)); return alertInline(e.message); }
-    $(".authorize", main).innerHTML = `<h2>${title}</h2><p>${text}</p><p><a href="#overview">Go to the dashboard</a></p>`;
+    $(".authorize", main).innerHTML = `<h2 id="az-done">${title}</h2><p>${text}</p><p><a href="#overview">${t("auth.go_dashboard")}</a></p>`;
   };
-  $("#az-yes").onclick = () => decide("approve", "Authorized", "Go back to your terminal: it finishes setting up by itself.");
-  $("#az-no").onclick = () => decide("deny", "Cancelled", "The computer was not connected. You can close this page.");
+  $("#az-yes").onclick = () => decide("approve", t("auth.done"), t("auth.done_text"));
+  $("#az-no").onclick = () => decide("deny", t("auth.cancelled"), t("auth.cancelled_text"));
 }
 // The code survives signing in, including a Google or GitHub round trip that loses the address's #part.
 // Kept for the 10 minutes a code lives, so an abandoned one doesn't take over a later sign-in.
@@ -1193,16 +1197,16 @@ matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if
 $("#signin-copy").onclick = async (e) => {
   const b = e.currentTarget;
   try { await navigator.clipboard.writeText($("#signin-install").textContent); } catch { return; /* clipboard blocked */ }
-  b.classList.add("copied"); b.setAttribute("aria-label", "Copied"); b.title = "Copied";
+  b.classList.add("copied"); b.setAttribute("aria-label", t("key.copied")); b.title = t("key.copied");
   clearTimeout(b.timer);
-  b.timer = setTimeout(() => { b.classList.remove("copied"); b.setAttribute("aria-label", "Copy command"); b.title = "Copy command"; }, 1600);
+  b.timer = setTimeout(() => { b.classList.remove("copied"); b.setAttribute("aria-label", t("login.copy")); b.title = t("login.copy"); }, 1600);
 };
 $("#other-ways").onclick = (e) => {
   e.preventDefault();
   S.otherWays = !S.otherWays;
   $("#classic").classList.toggle("hidden", !S.otherWays);
   e.target.setAttribute("aria-expanded", S.otherWays);
-  e.target.textContent = S.otherWays ? "Hide other ways to sign in" : "Other ways to sign in";
+  e.target.textContent = S.otherWays ? t("login.hide_other_ways") : t("login.other_ways");
 };
 
 // Native confirm/alert block the page; use the dialog instead for anything but the irreversible revoke.
@@ -1643,7 +1647,7 @@ $("#form-key").onsubmit = (e) => { e.preventDefault(); login("/api/login/key", {
 if (ADMIN_PAGE) {
   $("#form-admin").classList.remove("hidden");
   $("#form-key").classList.add("hidden");
-  $("#login-hint").textContent = "Sign in as the admin.";
+  $("#login-hint span[data-i18n]").textContent = t("login.admin_hint");
 }
 $("#logout").onclick = async () => {
   await api("/api/logout", { method: "POST", body: {} }).catch(() => {});
