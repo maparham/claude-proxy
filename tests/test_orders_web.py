@@ -395,7 +395,7 @@ async def test_dashboard_serves_the_orders_tab_and_the_buyer_view(env):
     async with client(gw) as c:
         js = (await c.get("/static/app.js")).text
     assert "renderOrders" in js and "/api/admin/orders" in js and '"/api/me/orders"' in js and "order_id: pre.order_id" in js
-    assert 'orders: { label: "Orders", render: renderOrders, admin: true, feature: "tickets" }' in js
+    assert 'orders: { render: renderOrders, admin: true, feature: "tickets" }' in js
     _node_check(STATIC / "app.js")
 
 
@@ -406,6 +406,9 @@ var money = (a, c) => `${c} ${a}`;
 var fmtShare = (v) => `${v}%`;
 var fmtDate = (t) => `D${t}`;
 var fmtAgo = (t) => `A${t}`;
+var bdi = (v) => `<bdi>${esc(v)}</bdi>`;
+var nfFix = (d) => new Intl.NumberFormat("en-US", { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: false });
+var nf0 = nfFix(0), nf2 = nfFix(2), nfFull = new Intl.NumberFormat("en-US");
 var stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
 var S = { tkSkew: 0, pick: null, user: { email: null } };
 var Date = { now: () => 0 };

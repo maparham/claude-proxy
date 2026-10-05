@@ -128,6 +128,8 @@ function modelName(id) {
 const refModel = () => modelName(S.settings.reference_model);
 // Requests without a model, such as Claude Code listing models (GET /v1/models): counted, but no tokens.
 const NO_MODEL = "no model";
+// What a chart or table shows for a series key: the two internal ones read in the page's language.
+const seriesLabel = (k) => (k === OTHER ? t("chart.other") : k === NO_MODEL ? t("chart.no_model") : k);
 // Tip text quotes config through placeholders: {ref} the weighting reference model, {stale} the staleness cutoff.
 const fillTip = (html) => html.replace(/\{ref\}/g, esc(refModel())).replace(/\{stale\}/g, fmtDur(S.settings.stale_after_s));
 
@@ -252,6 +254,8 @@ function timeLabel(gran) {
     return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
   };
 }
+// Time-axis labels in the page's language and calendar (ECharts would print English month names).
+const timeAxis = (v) => new Date(v).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
 // Axis labels for bucket times (seconds): hourly buckets show the clock time, with the date
 // only on the first label and where the day changes, so the date is not repeated on every tick.
 function axisLabels(gran, times) {
@@ -363,28 +367,28 @@ function limitsBlock(ls) {
 // ---------- views ----------
 
 const VIEWS = {
-  overview: { label: "Overview", render: renderOverview },
-  usage: { label: "Usage over time", render: renderUsage },
-  users: { label: "Users & limits", render: renderUsers, admin: true },
-  tickets: { label: "Tickets", render: renderTickets, admin: true, feature: "tickets" },
-  orders: { label: "Orders", render: renderOrders, admin: true, feature: "tickets" },
-  pricing: { label: "Pricing", render: renderPricing, admin: true, feature: "tickets" },
-  authorize: { label: "Connect a computer", render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
-  quota: { label: "Account quota", render: renderQuota, admin: true },
-  models: { label: "Models & cache", render: renderModels },
-  activity: { label: "Activity", render: renderActivity },
-  sessions: { label: "Sessions", render: renderSessions },
-  errors: { label: "Errors", render: renderErrors },
-  audit: { label: "Audit log", render: renderAudit, admin: true },
-  user: { label: "User", render: renderUser, admin: true, hidden: true, parent: "users" },   // #user/<id>, opened from Users & limits
+  overview: { render: renderOverview },
+  usage: { render: renderUsage },
+  users: { render: renderUsers, admin: true },
+  tickets: { render: renderTickets, admin: true, feature: "tickets" },
+  orders: { render: renderOrders, admin: true, feature: "tickets" },
+  pricing: { render: renderPricing, admin: true, feature: "tickets" },
+  authorize: { render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
+  quota: { render: renderQuota, admin: true },
+  models: { render: renderModels },
+  activity: { render: renderActivity },
+  sessions: { render: renderSessions },
+  errors: { render: renderErrors },
+  audit: { render: renderAudit, admin: true },
+  user: { render: renderUser, admin: true, hidden: true, parent: "users" },   // #user/<id>, opened from Users & limits
 };
 const isAdmin = () => S.user && S.user.role === "admin";
 
 function renderTabs() {
   const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && (!v.feature || S.tickets?.enabled));
   const current = VIEWS[S.tab]?.parent || S.tab;
-  const badge = (k) => (k === "orders" && S.tickets?.orders_new > 0 ? ` <span class="badge tab-count" aria-label="${S.tickets.orders_new} new">${S.tickets.orders_new}</span>` : "");
-  $("#tabs").innerHTML = tabs.map(([k, v]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(v.label)}${badge(k)}</button>`).join("");
+  const badge = (k) => (k === "orders" && S.tickets?.orders_new > 0 ? ` <span class="badge tab-count" aria-label="${esc(t("tab.orders_new", { n: S.tickets.orders_new }))}">${nf0.format(S.tickets.orders_new)}</span>` : "");
+  $("#tabs").innerHTML = tabs.map(([k]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(t(`tab.${k}`))}${badge(k)}</button>`).join("");
 }
 $("#tabs").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-tab]"); if (!b) return;
@@ -397,7 +401,7 @@ async function render() {
   disposeCharts();
   const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && (!VIEWS[S.tab].feature || S.tickets?.enabled) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
-  main.innerHTML = `<p class="muted">Loading…</p>`;
+  main.innerHTML = `<p class="muted">${t("app.loading")}</p>`;
   try { await view.render(main); } catch (e) {
     if (e.message !== "signed out") main.innerHTML = `<div class="banner critical"><span class="icon">!</span><span>${esc(e.message)}</span></div>`;
   }
@@ -413,11 +417,8 @@ function scrollToPrices() {
 function credentialPill(c) {
   const pill = $("#cred-pill");
   pill.querySelector(".dot").style.background = c.healthy ? css("--good") : css("--critical");
-  pill.querySelector("span:last-child").textContent = c.healthy ? "Subscription linked" : "Subscription login needed";
-  pill.dataset.tipHtml = (c.healthy
-    ? `<span class="th">Subscription linked</span><p>The gateway holds a working Claude subscription login; everyone's Claude requests go out on it.</p>`
-    : `<span class="th">Subscription login needed</span><p>The gateway's Claude login is missing or expired, so Claude requests fail. The admin runs <code>claude-proxy login</code> on the gateway host.</p>`)
-    + (c.detail ? `<p class="tm">${esc(c.detail)}</p>` : "");
+  pill.querySelector("span:last-child").textContent = c.healthy ? t("cred.linked") : t("cred.needed");
+  pill.dataset.tipHtml = (c.healthy ? t("cred.linked_tip") : t("cred.needed_tip")) + (c.detail ? `<p class="tm">${esc(c.detail)}</p>` : "");
 }
 
 async function renderOverview(main) {
@@ -427,32 +428,32 @@ async function renderOverview(main) {
   const order = mo && mo.order;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
-  const t = ov.totals[S.prefs.period] || ov.totals["24h"];
+  const tot = ov.totals[S.prefs.period] || ov.totals["24h"];
   const banners = [];
-  if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span><b>Claude requests will fail:</b> the gateway has no working Claude subscription login. ${isAdmin() ? `Run <code>claude-proxy login</code> on the gateway host.${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : "Ask the admin to re-link it."}</span></div>`);
+  if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span>${t("ov.cred_fail")} ${isAdmin() ? `${t("ov.cred_fail_admin")}${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : t("ov.cred_fail_user")}</span></div>`);
   const stale = (ov.quota || []).filter((q) => q.utilization_pct != null && q.stale);
-  if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>No fresh account figures from Anthropic for ${stale.map((q) => q.bucket).join(", ")}. Share limits are skipped until one arrives; token limits still apply.</span></div>`);
-  const unpriced = t.unpriced_models || [];
+  if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.stale", { buckets: stale.map((q) => esc(t(`bucket.${q.bucket}`))).join(t("app.list_sep")) })}</span></div>`);
+  const unpriced = tot.unpriced_models || [];
   const ex = ov.exhaustion;
   main.innerHTML = `
     <section class="view">
-      <h2>${isAdmin() ? "Account overview" : `Your usage, ${esc(S.user.name)}`}</h2>
-      <p class="lede">${isAdmin() ? "Everything that went through the gateway, all users." : "Only your own requests."}</p>
+      <h2>${isAdmin() ? t("ov.title_admin") : t("ov.title_user", { name: bdi(S.user.name) })}</h2>
+      <p class="lede">${isAdmin() ? t("ov.lede_admin") : t("ov.lede_user")}</p>
       ${banners.join("")}
-      <div class="controls">${seg("period", [["24h", "Last 24 h"], ["7d", "7 days"], ["30d", "30 days"]], S.prefs.period)}</div>
+      <div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
       <div class="tiles">
-        <div class="card tile"><div class="label">Requests${tipI("requests")}</div><div class="value">${fmtNum(t.requests)}</div><div class="foot">${t.requests >= 1000 ? `${esc(nfFull.format(t.requests))} forwarded` : "forwarded to a provider"}</div></div>
-        <div class="card tile"><div class="label">Weighted tokens${tipI("weighted")}</div><div class="value">${fmtNum(t.weighted)}</div><div class="foot">in ${esc(refModel())} input tokens</div></div>
-        <div class="card tile"><div class="label">Raw tokens${tipI("raw")}</div><div class="value">${fmtNum(t.raw)}</div><div class="foot">${fmtNum(t.cache_read)} of them cache reads</div></div>
-        <div class="card tile"><div class="label">Est. API-equivalent cost${tipI("cost")}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${unpriced.length ? `unpriced: ${esc(unpriced.join(", "))}` : isAdmin() ? "not billed on the subscription" : "at API list prices"}</div></div>
-        ${isAdmin() ? `<div class="card tile"><div class="label">Active users${tipI("active_users")}</div><div class="value">${ov.active_users_24h}</div><div class="foot">in the last 24 h</div></div>` : ""}
-        <div class="card tile"><div class="label">Burn rate${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">weighted tokens / min, last 15 min</div></div>
+        <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
+        <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
+        <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
+        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
+        ${isAdmin() ? `<div class="card tile"><div class="label">${t("ov.active_users")}${tipI("active_users")}</div><div class="value">${nfFull.format(ov.active_users_24h)}</div><div class="foot">${t("ov.last_24h")}</div></div>` : ""}
+        <div class="card tile"><div class="label">${t("ov.burn_rate")}${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">${t("ov.burn_foot")}</div></div>
       </div>
       <div class="grid${isAdmin() ? " cols-2" : ""}">
-        ${isAdmin() ? `<div class="card"><h3>Account quota (reported by Anthropic)${tipI("quota")}</h3>
-          <p class="sub">Bar length is the account's utilization. Segments are each user's ${tipT("<b>estimated share</b>", "share")}; grey is usage ${tipT("not attributed", "unattributed")} to any gateway user.</p>
+        ${isAdmin() ? `<div class="card"><h3>${t("ov.quota_title")}${tipI("quota")}</h3>
+          <p class="sub">${t("ov.quota_sub", { share: tipT(t("ov.est_share"), "share"), unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p>
           <div id="quota-bars"></div>
-          ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">5-hour bucket rising ${ex.pct_per_hour.toFixed(1)} pts/h${ex.eta_s ? ` · at this pace it fills in <b>${fmtDur(ex.eta_s)}</b>${ex.before_reset ? " — before it resets" : ", after it resets"}` : ""}.${tipI("exhaustion")}</p>` : ""}
+          ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">${t("ov.rising", { v: nfFix(1).format(ex.pct_per_hour) })}${ex.eta_s ? t("ov.fills_in", { d: fmtDur(ex.eta_s) }) + (ex.before_reset ? t("ov.before_reset") : t("ov.after_reset")) : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>` : ""}
         ${isAdmin() ? usersCard() : userLimitsCard(me, tk)}
       </div>
@@ -462,18 +463,19 @@ async function renderOverview(main) {
   wireSegs(main, render);
   wireMachines(main);
   if (tk) wireOrdering(main, tk, order);
-  if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">No account figures yet. They arrive with the first response through the gateway.</p>`;
+  if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">${t("ov.no_figures")}</p>`;
   if (isAdmin()) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
     stackedTime($("#ov-users"), s.points, "weighted", "user", "day");
   }
   if (tk) {
+    const p2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2 });
     const tick = () => {
       let ended = false;
       main.querySelectorAll(".countdown").forEach((el) => {
         const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000 - S.tkSkew));
         if (!s && !S.discountsEnded.has(el.dataset.ends)) { S.discountsEnded.add(el.dataset.ends); ended = true; }
-        el.textContent = s ? `Offer ends in ${Math.floor(s / 86400)}d ${String(Math.floor((s % 86400) / 3600)).padStart(2, "0")}h ${String(Math.floor((s % 3600) / 60)).padStart(2, "0")}m ${String(s % 60).padStart(2, "0")}s` : "Offer ended";
+        el.textContent = s ? t("price.offer_ends", { d: nf0.format(Math.floor(s / 86400)), h: p2.format(Math.floor((s % 86400) / 3600)), m: p2.format(Math.floor((s % 3600) / 60)), s: p2.format(s % 60) }) : t("price.offer_ended");
       });
       if (ended) { clearInterval(S.countdown); render(); }   // once per end: the regular price returns
     };
@@ -483,29 +485,29 @@ async function renderOverview(main) {
 }
 
 function usersCard() {
-  return `<div class="card"><h3>Usage by user, last 7 days</h3><p class="sub">Daily, weighted tokens.</p><div class="chart short" id="ov-users"></div></div>`;
+  return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;
 }
 function userLimitsCard(me, tk) {
-  if (me.paused) return `<div class="card"><h3>Your limits</h3><div class="ticket"><b>Tickets are paused.</b> Ask the gateway admin.</div></div>`;
+  if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div><b>${esc(c.label)} ticket</b> · ${fmtShare(c.share_pct)} of the subscription</div>
-      <div class="muted">Ends ${fmtDate(c.effective_end)}${c.bonus_days ? ` <span class="badge">+${c.bonus_days} day${c.bonus_days === 1 ? "" : "s"} bonus</span>` : ""} · today ends in ${fmtDur(c.day_end - Date.now() / 1000)}</div>
-      ${c.bonuses.map((b) => `<div class="badge bonus">Bonus: +${fmtShare(b.share_pct)} until ${fmtDate(b.ends_at)}${b.note ? ` · ${esc(b.note)}` : ""}</div>`).join("")}
-      ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">Bonus: +${b.extra_days} day${b.extra_days === 1 ? "" : "s"} · ${esc(b.note)}</div>`).join("")}
-      ${c.bonus_share ? `<p class="sub">While the bonus runs, both bars are measured against ${fmtShare(c.share_pct + c.bonus_share)}.</p>` : ""}
-      ${tk.queued ? `<div class="muted">Next: ${esc(tk.queued.label)} ticket from ${fmtDate(tk.queued.starts_at)}</div>` : ""}</div>`
-    : tk.queued ? `<div class="ticket"><b>Your next ticket</b> (${esc(tk.queued.label)}) starts ${fmtDate(tk.queued.starts_at)}.</div>`
-    : `<div class="ticket"><b>Your ticket has ended.</b> ${esc(tk.how_to_buy || "Ask the gateway admin.")}</div>`;
-  return `<div class="card"><h3>${c ? "Your ticket" : "Your limits"}</h3>
-    <p class="sub">${c ? "The 5-hour bar follows Anthropic's window; the today bar is this ticket day's share and resets when the day ends." : `Resets a window-length after the first request; ${tipT("the request that crosses a limit is still served", "served")}.`}</p>
+      <div>${t("ov.ticket_line", { label: bdi(c.label), share: fmtShare(c.share_pct) })}</div>
+      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${t("ov.today_ends", { d: fmtDur(c.day_end - Date.now() / 1000) })}</div>
+      ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: fmtShare(b.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
+      ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
+      ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_pct + c.bonus_share) })}</p>` : ""}
+      ${tk.queued ? `<div class="muted">${t("ov.next", { label: bdi(tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
+    : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: bdi(tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
+    : `<div class="ticket">${t("ov.ticket_ended")} ${esc(tk.how_to_buy || t("ov.ask_admin"))}</div>`;
+  return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
+    <p class="sub">${c ? t("ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
     ${ticket}${limitsBlock(me.limits)}</div>`;
 }
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
 function pickedLine(prices, pick) {
-  const t = pick && typeof pick === "object" ? prices.tiers.find((x) => x.tier === pick.tier) : null;
-  const len = t && { day: "a day", week: "a week", month: "a month" }[pick.length];
-  return len ? `You picked <b>${esc(t.label)}</b> for <b>${len}</b>. ` : "";
+  const tier = pick && typeof pick === "object" ? prices.tiers.find((x) => x.tier === pick.tier) : null;
+  const len = tier && ["day", "week", "month"].includes(pick.length) && t(`price.a_${pick.length}`);
+  return len ? t("price.picked", { tier: esc(tier.label), len }) : "";
 }
 function priceListCard(tk, order) {
   const p = tk.prices;
@@ -515,17 +517,17 @@ function priceListCard(tk, order) {
   const now = Date.now() / 1000 + S.tkSkew;
   // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
   const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
-  const L = [["day", "1 day"], ["week", "1 week"], ["month", "1 month"]];
-  const hint = (t) => Object.entries({ sonnet: "Sonnet", opus: "Opus" }).map(([f, n]) => { const h = t.hours[f]; return h && (h.per_5h != null || h.per_day != null)
-    ? `<div class="muted">${n}: at least ${[h.per_5h != null ? `${h.per_5h} h per 5-hour window` : null, h.per_day != null ? `${h.per_day} h per day` : null].filter(Boolean).join(", ")}</div>` : ""; }).join("");
+  const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]];
+  const hint = (tier) => Object.entries({ sonnet: "Sonnet", opus: "Opus" }).map(([f, n]) => { const h = tier.hours[f]; return h && (h.per_5h != null || h.per_day != null)
+    ? `<div class="muted">${t("price.at_least", { model: n, what: [h.per_5h != null ? t("price.h_per_5h", { n: nfFull.format(h.per_5h) }) : null, h.per_day != null ? t("price.h_per_day", { n: nfFull.format(h.per_day) }) : null].filter(Boolean).join(t("app.list_sep")) })}</div>` : ""; }).join("");
   // The home page's pick is the highlighted Order button; a sold-out price has none.
-  const orderBtn = (t, k) => `<div><button class="btn small${pick && pick.tier === t.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(t.tier)}:${k}"${open ? ` disabled title="You already have an open order."` : ""}>Order</button></div>`;
-  const cell = (t, k) => { const l = t.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">sold out</span>` : ""}
-    ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(t, k)}</td>`; };
-  return `<div class="card" id="prices"><h3>Tickets</h3><p class="sub">Buy a slice for a day, a week or a month.${p.rate_set_at ? ` Prices converted at the rate of ${fmtDate(p.rate_set_at)}.` : ""}</p>
-    <div class="table-wrap"><table class="data"><thead><tr><th>Tier</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((t) => `<tr><td><b>${esc(t.label)}</b> <span class="muted">${fmtShare(t.share_pct)}</span><div class="muted">≈ ${esc(t.compare)}</div>${hint(t)}</td>${L.map(([k]) => cell(t, k)).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${picked}${esc(tk.how_to_buy || (picked ? "Ask the gateway admin." : ""))}</p></div>`;
+  const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
+  const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
+    ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
+  return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
+    ${p.tiers.map((tier) => `<tr><td><b>${bdi(tier.label)}</b> <span class="muted">${fmtShare(tier.share_pct)}</span><div class="muted">≈ ${esc(tier.compare)}</div>${hint(tier)}</td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
+    </tbody></table></div><p class="sub">${picked}${esc(tk.how_to_buy || (picked ? t("ov.ask_admin") : ""))}</p></div>`;
 }
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
@@ -586,43 +588,45 @@ function wireOrdering(root, tk, order) {
 }
 
 function quotaBar(q) {
-  if (q.utilization_pct == null) return `<div style="margin-bottom:14px"><b>${esc(q.bucket)}</b> <span class="muted">no data yet</span></div>`;
+  const name = q.bucket === "5h" || q.bucket === "7d" ? t(`quota.bucket_${q.bucket}`) : esc(q.bucket);
+  if (q.utilization_pct == null) return `<div style="margin-bottom:14px"><b>${name}</b> <span class="muted">${t("quota.no_data")}</span></div>`;
   const shares = Object.entries(q.shares).sort((a, b) => b[1] - a[1]);
   const segs = shares.map(([k, v]) => [k, v]).concat([["unattributed", q.unattributed || 0]]).filter(([, v]) => v > 0.05);
-  const resets = q.resets_at ? `resets in ${fmtDur(q.resets_at - Date.now() / 1000)}` : "";
+  const resets = q.resets_at ? t("quota.resets_in", { d: fmtDur(q.resets_at - Date.now() / 1000) }) : "";
+  const pts = (v) => nfFix(1).format(v);
   return `<div style="margin-bottom:16px">
-    <div style="display:flex;justify-content:space-between;align-items:baseline"><span><b>${tipT(q.bucket === "5h" ? "5-hour" : q.bucket === "7d" ? "7-day" : esc(q.bucket), `bucket:${q.bucket}`)}</b>
-      <span style="font-size:22px;font-weight:650;margin-left:8px">${fmtPct(q.utilization_pct)}</span></span>
-      <span class="muted">${esc(resets)}${q.stale ? ` · ${tipT("stale", "stale")}` : ""}</span></div>
-    <div class="stack" role="img" aria-label="${esc(q.bucket)} utilization ${fmtPct(q.utilization_pct)}">
-      ${segs.map(([k, v]) => `<span${tipAttr(k === "unattributed" ? `<b>Not attributed</b> · ${v.toFixed(1)} pts<p class="tm">Account usage the gateway can't pin on a user.</p>`
-        : `<b>${esc(k)}</b> · ${v.toFixed(1)} pts, estimated`)} style="width:${v}%;background:${colorFor("user", k)}"></span>`).join("")}
+    <div style="display:flex;justify-content:space-between;align-items:baseline"><span><b>${tipT(name, `bucket:${q.bucket}`)}</b>
+      <span style="font-size:22px;font-weight:650;margin-inline-start:8px">${fmtPct(q.utilization_pct)}</span></span>
+      <span class="muted">${esc(resets)}${q.stale ? ` · ${tipT(t("quota.stale"), "stale")}` : ""}</span></div>
+    <div class="stack" role="img" aria-label="${esc(t("quota.aria", { bucket: name, pct: fmtPct(q.utilization_pct) }))}">
+      ${segs.map(([k, v]) => `<span${tipAttr(k === "unattributed" ? t("quota.seg_unattributed", { v: pts(v) })
+        : t("quota.seg_user", { name: bdi(k), v: pts(v) }))} style="width:${v}%;background:${colorFor("user", k)}"></span>`).join("")}
     </div>
-    <div class="legend">${segs.map(([k, v]) => `<span><i style="background:${colorFor("user", k)}"></i>${k === "unattributed" ? tipT("not attributed", "unattributed") : esc(k)} ${v.toFixed(1)}</span>`).join("")}</div>
+    <div class="legend">${segs.map(([k, v]) => `<span><i style="background:${colorFor("user", k)}"></i>${k === "unattributed" ? tipT(t("ov.not_attributed"), "unattributed") : bdi(k)} ${pts(v)}</span>`).join("")}</div>
   </div>`;
 }
 
 async function renderUsage(main) {
   const p = S.prefs;
-  const splits = isAdmin() ? [["user", "By user"], ["model", "By model"], ["provider", "By provider", "split:provider"]] : [["model", "By model"], ["provider", "By provider", "split:provider"]];
+  const splits = isAdmin() ? [["user", t("usage.by_user")], ["model", t("usage.by_model")], ["provider", t("usage.by_provider"), "split:provider"]] : [["model", t("usage.by_model")], ["provider", t("usage.by_provider"), "split:provider"]];
   if (!isAdmin() && p.split === "user") p.split = "model";
   const d = await api(`/api/series?range=${p.range}&granularity=${p.granularity}&split=${p.split}&tz_offset=${tzOffset()}`);
-  main.innerHTML = `<section class="view"><h2>Usage over time</h2>
-    <p class="lede">${tipT("Weighted tokens", "weighted")} price each token type and model at API list-price ratios, in units of one ${esc(refModel())} input token, so they approximate what a request costs${isAdmin() ? " against the quota" : ""}. ${tipT("Raw tokens", "raw")} are dominated by cache reads.</p>
+  main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
+    <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
     <div class="controls">
-      ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range)}
-      ${seg("granularity", [["hour", "Hourly"], ["day", "Daily"], ["week", "Weekly"]], p.granularity)}
+      ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")]], p.range)}
+      ${seg("granularity", [["hour", t("gran.hour")], ["day", t("gran.day")], ["week", t("gran.week")]], p.granularity)}
       ${seg("split", splits, p.split)}
       ${seg("metric", Object.entries(METRICS).map(([k, v]) => [k, v, `metric:${k}`]), p.metric)}
     </div>
-    <div class="card"><h3>${esc(METRICS[p.metric])} per ${p.granularity}</h3><p class="sub" id="usage-hint">Scroll or pinch to zoom.</p>
+    <div class="card"><h3>${t(`usage.per_${p.granularity}`, { metric: esc(METRICS[p.metric]) })}</h3><p class="sub" id="usage-hint">${t("usage.zoom")}</p>
       <div class="chart tall" id="usage-chart"></div><div id="usage-table"></div></div></section>`;
   wireSegs(main, render);
-  if (!d.points.length) { $("#usage-chart").outerHTML = `<p class="muted">No requests in this range.</p>`; return; }
+  if (!d.points.length) { $("#usage-chart").outerHTML = `<p class="muted">${t("usage.none")}</p>`; return; }
   const { keys, times, series } = stackedTime($("#usage-chart"), d.points, p.metric, p.split, p.granularity);
-  if (keys.length > 1) $("#usage-hint").textContent = "Scroll or pinch to zoom; click a legend item to hide it.";
-  $("#usage-table").innerHTML = tableView("Show as table", ["Period", ...keys], times.map((t) =>
-    [timeLabel(p.granularity)(t * 1000), ...keys.map((k) => fmtMetric(p.metric, series[k].get(t) || 0))]));
+  if (keys.length > 1) $("#usage-hint").textContent = t("usage.zoom_legend");
+  $("#usage-table").innerHTML = tableView(t("app.show_table"), [t("usage.period"), ...keys.map(seriesLabel)], times.map((tm) =>
+    [timeLabel(p.granularity)(tm * 1000), ...keys.map((k) => fmtMetric(p.metric, series[k].get(tm) || 0))]));
 }
 
 async function renderUsers(main) {
@@ -1403,28 +1407,30 @@ async function renderUser(main) {
 async function renderQuota(main) {
   const p = S.prefs;
   const d = await api(`/api/quota/timeline?bucket=${encodeURIComponent(p.bucket)}&range=${p.range === "1d" ? "1d" : p.range}`);
-  main.innerHTML = `<section class="view"><h2>Account quota</h2>
-    <p class="lede">Utilization is <b>reported by Anthropic</b> for the whole subscription. Per-user figures are ${tipT("<b>estimated</b>", "share")}: each rise between two reports is split across the users whose requests finished in between, by weighted tokens. Reports come in whole percents.</p>
-    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, b, `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], p.range)}</div>
+  const bname = (b) => (b === "5h" || b === "7d" ? t(`quota.bucket_${b}`) : b);
+  main.innerHTML = `<section class="view"><h2>${t("tab.quota")}</h2>
+    <p class="lede">${t("quota.lede", { estimated: tipT(t("quota.estimated"), "share") })}</p>
+    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, bname(b), `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], p.range)}</div>
     <div class="grid cols-2">
-      <div class="card"><h3>Reported utilization${tipI("reported")}</h3><p class="sub">Each point is a report from response headers or the usage endpoint.</p><div class="chart" id="q-line"></div></div>
-      <div class="card"><h3>Estimated share, current window${tipI("share")}</h3><p class="sub">Cumulative since the bucket last reset; grey is ${tipT("not attributed", "unattributed")}.</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
+      <div class="card"><h3>${t("quota.reported")}${tipI("reported")}</h3><p class="sub">${t("quota.reported_sub")}</p><div class="chart" id="q-line"></div></div>
+      <div class="card"><h3>${t("quota.share_title")}${tipI("share")}</h3><p class="sub">${t("quota.share_sub", { unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
     </div></section>`;
   wireSegs(main, render);
   const o = baseOption();
-  if (!d.snapshots.length) { $("#q-line").outerHTML = `<p class="muted">No reports for this bucket in range.</p>`; }
+  const pctAxis = (v) => fmtPct(v);
+  if (!d.snapshots.length) { $("#q-line").outerHTML = `<p class="muted">${t("quota.no_reports")}</p>`; }
   else {
     chart($("#q-line")).setOption({
       ...o, legend: { show: false },
       tooltip: { ...o.tooltip, valueFormatter: (v) => fmtPct(v, 1) },
-      xAxis: { ...o.xAxis, type: "time" }, yAxis: { ...o.yAxis, type: "value", max: 100, axisLabel: { ...o.yAxis.axisLabel, formatter: "{value}%" } },
+      xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", max: 100, axisLabel: { ...o.yAxis.axisLabel, formatter: pctAxis } },
       dataZoom: [{ type: "inside" }],
-      series: [{ name: `${p.bucket} utilization`, type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
+      series: [{ name: t("quota.utilization", { bucket: bname(p.bucket) }), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
                  data: d.snapshots.map((s) => [s.observed_at * 1000, s.utilization_pct]) }],
     });
   }
   const h = d.window_history;
-  if (!h.length) { $("#q-share").outerHTML = `<p class="muted">No current window.</p>`; return; }
+  if (!h.length) { $("#q-share").outerHTML = `<p class="muted">${t("quota.no_window")}</p>`; return; }
   const totals = {};
   h.forEach((pt) => Object.entries(pt.shares).forEach(([k, v]) => (totals[k] = Math.max(totals[k] || 0, v))));
   const users = topKeys(totals);
@@ -1438,31 +1444,33 @@ async function renderQuota(main) {
   });
   const hasOther = rows.some((r) => r.other > 0);
   const series = users.map((k, i) => ({ name: k, data: rows.map((r) => [r.t, r.named[i]]), color: colorFor("user", k) }));
-  if (hasOther) series.push({ name: OTHER, data: rows.map((r) => [r.t, r.other]), color: colorFor("user", OTHER) });
-  series.push({ name: "not attributed", data: rows.map((r) => [r.t, r.un]), color: colorFor("user", "unattributed") });
+  if (hasOther) series.push({ name: seriesLabel(OTHER), data: rows.map((r) => [r.t, r.other]), color: colorFor("user", OTHER) });
+  series.push({ name: t("ov.not_attributed"), data: rows.map((r) => [r.t, r.un]), color: colorFor("user", "unattributed") });
   chart($("#q-share")).setOption({
-    ...o, tooltip: { ...o.tooltip, valueFormatter: (v) => `${v.toFixed(1)} pts` },
-    xAxis: { ...o.xAxis, type: "time" }, yAxis: { ...o.yAxis, type: "value", axisLabel: { ...o.yAxis.axisLabel, formatter: "{value}%" } },
+    ...o, tooltip: { ...o.tooltip, valueFormatter: (v) => t("lim.pts", { v: nfFix(1).format(v) }) },
+    xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", axisLabel: { ...o.yAxis.axisLabel, formatter: pctAxis } },
     series: series.map((s) => ({ name: s.name, type: "line", stack: "share", step: "end", showSymbol: false, areaStyle: { color: s.color, opacity: 0.85 },
                                  lineStyle: { width: 0 }, itemStyle: { color: s.color }, data: s.data })),
   });
   const last = h[h.length - 1];
-  $("#q-table").innerHTML = tableView("Show current shares as table", ["User", "Estimated share (pts)"],
-    Object.entries(last.shares).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, v.toFixed(2)])
-      .concat([["not attributed", Math.max(0, last.utilization_pct - Object.values(last.shares).reduce((a, b) => a + b, 0)).toFixed(2)]]));
+  $("#q-table").innerHTML = tableView(t("quota.table_title"), [t("app.user"), t("quota.table_share")],
+    Object.entries(last.shares).sort((a, b) => b[1] - a[1]).map(([k, v]) => [k, nf2.format(v)])
+      .concat([[t("ov.not_attributed"), nf2.format(Math.max(0, last.utilization_pct - Object.values(last.shares).reduce((a, b) => a + b, 0)))]]));
 }
 
 async function renderModels(main) {
   const p = S.prefs;
   const d = await api(`/api/models?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
   const mm = p.modelMetric;
-  main.innerHTML = `<section class="view"><h2>Models & cache</h2>
-    <p class="lede">${isAdmin() ? "Claude models run on the shared subscription; other providers (such as Muse on Meta) are billed to their own API key." : "What each model's requests would cost at API list prices, and how much of your prompts the cache served."}</p>
-    <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", "Est. cost", "metric:cost_usd"], ["weighted", "Weighted", "metric:weighted"], ["raw", "Raw tokens", "metric:raw"], ["requests", "Requests", "metric:requests"]], mm)}</div>
-    <div class="tiles">${Object.entries(d.providers).map(([k, t]) => `<div class="card tile"><div class="label">${!isAdmin() ? `${k === "anthropic" ? "Claude" : esc(k)} (API-equivalent)${tipI("provider_sub")}` : k === "anthropic" ? `Claude (subscription, API-equivalent)${tipI("provider_sub")}` : `${esc(k)} (own API key)${tipI("provider_own")}`}</div><div class="value">${fmtUsd(t.cost_usd)}</div><div class="foot">${fmtNum(t.requests)} requests · ${fmtNum(t.raw)} tokens</div></div>`).join("")}</div>
+  const provLabel = (k) => (!isAdmin() ? `${t("models.api_equiv", { p: k === "anthropic" ? "Claude" : bdi(k) })}${tipI("provider_sub")}`
+    : k === "anthropic" ? `${t("models.claude_sub")}${tipI("provider_sub")}` : `${t("models.own_key", { p: bdi(k) })}${tipI("provider_own")}`);
+  main.innerHTML = `<section class="view"><h2>${t("tab.models")}</h2>
+    <p class="lede">${isAdmin() ? t("models.lede_admin") : t("models.lede_user")}</p>
+    <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", t("models.m_cost"), "metric:cost_usd"], ["weighted", t("models.m_weighted"), "metric:weighted"], ["raw", t("metric.raw"), "metric:raw"], ["requests", t("metric.requests"), "metric:requests"]], mm)}</div>
+    <div class="tiles">${Object.entries(d.providers).map(([k, v]) => `<div class="card tile"><div class="label">${provLabel(k)}</div><div class="value">${fmtUsd(v.cost_usd)}</div><div class="foot">${t("models.tile_foot", { r: fmtNum(v.requests), n: fmtNum(v.raw) })}</div></div>`).join("")}</div>
     <div class="grid cols-2">
-      <div class="card"><h3>${esc(METRICS[mm])} by model</h3><p class="sub">Largest first.</p><div class="chart" id="m-bars"></div></div>
-      <div class="card"><h3>Cache hit ratio${tipI("cache_ratio")}</h3><p class="sub">Daily <code>${esc(d.formula)}</code></p><div class="chart" id="m-cache"></div></div>
+      <div class="card"><h3>${t("models.by_model", { metric: esc(METRICS[mm]) })}</h3><p class="sub">${t("models.largest")}</p><div class="chart" id="m-bars"></div></div>
+      <div class="card"><h3>${t("models.cache_title")}${tipI("cache_ratio")}</h3><p class="sub">${t("models.daily")} <code>${esc(d.formula)}</code></p><div class="chart" id="m-cache"></div></div>
     </div></section>`;
   wireSegs(main, render);
   const o = baseOption();
@@ -1472,41 +1480,44 @@ async function renderModels(main) {
       ...o, legend: { show: false }, tooltip: { ...o.tooltip, trigger: "item", valueFormatter: (v) => fmtMetric(mm, v) },
       grid: { ...o.grid, top: 8 },
       xAxis: { ...o.yAxis, type: "value", splitNumber: narrow() ? 2 : 5, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtMetric(mm, v) } },
-      yAxis: { ...o.xAxis, type: "category", data: models.map((m) => m.model || NO_MODEL) },
+      yAxis: { ...o.xAxis, type: "category", data: models.map((m) => m.model || seriesLabel(NO_MODEL)) },
       series: [{ type: "bar", barMaxWidth: 18, itemStyle: { color: css("--s1"), borderRadius: [0, 4, 4, 0] }, data: models.map((m) => m[mm]) }],
     });
-  } else $("#m-bars").outerHTML = `<p class="muted">No requests in range.</p>`;
+  } else $("#m-bars").outerHTML = `<p class="muted">${t("models.none")}</p>`;
   const pts = d.cache_ratio.filter((p) => p.ratio != null);
   if (pts.length) {
     chart($("#m-cache")).setOption({
       ...o, legend: { show: false }, tooltip: { ...o.tooltip, valueFormatter: (v) => fmtPct(v * 100, 1) },
       xAxis: { ...o.xAxis, type: "time", minInterval: 86400000, axisLabel: { ...o.xAxis.axisLabel, formatter: (v) => timeLabel("day")(v) } },
-      yAxis: { ...o.yAxis, type: "value", min: 0, max: 1, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => `${Math.round(v * 100)}%` } },
-      series: [{ name: "cache hit ratio", type: "line", showSymbol: pts.length < 40, symbolSize: 8, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
+      yAxis: { ...o.yAxis, type: "value", min: 0, max: 1, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtPct(Math.round(v * 100)) } },
+      series: [{ name: t("models.cache_series"), type: "line", showSymbol: pts.length < 40, symbolSize: 8, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
                  data: pts.map((p) => [p.t * 1000, p.ratio]) }],
     });
-  } else $("#m-cache").outerHTML = `<p class="muted">No token data in range.</p>`;
+  } else $("#m-cache").outerHTML = `<p class="muted">${t("models.no_tokens")}</p>`;
 }
 
 async function renderActivity(main) {
   const p = S.prefs;
   const d = await api(`/api/heatmap?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
-  main.innerHTML = `<section class="view"><h2>Activity</h2><p class="lede">Requests by weekday and hour of day, in your local time.</p>
-    <div class="controls">${seg("range", [["7d", "7 d"], ["30d", "30 d"], ["90d", "90 d"]], p.range === "1d" ? "7d" : p.range)}</div>
+  main.innerHTML = `<section class="view"><h2>${t("tab.activity")}</h2><p class="lede">${t("act.lede")}</p>
+    <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")]], p.range === "1d" ? "7d" : p.range)}</div>
     <div class="card heat-wrap"><div class="chart" id="heat"></div></div></section>`;
   wireSegs(main, render);
   heatmap($("#heat"), d.cells);
 }
 function heatmap(el, cells) {
-  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  // Sunday first, as the API counts them; 2023-01-01 was a Sunday.
+  const wd = new Intl.DateTimeFormat(LOC, { weekday: "short", timeZone: "UTC" });
+  const days = [...Array(7).keys()].map((i) => wd.format(Date.UTC(2023, 0, 1 + i)));
+  const p2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2 });
   const max = Math.max(1, ...cells.map((c) => c[2]));
   const o = baseOption();
   chart(el).setOption({
     ...o, legend: { show: false }, grid: { ...o.grid, top: 8, bottom: 48 },
-    tooltip: { ...o.tooltip, trigger: "item", formatter: (x) => `${days[x.value[1]]} ${String(x.value[0]).padStart(2, "0")}:00 — <b>${x.value[2]}</b> requests` },
-    xAxis: { ...o.xAxis, type: "category", data: [...Array(24).keys()].map((h) => String(h).padStart(2, "0")), splitArea: { show: false } },
+    tooltip: { ...o.tooltip, trigger: "item", formatter: (x) => `${days[x.value[1]]} ${p2.format(x.value[0])}:${p2.format(0)} — ${plural("act.n_requests", x.value[2], { n: `<b>${nfFull.format(x.value[2])}</b>` })}` },
+    xAxis: { ...o.xAxis, type: "category", data: [...Array(24).keys()].map((h) => p2.format(h)), splitArea: { show: false } },
     yAxis: { ...o.yAxis, type: "category", data: days, inverse: true, splitLine: { show: false } },
-    visualMap: { min: 1, max: Math.max(2, max), calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 140, text: [`${max} requests`, "1"],
+    visualMap: { min: 1, max: Math.max(2, max), calculable: false, orient: "horizontal", left: "center", bottom: 0, itemWidth: 12, itemHeight: 140, text: [plural("act.n_requests", max, { n: nfFull.format(max) }), nf0.format(1)],
                  textStyle: { color: css("--muted"), fontSize: 11 },
                  inRange: { color: [css("--seq-1"), css("--seq-2"), css("--seq-3"), css("--seq-4"), css("--seq-5")] } },
     series: [{ type: "heatmap", data: cells, itemStyle: { borderColor: css("--surface"), borderWidth: 2, borderRadius: 3 } }],
@@ -1515,15 +1526,15 @@ function heatmap(el, cells) {
 
 async function renderSessions(main) {
   const d = await api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}`);
-  main.innerHTML = `<section class="view"><h2>Sessions</h2><p class="lede">Claude Code sessions seen in the last ${S.prefs.range === "1d" ? "24 hours" : "7 days"}, most recently active first.</p>
-    <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">No sessions recorded. Claude Code sends a session header on each request; if this stays empty, the header name has changed.</p>`}</div></section>`;
+  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
+    <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">${t("sess.none")}</p>`}</div></section>`;
 }
-const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${esc(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
+const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${bdi(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
   : id ? `<span class="muted">${esc(id.slice(0, 8))}</span>` : `<span class="muted">—</span>`);
 function sessionsTable(sessions, showUser) {
-  return `<table class="data"><thead><tr><th>Session${tipI("session")}</th>${showUser ? `<th>User${tipI("sess_user")}</th>` : ""}<th>Started${tipI("sess_started")}</th><th class="r">Duration${tipI("sess_duration")}</th><th class="r">Requests${tipI("sess_requests")}</th><th class="r">Weighted${tipI("sess_weighted")}</th><th class="r">Est. cost${tipI("sess_cost")}</th><th>Models${tipI("sess_models")}</th></tr></thead><tbody>
-      ${sessions.map((s) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${esc(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
-        <td class="r">${s.requests}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${esc(s.models.join(", "))}</td></tr>`).join("")}
+  return `<table class="data"><thead><tr><th>${t("sess.session")}${tipI("session")}</th>${showUser ? `<th>${t("app.user")}${tipI("sess_user")}</th>` : ""}<th>${t("sess.started")}${tipI("sess_started")}</th><th class="r">${t("sess.duration")}${tipI("sess_duration")}</th><th class="r">${t("metric.requests")}${tipI("sess_requests")}</th><th class="r">${t("models.m_weighted")}${tipI("sess_weighted")}</th><th class="r">${t("models.m_cost")}${tipI("sess_cost")}</th><th>${t("sess.models")}${tipI("sess_models")}</th></tr></thead><tbody>
+      ${sessions.map((s) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
+        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`).join("")}
     </tbody></table>`;
 }
 
@@ -1531,14 +1542,14 @@ async function renderErrors(main) {
   const p = S.prefs;
   const range = p.range === "90d" ? "30d" : p.range;
   const d = await api(`/api/errors?range=${range}&tz_offset=${tzOffset()}`);
-  main.innerHTML = `<section class="view"><h2>Errors</h2><p class="lede">${!isAdmin() ? "Requests the gateway or a provider refused. Hover a kind below for what it means." : `Gateway rejections and upstream errors. Upstream 429s are split into an ${tipT("exhausted account quota", "err:upstream_quota")}, a ${tipT("per-minute throttle", "err:upstream_throttle")}, and a ${tipT("refusal of one request", "err:upstream_request_scoped")}. Hover a kind below for what it means.`}</p>
-    <div class="controls">${seg("range", [["1d", "24 h"], ["7d", "7 d"], ["30d", "30 d"]], range)}</div>
+  main.innerHTML = `<section class="view"><h2>${t("tab.errors")}</h2><p class="lede">${!isAdmin() ? t("errs.lede_user") : t("errs.lede_admin", { quota: tipT(t("errs.quota"), "err:upstream_quota"), throttle: tipT(t("errs.throttle"), "err:upstream_throttle"), one: tipT(t("errs.one"), "err:upstream_request_scoped") })}</p>
+    <div class="controls">${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
-    <div class="card table-wrap" style="margin-top:16px"><h3>Most recent</h3>${d.recent.length ? `<table class="data"><thead><tr><th>When</th>${isAdmin() ? "<th>User</th>" : ""}<th>Kind</th><th>Model</th><th class="r">Status</th></tr></thead><tbody>
-      ${d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${esc(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${esc(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="muted">No errors in range.</p>`}</div></section>`;
+    <div class="card table-wrap" style="margin-top:16px"><h3>${t("errs.recent")}</h3>${d.recent.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th>${isAdmin() ? `<th>${t("app.user")}</th>` : ""}<th>${t("errs.kind")}</th><th>${t("errs.model")}</th><th class="r">${t("errs.status")}</th></tr></thead><tbody>
+      ${d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+    </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div></section>`;
   wireSegs(main, render);
-  if (!d.points.length) { $("#err-chart").outerHTML = `<p class="muted">Nothing to plot.</p>`; return; }
+  if (!d.points.length) { $("#err-chart").outerHTML = `<p class="muted">${t("errs.nothing")}</p>`; return; }
   const pts = d.points.map((x) => ({ t: x.t, key: ERROR_LABELS[x.k] || x.k, n: x.n }));
   stackedTime($("#err-chart"), pts, "n", "error", d.bucket_s === 3600 ? "hour" : "day");
 }
@@ -1549,9 +1560,9 @@ function auditDetail(json) {
 }
 async function renderAudit(main) {
   const d = await api("/api/audit");
-  main.innerHTML = `<section class="view"><h2>Audit log</h2><p class="lede">Admin actions from the dashboard and the CLI.</p>
-    <div class="card table-wrap"><table class="data"><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Target</th><th>Detail</th></tr></thead><tbody>
-      ${d.entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${esc(e.actor ?? "—")}</td><td>${esc(e.action)}</td><td>${esc(e.target ?? "")}</td><td class="muted">${esc(auditDetail(e.detail_json))}</td></tr>`).join("")}
+  main.innerHTML = `<section class="view"><h2>${t("tab.audit")}</h2><p class="lede">${t("audit.lede")}</p>
+    <div class="card table-wrap"><table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("audit.actor")}</th><th>${t("audit.action")}</th><th>${t("audit.target")}</th><th>${t("audit.detail")}</th></tr></thead><tbody>
+      ${d.entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${bdi(e.actor ?? "—")}</td><td><code>${esc(e.action)}</code></td><td>${bdi(e.target ?? "")}</td><td class="muted" dir="ltr">${esc(auditDetail(e.detail_json))}</td></tr>`).join("")}
     </tbody></table></div></section>`;
 }
 
