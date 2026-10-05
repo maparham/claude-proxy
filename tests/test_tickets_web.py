@@ -551,10 +551,11 @@ def test_home_says_when_prices_are_unavailable(tmp_path):
 PICK_HARNESS = r"""
 const fs = require("fs"), vm = require("vm");
 const src = fs.readFileSync(process.argv[2], "utf8");
+const i18n = fs.readFileSync(require("path").join(require("path").dirname(process.argv[2]), "i18n.js"), "utf8");
 const grab = (re) => { const m = re.exec(src); if (!m) throw new Error("not found: " + re); return m[0]; };
 const code = grab(/^const esc = .*$/m) + "\n" + grab(/^function pickedLine\([\s\S]*?^}/m);
-const ctx = { String };
-vm.runInNewContext(code, ctx);
+const ctx = { String, console, localStorage: { getItem: () => "en" } };
+vm.runInNewContext(i18n + "\n" + code, ctx);
 const prices = { tiers: [{ tier: "lite", label: "Lite" }, { tier: "pro", label: "<Pro>" }] };
 console.log(JSON.stringify(JSON.parse(process.argv[3]).map((pick) => ctx.pickedLine(prices, pick))));
 """
@@ -591,8 +592,9 @@ const src = fs.readFileSync(process.argv[2], "utf8");
 const names = JSON.parse(process.argv[3]);
 const code = names.map((n) => { const m = new RegExp(`^function ${n}\\([\\s\\S]*?^}`, "m").exec(src); if (!m) throw new Error("not found: " + n); return m[0]; }).join("\n");
 const calls = [];
-const ctx = { JSON, console, calls, URLSearchParams: class extends URLSearchParams { get size() { return undefined; } } };   // an old browser: no .size
-vm.runInNewContext(code + "\n" + process.argv[4], ctx);
+const i18n = fs.readFileSync(require("path").join(require("path").dirname(process.argv[2]), "i18n.js"), "utf8");
+const ctx = { JSON, console, calls, localStorage: { getItem: () => "en" }, URLSearchParams: class extends URLSearchParams { get size() { return undefined; } } };   // an old browser: no .size
+vm.runInNewContext(i18n + "\n" + code + "\n" + process.argv[4], ctx);
 console.log(JSON.stringify(ctx.out));
 """
 

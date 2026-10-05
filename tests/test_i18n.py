@@ -1,0 +1,77 @@
+"""The dashboard's dictionaries (static/i18n.js): both languages complete, and every key the page uses defined."""
+import json
+import re
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+STATIC = Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static"
+
+DUMP = r"""
+const fs = require("fs"), vm = require("vm");
+const ctx = { localStorage: { getItem: () => process.argv[3] || null, setItem() {} }, console };
+vm.runInNewContext(fs.readFileSync(process.argv[2], "utf8") + "\n;this.out = { I18N, LANG, LOC, ERR_FA, ERR_PATTERNS: ERR_PATTERNS.map(([r, k]) => [r.source, k]) };", ctx);
+const probe = process.argv[4];
+if (probe) vm.runInNewContext(probe, ctx);
+console.log(JSON.stringify(ctx.out));
+"""
+
+
+def node(tmp_path, lang=None, probe=""):
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    h = tmp_path / "dump.js"
+    h.write_text(DUMP)
+    return json.loads(subprocess.run(["node", str(h), str(STATIC / "i18n.js"), lang or "", probe],
+                                     capture_output=True, text=True, timeout=30, check=True).stdout)
+
+
+def test_persian_is_the_default_and_english_is_remembered(tmp_path):
+    assert node(tmp_path)["LANG"] == "fa" and node(tmp_path)["LOC"] == "fa-IR"
+    assert node(tmp_path, "en")["LANG"] == "en" and node(tmp_path, "en")["LOC"] == "en-US"
+    assert node(tmp_path, "xx")["LANG"] == "fa"   # junk in storage: the default
+
+
+def test_both_languages_have_the_same_keys_and_placeholders(tmp_path):
+    d = node(tmp_path)["I18N"]
+    assert set(d["en"]) == set(d["fa"])
+    ph = lambda s: sorted(set(re.findall(r"\{(\w+)\}", s)))
+    bad = [k for k in d["en"] if ph(d["en"][k]) != ph(d["fa"][k])]
+    assert bad == []
+
+
+def test_persian_uses_persian_letters(tmp_path):
+    d = node(tmp_path)
+    text = "".join(d["I18N"]["fa"].values()) + "".join(d["ERR_FA"].values())
+    assert "ي" not in text and "ك" not in text
+
+
+def test_t_falls_back_to_english_then_the_key(tmp_path):
+    out = node(tmp_path, "fa", 'I18N.en["x.only_en"] = "Hi {name}";'
+               ' I18N.en["x.n.one"] = "{n} thing"; I18N.en["x.n.other"] = "{n} things"; I18N.fa["x.n.one"] = I18N.fa["x.n.other"] = "{n} چیز";'
+               ' this.out = [t("x.only_en", {name: "a"}), t("x.nowhere"), plural("x.n", 1), plural("x.n", 2)];')
+    assert out == ["Hi a", "x.nowhere", "1 چیز", "2 چیز"]
+
+
+def _used_keys():
+    js = (STATIC / "app.js").read_text()
+    html = (STATIC / "index.html").read_text()
+    keys = set(re.findall(r"""\bt\(\s*"([a-z][\w.:-]*)\"""", js))
+    plurals = set(re.findall(r"""\bplural\(\s*"([a-z][\w.:-]*)\"""", js))
+    keys |= set(re.findall(r'data-i18n="([^"]+)"', html))
+    for spec in re.findall(r'data-i18n-attr="([^"]+)"', html):
+        keys |= {part.split(":", 1)[1] for part in spec.split(";")}
+    return keys, plurals
+
+
+def test_every_key_the_page_uses_is_defined(tmp_path):
+    en = node(tmp_path)["I18N"]["en"]
+    keys, plurals = _used_keys()
+    assert sorted(k for k in keys if k not in en) == []
+    assert sorted(k for k in plurals if f"{k}.one" not in en or f"{k}.other" not in en) == []
+
+
+def test_app_js_holds_no_persian():
+    assert not re.search(r"[؀-ۿ]", (STATIC / "app.js").read_text())
