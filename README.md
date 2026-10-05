@@ -343,6 +343,8 @@ active ticket their requests get a 403 that quotes `how_to_buy`. Third-party mod
 limit is set for the user. When the ticket ends and the user is not buying again, **Ungate** on the Users page returns
 them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets-design.md`.
 
+**Online payment (ZarinPal).** When tickets are on, signed-in users can pay for tickets online in Iranian currency (Toman) through ZarinPal. The ticket is granted as soon as the payment is verified. Payments are enabled when `ZARINPAL_MERCHANT_ID` is set in `gateway.env`, `[tickets.currencies.IRT]` is configured in `config.toml`, the `[zarinpal]` section exists, and `[listener] home_url` is set. See `docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md`.
+
 ### Order requests
 
 Instead of contacting the admin by hand, a buyer files an order request; it is a request, not a payment, and holds no

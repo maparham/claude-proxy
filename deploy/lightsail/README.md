@@ -140,6 +140,17 @@ once for your password manager, and is kept nowhere else. Reruns keep it; `--new
 after which older copies need the old key. Keep `CLAUDE_PROXY_CREDENTIAL_KEY` from `gateway.env` in the
 password manager too: the subscription grant in the database is encrypted with it, and it isn't backed up.
 
+## Online payment (ZarinPal)
+
+Enable online payment for Toman orders:
+
+1. Put `ZARINPAL_MERCHANT_ID=<36-char id>` in `gateway.env`.
+2. Restart: `docker compose up -d`.
+3. On the dashboard's **Pricing** tab, set the USD→IRT exchange rate.
+4. Users will see the **Pay with ZarinPal** button in the order dialog.
+
+The payment callback is `https://rahkar.pro/pay/callback`. The server's outgoing IP must be the one registered with ZarinPal (`3.139.146.5`).
+
 ### Restore
 
 On the Mac, with the age private key from the password manager:

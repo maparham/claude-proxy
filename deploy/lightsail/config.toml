@@ -55,3 +55,11 @@ default_usd = { day = 12, week = 35, month = 100 }
 
 [tickets.currencies.EUR]
 round_to = 0.50
+
+[tickets.currencies.IRT]   # Toman, for ZarinPal; set the rate on the Pricing tab
+round_to = 1000
+
+# ZarinPal (docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md). Terminal registered for rahkar.pro and
+# 3.139.146.5. Off until ZARINPAL_MERCHANT_ID is in gateway.env.
+[zarinpal]
+sandbox = false
