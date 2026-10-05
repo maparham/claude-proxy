@@ -13,6 +13,10 @@ const S = {
 const $ = (sel, root = document) => root.querySelector(sel);
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const tzOffset = () => -new Date().getTimezoneOffset() * 60;
+// The page's own text in the chosen language (i18n.js), and the switch between Persian and English.
+applyStatic();
+document.title = t("app.title");
+$("#lang-toggle").onclick = $("#lang-signin").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
 
 function loadPrefs() {
   const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open" };
@@ -282,9 +286,12 @@ function showTip(el, pinned = false) {
   const gutter = 16, gap = 8, vw = document.documentElement.clientWidth, vh = window.innerHeight;
   const cx = r.left + r.width / 2;
   const left = Math.min(Math.max(gutter, cx - w / 2), vw - gutter - w);
-  // data-tip-side="right" (dropdown items): beside the element, or on its left when the right has no room.
+  // data-tip-side="right" (dropdown items): beside the element, on the side the text reads away from (the right,
+  // or the left in Persian), else on the other side when that one has no room.
+  const rtl = document.documentElement.dir === "rtl";
+  const fitsR = r.right + gap + w <= vw - gutter, fitsL = r.left - gap - w >= gutter;
   const side = el.dataset.tipSide !== "right" ? null
-    : r.right + gap + w <= vw - gutter ? "right" : r.left - gap - w >= gutter ? "left" : null;
+    : rtl ? (fitsL ? "left" : fitsR ? "right" : null) : (fitsR ? "right" : fitsL ? "left" : null);
   if (side) {
     const top = Math.min(Math.max(gutter, r.top + r.height / 2 - h / 2), vh - gutter - h);
     tip.dataset.side = side;

@@ -106,7 +106,8 @@ class SecurityHeaders(BaseHTTPMiddleware):
         clerk = f" https://{clerk_host}" if clerk_host else ""
         bot = " https://challenges.cloudflare.com" if clerk_host or turnstile else ""
         self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/{clerk}{bot}; "
-                    f"style-src 'self' 'unsafe-inline'; img-src 'self' data:{clerk}{' https://img.clerk.com' if clerk else ''}; "
+                    f"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data:{clerk}{' https://img.clerk.com' if clerk else ''}; "
+                    "font-src 'self' https://fonts.gstatic.com; "
                     f"connect-src 'self'{clerk}; frame-src{bot or ' ' + repr('none')}; worker-src 'self' blob:; "
                     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
 

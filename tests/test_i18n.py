@@ -75,3 +75,17 @@ def test_every_key_the_page_uses_is_defined(tmp_path):
 
 def test_app_js_holds_no_persian():
     assert not re.search(r"[؀-ۿ]", (STATIC / "app.js").read_text())
+
+
+def test_the_page_offers_the_switch_and_marks_its_text():
+    html = (STATIC / "index.html").read_text()
+    assert 'id="lang-toggle"' in html and 'id="lang-signin"' in html
+    assert html.count("data-i18n") >= 30
+    assert "fonts.googleapis.com/css2?family=Vazirmatn" in html
+
+
+def test_css_has_no_physical_sides_outside_the_tooltip():
+    css = (STATIC / "app.css").read_text()
+    lines = [l for l in css.splitlines() if re.search(r"\b(margin|padding|border)-(left|right)\b|text-align:\s*(left|right)|(^|[;{\s])(left|right):", l)
+             and not l.lstrip().startswith("#tip")]
+    assert lines == []

@@ -293,3 +293,11 @@ async def test_me_logout_revokes_only_a_machine_key(env):
         assert (await c.post("/api/me/logout", headers=bearer(keys["alice"]))).json() == {"ok": True, "revoked": False}
         assert (await c.get("/api/me/status", headers=bearer(keys["alice"]))).status_code == 200
         assert (await c.post("/api/me/logout")).status_code == 401
+
+
+async def test_dashboard_csp_allows_google_fonts(env):
+    gw, *_ = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/dashboard")
+    csp = dict(d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";"))
+    assert "https://fonts.googleapis.com" in csp["style-src"] and "https://fonts.gstatic.com" in csp["font-src"]

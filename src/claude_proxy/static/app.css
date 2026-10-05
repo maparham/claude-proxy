@@ -50,6 +50,9 @@ body {
   background: var(--page); color: var(--ink);
   font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif;
 }
+html:lang(fa) body { font-family: Vazirmatn, system-ui, -apple-system, "Segoe UI", sans-serif; }
+bdi, [dir=ltr] { unicode-bidi: isolate; }
+.linklike { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 button, input, select { font: inherit; color: inherit; }
 a { color: var(--s1); }
 .hidden { display: none !important; }
@@ -95,19 +98,19 @@ section.view > p.lede { margin: 0 0 16px; color: var(--ink-2); max-width: 780px;
 .controls { display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; margin-bottom: 12px; }
 .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; background: var(--surface); }
 .seg button { border: 0; background: none; padding: 5px 10px; cursor: pointer; color: var(--ink-2); font-size: 13px; }
-.seg button + button { border-left: 1px solid var(--border); }
+.seg button + button { border-inline-start: 1px solid var(--border); }
 .seg button[aria-pressed="true"] { background: var(--wash); color: var(--ink); font-weight: 600; }
-.controls label { font-size: 12px; color: var(--muted); margin-right: 4px; }
+.controls label { font-size: 12px; color: var(--muted); margin-inline-end: 4px; }
 
 .chart { width: 100%; height: 320px; }
 .chart.short { height: 220px; }
 .chart.tall { height: 380px; }
 
 table.data { width: 100%; border-collapse: collapse; font-size: 13px; }
-table.data th { text-align: left; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 8px 10px;
+table.data th { text-align: start; font-weight: 600; color: var(--ink-2); font-size: 12px; padding: 8px 10px;
                 border-bottom: 1px solid var(--axis); white-space: nowrap; }
 table.data td { padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
-table.data td.r, table.data th.r { text-align: right; font-variant-numeric: tabular-nums; }
+table.data td.r, table.data th.r { text-align: end; font-variant-numeric: tabular-nums; }
 .sess-title { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-id { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 table.data tr:hover td { background: var(--wash); }
@@ -145,16 +148,16 @@ a.btn { color: inherit; text-decoration: none; }
 :where(input[type=text], input[type=password], input[type=number], select) {
   border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px; min-width: 0; }
 /* tipSelect: a <select> drawn as a button and a listbox, so each option can carry a tip. */
-.tsel { border: 1px solid var(--border); background: var(--surface); padding: 6px 26px 6px 8px; border-radius: 8px; min-width: 0;
-        text-align: left; cursor: pointer; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.tsel::after { content: ""; position: absolute; right: 10px; top: 50%; width: 6px; height: 6px; border: solid var(--ink-2);
+.tsel { border: 1px solid var(--border); background: var(--surface); padding-block: 6px; padding-inline: 8px 26px; border-radius: 8px; min-width: 0;
+        text-align: start; cursor: pointer; position: relative; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tsel::after { content: ""; position: absolute; inset-inline-end: 10px; top: 50%; width: 6px; height: 6px; border: solid var(--ink-2);
                border-width: 0 1.5px 1.5px 0; transform: translateY(-70%) rotate(45deg); }
 .tsel-list { position: fixed; inset: auto; margin: 0; padding: 4px; list-style: none; overflow-y: auto; box-sizing: border-box;
              background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 10px; font-size: 13px;
              box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12); }
-.tsel-list li { padding: 5px 12px 5px 26px; border-radius: 6px; cursor: default; white-space: nowrap; position: relative; }
+.tsel-list li { padding-block: 5px; padding-inline: 26px 12px; border-radius: 6px; cursor: default; white-space: nowrap; position: relative; }
 .tsel-list li.active { background: var(--wash); }
-.tsel-list li[aria-selected="true"]::before { content: "\2713"; position: absolute; left: 9px; }
+.tsel-list li[aria-selected="true"]::before { content: "\2713"; position: absolute; inset-inline-start: 9px; }
 input:disabled, select:disabled { color: var(--muted); background: var(--wash); opacity: 1; }
 input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); outline-offset: 1px; }
 
@@ -181,7 +184,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
   grid-template-columns: minmax(0, 1fr) minmax(400px, 38%);
   grid-template-rows: auto 1fr auto auto 1fr auto;
   grid-template-areas: "brand panel" ". panel" "intro panel" "steps panel" ". panel" "foot panel";
-  column-gap: clamp(32px, 6vw, 96px); padding-left: clamp(24px, 7vw, 112px);
+  column-gap: clamp(32px, 6vw, 96px); padding-inline-start: clamp(24px, 7vw, 112px);
 }
 .signin-brand { grid-area: brand; margin: 28px 0 0; font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
 .signin-intro { grid-area: intro; max-width: 34rem; }
@@ -206,7 +209,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
               background: var(--wash); border: 1px solid var(--border); }
 .signin-cmd pre { flex: 1; min-width: 0; margin: 0; padding: 5px 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
                   white-space: pre-wrap; overflow-wrap: anywhere; }
-.signin-cmd .prompt { color: var(--muted); margin-right: 1ch; user-select: none; }
+.signin-cmd .prompt { color: var(--muted); margin-inline-end: 1ch; user-select: none; }
 .signin-cmd code { color: var(--ink); }
 .cmd-copy { flex: none; display: grid; place-items: center; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 6px;
             background: none; color: var(--muted); cursor: pointer; }
@@ -220,7 +223,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .signin-foot { grid-area: foot; margin: 32px 0 28px; font-size: 13px; }
 .signin-foot a { color: var(--muted); }
 .signin-foot a:hover { color: var(--ink); }
-.signin-panel { grid-area: panel; background: var(--surface); border-left: 1px solid var(--border);
+.signin-panel { grid-area: panel; background: var(--surface); border-inline-start: 1px solid var(--border);
                 display: flex; align-items: center; justify-content: center; padding: 48px clamp(24px, 4vw, 56px); }
 .signin-box { width: 100%; max-width: 360px; }
 .signin-box h2 { font-size: 22px; letter-spacing: -0.015em; font-weight: 650; margin: 0 0 4px; }
@@ -254,7 +257,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .signin .error { margin-top: 12px; }
 
 @media (max-width: 880px) {
-  .signin { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; padding-left: 0;
+  .signin { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; padding-inline-start: 0;
             grid-template-areas: "brand" "intro" "panel" "steps" "foot"; }
   .signin-brand, .signin-intro, .signin-steps, .signin-foot { padding: 0 20px; }
   .signin-brand { margin-top: 20px; }
@@ -262,7 +265,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
   .signin-intro h1 { font-size: 28px; }
   .signin-lede { font-size: 15px; }
   .signin-code { font-size: 32px; margin-top: 20px; }
-  .signin-panel { border-left: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+  .signin-panel { border-inline-start: 0; border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
                   margin-top: 28px; padding: 28px 20px; }
   .signin-box { max-width: 420px; }
 }
@@ -279,14 +282,14 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); }
 
 /* Tooltips: an info dot (.tip-i) or a dotted term (.tip-t) carries data-tip / data-tip-html; one shared #tip shows it. */
-.tip-i { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-left: 5px;
+.tip-i { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-inline-start: 5px;
          border-radius: 50%; border: 1px solid var(--axis); color: var(--muted); font-size: 10px; font-weight: 700;
          line-height: 1; vertical-align: 1px; cursor: help; user-select: none; flex: none; }
 .tip-i:hover, .tip-i.tip-on { color: var(--ink); border-color: var(--ink-2); background: var(--wash); }
 .tip-t { text-decoration: underline dotted var(--muted); text-underline-offset: 3px; text-decoration-thickness: 1px; cursor: help; }
 #tip { position: fixed; inset: auto; margin: 0; z-index: 100; max-width: min(320px, calc(100vw - 32px)); width: max-content;
        padding: 9px 12px; border: 1px solid var(--tip-line); border-radius: 10px; overflow: visible;
-       background: var(--tip-bg); color: var(--tip-ink); font-size: 12.5px; line-height: 1.5; font-weight: 400; text-align: left;
+       background: var(--tip-bg); color: var(--tip-ink); font-size: 12.5px; line-height: 1.5; font-weight: 400; text-align: start;
        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12); pointer-events: none;
        animation: tip-in 120ms ease-out; }
 #tip:not(.open) { display: none; }
@@ -299,7 +302,7 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 #tip[data-side="left"]::after { border-bottom: 0; border-left: 0; }
 #tip p { margin: 0; }
 #tip p + p, #tip p + ul, #tip ul + p { margin-top: 6px; }
-#tip ul { margin: 4px 0 0; padding-left: 16px; }
+#tip ul { margin: 4px 0 0; padding-inline-start: 16px; }
 #tip li + li { margin-top: 2px; }
 #tip b { font-weight: 650; }
 #tip .th { font-weight: 650; display: block; margin-bottom: 2px; }
@@ -311,7 +314,7 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .hint code { font-size: 11.5px; }
 
 @media (max-width: 640px) {
-  header.top, nav.tabs { padding-left: 16px; padding-right: 16px; }
+  header.top, nav.tabs { padding-inline: 16px; }
   main { padding: 16px 16px 48px; }
   .cols-2 { grid-template-columns: 1fr; }
   .chart { height: 260px; }
@@ -336,7 +339,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .order-btn { margin-top: 4px; }
 .order-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .order-msg { max-width: 32ch; white-space: pre-wrap; overflow-wrap: anywhere; }
-.badge.tab-count { margin-left: 4px; border-color: var(--s1); color: var(--s1); font-weight: 600; }
+.badge.tab-count { margin-inline-start: 4px; border-color: var(--s1); color: var(--s1); font-weight: 600; }
 .badge.mail { display: inline-block; margin: 0 4px 4px 0; white-space: nowrap; }
 .badge.state-new { border-color: var(--s1); color: var(--s1); }
 .badge.state-contacted { border-color: var(--s4); }
