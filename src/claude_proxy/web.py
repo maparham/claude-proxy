@@ -32,7 +32,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import clerk, db, limits, orders, quota, tickets, turnstile, usage
+from . import clerk, db, limits, orders, payments, quota, tickets, turnstile, usage
 from .auth import AuthError, authenticate
 from .config import LENGTHS
 from .gateway import Gateway
@@ -124,7 +124,7 @@ class SecurityHeaders(BaseHTTPMiddleware):
 
 class HomeHost(BaseHTTPMiddleware):
     """On [listener] home_url's host only the home page and what it uses are served; the rest is the dashboard's."""
-    PUBLIC = ("/", "/privacy", "/api/pricing", "/api/orders")
+    PUBLIC = ("/", "/privacy", "/api/pricing", "/api/orders", "/pay/callback")
 
     def __init__(self, app, home_host: str, dashboard: str):
         super().__init__(app)
@@ -1056,6 +1056,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         out["prices"] = tickets.price_table(conn, cfg, now, currency)
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
+        # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
+        out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY)}
+                      if payments.on(cfg) and payments.rate_ok(conn, now) else None)
         return out
 
     # ---------- order requests (design 2026-10-04) ----------
@@ -1117,6 +1120,44 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         return {"order": my_order(user["id"])}
 
+    # ---------- online payment (payments design, 2026-10-05) ----------
+
+    @app.post("/api/orders/pay")
+    async def order_pay(request: Request):
+        user = principal(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        # As for an order: the account email, else one typed in the dialog, stored on the order only.
+        email = user["email"] or str(body.get("email") or "")
+        return await payments.start(conn, cfg, user, str(body.get("tier") or ""), str(body.get("length") or ""), email)
+
+    @app.get("/pay/callback")
+    async def pay_callback(Authority: str = "", Status: str = ""):
+        # No session: the authority names the payment, and its ticket only ever goes to the payment's own user.
+        before = conn.execute("SELECT status FROM payments WHERE authority=?", (Authority,)).fetchone()
+        try:
+            p = await payments.callback(conn, cfg, Authority, Status)
+        except payments.PaymentError:
+            return HTMLResponse("<!doctype html><title>Payment not found</title><p>This payment link is not known.</p>",
+                                status_code=404, headers=PAGE_HEADERS)
+        if before and before["status"] == "started" and p["status"] in ("paid", "paid_unfulfilled") and cfg.email is not None:
+            task = asyncio.create_task(payments.send_mails(conn, cfg, p["id"]))
+            _mail_tasks.add(task)
+            task.add_done_callback(_mail_done)
+        return RedirectResponse(f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#payment/{p['id']}", status_code=302)
+
+    @app.get("/api/me/payments/{pid}")
+    async def my_payment(request: Request, pid: int):
+        user = principal(request)
+        row = conn.execute("SELECT p.*, o.tier, o.length FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=? AND p.user_id=?",
+                           (pid, user["id"])).fetchone()
+        if row is None:
+            fail(404, "No such payment.")
+        # The buyer sees ZarinPal's message for a failed payment; never the card, the authority or an internal reason.
+        return {"id": row["id"], "status": row["status"], "amount": row["amount"], "ref_id": row["ref_id"], "tier": row["tier"],
+                "label": tier_label(row["tier"]), "length": row["length"],
+                "error_shown": row["error"] if row["status"] == "failed" else None}
+
     @app.post("/api/me/orders/{oid}/{action}")
     async def order_mine_action(request: Request, oid: int, action: str):
         user = principal(request, write=True)
@@ -1138,6 +1179,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             o["label"] = tier_label(o["tier"])
             # Offered in the link dialog, never linked by itself (spec section 7).
             o["suggested_user"] = orders.suggest_user(conn, o) if o["user_id"] is None and o["status"] in orders.OPEN else None
+            pay = conn.execute("SELECT status, amount, ref_id, card_pan FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1",
+                               (o["id"],)).fetchone()
+            o["payment"] = dict(pay) if pay else None
         return {"orders": rows, "new": orders.new_count(conn)}
 
     @app.post("/api/admin/orders/{oid}")
