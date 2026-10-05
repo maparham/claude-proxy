@@ -1408,6 +1408,13 @@ const LOC = LANG === "fa" ? "fa-IR" : "en-US";
 if (typeof document !== "undefined") {
   document.documentElement.lang = LANG;
   document.documentElement.dir = LANG === "fa" ? "rtl" : "ltr";
+  // Persian's font, added from script so the page never waits on Google (slow or blocked for many Persian readers):
+  // until it arrives, or if it never does, the system font shows.
+  if (LANG === "fa") {
+    const font = document.createElement("link");
+    font.rel = "stylesheet"; font.href = "https://fonts.googleapis.com/css2?family=Vazirmatn:wght@100..900&display=swap";
+    document.head.append(font);
+  }
 }
 
 // The active language's text, else English's, else the key itself; {name} filled from vars, unescaped (callers pass
