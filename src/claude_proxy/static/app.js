@@ -51,7 +51,7 @@ const iso = (v) => `\u2068${v}\u2069`;   // the same for plain text (textContent
 // Persian keyboards type Persian digits (U+06F0..9; Arabic ones U+0660..9, and U+066B as the decimal point);
 // number fields read them as 0-9.
 const asciiDigits = (s) => s.replace(/[\u06F0-\u06F9]/g, (d) => d.charCodeAt(0) - 0x6F0).replace(/[\u0660-\u0669]/g, (d) => d.charCodeAt(0) - 0x660).replace(/\u066B/g, ".");
-const num = (v) => Number(asciiDigits(String(v ?? "").trim()));
+const num = (v) => Number(asciiDigits(String(v ?? "").trim()).replace(/[\u066C\u060C,]/g, ""));   // grouping, as the page prints numbers, is dropped
 const nf = new Intl.NumberFormat(LOC, { maximumFractionDigits: 1, notation: "compact" });   // 24.9M, never "24.9m" (minutes?)
 const nfFull = new Intl.NumberFormat(LOC);
 const nfFix = (d) => new Intl.NumberFormat(LOC, { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: false });
@@ -109,7 +109,7 @@ const LIMIT_PLACEHOLDER = { count: t("lim.eg", { v: "200" }), weighted: t("lim.e
 KIND_NOTE.total = t("kindnote.total");
 const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : k === "cost_total" ? KIND_NOTE.total : KIND_NOTE.window);
 Object.entries(KIND_TIPS).forEach(([k, v]) => {
-  TIPS[`kind:${k}`] = `<span class="th">${t(`kname.${k}`)}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
+  TIPS[`kind:${k}`] = `<span class="th">${labelOf("kname.", k)}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
 });
 const ERROR_TIPS = Object.fromEntries(["gateway_limit", "gateway_auth", "gateway_key_scope", "gateway_bad_request", "upstream_quota", "upstream_throttle", "upstream_request_scoped", "gateway_needs_login", "gateway_refresh_unavailable", "gateway_upstream_unreachable", "gateway_route_unconfigured", "overloaded_error", "api_error"].map((k) => [k, t(`etip.${k}`)]));
 Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
@@ -338,9 +338,12 @@ function meter(pct) {
   const cls = pct >= 100 ? "over" : pct >= 80 ? "warn" : "";
   return `<div class="meter ${cls}"><span style="width:${Math.min(100, Math.max(0, pct || 0)).toFixed(1)}%"></span></div>`;
 }
+// A label for a value the server names (a limit kind, unit, bucket, role): its translation, or the value itself, readable,
+// when the dictionaries don't know it yet.
+function labelOf(prefix, v) { return I18N.en[prefix + v] ? t(prefix + v) : String(v).replace(/_/g, " "); }
 function limitLabel(l) {
   const scope = l.scope && l.scope !== "*" ? ` [${l.scope}]` : "";
-  return `${t(`kname.${l.kind}`)}${scope}`;
+  return `${labelOf("kname.", l.kind)}${scope}`;
 }
 function limitValue(l) {
   if (l.kind === "allowed_models") return l.value;
@@ -436,7 +439,7 @@ async function renderOverview(main) {
   const banners = [];
   if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span>${t("ov.cred_fail")} ${isAdmin() ? `${t("ov.cred_fail_admin")}${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : t("ov.cred_fail_user")}</span></div>`);
   const stale = (ov.quota || []).filter((q) => q.utilization_pct != null && q.stale);
-  if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.stale", { buckets: stale.map((q) => esc(t(`bucket.${q.bucket}`))).join(t("app.list_sep")) })}</span></div>`);
+  if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.stale", { buckets: stale.map((q) => esc(labelOf("bucket.", q.bucket))).join(t("app.list_sep")) })}</span></div>`);
   const unpriced = tot.unpriced_models || [];
   const ex = ov.exhaustion;
   main.innerHTML = `
@@ -775,7 +778,7 @@ function grantDialog(users, pre = null) {
       ${p.credit ? `<br><span class="muted">${t("tk.credit_removed")}</span>` : ""}`;
     $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
     $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">${t("tk.remove_limits")}</p>` +
-      p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(t(`unitname.${r.unit}`))}</label>`).join("") : "";
+      p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(labelOf("unitname.", r.unit))}</label>`).join("") : "";
     $("#grant-go", d).disabled = !p.available;
   };
   ["user", "tier", "length", "currency"].forEach((k) => (f[k].onchange = refresh));
@@ -976,7 +979,7 @@ function keyDialog(title, key, how = t("key.how_default")) {
     <code class="key" id="new-key">${esc(key)}</code><p><button class="btn" id="copy-key">${t("key.copy")}</button> <button class="btn primary" data-close>${t("app.done")}</button></p>`);
   $("#copy-key").onclick = async () => { try { await navigator.clipboard.writeText(key); $("#copy-key").textContent = t("key.copied"); } catch { /* clipboard blocked */ } };
 }
-function showWho() { $("#who").textContent = `${iso(S.user.name)} · ${t(`role.${S.user.role}`)}`; }
+function showWho() { $("#who").textContent = `${iso(S.user.name)} · ${labelOf("role.", S.user.role)}`; }
 // Without `u`: the signed-in user renames themselves; with it, an admin renames that user.
 function nameDialog(u) {
   const self = !u, name = self ? S.user.name : u.name;
@@ -1305,11 +1308,11 @@ function tipSelect(sel, tipFor) {
 function limitsDialog(u) {
   const kinds = S.kinds || {};
   const d = openDialog(`<h3>${t("lim.title", { name: bdi(u.name) })}</h3>
-    <div id="lim-list">${u.limits.length ? u.limits.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)} = <b><bdi>${esc(l.value)}</bdi></b> <span class="muted">${esc(t(`unitname.${l.unit}`))}</span></span>
+    <div id="lim-list">${u.limits.length ? u.limits.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)} = <b><bdi>${esc(l.value)}</bdi></b> <span class="muted">${esc(labelOf("unitname.", l.unit))}</span></span>
       <button class="btn small danger" data-del="${esc(l.kind)}" data-scope="${esc(l.scope)}">${t("lim.remove")}</button></div>`).join("") : `<p class="muted">${t("lim.none_yet")}</p>`}</div>
     <h3 style="margin-top:16px">${t("lim.set")}</h3>
     <form id="f-lim" class="form-grid">
-      <label><span>${t("lim.kind")}${tipI("kind", t("lim.about_kind"))}</span><select name="kind">${Object.keys(kinds).map((k) => `<option value="${esc(k)}">${esc(t(`kname.${k}`))}</option>`).join("")}</select></label>
+      <label><span>${t("lim.kind")}${tipI("kind", t("lim.about_kind"))}</span><select name="kind">${Object.keys(kinds).map((k) => `<option value="${esc(k)}">${esc(labelOf("kname.", k))}</option>`).join("")}</select></label>
       <label><span>${t("lim.value")}${tipI("value")}</span><input type="text" name="value" dir="ltr" required placeholder="${esc(t("lim.eg", { v: "500000" }))}"></label>
       <label><span>${t("lim.unit")}${tipI("unit", t("lim.about_unit"))}</span><select name="unit"></select></label>
       <label><span>${t("lim.models_glob")}${tipI("scope")}</span><input type="text" name="scope" dir="ltr" value="*"></label>
@@ -1318,19 +1321,19 @@ function limitsDialog(u) {
     <div class="hint" id="lim-hint" aria-live="polite"></div>
     <div class="error" id="lim-err"></div><p><button class="btn" data-close>${t("app.close")}</button></p>`);
   const f = $("#f-lim", d);
-  tipSelect(f.kind, (k) => `<span class="th">${esc(t(`kname.${k}`))}</span><p>${KIND_SHORT[k] || KIND_TIPS[k] || ""}</p>`);
+  tipSelect(f.kind, (k) => `<span class="th">${esc(labelOf("kname.", k))}</span><p>${KIND_SHORT[k] || KIND_TIPS[k] || ""}</p>`);
   // The Kind and Unit dots and the hint line describe whatever is selected; each Kind item also has its own short tip.
   const syncHint = () => {
     const k = f.kind.value, unit = f.unit.value;
     d.querySelector('[data-tip="kind"]').dataset.tipHtml = TIPS[`kind:${k}`] || `<b>${esc(k)}</b>`;
-    d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(t(`unitname.${unit}`))}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
+    d.querySelector('[data-tip="unit"]').dataset.tipHtml = `<span class="th">${esc(labelOf("unitname.", unit))}</span><p>${UNIT_TIPS[unit] || ""}</p>`;
     f.value.placeholder = LIMIT_PLACEHOLDER[unit] || "";
-    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(t(`kname.${k}`))}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
-      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(t(`unitname.${unit}`))}</b>: ${UNIT_TIPS[unit]}${f.unit.disabled ? t("lim.only_unit") : ""}` : ""));
+    $("#lim-hint", d).innerHTML = fillTip(`<b>${esc(labelOf("kname.", k))}</b>: ${KIND_TIPS[k] || ""} ${kindNote(k)}`
+      + (UNIT_TIPS[unit] && unit !== "list" ? `<br><b>${esc(labelOf("unitname.", unit))}</b>: ${UNIT_TIPS[unit]}${f.unit.disabled ? t("lim.only_unit") : ""}` : ""));
   };
   const syncUnits = () => {
     const k = f.kind.value;
-    f.unit.innerHTML = (kinds[k] || []).map((x) => `<option value="${esc(x)}">${esc(t(`unitname.${x}`))}</option>`).join("");
+    f.unit.innerHTML = (kinds[k] || []).map((x) => `<option value="${esc(x)}">${esc(labelOf("unitname.", x))}</option>`).join("");
     f.unit.disabled = f.unit.options.length < 2;   // requests_* only take count, share_* only pct: nothing to pick
     f.scope.disabled = k === "allowed_models";
     syncHint();
