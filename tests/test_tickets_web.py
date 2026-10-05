@@ -415,9 +415,10 @@ async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
 
 
 HOME_HARNESS = r"""
-const fs = require("fs"), vm = require("vm");
+const fs = require("fs"), vm = require("vm"), path = require("path");
 const [src, serverNow, clientNow, endsAt, already, dataJson, fail] = [fs.readFileSync(process.argv[2], "utf8"), +process.argv[3], +process.argv[4],
   +process.argv[5], process.argv[6], process.argv[7], process.argv[8] === "1"];
+const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js"), "utf8");
 const data = JSON.parse(dataJson); data.now = serverNow;
 let reloads = 0, tickFn = null, onToggle = null;
 const store = {}; if (already) store[already] = "1";
@@ -429,14 +430,14 @@ const ctx = {
   Date: { now: () => clientNow * 1000 },
   document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: (sel) => sel === ".countdown" ? [countdownEl] : [] },
   location: { reload: () => { reloads++; } },
-  localStorage: { getItem: () => null },
+  localStorage: { getItem: (k) => (k === "cp-lang" ? "en" : null) },
   sessionStorage: { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = v; } },
   setInterval: (fn) => { tickFn = fn; },
   fetch: () => fail ? Promise.reject(new Error("down")) : Promise.resolve({ ok: true, json: () => Promise.resolve(data) }),
 };
-vm.runInNewContext(src, ctx);
+vm.runInNewContext(i18n + "\n" + src, ctx);
 setTimeout(() => {
-  const out = { howToBuy: el("how-to-buy").textContent, pricing: el("cards").innerHTML };
+  const out = { howToBuy: el("how-to-buy").innerHTML, pricing: el("cards").innerHTML };
   if (!fail) {
     out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
     out.save = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.savePct(data.tiers[0], k)]));
@@ -536,7 +537,8 @@ def test_home_highlights_the_second_tier_only(tmp_path):
 
 def test_home_fills_how_to_buy_with_a_fallback(tmp_path):
     assert _run_home(tmp_path)["howToBuy"] == "Ask the gateway admin."
-    assert _run_home(tmp_path, _prices(how_to_buy="Bank transfer, then email."))["howToBuy"] == "Bank transfer, then email."
+    out = _run_home(tmp_path, _prices(how_to_buy="Bank transfer, then email."))["howToBuy"]
+    assert out == "<bdi>Bank transfer, then email.</bdi>"   # the admin's own text, isolated like any other admin note
 
 
 def test_home_escapes_tier_text(tmp_path):

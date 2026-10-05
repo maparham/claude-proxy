@@ -533,8 +533,9 @@ async def test_home_js_orders_through_the_public_endpoint(env):
 
 
 HOME_ORDER_HARNESS = r"""
-const fs = require("fs"), vm = require("vm");
+const fs = require("fs"), vm = require("vm"), path = require("path");
 const src = fs.readFileSync(process.argv[2], "utf8");
+const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js"), "utf8");
 const data = JSON.parse(process.argv[3]);
 const created = [];
 const els = {};
@@ -543,12 +544,12 @@ const ctx = {
   console, Intl, Math, String, Object, Number, JSON, encodeURIComponent, Promise, Date,
   document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: () => [],
               head: { appendChild: (s) => created.push(s.src) }, createElement: () => ({}) },
-  location: { reload: () => {} }, localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null, setItem: () => {} },
+  location: { reload: () => {} }, localStorage: { getItem: (k) => (k === "cp-lang" ? "en" : null) }, sessionStorage: { getItem: () => null, setItem: () => {} },
   setInterval: () => {},
   fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve(data) }),
 };
 ctx.window = ctx;
-vm.runInNewContext(src, ctx);
+vm.runInNewContext(i18n + "\n" + src, ctx);
 setTimeout(() => {
   const out = { atLoad: created.length };
   out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
@@ -675,8 +676,9 @@ def test_the_received_message_promises_an_email_only_when_one_was_queued(tmp_pat
 
 
 HOME_TICK_HARNESS = r"""
-const fs = require("fs"), vm = require("vm");
+const fs = require("fs"), vm = require("vm"), path = require("path");
 const src = fs.readFileSync(process.argv[2], "utf8");
+const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js"), "utf8");
 const data = JSON.parse(process.argv[3]);
 let reloads = 0, tickFn = null; const closeFns = [];
 const countdownEl = { dataset: { ends: "1000" }, textContent: "" };
@@ -689,13 +691,13 @@ const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventLi
 const ctx = {
   console, Intl, Math, String, Object, Number, JSON, encodeURIComponent, Promise, Date: { now: () => 2000 * 1000 },
   document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: (s) => s === ".countdown" ? [countdownEl] : [] },
-  location: { reload: () => { reloads++; } }, localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null, setItem: () => {} },
+  location: { reload: () => { reloads++; } }, localStorage: { getItem: (k) => (k === "cp-lang" ? "en" : null) }, sessionStorage: { getItem: () => null, setItem: () => {} },
   setInterval: (fn) => { tickFn = fn; },
   fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve(data) }),
 };
 ctx.window = ctx;
 const context = vm.createContext(ctx);
-vm.runInContext(src, context);
+vm.runInContext(i18n + "\n" + src, context);
 setTimeout(() => {
   vm.runInContext('ordering = { t: data.tiers[0], len: "week" }', context);   // as openOrder() would have set it
   tickFn(); tickFn();

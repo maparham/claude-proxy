@@ -1216,7 +1216,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         signed_in = db.find_session(conn, request.cookies.get(COOKIE, "")) is not None
         if not cfg.tickets.enabled or (signed_in and home is None):
             return RedirectResponse("/dashboard")
-        return HTMLResponse(versioned("home.html", ("home.js", "home.css", "app.css")), headers=PAGE_HEADERS)
+        return HTMLResponse(versioned("home.html", ("i18n.js", "home.js", "home.css", "app.css")), headers=PAGE_HEADERS)
 
     @app.get("/d/{code}")
     @app.get("/D/{code}")   # as the QR code spells it

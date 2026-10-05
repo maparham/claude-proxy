@@ -57,9 +57,10 @@ def test_t_falls_back_to_english_then_the_key(tmp_path):
 
 
 def _used_keys():
-    js = (STATIC / "app.js").read_text()
-    html = (STATIC / "index.html").read_text()
+    js = (STATIC / "app.js").read_text() + (STATIC / "home.js").read_text()
+    html = (STATIC / "index.html").read_text() + (STATIC / "home.html").read_text()
     keys = set(re.findall(r"""\bt\(\s*"([a-z][\w.:-]*)\"""", js))
+    keys |= {"price.1_day", "price.1_week", "price.1_month"}   # home.js's lengthName: t(`price.1_${len}`)
     plurals = set(re.findall(r"""\bplural\(\s*"([a-z][\w.:-]*)\"""", js))
     keys |= set(re.findall(r'data-i18n="([^"]+)"', html))
     for spec in re.findall(r'data-i18n-attr="([^"]+)"', html):
@@ -76,6 +77,7 @@ def test_every_key_the_page_uses_is_defined(tmp_path):
 
 def test_app_js_holds_no_persian():
     assert not re.search(r"[؀-ۿ]", (STATIC / "app.js").read_text())
+    assert not re.search(r"[؀-ۿ]", (STATIC / "home.js").read_text())
 
 
 def test_the_page_offers_the_switch_and_marks_its_text():
@@ -84,11 +86,20 @@ def test_the_page_offers_the_switch_and_marks_its_text():
     assert html.count("data-i18n") >= 30
 
 
+def test_the_home_page_offers_the_switch_and_marks_its_text():
+    html = (STATIC / "home.html").read_text()
+    assert html.startswith('<!doctype html>\n<html lang="fa" dir="rtl">')
+    assert 'id="lang-toggle"' in html and '/static/i18n.js' in html
+    assert html.count("data-i18n") >= 20
+
+
 def test_css_has_no_physical_sides_outside_the_tooltip():
+    pat = re.compile(r"\b(margin|padding|border)-(left|right)\b|text-align:\s*(left|right)|(^|[;{\s])(left|right):")
     css = (STATIC / "app.css").read_text()
-    lines = [l for l in css.splitlines() if re.search(r"\b(margin|padding|border)-(left|right)\b|text-align:\s*(left|right)|(^|[;{\s])(left|right):", l)
-             and not l.lstrip().startswith("#tip")]
+    lines = [l for l in css.splitlines() if pat.search(l) and not l.lstrip().startswith("#tip")]
     assert lines == []
+    home_css = (STATIC / "home.css").read_text()
+    assert [l for l in home_css.splitlines() if pat.search(l)] == []
 
 
 FMT = r"""
