@@ -1,4 +1,5 @@
 """The dashboard's dictionaries (static/i18n.js): both languages complete, and every key the page uses defined."""
+import ast
 import json
 import re
 import shutil
@@ -116,3 +117,29 @@ def test_formatters_follow_the_language(tmp_path):
     fa = _fmt(tmp_path, "fa")
     assert fa[1] == "$۱۲٫۵۰" and fa[2] == "۲ ساعت و ۳۰ دقیقه" and fa[3] == 25 and fa[4] == 3.5
     assert re.search(r"[۰-۹]", fa[0])
+
+
+def _fail_messages():
+    exact, built = set(), []
+    for py in (STATIC.parent).glob("*.py"):
+        for node_ in ast.walk(ast.parse(py.read_text())):
+            if isinstance(node_, ast.Call) and getattr(node_.func, "id", None) == "fail" and len(node_.args) > 1:
+                a = node_.args[1]
+                if isinstance(a, ast.Constant) and isinstance(a.value, str) and a.value[:1].isupper():
+                    exact.add(a.value)
+                elif isinstance(a, ast.JoinedStr):
+                    built.append("".join(v.value if isinstance(v, ast.Constant) else "X1" for v in a.values))
+    return exact, built
+
+
+def test_every_server_message_reads_in_persian(tmp_path):
+    d = node(tmp_path)
+    exact, built = _fail_messages()
+    assert sorted(m for m in exact if m not in d["ERR_FA"]) == []
+    pats = [re.compile(src) for src, _ in d["ERR_PATTERNS"]]
+    assert [m for m in built if not any(p.search(m) for p in pats)] == []
+
+
+def test_an_unknown_message_shows_as_sent(tmp_path):
+    out = node(tmp_path, "fa", 'this.out = [errMsg("Brand new message."), errMsg(""), errMsg(undefined)];')
+    assert out == ["Brand new message.", "", None]

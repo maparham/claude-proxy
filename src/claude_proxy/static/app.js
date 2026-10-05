@@ -90,7 +90,8 @@ async function api(path, opts = {}) {
   let data = null;
   try { data = await r.json(); } catch { /* empty */ }
   if (r.status === 401 && !path.startsWith("/api/login")) { showLogin(); throw new Error("signed out"); }
-  if (!r.ok) throw Object.assign(new Error((data && data.error) || `HTTP ${r.status}`), { status: r.status, data });
+  // The server writes English; errMsg (i18n.js) gives the known messages in Persian. `raw` keeps the original.
+  if (!r.ok) { const raw = (data && data.error) || `HTTP ${r.status}`; throw Object.assign(new Error(errMsg(raw)), { status: r.status, data, raw }); }
   return data;
 }
 

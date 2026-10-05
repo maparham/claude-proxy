@@ -1434,8 +1434,56 @@ function setLang(lang) {
 
 // Server messages (web.py's fail()) are English; the known ones read in Persian. Exact texts first, then the
 // messages built from values, whose groups fill {1}, {2} of the Persian.
-const ERR_FA = {};
-const ERR_PATTERNS = [];
+const ERR_FA = {
+  "A computer's key can only remove that computer. Sign in with your first key to manage the others.": "کلید یک رایانه فقط همان رایانه را می‌تواند حذف کند. برای مدیریت بقیه با کلید اصلی‌تان وارد شوید.",
+  "A revoked user cannot be re-enabled; delete them and add them again for a new key.": "کاربر ابطال‌شده دوباره فعال نمی‌شود؛ برای کلید تازه او را حذف و دوباره اضافه کنید.",
+  "Admin only.": "فقط برای مدیر.",
+  "Authorize computers in the browser, signed in to the dashboard.": "رایانه‌ها را در مرورگر و پس از ورود به داشبورد تأیید کنید.",
+  "Could not reach Clerk to check the sign-in; try again.": "برای بررسی ورود به Clerk دسترسی نبود؛ دوباره تلاش کنید.",
+  "Expected a JSON body.": "بدنهٔ JSON انتظار می‌رفت.",
+  "Expected a JSON object.": "شیء JSON انتظار می‌رفت.",
+  "Missing or wrong CSRF token.": "توکن CSRF نیست یا نادرست است.",
+  "Need a daily amount in dollars above 0.": "یک مبلغ روزانهٔ دلاری بیشتر از ۰ لازم است.",
+  "Need a name of 1-64 characters and role user or admin.": "نامی ۱ تا ۶۴ نویسه‌ای و نقش user یا admin لازم است.",
+  "No such limit.": "چنین سقفی نیست.",
+  "No such machine.": "چنین رایانه‌ای نیست.",
+  "No such request waiting: it may have expired (after 10 minutes) or been answered already. Run gclaude again for a new code (the first time, the install command).": "چنین درخواستی در انتظار نیست: شاید منقضی شده (پس از ۱۰ دقیقه) یا قبلاً پاسخ گرفته باشد. برای کد تازه دوباره gclaude را اجرا کنید (بار اول، فرمان نصب را).",
+  "No such user.": "چنین کاربری نیست.",
+  "Not found.": "پیدا نشد.",
+  "Not signed in.": "وارد نشده‌اید.",
+  "Ordering without signing in is not set up on this gateway.": "سفارش بدون ورود روی این درگاه راه‌اندازی نشده است.",
+  "Preview the ticket first and send the usd and rate it showed.": "اول پیش‌نمایش تیکت را ببینید و مبلغ دلاری و نرخی را که نشان داد بفرستید.",
+  "Send the gateway key to sign it out.": "برای خارج کردن کلید درگاه، خود کلید را بفرستید.",
+  "Sign-in with Clerk is not set up on this gateway.": "ورود با Clerk روی این درگاه راه‌اندازی نشده است.",
+  "Sign-ups are closed. Ask the gateway admin for an account.": "ثبت‌نام بسته است. برای حساب از مدیر درگاه بخواهید.",
+  "That account was just created; sign in again.": "آن حساب همین حالا ساخته شد؛ دوباره وارد شوید.",
+  "That request was answered already.": "به آن درخواست قبلاً پاسخ داده شده است.",
+  "The verification failed; please try again.": "تأیید ناموفق بود؛ لطفاً دوباره تلاش کنید.",
+  "This account is disabled. Ask the gateway admin.": "این حساب غیرفعال است. از مدیر درگاه بپرسید.",
+  "This account was removed. Ask the gateway admin.": "این حساب حذف شده است. از مدیر درگاه بپرسید.",
+  "This gateway has no [listener] public_url and dashboard_url set, so it can't authorize in the browser.": "این درگاه public_url و dashboard_url را در [listener] تنظیم نکرده، پس نمی‌تواند در مرورگر تأیید کند.",
+  "This key only works for third-party models; sign in with your Claude Code key.": "این کلید فقط برای مدل‌های شخص ثالث کار می‌کند؛ با کلید Claude Code خود وارد شوید.",
+  "This key only works for third-party models; use your Claude Code key for the dashboard.": "این کلید فقط برای مدل‌های شخص ثالث کار می‌کند؛ برای داشبورد از کلید Claude Code خود استفاده کنید.",
+  "Tickets are not enabled on this gateway.": "تیکت‌ها روی این درگاه فعال نیستند.",
+  "Type the user's name to confirm.": "برای تأیید، نام کاربر را بنویسید.",
+  "Unknown action.": "کار ناشناخته.",
+  "Unknown, disabled or revoked key.": "کلید ناشناخته، غیرفعال یا ابطال‌شده است.",
+  "Wrong username or password.": "نام کاربری یا گذرواژه نادرست است.",
+  "You cannot disable or revoke your own account.": "نمی‌توانید حساب خودتان را غیرفعال یا ابطال کنید.",
+  "You signed in with a computer's key, which can't authorize another computer. Sign in with Google, GitHub, your email or the gateway key the admin gave you.": "با کلید یک رایانه وارد شده‌اید که نمی‌تواند رایانهٔ دیگری را تأیید کند. با Google، GitHub، ایمیل‌تان یا کلید درگاهی که مدیر داده وارد شوید.",
+};
+const ERR_PATTERNS = [
+  [/^(.+) must be a number\.$/, "{1} باید عدد باشد."],
+  [/^(.+) must be a whole number\.$/, "{1} باید عدد صحیح باشد."],
+  [/^(.+) must be a finite number of sensible size\.$/, "{1} باید عددی متناهی و با اندازهٔ معقول باشد."],
+  [/^The name (.+) is taken\. Ask the gateway admin\.$/, "نام {1} گرفته شده است. از مدیر درگاه بپرسید."],
+  [/^No user '(.+?)'\.$|^No user (.+?)\.$/, "کاربری با نام {1}{2} نیست."],
+  [/^User '(.+?)' already exists\.$|^User (.+?) already exists\.$/, "کاربر {1}{2} از قبل وجود دارد."],
+  [/^Too many (.+?)\. Try again in (\S+)s\.$/, "تلاش‌های بیش از حد ({1}). {2} ثانیهٔ دیگر دوباره تلاش کنید."],
+  [/^Sign-in failed: (.+)\.$/, "ورود ناموفق بود: {1}."],
+  [/^(.+) is linked to another sign-in\. Ask the gateway admin\.$/, "{1} به ورود دیگری پیوند خورده است. از مدیر درگاه بپرسید."],
+  [/^Unknown action '(.+?)'\.$|^Unknown action (.+?)\.$/, "کار ناشناخته: {1}{2}."],
+];
 function errMsg(text) {
   if (LANG !== "fa" || !text) return text;
   if (ERR_FA[text]) return ERR_FA[text];
