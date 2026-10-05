@@ -59,8 +59,9 @@ const nf0 = nfFix(0), nf2 = nfFix(2);
 function fmtNum(v) { return v == null ? "—" : nf.format(v); }
 function fmtUsd(v) { return v == null ? "—" : v === 0 ? `$${nf0.format(0)}` : v < 0.01 ? `<$${nf2.format(0.01)}` : "$" + (v >= 100 ? nf0 : nf2).format(v); }
 const fmtPrice = (v) => `$${Number.isInteger(v) ? nf0.format(v) : nf2.format(v)}`;   // a USD price: whole dollars bare, otherwise cents
-const fmtShare = (v) => `${new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 }).format(+v)}%`;   // 6.1000000000000005 reads 6.1%
-function fmtPct(v, d = 0) { return v == null ? "—" : `${nfFix(d).format(v)}%`; }
+const PCT = LANG === "fa" ? "\u066A" : "%";   // the Persian percent sign in Persian
+const fmtShare = (v) => `${new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 }).format(+v)}${PCT}`;   // 6.1000000000000005 reads 6.1%
+function fmtPct(v, d = 0) { return v == null ? "—" : `${nfFix(d).format(v)}${PCT}`; }
 function fmtDur(s) {
   if (s == null) return "—";
   s = Math.max(0, Math.round(s));
@@ -501,7 +502,7 @@ function userLimitsCard(me, tk) {
       ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_pct + c.bonus_share) })}</p>` : ""}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: bdi(tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: bdi(tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
-    : `<div class="ticket">${t("ov.ticket_ended")} ${esc(tk.how_to_buy || t("ov.ask_admin"))}</div>`;
+    : `<div class="ticket">${t("ov.ticket_ended")} ${tk.how_to_buy ? bdi(tk.how_to_buy) : t("ov.ask_admin")}</div>`;
   return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? t("ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
     ${ticket}${limitsBlock(me.limits)}</div>`;
@@ -530,7 +531,7 @@ function priceListCard(tk, order) {
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${bdi(tier.label)}</b> <span class="muted">${fmtShare(tier.share_pct)}</span><div class="muted">≈ ${esc(tier.compare)}</div>${hint(tier)}</td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${picked}${esc(tk.how_to_buy || (picked ? t("ov.ask_admin") : ""))}</p></div>`;
+    </tbody></table></div><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
 }
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
@@ -539,7 +540,7 @@ const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1
 // The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
 function myOrderCard(o) {
   if (!o) return "";
-  const what = t("ord.what", { label: esc(o.label), len: lengthName(o.length) });
+  const what = t("ord.what", { label: bdi(o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
     return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
       <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div></div>
@@ -554,7 +555,7 @@ function orderCurrencies(p) { return [...new Set([p.currency, "USD"])]; }
 function orderFormHtml(p, tier, len, email) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
-  return `<h3>${t("ord.title", { what: t("ord.what", { label: esc(tier.label), len: lengthName(len) }) })}</h3>
+  return `<h3>${t("ord.title", { what: t("ord.what", { label: bdi(tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form id="f-order" class="form-grid order-form">
       <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c)}</option>`).join("")}</select></label>
@@ -661,7 +662,7 @@ function userRow(u) {
   const share = (b) => (u.share[b] == null ? "—" : nfFix(1).format(u.share[b]));
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}
-      <div class="muted" style="font-size:12px"><bdi>${esc(u.prefix)}…</bdi>${u.routes_prefix ? ` · OpenCode <bdi>${esc(u.routes_prefix)}…</bdi>` : ""}</div></td>
+      <div class="muted" style="font-size:12px"><bdi class="nowrap">${esc(u.prefix)}…</bdi>${u.routes_prefix ? ` · OpenCode <bdi class="nowrap">${esc(u.routes_prefix)}…</bdi>` : ""}</div></td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
@@ -937,10 +938,10 @@ async function renderPricing(main) {
           <span><input type="text" inputmode="decimal" dir="ltr" name="rate" step="any" min="0" placeholder="${esc(t("pr.todays_rate"))}" required style="width:110px"> <button class="btn small" type="submit">${t("app.save")}</button></span></form>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
       </div>
       <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
-        <table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
+        <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${bdi(x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
           `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">${t("app.save")}</button></form></td>`).join("")}</tr>`).join("")}
-        </tbody></table></div>
+        </tbody></table></div></div>
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
@@ -951,10 +952,10 @@ async function renderPricing(main) {
         <label>${t("tk.until")}<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
         <button class="btn primary" type="submit">${t("pr.create_discount")}</button></form>
       <div class="error" id="disc-err"></div>
-      <table class="data" style="margin-top:12px"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.length")}</th><th class="r">USD</th><th>${t("tk.period")}</th><th>${t("tk.state")}</th><th></th></tr></thead><tbody>
+      <div class="table-wrap" style="margin-top:12px"><table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.length")}</th><th class="r">USD</th><th>${t("tk.period")}</th><th>${t("tk.state")}</th><th></th></tr></thead><tbody>
       ${p.discounts.map((x) => `<tr><td>${bdi(p.tiers[x.tier]?.label || x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
         <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">${t("app.cancel_ticket")}</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("pr.no_discounts")}</td></tr>`}
-      </tbody></table></div>
+      </tbody></table></div></div>
   </section>`;
   const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
   main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }); }));
@@ -1091,7 +1092,7 @@ async function renderAuthorize(main) {
     <h2>${t("tab.authorize")}</h2>
     <p>${t("auth.asks", { label: `<b>${bdi(req.label)}</b>`, name: `<b>${bdi(S.user.name)}</b>` })}
       ${t("auth.asked", { ago: fmtAgo(req.created_at), ip: req.ip ? bdi(req.ip) : t("auth.unknown_ip") })}${req.ip && req.ip !== req.your_ip ? ` <b>(${t("auth.not_this", { ip: bdi(req.your_ip) })})</b>` : ""}.</p>
-    <p>${t("auth.check_code")}</p><div class="user-code" dir="ltr">${esc(req.user_code)}</div>
+    <p>${t("auth.check_code")}</p><div class="user-code">${bdi(req.user_code)}</div>
     <p class="muted">${t("auth.only_if")}</p>
     <p><button class="btn primary" id="az-yes">${t("auth.authorize")}</button> <button class="btn" id="az-no">${t("app.cancel")}</button></p></div></section>`;
   const decide = async (decision, title, text) => {
