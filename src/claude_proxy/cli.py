@@ -10,7 +10,7 @@ import time
 
 import httpx
 
-from . import db, estimates, limits, orders
+from . import db, estimates, limits, orders, payments
 from .config import Config, ConfigError
 from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
@@ -285,6 +285,12 @@ async def _maintenance(conn, cfg: Config):
                 logger.info("cleared the IP of %d orders older than 30 days", cleared)
         except Exception:
             logger.exception("clearing old order IPs failed")
+        try:
+            expired = payments.expire(conn)
+            if expired:
+                logger.info("expired %d unfinished payments", expired)
+        except Exception:
+            logger.exception("expiring payments failed")
         await asyncio.sleep(6 * 3600)
 
 
