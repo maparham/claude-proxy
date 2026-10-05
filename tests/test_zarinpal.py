@@ -74,3 +74,10 @@ def test_config_section_and_secret(tmp_path, monkeypatch):
     p.write_text("[zarinpal]\nmerchant_id = \"x\"\n")
     with pytest.raises(ConfigError, match=r"\[zarinpal\]"):
         Config.load(str(p))
+
+
+@pytest.mark.parametrize("data", [{"code": 100, "card_pan": "x"}, {"code": 101, "ref_id": None}, {"code": 100, "ref_id": ""}])
+async def test_verify_without_ref_id_is_unavailable(monkeypatch, data):
+    fake(monkeypatch, lambda r: httpx.Response(200, json={"data": data, "errors": []}))
+    with pytest.raises(zarinpal.ZarinpalUnavailable):
+        await zarinpal.verify(MID, 1000, "A1", sandbox=False)

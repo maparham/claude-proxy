@@ -77,12 +77,15 @@ needed: the authority identifies the payment, and the ticket only ever goes to t
 - Unknown authority: 404 page.
 - Payment no longer `started` (a repeated callback, or a reload): no ZarinPal call; redirect to the result.
 - `NOK`: `cancelled`; the order is withdrawn; redirect to the dashboard with "Payment cancelled; nothing was charged."
+- `OK`, but the order is no longer open (withdrawn, declined, or granted by hand): `cancelled` without verifying
+  (ZarinPal returns an unverified payment's money).
 - `OK`: call `verify.json` with `merchant_id`, the stored `amount` and the authority.
   - Code 100 or 101: store `ref_id` and `card_pan`, then grant (below).
   - Any other code: `failed`, the order is withdrawn, and the buyer sees ZarinPal's message and "If money left your
     account, ZarinPal returns it within 72 hours."
-  - ZarinPal unreachable: the payment stays `started` and the buyer sees "We could not confirm your payment yet;
-    reload this page in a minute." Reloading retries the verify (101 makes this safe).
+  - ZarinPal unreachable (or a success without a `ref_id`): the payment stays `started` and the buyer sees "Your
+    payment is being confirmed with ZarinPal. The result will be emailed to you within the hour." Reconcile (below)
+    retries the verify (101 makes this safe).
 
 **Grant.** `tickets.grant` with `order_id` and a new `paid=True`, which grants at the order's quote: `quoted_usd` and
 `quoted_rate` are used as the price instead of today's, there is no stale-rate confirmation and no quote check. The
@@ -95,8 +98,11 @@ issued automatically. The admin has been told and will sort it out."
 outcome: on success "Paid. Reference 12345678." and their new ticket. A browser that is not signed in (sessions live
 on the dashboard host) sees the sign-in screen first, then the same result.
 
-**Expiry.** The maintenance task marks payments still `started` after an hour as `expired` and withdraws their
-orders. ZarinPal returns money for a payment that was never verified.
+**Reconcile (expiry).** Every 5 minutes, a task verifies each payment still `started` an hour after it began, with
+its stored amount: 100/101 grants it (or `paid_unfulfilled`) and sends the section 5 mail once; a refusal marks it
+`expired` and withdraws its order; ZarinPal unreachable leaves it `started` for the next run. With payments off, or
+its order no longer open, it is closed (`expired` / `cancelled`) without verifying. ZarinPal returns money for a
+payment that was never verified.
 
 ## 5. Mail
 

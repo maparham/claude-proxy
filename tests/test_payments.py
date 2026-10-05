@@ -1,4 +1,4 @@
-"""Payments design, section 4: start, callback, expiry, with ZarinPal faked."""
+"""Payments design, section 4: start, callback, reconcile, with ZarinPal faked."""
 import asyncio
 import sqlite3
 import time
@@ -227,7 +227,7 @@ async def test_verify_succeeds_after_expiry_meanwhile_is_unfulfilled(env, monkey
     p0 = payments.get(conn, r["payment_id"])
 
     async def verify_but_expired_meanwhile(merchant_id, amount, authority, sandbox):
-        payments.expire(conn, now=time.time() + payments.EXPIRE_S + 1)   # the buyer's reload expired it while this awaited
+        payments._close(conn, payments.get(conn, p0["id"]), "expired", int(time.time()))   # reconcile closed it while this awaited
         return {"code": 100, "ref_id": 201, "card_pan": "x"}
     monkeypatch.setattr(zarinpal, "verify", verify_but_expired_meanwhile)
 
@@ -237,13 +237,58 @@ async def test_verify_succeeds_after_expiry_meanwhile_is_unfulfilled(env, monkey
     assert orders.get(conn, p["order_id"])["status"] == "withdrawn"
 
 
-async def test_declined_meanwhile_is_unfulfilled(env):
+async def test_declined_during_verify_is_unfulfilled(env, monkeypatch):
     conn, cfg, ids, zp = env
     r = await start(conn, cfg, ids)
     p0 = payments.get(conn, r["payment_id"])
-    orders.set_status(conn, ids["admin"], p0["order_id"], "declined", note="no")
+    real_verify = zp.verify
+
+    async def declined_meanwhile(*a, **kw):
+        orders.set_status(conn, ids["admin"], p0["order_id"], "declined", note="no")
+        return await real_verify(*a, **kw)
+    monkeypatch.setattr(zarinpal, "verify", declined_meanwhile)
     p = await payments.callback(conn, cfg, p0["authority"], "OK")
     assert p["status"] == "paid_unfulfilled"
+
+
+@pytest.mark.parametrize("to", ["withdrawn", "declined"])
+async def test_order_closed_before_callback_cancels_without_verifying(env, to):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+    orders.set_status(conn, ids["alice"] if to == "withdrawn" else ids["admin"], p0["order_id"], to, note="no")
+    p = await payments.callback(conn, cfg, p0["authority"], "OK")
+    assert p["status"] == "cancelled" and zp.verifies == [] and not p.get("changed")
+    assert orders.get(conn, p["order_id"])["status"] == to
+    assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='payment_cancelled'").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+
+
+async def test_order_granted_by_hand_cancels_without_verifying(env):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+    o = orders.get(conn, p0["order_id"])
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "IRT", order_id=o["id"], paid=True)
+    p = await payments.callback(conn, cfg, p0["authority"], "OK")
+    assert p["status"] == "cancelled" and zp.verifies == []
+    assert orders.get(conn, p["order_id"])["status"] == "done"
+
+
+async def test_fulfil_error_after_commit_keeps_paid(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+    real_grant = tickets.grant
+
+    def grant_then_boom(*a, **kw):
+        real_grant(*a, **kw)
+        raise sqlite3.OperationalError("after commit")
+    monkeypatch.setattr(tickets, "grant", grant_then_boom)
+    p = await payments.callback(conn, cfg, p0["authority"], "OK")
+    assert p["status"] == "paid" and p["changed"] is True and p["ref_id"] == "201"
+    assert payments.get(conn, p0["id"])["status"] == "paid"
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 1
 
 
 async def test_rate_change_during_payment_keeps_the_paid_amount(env):
@@ -282,13 +327,112 @@ async def test_unknown_authority(env):
     assert e.value.status == 404
 
 
-async def test_expire(env):
+def later():
+    return time.time() + payments.EXPIRE_S + 1
+
+
+async def test_reconcile_leaves_recent_payments(env):
     conn, cfg, ids, zp = env
     r = await start(conn, cfg, ids)
-    assert payments.expire(conn, now=time.time() + 30) == 0
-    assert payments.expire(conn, now=time.time() + payments.EXPIRE_S + 1) == 1
+    out = await payments.reconcile(conn, cfg, now=time.time() + 30)
+    assert out["changed"] == [] and zp.verifies == []
+    assert payments.get(conn, r["payment_id"])["status"] == "started"
+
+
+async def test_reconcile_grants_a_payment_whose_verify_was_unreachable(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    from claude_proxy import mail
+    from claude_proxy.config import EmailConfig
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body: sent.append(to))
+    zp.verify_answer = zarinpal.ZarinpalUnavailable("down")
+    p0, p = await paid_flow(conn, cfg, ids)
+    assert p["status"] == "started"
+    zp.verify_answer = {"code": 101, "ref_id": 201, "card_pan": "x"}
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["changed"] == [p0["id"]] and out["paid"] == 1
+    assert zp.verifies[-1] == (1250000, p0["authority"])
+    p = payments.get(conn, p0["id"])
+    o = orders.get(conn, p["order_id"])
+    assert p["status"] == "paid" and o["status"] == "done" and o["ticket_id"]
+    for pid in out["changed"]:
+        await payments.send_mails(conn, cfg, pid)
+    again = await payments.reconcile(conn, cfg, now=later() + 600)   # nothing left: no second mail, no second verify
+    assert again["changed"] == [] and len(zp.verifies) == 2
+    assert sorted(sent) == ["admin@example.com", "alice@example.com"]
+
+
+async def test_reconcile_refused_expires_and_withdraws(env):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    zp.verify_answer = zarinpal.ZarinpalRefused(-51, "not paid")
+    out = await payments.reconcile(conn, cfg, now=later())
     p = payments.get(conn, r["payment_id"])
-    assert p["status"] == "expired" and orders.get(conn, p["order_id"])["status"] == "withdrawn"
+    assert out["expired"] == 1 and out["changed"] == []
+    assert p["status"] == "expired" and "-51" in p["error"]
+    assert orders.get(conn, p["order_id"])["status"] == "withdrawn"
+
+
+async def test_reconcile_unavailable_stays_started(env):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    zp.verify_answer = zarinpal.ZarinpalUnavailable("down")
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["pending"] == 1 and out["changed"] == []
+    p = payments.get(conn, r["payment_id"])
+    assert p["status"] == "started" and orders.get(conn, p["order_id"])["status"] == "new"
+
+
+async def test_reconcile_with_payments_off_expires_without_verifying(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    monkeypatch.delenv("ZARINPAL_MERCHANT_ID")
+    out = await payments.reconcile(conn, cfg, now=later())
+    p = payments.get(conn, r["payment_id"])
+    assert out["expired"] == 1 and zp.verifies == [] and p["status"] == "expired"
+    assert orders.get(conn, p["order_id"])["status"] == "withdrawn"
+
+
+async def test_reconcile_order_closed_cancels_without_verifying(env):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+    orders.set_status(conn, ids["alice"], p0["order_id"], "withdrawn")
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["cancelled"] == 1 and zp.verifies == []
+    assert payments.get(conn, p0["id"])["status"] == "cancelled"
+
+
+async def test_reconcile_skips_a_payment_finished_while_it_awaited(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+
+    async def callback_won(merchant_id, amount, authority, sandbox):
+        payments._set(conn, p0["id"], "paid", int(time.time()), ref_id="999", card_pan="y")
+        return {"code": 101, "ref_id": 999, "card_pan": "y"}
+    monkeypatch.setattr(zarinpal, "verify", callback_won)
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["changed"] == [] and conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+
+
+async def test_reconcile_one_bad_row_does_not_stop_the_rest(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r1 = await start(conn, cfg, ids)
+    conn.execute("UPDATE orders SET status='withdrawn'")
+    r2 = await start(conn, cfg, ids)
+    calls = []
+
+    async def first_explodes(merchant_id, amount, authority, sandbox):
+        calls.append(authority)
+        if len(calls) == 1:
+            raise RuntimeError("boom")
+        return {"code": 100, "ref_id": 202, "card_pan": "x"}
+    monkeypatch.setattr(zarinpal, "verify", first_explodes)
+    conn.execute("UPDATE orders SET status='new' WHERE id=(SELECT order_id FROM payments WHERE id=?)", (r1["payment_id"],))
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["errors"] == 1 and out["paid"] == 1 and len(calls) == 2
 
 
 async def test_mails(env):
@@ -303,3 +447,61 @@ async def test_mails(env):
     assert "1,250,000 Toman" in m[0][2] and "201" in m[0][2] and "201" in m[1][2]
     m = payments.mails(cfg, p | {"status": "paid_unfulfilled"}, o, None, "sold out")
     assert [x[0] for x in m] == ["admin@example.com"] and "NOT granted: sold out" in m[0][2]
+
+
+def test_startup_warning_names_what_is_missing(env, monkeypatch, caplog):
+    conn, cfg, ids, zp = env
+    assert payments.missing(cfg) == []
+    with caplog.at_level("WARNING"):
+        payments.warn_if_off(cfg)
+    assert caplog.records == []
+    cfg.listener.home_url = ""
+    del cfg.tickets.currencies["IRT"]
+    assert payments.missing(cfg) == ["IRT in [tickets.currencies]", "[listener] home_url"]
+    monkeypatch.delenv("ZARINPAL_MERCHANT_ID")
+    cfg.tickets.enabled = False
+    with caplog.at_level("WARNING"):
+        payments.warn_if_off(cfg)
+    assert len(caplog.records) == 1
+    msg = caplog.records[0].getMessage()
+    assert "ZARINPAL_MERCHANT_ID" in msg and "IRT" in msg and "home_url" in msg and "[tickets]" in msg
+    caplog.clear()
+    monkeypatch.setenv("ZARINPAL_MERCHANT_ID", MID)
+    with caplog.at_level("WARNING"):
+        payments.warn_if_off(cfg)
+    assert MID not in caplog.text
+    cfg.zarinpal = None
+    caplog.clear()
+    with caplog.at_level("WARNING"):
+        payments.warn_if_off(cfg)
+    assert caplog.records == []   # no [zarinpal] section: payments are simply not configured
+
+
+async def test_cli_reconcile_mails_each_changed_payment_once(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    from claude_proxy import cli, mail
+    from claude_proxy.config import EmailConfig
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body: sent.append(to))
+    r = await start(conn, cfg, ids)
+    conn.execute("UPDATE payments SET created_at=created_at-?", (payments.EXPIRE_S + 1,))
+    await cli._reconcile_once(conn, cfg)   # no [email]: granted, no mail
+    assert payments.get(conn, r["payment_id"])["status"] == "paid" and sent == []
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    conn.execute("UPDATE orders SET status='withdrawn'")
+    r = await start(conn, cfg, ids)
+    conn.execute("UPDATE payments SET created_at=created_at-? WHERE id=?", (payments.EXPIRE_S + 1, r["payment_id"]))
+    await cli._reconcile_once(conn, cfg)
+    await cli._reconcile_once(conn, cfg)
+    assert sorted(sent) == ["admin@example.com", "alice@example.com"]
+
+
+async def test_cli_reconcile_survives_a_failure(monkeypatch, caplog):
+    from claude_proxy import cli
+    from claude_proxy.config import Config
+
+    async def boom(*a, **k):
+        raise RuntimeError("db gone")
+    monkeypatch.setattr(payments, "reconcile", boom)
+    await cli._reconcile_once(None, Config())
+    assert "reconciling payments failed" in caplog.text

@@ -248,7 +248,9 @@ async def _serve(cfg: Config):
     ]
     print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
     print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
-    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_maintenance(conn, cfg))]
+    payments.warn_if_off(cfg)
+    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_maintenance(conn, cfg)),
+                  asyncio.create_task(_reconcile_payments(conn, cfg))]
     running = [asyncio.create_task(s.serve()) for s in servers]
     try:
         await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
@@ -285,13 +287,30 @@ async def _maintenance(conn, cfg: Config):
                 logger.info("cleared the IP of %d orders older than 30 days", cleared)
         except Exception:
             logger.exception("clearing old order IPs failed")
-        try:
-            expired = payments.expire(conn)
-            if expired:
-                logger.info("expired %d unfinished payments", expired)
-        except Exception:
-            logger.exception("expiring payments failed")
         await asyncio.sleep(6 * 3600)
+
+
+RECONCILE_EVERY_S = 300
+
+
+async def _reconcile_payments(conn, cfg: Config):
+    """Payments design, section 4 (Expiry): settle payments left `started`, every few minutes."""
+    while True:
+        await _reconcile_once(conn, cfg)
+        await asyncio.sleep(RECONCILE_EVERY_S)
+
+
+async def _reconcile_once(conn, cfg: Config):
+    try:
+        out = await payments.reconcile(conn, cfg)
+    except Exception:
+        logger.exception("reconciling payments failed")
+        return
+    if any(v for k, v in out.items() if k != "changed"):
+        logger.info("reconciled unfinished payments: %s", out)
+    if cfg.email is not None:
+        for pid in out["changed"]:   # each moved to paid/paid_unfulfilled by this run only: mail once
+            await payments.send_mails(conn, cfg, pid)
 
 
 def main(argv=None):

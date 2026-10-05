@@ -492,10 +492,14 @@ async function renderOverview(main) {
   }
   if (S.paymentId) {
     const id = S.paymentId; S.paymentId = null;
-    api(`/api/me/payments/${id}`).then((p) => { const msg = paymentNoticeMsg(p); if (msg) alertInline(msg); }).catch(() => {});
+    api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
 }
-// The #payment/<id> result notice. alertInline() escapes the whole string it's handed, so this passes every
+function showPaymentNotice(p) {
+  const msg = paymentNoticeMsg(p);
+  if (msg) infoInline(t("pay.title"), msg);
+}
+// The #payment/<id> result notice. infoInline() escapes the message it's handed, so this passes every
 // server value (ref_id, label, error_shown) in raw: escaping it here too would double-escape ' and & etc.
 function paymentNoticeMsg(p) {
   const what = t("ord.what", { label: p.label, len: lengthName(p.length) });

@@ -30,10 +30,29 @@ def _now(now) -> int:
     return int(time.time() if now is None else now)
 
 
+def missing(cfg: Config) -> list[str]:
+    """What a [zarinpal] section still needs before payments are on (section 2). Names only, never the merchant ID."""
+    out = []
+    if not cfg.tickets.enabled:
+        out.append("[tickets] enabled")
+    if cfg.zarinpal is None or not cfg.zarinpal.merchant_id():
+        out.append("ZARINPAL_MERCHANT_ID in the environment")
+    if CURRENCY not in cfg.tickets.currencies:
+        out.append(f"{CURRENCY} in [tickets.currencies]")
+    if not cfg.listener.home_url:
+        out.append("[listener] home_url")
+    return out
+
+
 def on(cfg: Config) -> bool:
     """Payments design, section 2: tickets, a [zarinpal] section, the merchant ID, IRT and the home URL."""
-    return bool(cfg.tickets.enabled and cfg.zarinpal is not None and cfg.zarinpal.merchant_id()
-                and CURRENCY in cfg.tickets.currencies and cfg.listener.home_url)
+    return cfg.zarinpal is not None and not missing(cfg)
+
+
+def warn_if_off(cfg: Config) -> None:
+    """At startup: a [zarinpal] section with payments still off logs one warning naming what is missing."""
+    if cfg.zarinpal is not None and not on(cfg):
+        logger.warning("[zarinpal] is set but online payment is off; missing: %s", ", ".join(missing(cfg)))
 
 
 def rate_ok(conn: sqlite3.Connection, now: float | None = None) -> bool:
@@ -100,11 +119,13 @@ async def callback(conn: sqlite3.Connection, cfg: Config, authority: str, status
     if status != "OK":
         _close(conn, p, "cancelled", _now(now))
         return get(conn, p["id"])
+    if _cancel_if_order_closed(conn, p, _now(now)):
+        return get(conn, p["id"])
     try:
         v = await zarinpal.verify(cfg.zarinpal.merchant_id(), p["amount"], authority, cfg.zarinpal.sandbox)
     except zarinpal.ZarinpalUnavailable as e:
         logger.warning("payment #%d: verify unavailable: %s", p["id"], e)
-        return get(conn, p["id"])   # still started: a reload retries
+        return get(conn, p["id"])   # still started: reconcile retries it within the hour
     except zarinpal.ZarinpalRefused as e:
         p = get(conn, p["id"])
         if p["status"] != "started":   # another callback finished while this one awaited ZarinPal
@@ -121,12 +142,24 @@ async def callback(conn: sqlite3.Connection, cfg: Config, authority: str, status
     return _fulfil(conn, cfg, p, ref_id, card_pan, _now(now))
 
 
+def _cancel_if_order_closed(conn: sqlite3.Connection, p: dict, now: int) -> bool:
+    """Before verifying: an order that was withdrawn, declined or granted by hand can no longer be granted from, so
+    the payment is cancelled unverified (ZarinPal returns an unverified payment's money) and True is returned."""
+    o_status = orders.get(conn, p["order_id"])["status"]
+    if o_status in orders.OPEN:
+        return False
+    logger.info("payment #%d: order #%d is %s; cancelled without verifying", p["id"], p["order_id"], o_status)
+    _close(conn, p, "cancelled", now, error=f"order {o_status} before verify")
+    return True
+
+
 def _unfulfilled(conn: sqlite3.Connection, p: dict, ref_id: str, card_pan: str | None, now: int, reason: str) -> dict:
     """Record a ZarinPal-verified payment that could not (or no longer can) be granted, without losing its ref_id."""
+    # Logged first: if the write below fails, the verified ref_id still has a trace.
+    logger.warning("payment #%d (ref %s) verified but not granted: %s", p["id"], ref_id, reason)
     _set(conn, p["id"], "paid_unfulfilled", now, ref_id=ref_id, card_pan=card_pan, error=reason)
     db.audit(conn, p["user_id"], "payment_unfulfilled", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id,
                                                                                      "reason": reason})
-    logger.warning("payment #%d (ref %s) verified but not granted: %s", p["id"], ref_id, reason)
     return {**get(conn, p["id"]), "changed": True}
 
 
@@ -153,19 +186,76 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
         tickets.grant(conn, cfg, None, buyer, o["tier"], o["length"], CURRENCY, note=f"ZarinPal {ref_id}",
                       order_id=o["id"], paid=True, after=mark, now=now)
     except Exception as e:
+        try:
+            committed = get(conn, p["id"])["status"] == "paid"
+        except Exception:
+            committed = False
+        if committed:   # the grant committed, then something after it raised: keep paid
+            logger.exception("payment #%d (ref %s): error after the grant committed", p["id"], ref_id)
+            return {**get(conn, p["id"]), "changed": True}
         _unfulfilled(conn, p, ref_id, card_pan, now, str(e))
         if not isinstance(e, (tickets.TicketError, orders.OrderError)):
             raise   # unexpected (e.g. sqlite3.OperationalError): the payment is recorded, then the error still surfaces
     return {**get(conn, p["id"]), "changed": True}
 
 
-def expire(conn: sqlite3.Connection, now: float | None = None) -> int:
-    """Payments still `started` an hour after they began: the buyer never came back (section 4, Expiry)."""
+async def reconcile(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> dict:
+    """Payments still `started` an hour after they began (section 4, Expiry): the buyer never came back, or their
+    verify could not reach ZarinPal. Each is verified with its stored amount: confirmed -> granted (or
+    paid_unfulfilled); refused -> expired, its order withdrawn; unreachable -> left `started` for the next run.
+    With payments off, or its order closed, it is closed without verifying. Returns counts per outcome, and in
+    `changed` the ids THIS run moved to paid/paid_unfulfilled (the caller mails those, once)."""
     now = _now(now)
-    rows = conn.execute("SELECT * FROM payments WHERE status='started' AND created_at<?", (now - EXPIRE_S,)).fetchall()
-    for r in rows:
-        _close(conn, dict(r), "expired", now)
-    return len(rows)
+    out = {"paid": 0, "paid_unfulfilled": 0, "expired": 0, "cancelled": 0, "pending": 0, "errors": 0, "changed": []}
+    ids = [r[0] for r in conn.execute("SELECT id FROM payments WHERE status='started' AND created_at<? ORDER BY id",
+                                      (now - EXPIRE_S,)).fetchall()]
+    for pid in ids:
+        verified = False
+        try:
+            p = get(conn, pid)
+            if p["status"] != "started":   # a callback finished it while an earlier row awaited ZarinPal
+                continue
+            if not on(cfg):
+                _close(conn, p, "expired", now)
+                out["expired"] += 1
+                continue
+            if _cancel_if_order_closed(conn, p, now):
+                out["cancelled"] += 1
+                continue
+            try:
+                v = await zarinpal.verify(cfg.zarinpal.merchant_id(), p["amount"], p["authority"], cfg.zarinpal.sandbox)
+            except zarinpal.ZarinpalUnavailable as e:
+                logger.warning("payment #%d: verify still unavailable: %s", pid, e)
+                out["pending"] += 1
+                continue
+            except zarinpal.ZarinpalRefused as e:
+                p = get(conn, pid)
+                if p["status"] == "started":
+                    _close(conn, p, "expired", now, error=f"{e.code}: {e.message}")
+                    out["expired"] += 1
+                continue
+            p = get(conn, pid)
+            ref_id, card_pan = str(v["ref_id"]), v.get("card_pan")
+            if p["status"] in ("paid", "paid_unfulfilled"):   # a callback fulfilled it while this awaited
+                continue
+            verified = True   # from here on, no await: a paid/paid_unfulfilled status is this run's doing
+            if p["status"] != "started":
+                r = _unfulfilled(conn, p, ref_id, card_pan, now, f"verified after the payment was closed ({p['status']})")
+            else:
+                r = _fulfil(conn, cfg, p, ref_id, card_pan, now)
+            if r.get("changed"):
+                out[r["status"]] += 1
+                out["changed"].append(pid)
+        except Exception:
+            logger.exception("payment #%d: reconcile failed", pid)
+            out["errors"] += 1
+            # _fulfil re-raises an unexpected error after recording paid_unfulfilled: still mail the admin.
+            try:
+                if verified and get(conn, pid)["status"] in ("paid", "paid_unfulfilled") and pid not in out["changed"]:
+                    out["changed"].append(pid)
+            except Exception:
+                logger.exception("payment #%d: re-reading after the failure failed", pid)
+    return out
 
 
 def _toman(n) -> str:

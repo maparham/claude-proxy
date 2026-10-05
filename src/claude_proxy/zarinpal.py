@@ -62,4 +62,6 @@ async def request(merchant_id: str, amount: int, description: str, callback_url:
 async def verify(merchant_id: str, amount: int, authority: str, sandbox: bool) -> dict:
     """Confirm a payment the buyer came back from with Status=OK. Code 100 the first time, 101 after."""
     data = await _call("verify.json", {"merchant_id": merchant_id, "amount": int(amount), "authority": authority}, sandbox)
+    if data.get("ref_id") in (None, ""):   # a success without a reference cannot be recorded: ask again later
+        raise ZarinpalUnavailable("verify.json: success without a ref_id")
     return {"code": data["code"], "ref_id": data.get("ref_id"), "card_pan": data.get("card_pan")}
