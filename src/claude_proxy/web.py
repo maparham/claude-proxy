@@ -1076,8 +1076,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                 headers={"Retry-After": "30"}) from e
         if not ok:
             fail(400, "The verification failed; please try again.")
-        place_order(body, name=str(body.get("name") or ""), email=str(body.get("email") or ""), ip=ip)
-        return {"ok": True}   # nothing about the order: the visitor has no view of it
+        o = place_order(body, name=str(body.get("name") or ""), email=str(body.get("email") or ""), ip=ip)
+        # Nothing about the order (the visitor has no view of it) but whether a confirmation was queued, so the page
+        # promises an email only when one is on its way.
+        return {"ok": True, "confirmation": o["buyer_mail"] == "pending"}
 
     @app.post("/api/me/orders")
     async def order_mine(request: Request):

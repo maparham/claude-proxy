@@ -27,6 +27,7 @@ EMAIL_MAX = 254
 EMAIL = re.compile(r'^[^@\s,;:<>()\[\]"\\]+@[^@\s,;:<>()\[\]"\\]+\.[^@\s,;:<>()\[\]"\\]+$')
 VISITOR_PER_IP = VISITOR_PER_EMAIL = 3   # per 24 hours
 VISITOR_GLOBAL = 50                      # all visitor orders together, per 24 hours
+USER_PER_DAY = 3                         # a signed-in user's orders per 24 hours, withdrawn ones included: each mails the admin
 BUYER_MAILS = 3                          # confirmations to one address per 24 hours
 IP_KEEP_S = 30 * DAY
 
@@ -37,6 +38,7 @@ MAIL_STATES = ("pending", "sent", "failed", "off", "skipped")
 TRANSITIONS = {"contacted": ("new",), "declined": OPEN, "withdrawn": OPEN}
 
 TOO_MANY = "Too many orders today; try again tomorrow or sign in."
+USER_TOO_MANY = "Too many orders today; try again tomorrow."
 BUSY = "Orders are busy today; please sign in to order."
 CHANGED = "This order was withdrawn or changed; reload."
 # A visitor order: placed without an account (user_id NULL until linked) or still carrying its IP (cleared on close).
@@ -124,6 +126,8 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
         if user_id is not None:
             if _count(conn, f"user_id=? AND status IN {OPEN}", (user_id,)):
                 raise OrderError(409, "You already have an open order.")
+            if _count(conn, "user_id=? AND created_at>?", (user_id, since)) >= USER_PER_DAY:   # or withdraw-and-reorder floods the admin
+                raise OrderError(429, USER_TOO_MANY)
         else:
             # Limit messages carry no numbers (spec section 9).
             if _count(conn, f"{VISITOR} AND ip=? AND created_at>?", (ip, since)) >= VISITOR_PER_IP \

@@ -73,7 +73,12 @@ function tick() {
     if (ends <= serverNow()) { el.textContent = "Offer ended"; if (!reloadedFor(ends)) ended = ends; }
     else el.textContent = `Offer ends in ${countdown(ends)}`;
   });
-  if (ended != null) { reloaded = true; markReloaded(ended); location.reload(); }   // the regular price returns by itself
+  if (ended == null) return;
+  reloaded = true; markReloaded(ended);
+  // Not while someone is filling in an order: the reload would drop what they typed. The dialog shows the regular
+  // price instead, and the cards get theirs back when it closes.
+  if (orderDialog().open) { pendingEnd = ended; offerEnded(); return; }
+  location.reload();   // the regular price returns by itself
 }
 // ---------- the order dialog (design 2026-10-04, section 2) ----------
 
@@ -81,6 +86,25 @@ const TURNSTILE_JS = "https://challenges.cloudflare.com/turnstile/v0/api.js?rend
 const LENGTH_NAME = { day: "1 day", week: "1 week", month: "1 month" };
 let turnstileReady = null;   // loaded when the dialog first opens, never for a visitor who only reads the page
 let widget = null;
+let ordering = null;         // the tier and length in the open dialog
+let pendingEnd = null;       // a discount that ended while the dialog was open: the page reloads once it closes
+const orderDialog = () => document.getElementById("order-dialog");
+orderDialog().addEventListener("close", () => { if (pendingEnd != null) location.reload(); });
+// The open dialog keeps its form; its price becomes the regular one, which is what the server charges from now on.
+function offerEnded() {
+  if (!ordering) return;
+  const dlg = orderDialog(), l = ordering.t.lengths[ordering.len];
+  const price = (c) => money(c === "USD" ? l.list_usd : l.list_amount, c);
+  dlg.querySelectorAll("option[data-price]").forEach((o) => { o.dataset.price = price(o.value); });
+  const sel = dlg.querySelector("select[name=currency]"), p = dlg.querySelector("#order-price"), hint = dlg.querySelector(".hint");
+  if (sel && p) p.textContent = price(sel.value);
+  if (hint) hint.textContent = `The offer ended while you were ordering; this is the regular price. ${hint.textContent}`;
+}
+// After a sent order. Only a queued confirmation is promised: there is none without [email] or past the buyer cap.
+function receivedHtml(email, confirmation) {
+  return `<h3>Order received</h3><p>The admin will contact you at <b>${esc(email)}</b>.${confirmation ? " A confirmation email is on its way." : ""}</p>
+    <p><button type="button" class="btn primary" data-close>Close</button></p>`;
+}
 function loadTurnstile() {
   turnstileReady ??= new Promise((resolve, reject) => {
     const s = document.createElement("script");
@@ -117,8 +141,9 @@ function dropWidget() {
 function openOrder(tierId, len) {
   const t = data.tiers.find((x) => x.tier === tierId);
   if (!t || !t.lengths[len]) return;
-  const dlg = document.getElementById("order-dialog");
+  const dlg = orderDialog();
   dropWidget();
+  ordering = { t, len };
   dlg.innerHTML = orderFormHtml(data, t, len);
   dlg.showModal();
   const f = dlg.querySelector("form"), err = dlg.querySelector(".error"), go = f.querySelector('button[type="submit"]');
@@ -150,7 +175,7 @@ function openOrder(tierId, len) {
       try { body = await r.json(); } catch { /* not JSON */ }
       if (!r.ok) throw new Error((body && body.error) || `The order could not be sent (HTTP ${r.status}).`);
       dropWidget();
-      dlg.innerHTML = `<h3>Order received</h3><p>Order received. Check your email.</p><p><button type="button" class="btn primary" data-close>Close</button></p>`;
+      dlg.innerHTML = receivedHtml(f.email.value, !!(body && body.confirmation));
       dlg.querySelector("[data-close]").onclick = () => dlg.close();
     } catch (x) {
       err.textContent = x.message;

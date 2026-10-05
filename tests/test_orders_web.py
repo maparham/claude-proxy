@@ -79,7 +79,7 @@ async def test_public_order_is_stored_with_the_ip(env, ts):
     gw, conn, cfg, ids, keys = env
     async with client(gw) as c:
         r = await c.post("/api/orders", json=VISITOR)
-        assert r.status_code == 200 and r.json() == {"ok": True}
+        assert r.status_code == 200 and r.json() == {"ok": True, "confirmation": False}   # no [email]
         assert (await c.get("/api/pricing")).json()["turnstile_site_key"] == "0xSITE"
     o = only_order(conn)
     assert (o["name"], o["email"], o["message"], o["user_id"], o["ip"], o["quoted_amount"]) == (
@@ -549,6 +549,7 @@ setTimeout(() => {
   const out = { atLoad: created.length };
   out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
   out.form = ctx.orderFormHtml(data, data.tiers[0], "week");
+  out.received = [ctx.receivedHtml("v@x.yz", true), ctx.receivedHtml("<v>@x.yz", false)];
   ctx.loadTurnstile(); ctx.loadTurnstile();
   out.scripts = created;
   console.log(JSON.stringify(out));
@@ -631,3 +632,90 @@ async def test_a_failing_dispatch_is_logged_at_once(env, ts, monkeypatch, caplog
     await asyncio.gather(*list(web._mail_tasks), return_exceptions=True)
     await asyncio.sleep(0)
     assert "order mail dispatch failed" in caplog.text
+
+
+# ---------- review follow-ups (2026-10-05) ----------
+
+async def test_a_signed_in_user_is_capped_per_day_even_after_withdrawing(env, sent):
+    """Withdraw-and-reorder in a loop must not mail the admin without end: sign-up is open."""
+    gw, conn, cfg, ids, keys = env
+    h = bearer(keys["alice"])
+    async with client(gw) as c:
+        for _ in range(orders.USER_PER_DAY):
+            r = await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd"})
+            assert r.status_code == 200, r.text
+            assert (await c.post(f"/api/me/orders/{r.json()['order']['id']}/withdraw", headers=h)).status_code == 200
+        r = await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd"})
+        assert (r.status_code, r.json()["error"]) == (429, "Too many orders today; try again tomorrow.")
+        await drain()
+    assert len([t for t, _ in sent if t == "admin@example.com"]) == orders.USER_PER_DAY
+
+
+async def test_the_public_response_says_whether_a_confirmation_was_queued(env, ts, monkeypatch):
+    gw, conn, cfg, ids, keys = env
+    body = ORDER | {"name": "Vi", "email": "v@x.yz", "turnstile_token": "t"}
+    async with client(gw) as c:
+        assert (await c.post("/api/orders", json=body)).json() == {"ok": True, "confirmation": False}   # no [email]: nothing is sent
+        cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+        monkeypatch.setattr(mail, "send", lambda *a: None)
+        assert (await c.post("/api/orders", json=body)).json() == {"ok": True, "confirmation": True}
+        await drain()
+
+
+def test_the_received_message_promises_an_email_only_when_one_was_queued(tmp_path):
+    from tests.test_tickets_web import _prices
+    queued, not_queued = _run_home_order(tmp_path, _prices() | {"turnstile_site_key": "0xSITE"})["received"]
+    assert "The admin will contact you at <b>v@x.yz</b>." in queued and "A confirmation email is on its way." in queued
+    assert "&lt;v&gt;@x.yz" in not_queued and "confirmation" not in not_queued
+    assert "Check your email" not in queued + not_queued
+
+
+HOME_TICK_HARNESS = r"""
+const fs = require("fs"), vm = require("vm");
+const src = fs.readFileSync(process.argv[2], "utf8");
+const data = JSON.parse(process.argv[3]);
+let reloads = 0, tickFn = null; const closeFns = [];
+const countdownEl = { dataset: { ends: "1000" }, textContent: "" };
+const price = { textContent: "" }, hint = { textContent: "" }, option = { value: "USD", dataset: { price: "" } };
+const dialog = { id: "order-dialog", open: true, innerHTML: "", addEventListener: (ev, fn) => { if (ev === "close") closeFns.push(fn); },
+  querySelector: (s) => s === "#order-price" ? price : s === ".hint" ? hint : s.startsWith("select") ? { value: "USD" } : null,
+  querySelectorAll: (s) => s.startsWith("option") ? [option] : [] };
+const els = { "order-dialog": dialog };
+const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventListener: () => {} });
+const ctx = {
+  console, Intl, Math, String, Object, Number, JSON, encodeURIComponent, Promise, Date: { now: () => 2000 * 1000 },
+  document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: (s) => s === ".countdown" ? [countdownEl] : [] },
+  location: { reload: () => { reloads++; } }, localStorage: { getItem: () => null }, sessionStorage: { getItem: () => null, setItem: () => {} },
+  setInterval: (fn) => { tickFn = fn; },
+  fetch: () => Promise.resolve({ ok: true, json: () => Promise.resolve(data) }),
+};
+ctx.window = ctx;
+const context = vm.createContext(ctx);
+vm.runInContext(src, context);
+setTimeout(() => {
+  vm.runInContext('ordering = { t: data.tiers[0], len: "week" }', context);   // as openOrder() would have set it
+  tickFn(); tickFn();
+  const out = { whileOpen: reloads, text: countdownEl.textContent, price: price.textContent, option: option.dataset.price, hint: hint.textContent };
+  dialog.open = false; closeFns.forEach((f) => f());
+  out.afterClose = reloads;
+  console.log(JSON.stringify(out));
+}, 10);
+"""
+
+
+def test_a_discount_ending_waits_for_the_order_dialog_to_close(tmp_path):
+    import json
+    import shutil
+    import subprocess
+    from tests.test_tickets_web import _prices, _tier
+    if not shutil.which("node"):
+        pytest.skip("no node here")
+    harness = tmp_path / "home_tick.js"
+    harness.write_text(HOME_TICK_HARNESS)
+    data = _prices(_tier(week={"usd": 6, "amount": 6, "discount_ends_at": 1000})) | {"turnstile_site_key": "0xSITE", "now": 2000}
+    out = subprocess.run(["node", str(harness), str(STATIC / "home.js"), json.dumps(data)], capture_output=True, text=True, timeout=30, check=True).stdout
+    r = json.loads(out)
+    assert r["whileOpen"] == 0 and r["text"] == "Offer ended"           # the visitor keeps what they typed
+    assert r["price"] == "$8.00" and r["option"] == "$8.00"              # at the regular price, which the server now charges
+    assert r["hint"].startswith("The offer ended while you were ordering; this is the regular price.")
+    assert r["afterClose"] == 1                                          # the regular price returns on the cards afterwards
