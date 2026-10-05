@@ -78,7 +78,7 @@ const money = (amount, currency) => { try { return new Intl.NumberFormat(LOC, { 
 // i18n-formatters:end
 const toLocal = (t) => { const d = new Date(t * 1000); d.setSeconds(0, 0); return new Date(d - d.getTimezoneOffset() * 60000).toISOString().slice(0, 16); };   // for <input type=datetime-local>
 const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
-const METRICS = { weighted: "Weighted tokens", raw: "Raw tokens", cost_usd: "Est. cost (USD)", requests: "Requests" };
+const METRICS = Object.fromEntries(["weighted", "raw", "cost_usd", "requests"].map((k) => [k, t(`metric.${k}`)]));
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
 async function api(path, opts = {}) {
@@ -96,165 +96,25 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = {
-  login_key: `Your <b>gateway key</b> (<code>sk-proxy-…</code>) from the admin, the same one Claude Code uses as <code>ANTHROPIC_AUTH_TOKEN</code>. It shows only your own usage.`,
-  requests: `Requests the gateway forwarded to a provider. Requests it refused (bad key, limit reached) are not counted.`,
-  weighted: `<span class="th">Weighted tokens</span><p>Every token priced at API list rates and expressed in <b>{ref} input tokens</b>: an Opus output token counts for many, a cache read for a tenth of an input token of the same model.</p><p class="tm">The closest match to what a request costs against the subscription quota.</p>`,
-  raw: `<span class="th">Raw tokens</span><p>Input, output, cache-write and cache-read tokens, each counted as 1. Cache reads are cheap but plentiful, so they usually dominate.</p>`,
-  cost: `<span class="th">API-equivalent cost</span><p>What these requests would cost at Anthropic's API list prices. Claude usage is covered by the subscription, so this is a yardstick, not a bill.</p><p class="tm">Models missing from the price table count as $0 and are listed as unpriced.</p>`,
-  active_users: `Users with at least one forwarded request in the last 24 hours.`,
-  burn_rate: `Weighted tokens per minute over the last 15 minutes, Claude models only. How hard the account is being pushed right now.`,
-  quota: `<span class="th">Account quota</span><p>Anthropic reports how full each of the subscription's usage buckets is. At 100%, Claude requests fail with 429 until the bucket resets.</p>`,
-  "bucket:5h": `<span class="th">5-hour bucket</span><p>Short-term usage allowance. Anthropic resets it about 5 hours after its window opened.</p>`,
-  "bucket:7d": `<span class="th">7-day bucket</span><p>Weekly usage allowance. Anthropic resets it 7 days after its window opened.</p>`,
-  share: `<span class="th">Estimated share</span><p>Anthropic reports only the account total. Each rise between two reports is split across the users whose requests finished in between, by weighted tokens.</p><p class="tm">Reports are whole percents, so small shares are rough.</p>`,
-  unattributed: `<span class="th">Not attributed</span><p>Usage the gateway can't pin on a user: the account used outside the gateway (claude.ai, another login), or usage from before this window's first report.</p>`,
-  stale: `No report from Anthropic in the last {stale}. Reports arrive with each Claude response; the gateway polls when it's quiet. Share limits are skipped meanwhile.`,
-  exhaustion: `How fast the 5-hour bucket rose over the last 30 minutes, projected to 100%. If that lands <b>before the reset</b>, Claude requests will start failing unless usage slows.`,
-  served: `Limits are checked before each request against usage already recorded, so the request that crosses the line goes through and the next one is refused.`,
-  share_col: `Each user's estimated share of the account's 5-hour and 7-day buckets, in percentage points.`,
-  limits_col: `Per-user caps, checked before every request. The bar turns amber at 80% and red at 100%.`,
-  gclaude_version: `The gclaude version this computer's status line last reported. <code>gclaude update</code> brings it to the newest; — until it reports one.`,
-  key_prefix: `The grey line under each name is the start of the user's gateway key, to tell keys apart. The full key is shown only once, when created or rotated.`,
-  act_limits: `View or change this user's limits.`,
-  act_rename: `Change the name shown on the dashboard and in their status line.`,
-  act_upgrade: `Replace their one-time sign-up credit with a daily allowance.`,
-  act_rotate: `Issue a new key and stop the old one immediately, along with every computer authorized under it. Usage history is kept.`,
-  act_routes_key: `Issue a key for OpenCode that works only for third-party models (such as Muse), never Claude. Issuing again replaces it.`,
-  act_routes_key_remove: `Delete this user's OpenCode key. Their Claude Code key keeps working.`,
-  act_disable: `Block the key until re-enabled. Nothing is deleted.`,
-  act_enable: `Let the key work again.`,
-  act_revoke: `Stop the key for good. Usage stays in the totals; a revoked user can only be deleted.`,
-  act_delete: `Remove the user and all their recorded usage. Account totals and charts change.`,
-  role: `<b>admin</b>: sees all users, manages keys and limits. <b>user</b>: sees only their own usage.`,
-  scope: `Count and limit only requests for matching models. <code>*</code> matches anything, so <code>claude-opus-*</code> covers every Opus version. Leave <code>*</code> for all models.`,
-  kind: `What the limit counts and over which window.`,
-  unit: `What the value is measured in.`,
-  value: `The cap, in the chosen unit. For <code>allowed_models</code>, the list of model globs.`,
-  "split:provider": `<b>anthropic</b> is the shared Claude subscription; other providers (such as Muse on Meta) use their own API key.`,
-  "metric:weighted": `Tokens priced by type and model, in {ref} input tokens. Best proxy for quota cost.`,
-  "metric:raw": `Every token counts 1, cache reads included.`,
-  "metric:cost_usd": `Estimated cost at Anthropic API list prices. Not billed on the subscription.`,
-  "metric:requests": `Forwarded requests, regardless of size.`,
-  reported: `Anthropic's own figure for the whole account, read from response headers or the usage endpoint. The line steps because it only changes when a new report arrives.`,
-  provider_sub: `Claude models run on the shared subscription. The figure is what they would cost on the API, not a bill.`,
-  provider_own: `This provider is billed to its own API key, at roughly this cost.`,
-  cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper against the quota.</p>`,
-  recent_requests: `Every request this user sent, refused ones included. Tokens, weighted tokens and cost are counted only for requests that reached a provider.`,
-  session: `<span class="th">Session</span><p>Claude Code sends a session id with each request; one row per id. Duration runs from the first to the last request.</p><p class="tm">The title is the one Claude Code generates for the session. Sessions without one show only their id.</p>`,
-  sess_user: `Who ran the session.`,
-  sess_started: `Time of the session's first request.`,
-  sess_duration: `Time from the first request to the last.`,
-  sess_requests: `Requests sent to a provider. Refused ones are not counted.`,
-  sess_weighted: `Tokens adjusted by type and model, in {ref} input tokens. Closest to quota cost.`,
-  sess_cost: `What it would cost at API prices. Not billed on the subscription.`,
-  sess_models: `Models the session used.`,
-  act_ungate: `This user's tickets have all ended. Stop them gating the user and set ordinary limits instead; the tickets stay as sales records.`,
-  act_ungate_paused: `Tickets are switched off, so this user is refused. Cancel their remaining tickets, stop them gating the user and set ordinary limits instead; the tickets stay as sales records.`,
-  act_ticket_cancel: `Frees the slice now and ends the ticket's bonuses. Their queued tickets move forward to close the gap when they fit. Refunds happen outside the app.`,
-  act_ticket_bonus: `Extra share for a period, extra days at the ticket's share, or both. Checked against capacity like a ticket.`,
-  capacity_sold: `What tickets and bonuses have reserved: the sum of their shares at this moment, and the highest sum over the next 30 days. Grants are refused past <b>max_sold_pct</b>.`,
-  capacity_util: `What everyone has actually used, as Anthropic reports it. The gap between max_sold_pct and 100 is what the admin, free-credit accounts and hand-limited users have.`,
-  sold_out_vs_queued: `The home page asks whether a ticket starting <b>now</b> fits. A grant to someone with a live ticket starts after it, so it can succeed while the badge says sold out.`,
-};
-const KIND_TIPS = {
-  requests_minute: "Requests in the last 60 seconds.",
-  tokens_minute: "Tokens in the last 60 seconds.",
-  tokens_5h: "Tokens in the last 5 hours. Separate from the account's 5-hour bucket.",
-  requests_daily: "Requests in the last 24 hours.",
-  tokens_daily: "Tokens in the last 24 hours.",
-  tokens_weekly: "Tokens in the last 7 days.",
-  requests_monthly: "Requests in the last 30 days.",
-  tokens_monthly: "Tokens in the last 30 days.",
-  cost_daily: "Estimated API-equivalent cost in the last 24 hours, in USD.",
-  cost_monthly: "Estimated API-equivalent cost in the last 30 days, in USD.",
-  cost_total: "A one-time <b>credit</b>: the estimated API-equivalent cost of all their requests so far, in USD. New sign-ups get one.",
-  share_5h: "The user's <b>estimated share</b> of the account's 5-hour bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
-  share_7d: "The user's <b>estimated share</b> of the account's 7-day bucket, in percentage points: <code>20</code> stops them at about a fifth of it. Claude models only.",
-  allowed_models: "Only these models may be requested; anything else is refused. Comma-separated globs, e.g. <code>claude-sonnet-*,muse-spark</code>.",
-};
-const KIND_NOTE = {
-  window: "The window opens with the first request and lasts its length; then the count goes back to zero and the next request opens a new one. Only forwarded requests count; token-counting calls are free.",
-  share: "Skipped while there is no fresh report from Anthropic.",
-};
-const UNIT_TIPS = {
-  count: "Number of requests.",
-  weighted: "Tokens priced by type and model, in {ref} input-token equivalents. The best proxy for quota cost.",
-  raw: "Every token counts 1, cache reads included, so long cached sessions add up fast.",
-  usd: "US dollars at API list prices.",
-  pct: "Percentage points of the account bucket, 0 to 100.",
-  list: "Comma-separated model globs.",
-};
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued"].map((k) => [k, t(`tip.${k}`)]));
+const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
+const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
+const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
 // One plain sentence per kind, shown beside each item of the Kind dropdown.
-const KIND_SHORT = {
-  requests_minute: "How many requests they can send in any 1 minute.",
-  requests_daily: "How many requests they can send in any 24 hours.",
-  requests_monthly: "How many requests they can send in any 30 days.",
-  tokens_minute: "How many tokens (pieces of text) they can use in any 1 minute.",
-  tokens_5h: "How many tokens they can use in any 5 hours.",
-  tokens_daily: "How many tokens they can use in any 24 hours.",
-  tokens_weekly: "How many tokens they can use in any 7 days.",
-  tokens_monthly: "How many tokens they can use in any 30 days.",
-  cost_daily: "How many dollars they can spend in any 24 hours, at API prices.",
-  cost_monthly: "How many dollars they can spend in any 30 days, at API prices.",
-  cost_total: "How many dollars they can spend in total, once: a starting credit.",
-  share_5h: "What percent of the shared subscription's 5-hour quota they can use.",
-  share_7d: "What percent of the shared subscription's weekly quota they can use.",
-  allowed_models: "Which models they may use. Any other model is refused.",
-};
-const LIMIT_PLACEHOLDER = { count: "e.g. 200", weighted: "e.g. 5000000", raw: "e.g. 20000000", usd: "e.g. 50", pct: "e.g. 25", list: "claude-sonnet-*,muse-spark" };
-KIND_NOTE.total = "No window: it never frees up. Raise it, or use Upgrade on the Users page to switch to a daily allowance.";
+const KIND_SHORT = Object.fromEntries(["requests_minute", "requests_daily", "requests_monthly", "tokens_minute", "tokens_5h", "tokens_daily", "tokens_weekly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kshort.${k}`)]));
+const LIMIT_PLACEHOLDER = { count: t("lim.eg", { v: "200" }), weighted: t("lim.eg", { v: "5000000" }), raw: t("lim.eg", { v: "20000000" }), usd: t("lim.eg", { v: "50" }), pct: t("lim.eg", { v: "25" }), list: "claude-sonnet-*,muse-spark" };
+KIND_NOTE.total = t("kindnote.total");
 const kindNote = (k) => (k.startsWith("share_") ? KIND_NOTE.share : k === "allowed_models" ? "" : k === "cost_total" ? KIND_NOTE.total : KIND_NOTE.window);
 Object.entries(KIND_TIPS).forEach(([k, v]) => {
-  TIPS[`kind:${k}`] = `<span class="th">${k.replace(/_/g, " ")}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
+  TIPS[`kind:${k}`] = `<span class="th">${t(`kname.${k}`)}</span><p>${v}</p>${kindNote(k) ? `<p class="tm">${kindNote(k)}</p>` : ""}`;
 });
-const ERROR_TIPS = {
-  gateway_limit: "A gateway limit refused the request (named in brackets). It never reached the provider and isn't counted as usage.",
-  gateway_auth: "Missing, wrong, disabled or revoked gateway key.",
-  gateway_key_scope: "An OpenCode key asked for a Claude model or a path it can't use. It never reached a provider.",
-  gateway_bad_request: "The request body wasn't JSON with a <code>model</code>, so the gateway refused it without forwarding.",
-  upstream_quota: "Anthropic refused it because an account bucket (5-hour or weekly) is full. Clears when that bucket resets.",
-  upstream_throttle: "Anthropic's short-term rate limit (per-minute requests or tokens). Usually clears within a minute.",
-  upstream_request_scoped: "A 429 without rate-limit headers: Anthropic refused this one request, not the account.",
-  gateway_needs_login: "The gateway's Claude login expired or was revoked. The admin runs <code>claude-proxy login</code>.",
-  gateway_refresh_unavailable: "Anthropic's sign-in service failed while the gateway renewed its token. It retries by itself.",
-  gateway_upstream_unreachable: "Network error: the gateway couldn't reach the provider.",
-  gateway_route_unconfigured: "The model is routed to another provider whose API key isn't set on the gateway.",
-  overloaded_error: "Anthropic is temporarily overloaded. Not a quota problem; retry shortly.",
-  api_error: "The provider returned a server error (5xx).",
-};
+const ERROR_TIPS = Object.fromEntries(["gateway_limit", "gateway_auth", "gateway_key_scope", "gateway_bad_request", "upstream_quota", "upstream_throttle", "upstream_request_scoped", "gateway_needs_login", "gateway_refresh_unavailable", "gateway_upstream_unreachable", "gateway_route_unconfigured", "overloaded_error", "api_error"].map((k) => [k, t(`etip.${k}`)]));
 Object.entries(ERROR_TIPS).forEach(([k, v]) => (TIPS[`err:${k}`] = v));
-const ERROR_LABELS = { gateway_limit: "Gateway limit", gateway_auth: "Bad gateway key", gateway_key_scope: "OpenCode key: not allowed", gateway_bad_request: "Unreadable request", upstream_quota: "Account quota exhausted (429)",
-                       upstream_throttle: "Per-minute throttle (429)", upstream_request_scoped: "Request refused (429)",
-                       gateway_needs_login: "Subscription login needed", gateway_upstream_unreachable: "Upstream unreachable",
-                       gateway_route_unconfigured: "Route key missing", overloaded_error: "Upstream overloaded (529)",
-                       gateway_refresh_unavailable: "Token refresh temporarily failing",
-                       api_error: "Upstream server error" };
-ERROR_LABELS.usage_limit = "Usage limit reached (429)";
-ERROR_LABELS.gateway_unavailable = "Gateway unavailable";
+const ERROR_LABELS = Object.fromEntries(["gateway_limit", "gateway_auth", "gateway_key_scope", "gateway_bad_request", "upstream_quota", "upstream_throttle", "upstream_request_scoped", "gateway_needs_login", "gateway_upstream_unreachable", "gateway_route_unconfigured", "overloaded_error", "gateway_refresh_unavailable", "api_error", "usage_limit", "gateway_unavailable"].map((k) => [k, t(`elabel.${k}`)]));
 
 // A non-admin is never told about the subscription behind the gateway; the server sends them nothing about
 // it (no account quota, no share limits, no credential state). These replace every tip that would mention it.
-const USER_TIPS = {
-  weighted: `<span class="th">Weighted tokens</span><p>Every token priced at API list rates and expressed in <b>{ref} input tokens</b>: an Opus output token counts for many, a cache read for a tenth of an input token of the same model.</p>`,
-  cost: `<span class="th">API-equivalent cost</span><p>What these requests would cost at API list prices. A yardstick, not a bill.</p><p class="tm">Models missing from the price table count as $0 and are listed as unpriced.</p>`,
-  burn_rate: `Weighted tokens per minute over the last 15 minutes, Claude models only.`,
-  "split:provider": `Which service answered: <b>anthropic</b> for Claude models, others (such as Muse on Meta) for theirs.`,
-  "metric:weighted": `Tokens priced by type and model, in {ref} input tokens.`,
-  "metric:cost_usd": `Estimated cost at API list prices. Not a bill.`,
-  provider_sub: `What these requests would cost at API list prices. Not a bill.`,
-  cache_ratio: `<span class="th">Cache hit ratio</span><p>Share of prompt tokens read from the prompt cache instead of processed fresh. Cache reads cost a tenth of normal input, so higher means cheaper.</p>`,
-  sess_weighted: `Tokens adjusted by type and model, in {ref} input tokens.`,
-  sess_cost: `What it would cost at API prices. Not a bill.`,
-  "kind:tokens_5h": `<span class="th">tokens 5h</span><p>Tokens in the last 5 hours.</p><p class="tm">${KIND_NOTE.window}</p>`,
-  "kind:cost_total": `<span class="th">Credit</span><p>Your one-time starting credit, at API prices. When it is used up, requests stop until the gateway admin gives you more.</p>`,
-  "kind:5h_limit": `<span class="th">5-hour limit</span><p>How much of your 5-hour allowance you have used. At 100%, Claude requests are refused until it resets.</p>`,
-  "kind:weekly_limit": `<span class="th">Weekly limit</span><p>How much of your weekly allowance you have used. At 100%, Claude requests are refused until it resets.</p>`,
-  "err:usage_limit": "A usage limit was reached. Requests work again once it resets.",
-  "err:gateway_unavailable": "The gateway couldn't serve Claude requests at that moment. Try again later, or ask the admin.",
-  "err:upstream_request_scoped": "The provider refused this one request (429).",
-  "err:overloaded_error": "The provider is temporarily overloaded. Retry shortly.",
-};
+const USER_TIPS = Object.fromEntries(["weighted", "cost", "burn_rate", "split:provider", "metric:weighted", "metric:cost_usd", "provider_sub", "cache_ratio", "sess_weighted", "sess_cost", "kind:tokens_5h", "kind:cost_total", "kind:5h_limit", "kind:weekly_limit", "err:usage_limit", "err:gateway_unavailable", "err:upstream_request_scoped", "err:overloaded_error"].map((k) => [k, t(`utip.${k}`, { note: KIND_NOTE.window })]));
 const ADMIN_TIPS = { ...TIPS };
 const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit", "today_limit"];   // share limits, as a non-admin's own allowance
 
@@ -272,7 +132,7 @@ const NO_MODEL = "no model";
 const fillTip = (html) => html.replace(/\{ref\}/g, esc(refModel())).replace(/\{stale\}/g, fmtDur(S.settings.stale_after_s));
 
 // Info dot, dotted term, or an attribute for any element. Unknown keys render nothing extra.
-const tipI = (key, label = "What is this?") => (TIPS[key]
+const tipI = (key, label = t("app.what_is_this")) => (TIPS[key]
   ? `<span class="tip-i" tabindex="0" role="button" aria-label="${esc(label)}" data-tip="${esc(key)}">?</span>` : "");
 const tipT = (html, key) => (TIPS[key] ? `<span class="tip-t" tabindex="0" data-tip="${esc(key)}">${html}</span>` : html);
 const tipAttr = (html) => (html ? ` data-tip-html="${esc(html)}"` : "");
@@ -470,33 +330,32 @@ function meter(pct) {
   const cls = pct >= 100 ? "over" : pct >= 80 ? "warn" : "";
   return `<div class="meter ${cls}"><span style="width:${Math.min(100, Math.max(0, pct || 0)).toFixed(1)}%"></span></div>`;
 }
-const USER_LABELS = { "5h_limit": "5-hour limit", weekly_limit: "weekly limit", today_limit: "today" };
 function limitLabel(l) {
   const scope = l.scope && l.scope !== "*" ? ` [${l.scope}]` : "";
-  return `${USER_LABELS[l.kind] || (l.kind === "cost_total" ? "credit" : l.kind.replace(/_/g, " "))}${scope}`;
+  return `${t(`kname.${l.kind}`)}${scope}`;
 }
 function limitValue(l) {
   if (l.kind === "allowed_models") return l.value;
+  const reset = l.reset_in ? t("lim.resets_in", { d: fmtDur(l.reset_in) }) : "";
   if (USER_LIMIT_KINDS.includes(l.kind)) {
-    if (l.skipped || l.current == null) return "not measured right now";
-    return `${l.current.toFixed(0)}% used${l.no_live_data ? " · estimated without live data" : ""}${l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : ""}`;
+    if (l.skipped || l.current == null) return t("lim.not_measured");
+    return `${t("lim.used_pct", { v: nf0.format(l.current) })}${l.no_live_data ? t("lim.est_no_live") : ""}${reset}`;
   }
-  if (l.skipped) return `skipped · ${l.skipped}`;
-  const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => `${v.toFixed(1)} pts` : fmtNum;
-  const reset = l.reset_in ? ` · resets in ${fmtDur(l.reset_in)}` : "";
-  return `${l.no_live_data ? "est. (no live data) " : l.estimated ? "est. " : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
+  if (l.skipped) return t("lim.skipped", { why: l.skipped });
+  const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => t("lim.pts", { v: nfFix(1).format(v) }) : fmtNum;
+  return `${l.no_live_data ? t("lim.est_nolive_prefix") : l.estimated ? t("lim.est_prefix") : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";
-  if (USER_LIMIT_KINDS.includes(l.kind)) return l.skipped ? "Not enforced for now. Your other limits still apply." : "";
-  if (l.no_live_data) return "No fresh report from Anthropic right now, so this is estimated from your tokens at the account's usual rate. Your ticket's limit still applies.";
-  if (l.skipped) return "Not enforced right now: without a fresh report from Anthropic the share can't be estimated. Token and request limits still apply.";
-  if (l.estimated) return "<b>est.</b> means estimated, not measured. <b>Resets</b> is when Anthropic resets the account bucket.";
+  if (USER_LIMIT_KINDS.includes(l.kind)) return l.skipped ? t("lim.tip_user_skipped") : "";
+  if (l.no_live_data) return t("lim.tip_no_live");
+  if (l.skipped) return t("lim.tip_skipped");
+  if (l.estimated) return t("lim.tip_est");
   if (!l.reset_in) return "";
-  return "<b>Resets</b> is when the window that opened with the first request ends and the count goes back to zero.";
+  return t("lim.tip_resets");
 }
 function limitsBlock(ls) {
-  if (!ls.length) return `<span class="muted">No limits</span>`;
+  if (!ls.length) return `<span class="muted">${t("lim.none")}</span>`;
   return ls.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l)), limitValueTip(l))}</span>
     <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div></div>`).join("");
 }

@@ -351,3 +351,4 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;
                                              min-width: 0; width: 100%; font: inherit; color: inherit; }
 dialog textarea { resize: vertical; }
+code { unicode-bidi: isolate; direction: ltr; }
