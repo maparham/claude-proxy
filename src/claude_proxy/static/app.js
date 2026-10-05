@@ -976,8 +976,8 @@ async function renderPricing(main) {
     <div class="grid cols-2">
       <div class="card"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
         ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
-          <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { rate: nfFull.format(r.rate), date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
-          <span><input type="text" inputmode="decimal" dir="ltr" name="rate" step="any" min="0" placeholder="${esc(t("pr.todays_rate"))}" required style="width:110px"> <button class="btn small" type="submit">${t("app.save")}</button></span></form>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
+          <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
+          <span class="nowrap">${t("pr.one_usd")} <input type="text" inputmode="decimal" dir="ltr" name="rate" value="${r.rate ?? ""}" placeholder="${esc(t("pr.todays_rate"))}" aria-label="${esc(`${t("pr.one_usd")} ${r.currency}`)}" required style="width:110px"> <b>${esc(r.currency)}</b> <button class="btn small" type="submit">${t("app.save")}</button></span></form>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
       </div>
       <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
