@@ -238,11 +238,12 @@ function baseOption() {
   const ink2 = css("--ink-2"), muted = css("--muted"), grid = css("--grid"), axis = css("--axis"), surface = css("--surface"), ink = css("--ink");
   return {
     animationDuration: 300,
-    textStyle: { fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', color: ink2 },
+    textStyle: { fontFamily: getComputedStyle(document.body).fontFamily, color: ink2 },
     grid: { left: 16, right: 28, top: 36, bottom: 8, containLabel: true },
     tooltip: {
       trigger: "axis", backgroundColor: surface, borderColor: css("--border") || axis, textStyle: { color: ink, fontSize: 12 },
       axisPointer: { type: "line", lineStyle: { color: axis } }, confine: true,
+      ...(LANG === "fa" && { extraCssText: "direction: rtl; text-align: right;" }),
     },
     legend: { type: "scroll", top: 0, left: 0, right: 0, icon: "roundRect", itemWidth: 10, itemHeight: 10, textStyle: { color: ink2, fontSize: 12 } },
     xAxis: { axisLine: { lineStyle: { color: axis } }, axisTick: { show: false }, axisLabel: { color: muted, fontSize: 11, hideOverlap: true }, splitLine: { show: false } },
@@ -252,8 +253,8 @@ function baseOption() {
 function timeLabel(gran) {
   return (v) => {
     const d = new Date(Number(v));   // category axes hand the formatter strings
-    if (gran === "hour") return d.toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-    return d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+    if (gran === "hour") return d.toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+    return d.toLocaleDateString(LOC, { month: "short", day: "numeric" });
   };
 }
 // Time-axis labels in the page's language and calendar (ECharts would print English month names).
@@ -264,7 +265,7 @@ function axisLabels(gran, times) {
   if (gran !== "hour") return times.map((t) => timeLabel(gran)(t * 1000));
   return times.map((t, i) => {
     const d = new Date(t * 1000);
-    const time = d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
+    const time = d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
     const newDay = i === 0 || d.toDateString() !== new Date(times[i - 1] * 1000).toDateString();
     return newDay ? `${timeLabel("day")(t * 1000)} ${time}` : time;
   });
@@ -300,12 +301,12 @@ function stackedTime(el, points, metric, dim, gran, opts = {}) {
   c.setOption({
     ...o,
     tooltip: { ...o.tooltip, valueFormatter: (v) => fmtMetric(metric, v) },
-    legend: { ...o.legend, show: keys.length > 1, data: keys },
+    legend: { ...o.legend, show: keys.length > 1, data: keys.map(seriesLabel) },
     xAxis: { ...o.xAxis, type: "category", data: axisLabels(gran, times) },
     yAxis: { ...o.yAxis, type: "value", axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtMetric(metric, v) } },
     dataZoom: times.length > 30 ? [{ type: "inside" }] : [],
     series: keys.map((k) => ({
-      name: k, type: "bar", stack: "total", barMaxWidth: 28, emphasis: { focus: "series" },
+      name: seriesLabel(k), type: "bar", stack: "total", barMaxWidth: 28, emphasis: { focus: "series" },
       itemStyle: { color: colorFor(dim, k), borderColor: css("--surface"), borderWidth: 1, borderRadius: 0 },
       data: times.map((t) => series[k].get(t) || 0),
     })),
@@ -1130,7 +1131,9 @@ function setupClerk() {
     const npm = `https://${cfg.clerk.frontend_api}/npm`;
     await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
     await loadScript(`${npm}/@clerk/clerk-js@6/dist/clerk.browser.js`, { "data-clerk-publishable-key": cfg.clerk.publishable_key });
-    await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor } });
+    // Clerk's own Persian text (vendored: its Frontend API does not serve localizations); English if it fails to load.
+    const localization = LANG === "fa" ? await import("/static/clerk-fa-IR.js").then((m) => m.faIR, () => undefined) : undefined;
+    await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor }, ...(localization && { localization }) });
     window.Clerk.addListener(({ session }) => { if (session && !S.user && !$("#login").classList.contains("hidden")) clerkExchange(); });
     return window.Clerk;
   })().catch((e) => { console.warn(e); return null; });

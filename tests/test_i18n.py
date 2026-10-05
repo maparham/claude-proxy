@@ -143,3 +143,10 @@ def test_every_server_message_reads_in_persian(tmp_path):
 def test_an_unknown_message_shows_as_sent(tmp_path):
     out = node(tmp_path, "fa", 'this.out = [errMsg("Brand new message."), errMsg(""), errMsg(undefined)];')
     assert out == ["Brand new message.", "", None]
+
+
+def test_clerk_persian_is_vendored_and_loaded_only_for_persian():
+    vend = (STATIC / "clerk-fa-IR.js").read_text()
+    assert "export { faIR }" in vend and "@clerk/localizations@4.21.2" in vend.splitlines()[0]
+    js = (STATIC / "app.js").read_text()
+    assert 'import("/static/clerk-fa-IR.js")' in js and "localization" in js
