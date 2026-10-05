@@ -89,3 +89,9 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # from = "Claude Gateway <gateway@example.com>"  # required
 # admin_to = "admin@example.com"                 # required
 # # password: SMTP_PASSWORD in the environment (required when smtp_user is set)
+
+# Online payment through ZarinPal (docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md): signed-in users pay
+# in Toman and get their ticket at once. Needs ZARINPAL_MERCHANT_ID in the environment, [tickets.currencies.IRT]
+# (round_to = 1000) with a rate set on the Pricing tab, and [listener] home_url (the callback's domain).
+# [zarinpal]
+# sandbox = false

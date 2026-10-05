@@ -168,6 +168,15 @@ class EmailConfig:
 
 
 @dataclass
+class ZarinpalConfig:
+    """[zarinpal] (payments design, section 2). The merchant ID is a secret: ZARINPAL_MERCHANT_ID in the environment."""
+    sandbox: bool = False
+
+    def merchant_id(self) -> str | None:
+        return os.environ.get("ZARINPAL_MERCHANT_ID") or None
+
+
+@dataclass
 class DBConfig:
     path: str = field(default_factory=_default_db)
 
@@ -357,6 +366,7 @@ class Config:
     signup: SignupConfig = field(default_factory=SignupConfig)
     tickets: TicketsConfig = field(default_factory=TicketsConfig)
     email: EmailConfig | None = None      # None without an [email] section: no mail is sent
+    zarinpal: ZarinpalConfig | None = None   # None without a [zarinpal] section: no online payment
     pricing: Pricing = field(default_factory=Pricing)
     routes: list[Route] = field(default_factory=_default_routes)
     retention_days: int = 180
@@ -412,5 +422,11 @@ class Config:
                                "visitors cannot order from the home page")
         if "email" in data:
             cfg.email = _load_email(toml_path, data["email"])
+        if "zarinpal" in data:
+            z = data["zarinpal"]
+            if set(z) - {"sandbox"} or not isinstance(z.get("sandbox", False), bool):
+                raise ConfigError(f"{toml_path}: [zarinpal] takes only sandbox = true/false; the merchant ID is "
+                                  "ZARINPAL_MERCHANT_ID in the environment")
+            cfg.zarinpal = ZarinpalConfig(sandbox=z.get("sandbox", False))
         cfg.config_file = toml_path
         return cfg
