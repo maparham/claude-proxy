@@ -102,12 +102,28 @@ async def callback(conn: sqlite3.Connection, cfg: Config, authority: str, status
         logger.warning("payment #%d: verify unavailable: %s", p["id"], e)
         return get(conn, p["id"])   # still started: a reload retries
     except zarinpal.ZarinpalRefused as e:
-        _close(conn, get(conn, p["id"]), "failed", _now(now), error=f"{e.code}: {e.message}")
+        p = get(conn, p["id"])
+        if p["status"] != "started":   # another callback finished while this one awaited ZarinPal
+            return p
+        _close(conn, p, "failed", _now(now), error=f"{e.code}: {e.message}")
         return get(conn, p["id"])
     p = get(conn, p["id"])
-    if p["status"] != "started":   # another callback finished while this one awaited ZarinPal
+    ref_id, card_pan = str(v["ref_id"]), v.get("card_pan")
+    if p["status"] in ("paid", "paid_unfulfilled"):   # another callback already fulfilled it
         return p
-    return _fulfil(conn, cfg, p, str(v["ref_id"]), v.get("card_pan"), _now(now))
+    if p["status"] != "started":   # closed (cancelled/failed/expired) while this one awaited ZarinPal: never lose a verified ref_id
+        return _unfulfilled(conn, p, ref_id, card_pan, _now(now),
+                            f"verified after the payment was closed ({p['status']})")
+    return _fulfil(conn, cfg, p, ref_id, card_pan, _now(now))
+
+
+def _unfulfilled(conn: sqlite3.Connection, p: dict, ref_id: str, card_pan: str | None, now: int, reason: str) -> dict:
+    """Record a ZarinPal-verified payment that could not (or no longer can) be granted, without losing its ref_id."""
+    _set(conn, p["id"], "paid_unfulfilled", now, ref_id=ref_id, card_pan=card_pan, error=reason)
+    db.audit(conn, p["user_id"], "payment_unfulfilled", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id,
+                                                                                     "reason": reason})
+    logger.warning("payment #%d (ref %s) verified but not granted: %s", p["id"], ref_id, reason)
+    return get(conn, p["id"])
 
 
 def _close(conn: sqlite3.Connection, p: dict, status: str, now: int, **cols) -> None:
@@ -132,12 +148,10 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
             raise tickets.TicketError("the account no longer exists")
         tickets.grant(conn, cfg, None, buyer, o["tier"], o["length"], CURRENCY, note=f"ZarinPal {ref_id}",
                       order_id=o["id"], paid=True, after=mark, now=now)
-    except (tickets.TicketError, orders.OrderError) as e:
-        reason = str(e)
-        _set(conn, p["id"], "paid_unfulfilled", now, ref_id=ref_id, card_pan=card_pan, error=reason)
-        db.audit(conn, p["user_id"], "payment_unfulfilled", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id,
-                                                                                         "reason": reason})
-        logger.warning("payment #%d (ref %s) verified but not granted: %s", p["id"], ref_id, reason)
+    except Exception as e:
+        _unfulfilled(conn, p, ref_id, card_pan, now, str(e))
+        if not isinstance(e, (tickets.TicketError, orders.OrderError)):
+            raise   # unexpected (e.g. sqlite3.OperationalError): the payment is recorded, then the error still surfaces
     return get(conn, p["id"])
 
 

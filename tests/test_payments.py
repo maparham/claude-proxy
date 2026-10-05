@@ -1,4 +1,5 @@
 """Payments design, section 4: start, callback, expiry, with ZarinPal faked."""
+import sqlite3
 import time
 
 import pytest
@@ -167,6 +168,20 @@ async def test_verify_refused_fails_and_withdraws(env):
     assert orders.get(conn, p["order_id"])["status"] == "withdrawn"
 
 
+async def test_refused_after_concurrent_paid_does_not_overwrite(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+
+    async def refused_after_concurrent_paid(merchant_id, amount, authority, sandbox):
+        payments._set(conn, p0["id"], "paid", int(time.time()), ref_id="999", card_pan="y")   # another callback finished first
+        raise zarinpal.ZarinpalRefused(-51, "late")
+    monkeypatch.setattr(zarinpal, "verify", refused_after_concurrent_paid)
+
+    p = await payments.callback(conn, cfg, p0["authority"], "OK")
+    assert p["status"] == "paid" and p["ref_id"] == "999"
+
+
 async def test_verify_unreachable_stays_started_and_retries(env):
     conn, cfg, ids, zp = env
     zp.verify_answer = zarinpal.ZarinpalUnavailable("down")
@@ -188,6 +203,37 @@ async def test_capacity_gone_is_unfulfilled_and_order_stays_open(env, monkeypatc
     assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and "sold out" in p["error"]
     assert orders.get(conn, p["order_id"])["status"] == "new"
     assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+
+
+async def test_grant_crash_still_records_the_verified_payment_and_reraises(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+
+    def boom(*a, **k):
+        raise sqlite3.OperationalError("database is locked")
+    monkeypatch.setattr(tickets, "grant", boom)
+
+    with pytest.raises(sqlite3.OperationalError):
+        await payments.callback(conn, cfg, p0["authority"], "OK")
+    p = payments.get(conn, r["payment_id"])
+    assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and "database is locked" in p["error"]
+
+
+async def test_verify_succeeds_after_expiry_meanwhile_is_unfulfilled(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    r = await start(conn, cfg, ids)
+    p0 = payments.get(conn, r["payment_id"])
+
+    async def verify_but_expired_meanwhile(merchant_id, amount, authority, sandbox):
+        payments.expire(conn, now=time.time() + payments.EXPIRE_S + 1)   # the buyer's reload expired it while this awaited
+        return {"code": 100, "ref_id": 201, "card_pan": "x"}
+    monkeypatch.setattr(zarinpal, "verify", verify_but_expired_meanwhile)
+
+    p = await payments.callback(conn, cfg, p0["authority"], "OK")
+    assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and p["card_pan"] == "x"
+    assert "expired" in p["error"]
+    assert orders.get(conn, p["order_id"])["status"] == "withdrawn"
 
 
 async def test_declined_meanwhile_is_unfulfilled(env):
