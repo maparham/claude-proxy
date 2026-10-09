@@ -1,5 +1,5 @@
 """Is Anthropic itself having trouble? Two signals for the admin's Overview banner: our own recent 529s (overloaded),
-and Anthropic's public status page. Both say "upstream, not the gateway"."""
+and Anthropic's public status page (status.claude.com). Both say "upstream, not the gateway"."""
 from __future__ import annotations
 
 import asyncio
@@ -16,7 +16,7 @@ MIN_FAILED = 3        # fewer is a blip, which Claude Code's own retries absorb
 MIN_SHARE = 0.2
 # A 529 before the stream starts, or an overloaded_error event inside a 200 stream.
 OVERLOADED = "(status = 529 OR error_type = 'overloaded_error')"
-STATUS_URL = "https://status.anthropic.com/api/v2/summary.json"
+STATUS_URL = "https://status.claude.com/api/v2/summary.json"
 
 
 def overload(conn: sqlite3.Connection, now: float | None = None) -> dict:
