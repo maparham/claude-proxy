@@ -445,6 +445,13 @@ async function renderOverview(main) {
   if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span>${t("ov.cred_fail")} ${isAdmin() ? `${t("ov.cred_fail_admin")}${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : t("ov.cred_fail_user")}</span></div>`);
   const stale = (ov.quota || []).filter((q) => q.utilization_pct != null && q.stale);
   if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.stale", { buckets: stale.map((q) => esc(labelOf("bucket.", q.bucket))).join(t("app.list_sep")) })}</span></div>`);
+  const up = ov.upstream;
+  if (up) {
+    const sp = up.status_page;
+    const incidents = sp && sp.incidents.length ? t("ov.up_incidents", { list: sp.incidents.map((i) => /^https:\/\//.test(i.url) ? `<a href="${esc(i.url)}" target="_blank" rel="noopener">${bdi(i.name)}</a>` : bdi(i.name)).join(t("app.list_sep")) }) : "";
+    if (up.overloaded) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.up_overloaded", { failed: fmtNum(up.failed), total: fmtNum(up.total), since: esc(fmtTime(up.since)) })}${incidents ? ` ${incidents}` : ""}</span></div>`);
+    else if (incidents) banners.push(`<div class="banner"><span class="icon">i</span><span>${incidents}</span></div>`);
+  }
   const unpriced = tot.unpriced_models || [];
   const ex = ov.exhaustion;
   main.innerHTML = `

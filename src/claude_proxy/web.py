@@ -32,7 +32,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import clerk, db, limits, orders, payments, quota, tickets, turnstile, usage
+from . import clerk, db, limits, orders, payments, quota, tickets, turnstile, upstream, usage
 from .auth import AuthError, authenticate
 from .config import LENGTHS
 from .gateway import Gateway
@@ -384,6 +384,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             "exhaustion": _exhaustion(conn, now),
             "credential": {"healthy": be.healthy, "detail": be.detail, "expires_at": be.expires_at},
             "poll": {"last_status": gw.poller.last_status},
+            "upstream": upstream.overload(conn, now) | {"status_page": gw.status_page.view(now)},
         }
 
     @app.get("/api/series")

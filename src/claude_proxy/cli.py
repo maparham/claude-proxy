@@ -249,7 +249,7 @@ async def _serve(cfg: Config):
     print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
     print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
     payments.warn_if_off(cfg)
-    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(_maintenance(conn, cfg)),
+    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(gw.status_page.run()), asyncio.create_task(_maintenance(conn, cfg)),
                   asyncio.create_task(_reconcile_payments(conn, cfg))]
     running = [asyncio.create_task(s.serve()) for s in servers]
     try:

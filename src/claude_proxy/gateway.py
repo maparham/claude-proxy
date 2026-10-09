@@ -9,6 +9,7 @@ from . import tickets
 from .config import Config
 from .credentials import OAuthBackend
 from .quota import Poller
+from .upstream import StatusPage
 
 logger = logging.getLogger("claude_proxy")
 
@@ -25,6 +26,7 @@ class Gateway:
                                               limits=httpx.Limits(max_connections=100, max_keepalive_connections=20))
         self.backend = backend or OAuthBackend(cfg, conn, self.http)
         self.poller = Poller(conn, self.backend, cfg.quota)
+        self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)
         else:
