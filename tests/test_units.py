@@ -175,3 +175,9 @@ def test_haiku_5_5_has_a_price():
     from claude_proxy.config import Pricing
     p = Pricing().price_for("claude-haiku-5-5")
     assert (p.input, p.output, p.cache_read, p.cache_write_5m) == (0.10, 0.50, 0.01, 0.125)
+
+
+def test_sonnet_5_5_cache_reads_cost_less_than_sonnet_5():
+    from claude_proxy.config import Pricing
+    assert Pricing().price_for("claude-sonnet-5-5").cache_read == 0.10
+    assert Pricing().price_for("claude-sonnet-5").cache_read == 0.20
