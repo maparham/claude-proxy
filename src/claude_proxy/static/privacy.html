@@ -1,23 +1,27 @@
 <!doctype html>
-<html lang="en">
+<html lang="fa" dir="rtl">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Privacy · Claude Gateway</title>
+<meta name="robots" content="noindex">
+<meta name="retention-days" content="180">
+<title>حریم خصوصی · کلاد</title>
 <link rel="stylesheet" href="/static/app.css">
+<script src="/static/i18n.js"></script>
+<script src="/static/privacy.js" defer></script>
 </head>
 <body>
 <main class="login" style="max-width:640px">
   <div class="card">
-    <h2>Privacy</h2>
-    <p>Claude Gateway shares a Claude subscription within a small team. This is what it keeps about you.</p>
+    <h2 data-i18n="login.privacy">Privacy</h2>
+    <p data-i18n="privacy.lede">Claude Gateway shares a Claude subscription. This is what it keeps about you.</p>
     <ul>
-      <li><b>Your account:</b> your email address, and the ID of the sign-in you used (Google, GitHub or an emailed code, through Clerk).</li>
-      <li><b>Your computers:</b> a name for each computer you connect and when its key was last used. Keys are stored only as fingerprints.</li>
-      <li><b>Your usage:</b> for each request, its time, model, token counts, status and Claude Code's session id and title, so you and the admin can see usage and limits. The content of your prompts and of the answers is not stored.</li>
+      <li data-i18n="privacy.account"><b>Your account:</b> your email address, and the ID of the sign-in you used (Google, GitHub or an emailed code, through Clerk).</li>
+      <li data-i18n="privacy.computers"><b>Your computers:</b> a name for each computer you connect and when its key was last used. Keys are stored only as fingerprints.</li>
+      <li data-i18n="privacy.usage"><b>Your usage:</b> for each request, its time, model, token counts, status and Claude Code's session id and title, so you and the admin can see usage and limits. The content of your prompts and of the answers is not stored.</li>
     </ul>
-    <p>Usage records are deleted after 180 days. Nothing is sold or shared; requests go to the model's provider (Anthropic for Claude) to be answered. To have your account and usage deleted, ask the gateway admin.</p>
-    <p><a href="/dashboard">Back to the dashboard</a></p>
+    <p id="privacy-retention">Usage records are deleted after 180 days. Nothing is sold or shared; requests go to the model's provider (Anthropic for Claude) to be answered. To have your account and usage deleted, ask the gateway admin.</p>
+    <p><a href="/dashboard" data-i18n="privacy.back">Back to the dashboard</a> · <button type="button" class="linklike" id="lang-toggle" data-i18n="app.lang_other">فارسی</button></p>
   </div>
 </main>
 </body>

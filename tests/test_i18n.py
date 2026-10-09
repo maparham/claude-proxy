@@ -58,8 +58,8 @@ def test_t_falls_back_to_english_then_the_key(tmp_path):
 
 
 def _used_keys():
-    js = (STATIC / "app.js").read_text() + (STATIC / "home.js").read_text()
-    html = (STATIC / "index.html").read_text() + (STATIC / "home.html").read_text()
+    js = (STATIC / "app.js").read_text() + (STATIC / "home.js").read_text() + (STATIC / "privacy.js").read_text()
+    html = (STATIC / "index.html").read_text() + (STATIC / "home.html").read_text() + (STATIC / "privacy.html").read_text()
     keys = set(re.findall(r"""\bt\(\s*"([a-z][\w.:-]*)\"""", js))
     keys |= {"price.1_day", "price.1_week", "price.1_month"}   # home.js's lengthName: t(`price.1_${len}`)
     plurals = set(re.findall(r"""\bplural\(\s*"([a-z][\w.:-]*)\"""", js))
@@ -94,8 +94,15 @@ def test_the_home_page_offers_the_switch_and_marks_its_text():
     assert html.count("data-i18n") >= 20
 
 
-# Elements whose text is filled by home.js at runtime (via t()), not by applyStatic()'s data-i18n pass.
-_HOME_DYNAMIC_IDS = {"cards", "rate-note", "how-to-buy"}
+def test_the_privacy_page_offers_the_switch_and_marks_its_text():
+    html = (STATIC / "privacy.html").read_text()
+    assert html.startswith('<!doctype html>\n<html lang="fa" dir="rtl">')
+    assert 'id="lang-toggle"' in html and '/static/i18n.js' in html
+    assert html.count("data-i18n") >= 5
+
+
+# Elements whose text is filled by *.js at runtime (via t()), not by applyStatic()'s data-i18n pass.
+_HOME_DYNAMIC_IDS = {"cards", "rate-note", "how-to-buy", "privacy-retention"}
 _HOME_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
 
@@ -132,6 +139,12 @@ def test_every_home_page_text_node_is_translated_or_dynamic():
     # Catches a static string reverting to hardcoded text without its data-i18n marker — the >= 20 count above would not.
     parser = _TextCoverageParser()
     parser.feed((STATIC / "home.html").read_text())
+    assert parser.uncovered == []
+
+
+def test_every_privacy_page_text_node_is_translated_or_dynamic():
+    parser = _TextCoverageParser()
+    parser.feed((STATIC / "privacy.html").read_text())
     assert parser.uncovered == []
 
 

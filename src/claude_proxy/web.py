@@ -1245,8 +1245,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/privacy")
     async def privacy():
-        # Linked from the Google sign-in consent screen, which requires a privacy policy.
-        html = (STATIC / "privacy.html").read_text(encoding="utf-8").replace("after 180 days", f"after {cfg.retention_days} days")
+        # Linked from the Google sign-in consent screen, which requires a privacy policy. The retention period is
+        # configurable, so both the no-JS English fallback and the meta tag privacy.js reads get the real value.
+        html = versioned("privacy.html", ("i18n.js", "privacy.js", "app.css"))
+        html = html.replace("after 180 days", f"after {cfg.retention_days} days")
+        html = html.replace('name="retention-days" content="180"', f'name="retention-days" content="{cfg.retention_days}"')
         return HTMLResponse(html, headers=PAGE_HEADERS)
 
     @app.get("/static/{name}")
