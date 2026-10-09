@@ -773,6 +773,7 @@ const I18N = {
     "privacy.usage": "<b>Your usage:</b> for each request, its time, model, token counts, status and Claude Code's session id and title, so you and the admin can see usage and limits. The content of your prompts and of the answers is not stored.",
     "privacy.retention": "Usage records are deleted after {days} days. Nothing is sold or shared; requests go to the model's provider (Anthropic for Claude) to be answered. To have your account and usage deleted, ask the gateway admin.",
     "privacy.back": "Back to the dashboard",
+    "privacy.title": "Privacy · Claude Gateway",
     // en:end
   },
   fa: {
@@ -1539,12 +1540,13 @@ const I18N = {
     "home.prices_unavailable": "تعرفه‌ها اکنون در دسترس نیستند.",
     "cur.toman": "{v} تومان",
     "cur.IRT": "تومان",
-    "privacy.lede": "کلاد یک اشتراک Claude را به اشتراک می‌گذارد. این صفحه می‌گوید چه چیزی را دربارهٔ شما نگه می‌دارد.",
+    "privacy.lede": "این سرویس یک اشتراک کلاد را بین کاربرانش تقسیم می‌کند. این صفحه می‌گوید چه اطلاعاتی از شما نگه داشته می‌شود.",
     "privacy.account": "<b>حساب شما:</b> نشانی ایمیل‌تان، و شناسهٔ روشی که با آن وارد شده‌اید (Google، GitHub یا کدی که به ایمیل‌تان فرستاده می‌شود، از طریق Clerk).",
     "privacy.computers": "<b>سیستم‌های شما:</b> نامی برای هر سیستمی که وصل می‌کنید و زمان آخرین استفاده از کلیدش. کلیدها فقط به‌صورت اثرانگشت ذخیره می‌شوند.",
     "privacy.usage": "<b>مصرف شما:</b> برای هر درخواست، زمان، مدل، تعداد توکن‌ها، وضعیت و شناسه و عنوان نشست کلاد، تا شما و مدیر بتوانید مصرف و سقف‌ها را ببینید. محتوای پرامپت‌ها و پاسخ‌ها ذخیره نمی‌شود.",
     "privacy.retention": "رکوردهای مصرف پس از {days} روز حذف می‌شوند. چیزی فروخته یا به اشتراک گذاشته نمی‌شود؛ درخواست‌ها برای پاسخ به ارائه‌دهندهٔ مدل (برای Claude، Anthropic) فرستاده می‌شوند. برای حذف حساب و مصرف‌تان، از مدیر بخواهید.",
     "privacy.back": "بازگشت به داشبورد",
+    "privacy.title": "حریم خصوصی · کلاد",
     // fa:end
   },
 };

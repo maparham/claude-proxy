@@ -448,6 +448,7 @@ async def test_privacy_page(env):
     async with app(gw) as c:
         r = await c.get("/privacy")
     assert r.status_code == 200 and "after 90 days" in r.text and "not stored" in r.text
+    assert '<meta name="retention-days" content="90">' in r.text   # what privacy.js shows, in either language
     assert "no-transform" in r.headers["cache-control"]
 
 
