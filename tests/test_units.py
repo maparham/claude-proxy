@@ -169,3 +169,9 @@ def test_defaults_to_home_gateway_dir_when_present(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_PROXY_CREDENTIAL_KEY_FILE", raising=False)
     assert config.Config().db.path == str(home / ".claude-gateway" / "claude_proxy.db")
     assert credentials.decrypt_blob(credentials.encrypt_blob({"a": 1})) == {"a": 1}
+
+
+def test_haiku_5_5_has_a_price():
+    from claude_proxy.config import Pricing
+    p = Pricing().price_for("claude-haiku-5-5")
+    assert (p.input, p.output, p.cache_read, p.cache_write_5m) == (0.10, 0.50, 0.01, 0.125)

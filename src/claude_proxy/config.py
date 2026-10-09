@@ -211,6 +211,8 @@ def _default_prices() -> dict[str, Price]:
         "claude-opus-4*": Price(5.0, 25.0),
         "claude-sonnet-5*": Price(2.0, 10.0),
         "claude-sonnet-4*": Price(3.0, 15.0),
+        # Haiku 5.5 costs 5x this on prompts over 100K tokens; one price per model here, so those are undercounted.
+        "claude-haiku-5-5*": Price(0.10, 0.50, cache_read=0.01),
         "claude-haiku-4*": Price(1.0, 5.0),
         "muse-spark-1.3-contributor*": Price(0.10, 0.20, cache_write_5m=0.10, cache_write_1h=0.10, cache_read=0.002),
         "muse-spark*": Price(1.25, 4.25, cache_write_5m=1.25, cache_write_1h=1.25, cache_read=0.15),
