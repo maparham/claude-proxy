@@ -13,6 +13,7 @@ const nf2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2, useGrouping: f
 const nfShare = new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 });
 let data = null;
 let length = "week";
+let currency = null;   // set to the page's own currency (IRT today) once /api/pricing answers
 let skew = 0;           // server clock minus this browser's, in seconds: countdowns run on the server's clock
 let reloaded = false;
 const serverNow = () => Date.now() / 1000 + skew;
@@ -51,8 +52,13 @@ function savePct(t_, len) {
   const daily = t_.lengths.day.usd * LENGTHS[len][1];
   return len === "day" || !(daily > 0) ? 0 : Math.max(0, Math.floor((1 - t_.lengths[len].usd / daily) * 100));
 }
+// A tier's price in the chosen currency: USD's own fields, or the page currency's converted ones.
+function priceIn(l, currency) {
+  return currency === "USD" ? { amount: l.usd, list_amount: l.list_usd } : { amount: l.amount, list_amount: l.list_amount };
+}
 function card(t_, i, len, currency, ordering) {
   const l = t_.lengths[len];
+  const p = priceIn(l, currency);
   const off = l.discount_ends_at && l.list_usd > 0 ? Math.round((1 - l.usd / l.list_usd) * 100) : 0;
   const save = savePct(t_, len);
   return `<article class="tier${i === 1 ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
@@ -60,7 +66,7 @@ function card(t_, i, len, currency, ordering) {
     <h3>${bdi(t_.label)}</h3>
     ${t_.compare ? `<p class="compare">${t("home.compare", { what: bdi(t_.compare) })}</p>` : ""}
     <p class="share">${t("home.share_of", { pct: nfShare.format(+t_.share_pct) })}</p>
-    <p class="price">${l.discount_ends_at ? `<s>${esc(money(l.list_amount, currency))}</s> ` : ""}<b>${esc(money(l.amount, currency))}</b><span class="unit">${t(LENGTHS[len][0])}</span></p>
+    <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b><span class="unit">${t(LENGTHS[len][0])}</span></p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
     <ul class="hints">${hintLines(t_).map((h) => `<li>${h}</li>`).join("")}</ul>
@@ -70,11 +76,19 @@ function card(t_, i, len, currency, ordering) {
   </article>`;
 }
 function signInHref(t_, len) { return `/dashboard?tier=${encodeURIComponent(t_.tier)}&length=${len}`; }
-function cardsHtml(d, len) { return d.tiers.map((t_, i) => card(t_, i, len, d.currency, !!d.turnstile_site_key)).join(""); }
+function cardsHtml(d, len, currency = d.currency) { return d.tiers.map((t_, i) => card(t_, i, len, currency, !!d.turnstile_site_key)).join(""); }
+// "Toman" for IRT (shared i18n key with the order dialog), "USD" otherwise translated, else the bare code.
+function currencyLabel(c) { return c === "IRT" ? t("cur.IRT") : c === "USD" ? t("home.cur_usd") : c; }
+// Built once the page's own currency is known: that currency and USD, deduplicated (same idiom as the order form's select).
+function initCurrencyToggle(d) {
+  document.getElementById("currency-toggle").innerHTML = [...new Set([d.currency, "USD"])]
+    .map((c) => `<button type="button" data-currency="${esc(c)}" aria-pressed="${String(c === currency)}">${esc(currencyLabel(c))}</button>`).join("");
+}
 function render() {
-  document.getElementById("cards").innerHTML = cardsHtml(data, length);
+  document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
-  document.getElementById("rate-note").textContent = data.rate_set_at
+  document.querySelectorAll("#currency-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.currency === currency)));
+  document.getElementById("rate-note").textContent = currency !== "USD" && data.rate_set_at
     ? t("home.rate_note", { date: new Date(data.rate_set_at * 1000).toLocaleDateString(LOC) }) : "";
 }
 function tick() {
@@ -208,9 +222,17 @@ document.getElementById("length-toggle").addEventListener("click", (e) => {
   length = b.dataset.length;
   render();
 });
+document.getElementById("currency-toggle").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-currency]");
+  if (!b || !data) return;
+  currency = b.dataset.currency;
+  render();
+});
 fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
   data = d;
+  currency = d.currency;   // default: the page's own currency (IRT today)
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
+  initCurrencyToggle(d);
   render(); setInterval(tick, 1000);
 })
   .catch(() => { document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`; });
