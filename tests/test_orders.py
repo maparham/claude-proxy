@@ -305,6 +305,8 @@ def test_link_creates_a_user_named_after_the_email(env):
     u = user(conn, r["user_id"])
     assert (u["name"], u["role"], u["email"]) == ("New.Buyer@example.com", "user", None)
     assert "order_link" in actions(conn)
+    # No access before a ticket: a $0 credit, which the first ticket removes.
+    assert [tuple(r) for r in conn.execute("SELECT kind, scope, value FROM limits WHERE user_id=?", (u["id"],))] == [("cost_total", "*", "0")]
 
 
 def test_link_create_refused_when_the_name_or_email_is_taken(env):
@@ -536,6 +538,13 @@ def test_grant_with_order_id_marks_it_done(env):
     assert (o["status"], o["ticket_id"], o["ip"]) == ("done", t["id"], None)
     assert actions(conn)[-1] == "order_done"
     assert orders.mine(conn, ids["alice"])["status"] == "done"
+
+
+def test_granting_a_created_users_first_ticket_removes_the_zero_credit(env):
+    conn, cfg, ids = env
+    o = orders.link(conn, cfg, ids["admin"], visitor(conn, cfg)["id"], create=True)
+    grant(conn, cfg, ids, o["user_id"], o["id"])
+    assert conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (o["user_id"],)).fetchone() is None
 
 
 @pytest.mark.parametrize("how", ["withdrawn", "declined", "done", "other_user", "unlinked", "missing"])

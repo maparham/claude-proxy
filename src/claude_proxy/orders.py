@@ -301,7 +301,8 @@ def suggest_user(conn: sqlite3.Connection, order: dict) -> dict | None:
 def link(conn: sqlite3.Connection, cfg: Config, actor: int | None, order_id: int, *, user_id: int | None = None, create: bool = False,
          now: float | None = None) -> dict:
     """Tie an open visitor order to an account: an existing user, or (`create`) a new one named after the order's email.
-    Creating is safe though the address is unverified: only its owner can later sign in to that account through Clerk.
+    Creating is safe though the address is unverified: only its owner can later sign in to that account through Clerk,
+    and it has a $0 credit, so nothing is served before a ticket is granted.
     The order's email is never written to users.email."""
     now = _now(now)
     if user_id is None and not create:
@@ -322,6 +323,9 @@ def link(conn: sqlite3.Connection, cfg: Config, actor: int | None, order_id: int
             if len(email) > 64:   # the users' name limit
                 raise OrderError(400, "The email is too long for a user name; add the user by hand.")
             user_id, _ = db.create_user(conn, email)   # its key is never shown; the buyer signs in with Clerk
+            # No credit until a ticket is granted: the first ticket removes this, as it does a sign-up credit.
+            conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at, updated_by) VALUES(?,?,?,?,?,?,?)",
+                         (user_id, "cost_total", "*", "0", "usd", int(now), actor))
             db.audit(conn, actor, "user_add", email, {"role": "user", "order_id": order_id})
         u = conn.execute("SELECT id, name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
         if u is None:

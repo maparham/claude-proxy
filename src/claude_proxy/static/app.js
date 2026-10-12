@@ -719,7 +719,7 @@ function userActions(u) {
   const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked
     ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">${t("users.upgrade")}</button>` : "";
   const paused = u.ticket && u.ticket.paused;
-  const ungate = u.ticket && u.ticket.gated && (!u.ticket.live || paused) && !u.revoked
+  const ungate = u.ticket && u.ticket.gated && (!u.ticket.live || paused) && (!u.revoked || paused)   // revoked: the only way to end a ticket before deleting
     ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="${paused ? "act_ungate_paused" : "act_ungate"}">${t("users.ungate")}</button>` : "";
   return `<div class="row-actions">${upgrade}${ungate}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">${t("users.delete")}</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">${t("users.limits")}</button>${opencode}` : `
       <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">${t("users.limits")}</button>
