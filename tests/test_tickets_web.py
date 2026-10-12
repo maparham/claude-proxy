@@ -179,7 +179,7 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     assert lite["compare"] == "Claude Pro" and lite["lengths"]["month"] == {
         "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5, "sold_out": True}   # 25 sold: nothing fits today
     assert lite["lengths"]["week"]["sold_out"] is True and lite["lengths"]["week"]["discount_ends_at"] is None
-    assert lite["hours"] == {"sonnet": {"per_5h": None, "per_day": None}, "opus": {"per_5h": None, "per_day": None}}
+    assert lite["plan_pct"] == 100   # 5% share against Claude Pro's own 5% of the account
     text = r.text
     for leaked in ("utilization", "alice", "sold_now", "shares"):
         assert leaked not in text
@@ -197,17 +197,13 @@ async def test_pricing_falls_back_to_usd_without_a_rate(env):
     assert page.headers["content-security-policy"].startswith("default-src 'self'")
 
 
-async def test_pricing_reads_only_usage_estimates(env):
+async def test_pricing_plan_pct_is_none_for_an_unrecognised_compare(env):
     gw, conn, cfg, ids, keys = env
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (int(time.time()), "sonnet", "5h", 80, 1.25))
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (int(time.time()), "sonnet", "7d", 80, 0.25))
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (int(time.time()), "opus", "5h", 10, 5.0))
-    conn.execute("DELETE FROM requests")
-    conn.execute("DELETE FROM quota_snapshots")
+    cfg.tickets.tiers["lite"].compare = "Some Other Plan"
     async with asgi_client(create_dashboard_app(gw)) as c:
         p = (await c.get("/api/pricing")).json()
     lite = next(t for t in p["tiers"] if t["tier"] == "lite")
-    assert lite["hours"] == {"sonnet": {"per_5h": 4.0, "per_day": 2.8}, "opus": {"per_5h": None, "per_day": None}}   # 5/1.25; (5/7)/0.25 = 2.857
+    assert lite["plan_pct"] is None
 
 
 async def test_pricing_is_404_when_tickets_are_off(env):
@@ -441,7 +437,6 @@ setTimeout(() => {
   if (!fail) {
     out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
     out.save = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.savePct(data.tiers[0], k)]));
-    out.hints = ctx.hintLines(data.tiers[0]);
     onToggle({ target: { closest: () => ({ dataset: { length: "month" } }) } });
     out.afterToggle = el("cards").innerHTML;
     for (let i = 0; i < 3; i++) tickFn();
@@ -452,12 +447,12 @@ setTimeout(() => {
 """
 
 
-def _tier(tier="lite", label="Lite", compare="Claude Pro", hours=None, **lengths):
+def _tier(tier="lite", label="Lite", compare="Claude Pro", plan_pct=100, **lengths):
     base = {k: {"days": d, "usd": u, "list_usd": u, "amount": u, "list_amount": u, "discount_ends_at": None, "sold_out": False}
             for k, d, u in (("day", 1, 3), ("week", 7, 8), ("month", 30, 20))}
     for k, v in lengths.items():
         base[k].update(v)
-    return {"tier": tier, "label": label, "share_pct": 5, "compare": compare, "hours": hours or {}, "lengths": base}
+    return {"tier": tier, "label": label, "share_pct": 5, "compare": compare, "plan_pct": plan_pct, "lengths": base}
 
 
 def _prices(*tiers, how_to_buy=""):
@@ -522,10 +517,11 @@ def test_home_shows_a_discount_ribbon(tmp_path):
     assert "−25%" in r["cards"]["week"] and "<s>" in r["cards"]["week"] and "−" not in r["cards"]["month"]
 
 
-def test_home_hints_drop_missing_numbers_and_families(tmp_path):
-    hours = {"sonnet": {"per_5h": 4.0, "per_day": None}, "opus": {"per_5h": None, "per_day": None}}
-    r = _run_home(tmp_path, _prices(_tier(hours=hours)))
-    assert r["hints"] == ["Sonnet: at least 4 h per 5-hour window"]
+def test_home_shows_plan_pct_and_hides_it_when_unknown(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(plan_pct=100)))
+    assert "100% of <bdi>Claude Pro</bdi>" in r["cards"]["week"]
+    r = _run_home(tmp_path, _prices(_tier(plan_pct=None)))
+    assert "% of <bdi>Claude Pro</bdi>" not in r["cards"]["week"] and '<p class="plan-pct"></p>' in r["cards"]["week"]
 
 
 def test_home_highlights_the_second_tier_only(tmp_path):

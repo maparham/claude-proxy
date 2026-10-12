@@ -553,15 +553,14 @@ function priceListCard(tk, order) {
   // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
   const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]];
-  const hint = (tier) => Object.entries({ sonnet: "Sonnet", opus: "Opus" }).map(([f, n]) => { const h = tier.hours[f]; return h && (h.per_5h != null || h.per_day != null)
-    ? `<div class="muted">${t("price.at_least", { model: n, what: [h.per_5h != null ? t("price.h_per_5h", { n: nfFull.format(h.per_5h) }) : null, h.per_day != null ? t("price.h_per_day", { n: nfFull.format(h.per_day) }) : null].filter(Boolean).join(t("app.list_sep")) })}</div>` : ""; }).join("");
+  const planPct = (tier) => tier.plan_pct != null ? `<div class="muted">${t("home.plan_pct", { pct: nfFull.format(tier.plan_pct), what: bdi(tier.compare) })}</div>` : "";
   // The home page's pick is the highlighted Order button; a sold-out price has none.
   const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
   const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
     ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((tier) => `<tr><td><b>${bdi(tier.label)}</b> <span class="muted">${fmtShare(tier.share_pct)}</span><div class="muted">≈ ${esc(tier.compare)}</div>${hint(tier)}</td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
+    ${p.tiers.map((tier) => `<tr><td><b>${bdi(tier.label)}</b> <span class="muted">${fmtShare(tier.share_pct)}</span><div class="muted">≈ ${esc(tier.compare)}</div>${planPct(tier)}</td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
 }
 

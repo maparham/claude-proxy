@@ -61,7 +61,7 @@ function card(t_, i, len, currency, ordering) {
     <p class="per">${t(LENGTHS[len][0])}</p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
-    <ul class="hints">${hintLines(t_).map((h) => `<li>${h}</li>`).join("")}</ul>
+    <p class="plan-pct">${t_.plan_pct != null ? t("home.plan_pct", { pct: nf0.format(t_.plan_pct), what: bdi(t_.compare) }) : ""}</p>
     ${l.sold_out ? `<span class="btn get" aria-disabled="true">${t("home.sold_out")}</span>`
       : ordering ? `<button type="button" class="btn primary get" data-order="${esc(t_.tier)}:${len}">${t("home.get_it")}</button>`
       : `<a class="btn primary get" href="${signInHref(t_, len)}">${t("home.get_it")}</a>`}
