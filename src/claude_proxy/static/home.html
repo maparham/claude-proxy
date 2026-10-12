@@ -29,11 +29,8 @@
 
   <section id="pricing" class="pricing-sec" aria-labelledby="pricing-h">
     <h2 id="pricing-h" data-i18n="tab.pricing">Pricing</h2>
-    <div class="toggle-row">
-      <div class="pill-toggle" id="length-toggle" role="group" aria-label="Ticket length" data-i18n-attr="aria-label:home.length_label">
-        <button type="button" data-length="day" aria-pressed="false" data-i18n="home.len_day">Day</button><button type="button" data-length="week" aria-pressed="true" data-i18n="home.len_week">Week</button><button type="button" data-length="month" aria-pressed="false" data-i18n="home.len_month">Month</button>
-      </div>
-      <div class="pill-toggle" id="currency-toggle" role="group" aria-label="Currency" data-i18n-attr="aria-label:home.currency_label"></div>
+    <div class="pill-toggle" id="length-toggle" role="group" aria-label="Ticket length" data-i18n-attr="aria-label:home.length_label">
+      <button type="button" data-length="day" aria-pressed="false" data-i18n="home.len_day">Day</button><button type="button" data-length="week" aria-pressed="true" data-i18n="home.len_week">Week</button><button type="button" data-length="month" aria-pressed="false" data-i18n="home.len_month">Month</button>
     </div>
     <div class="cards" id="cards"><p class="muted" data-i18n="app.loading">Loading…</p></div>
     <p class="muted rate-note" id="rate-note"></p>
@@ -41,6 +38,9 @@
 
 </main>
 <dialog id="order-dialog" class="order-dialog" aria-labelledby="order-h"></dialog>
-<footer class="home-foot"><a href="/dashboard" data-i18n="login.submit">Sign in</a> · <a href="/privacy" data-i18n="login.privacy">Privacy</a></footer>
+<footer class="home-foot">
+  <p><a href="/dashboard" data-i18n="login.submit">Sign in</a> · <a href="/privacy" data-i18n="login.privacy">Privacy</a></p>
+  <p class="foot-currency"><label for="currency-select" data-i18n="home.currency_label">Currency</label> <select id="currency-select"></select></p>
+</footer>
 </body>
 </html>

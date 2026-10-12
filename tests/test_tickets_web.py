@@ -494,8 +494,8 @@ def test_home_counts_down_on_the_servers_clock(tmp_path):
 
 def test_home_shows_week_first_and_the_toggle_switches_length(tmp_path):
     r = _run_home(tmp_path)
-    assert "/week" in r["pricing"] and "/month" not in r["pricing"]
-    assert "/month" in r["afterToggle"] and "/week" not in r["afterToggle"]
+    assert "for a week" in r["pricing"] and "for a month" not in r["pricing"]
+    assert "for a month" in r["afterToggle"] and "for a week" not in r["afterToggle"]
 
 
 def test_home_sold_out_is_per_length(tmp_path):

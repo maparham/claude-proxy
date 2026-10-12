@@ -7,7 +7,6 @@ const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "
 const bdi = (v) => `<bdi>${esc(v)}</bdi>`;   // a tier's own name or the admin's "how to pay" text, inside translated copy
 const LENGTHS = { day: ["home.per_day", 1], week: ["home.per_week", 7], month: ["home.per_month", 30] };
 function lengthName(len) { return t(`price.1_${len}`); }   // "1 day" / "1 week" / "1 month", shared with the dashboard's price list
-const FAMILY = { sonnet: "Sonnet", opus: "Opus" };
 const nf0 = new Intl.NumberFormat(LOC, { useGrouping: false });
 const nf2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2, useGrouping: false });
 const nfShare = new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 });
@@ -39,14 +38,6 @@ function countdown(endsAt) {
   const vars = { d: nf0.format(d), h: hm.format(h), m: hm.format(m) };
   return t(d ? "home.countdown_full" : "home.countdown", vars);
 }
-// "Sonnet: at least 4 h per 5-hour window, 2.8 h per day"; a missing number is left out, a family with none is omitted.
-function hintLines(t_) {
-  return Object.entries(FAMILY).map(([fam, name]) => {
-    const h = (t_.hours || {})[fam] || {};
-    const parts = [h.per_5h != null ? t("home.h_per_5h", { n: nf0.format(h.per_5h) }) : null, h.per_day != null ? t("price.h_per_day", { n: nf0.format(h.per_day) }) : null].filter(Boolean);
-    return parts.length ? t("price.at_least", { model: name, what: parts.join(t("app.list_sep")) }) : null;   // Sonnet/Opus: fixed brand names, not server data
-  }).filter(Boolean);
-}
 // What a week or a month saves against buying the day ticket every day, on the charged prices (discounts count).
 function savePct(t_, len) {
   const daily = t_.lengths.day.usd * LENGTHS[len][1];
@@ -66,7 +57,8 @@ function card(t_, i, len, currency, ordering) {
     <h3>${bdi(t_.label)}</h3>
     ${t_.compare ? `<p class="compare">${t("home.compare", { what: bdi(t_.compare) })}</p>` : ""}
     <p class="share">${t("home.share_of", { pct: nfShare.format(+t_.share_pct) })}</p>
-    <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b><span class="unit">${t(LENGTHS[len][0])}</span></p>
+    <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
+    <p class="per">${t(LENGTHS[len][0])}</p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
     <ul class="hints">${hintLines(t_).map((h) => `<li>${h}</li>`).join("")}</ul>
@@ -80,14 +72,14 @@ function cardsHtml(d, len, currency = d.currency) { return d.tiers.map((t_, i) =
 // "Toman" for IRT (shared i18n key with the order dialog), "USD" otherwise translated, else the bare code.
 function currencyLabel(c) { return c === "IRT" ? t("cur.IRT") : c === "USD" ? t("home.cur_usd") : c; }
 // Built once the page's own currency is known: that currency and USD, deduplicated (same idiom as the order form's select).
-function initCurrencyToggle(d) {
-  document.getElementById("currency-toggle").innerHTML = [...new Set([d.currency, "USD"])]
-    .map((c) => `<button type="button" data-currency="${esc(c)}" aria-pressed="${String(c === currency)}">${esc(currencyLabel(c))}</button>`).join("");
+function initCurrencySelect(d) {
+  document.getElementById("currency-select").innerHTML = [...new Set([d.currency, "USD"])]
+    .map((c) => `<option value="${esc(c)}"${c === currency ? " selected" : ""}>${esc(currencyLabel(c))}</option>`).join("");
 }
 function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
-  document.querySelectorAll("#currency-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.currency === currency)));
+  document.getElementById("currency-select").value = currency;
   document.getElementById("rate-note").textContent = currency !== "USD" && data.rate_set_at
     ? t("home.rate_note", { date: new Date(data.rate_set_at * 1000).toLocaleDateString(LOC) }) : "";
 }
@@ -222,17 +214,16 @@ document.getElementById("length-toggle").addEventListener("click", (e) => {
   length = b.dataset.length;
   render();
 });
-document.getElementById("currency-toggle").addEventListener("click", (e) => {
-  const b = e.target.closest("button[data-currency]");
-  if (!b || !data) return;
-  currency = b.dataset.currency;
+document.getElementById("currency-select").addEventListener("change", (e) => {
+  if (!data) return;
+  currency = e.target.value;
   render();
 });
 fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
   data = d;
   currency = d.currency;   // default: the page's own currency (IRT today)
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
-  initCurrencyToggle(d);
+  initCurrencySelect(d);
   render(); setInterval(tick, 1000);
 })
   .catch(() => { document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`; });

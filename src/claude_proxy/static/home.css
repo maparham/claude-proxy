@@ -11,8 +11,7 @@ body.home { font-size: 15px; }
 .hero-lede code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
 .hero-cta .btn { padding: 10px 18px; font-weight: 600; margin-inline-end: 8px; }
 .pricing-sec { padding: 48px 0; border-top: 1px solid var(--border); scroll-margin-top: 16px; }
-.toggle-row { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 24px; }
-.pill-toggle { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); }
+.pill-toggle { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); margin-bottom: 24px; }
 .pill-toggle button { border: 0; background: none; padding: 6px 16px; border-radius: 999px; cursor: pointer; color: var(--ink-2); }
 .pill-toggle button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: stretch; }
@@ -24,7 +23,7 @@ body.home { font-size: 15px; }
 .tier .share { margin: 0; font-size: 13px; color: var(--muted); }
 .tier .price { margin: 12px 0 0; font-size: 34px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .tier .price s { font-size: 18px; color: var(--muted); }
-.tier .unit { font-size: 15px; color: var(--muted); margin-inline-start: 2px; }
+.tier .per { margin: 0; font-size: 14px; color: var(--muted); }
 .tier .countdown, .tier .save { margin: 0; font-size: 13px; }
 .tier .save { color: var(--good-text); font-weight: 600; }
 .tier .hints { list-style: none; margin: 10px 0 16px; padding: 0; font-size: 13.5px; color: var(--ink-2); flex: 1; }
@@ -34,7 +33,10 @@ body.home { font-size: 15px; }
 .ribbon { position: absolute; top: 14px; inset-inline-end: 14px; font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--s2); color: #fff; }
 .rate-note { font-size: 13px; margin-top: 16px; }
 .home-foot { padding: 32px 16px 48px; font-size: 13px; color: var(--muted); }
+.home-foot p { margin: 0 0 10px; }
 .home-foot a { color: var(--muted); }
+.foot-currency { display: flex; align-items: center; gap: 6px; }
+.foot-currency select { font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
 @media (max-width: 720px) {
   .hero { padding: 40px 0 32px; }
   .cards { grid-template-columns: minmax(0, 1fr); }
