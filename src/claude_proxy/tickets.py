@@ -17,10 +17,6 @@ from .config import LENGTHS, Config
 DAY = 86400
 ACCOUNT_ID = 1   # step 1 has exactly one account (spec section 1)
 
-# Each official Anthropic plan's own 5-hour/weekly rate limit as a percentage of one Claude Max 20x account
-# (design doc "Account": one Max 20x subscription is the 100% baseline; Max 5x and Pro scale down from that).
-ANTHROPIC_PLAN_PCT = {"Claude Pro": 5, "Claude Max 5x": 25, "Claude Max 20x": 100}
-
 STALE_RATE_S = 36 * 3600
 USD_ROUND_TO = 0.01
 MAX_USD = 100_000          # generous ceilings: anything above is a typo, not a price
@@ -618,16 +614,9 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
             "has_tickets": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is not None}
 
 
-def plan_pct(compare: str, share_pct: float) -> float | None:
-    """A tier's share_pct as a percentage of the Anthropic plan it's compared to, e.g. 25% of the account against
-    Claude Max 5x's own 25% is 100%. None when `compare` isn't one of the known plans (ANTHROPIC_PLAN_PCT)."""
-    base = ANTHROPIC_PLAN_PCT.get(compare)
-    return round(share_pct / base * 100) if base else None
-
-
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str) -> dict:
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
-    amounts, a sold-out flag and the plan-percentage hint. Nothing about who holds what. Falls back to USD without a rate."""
+    amounts and a sold-out flag. Nothing about who holds what. Falls back to USD without a rate."""
     now = _now(now)
     rate = current_rate(conn, currency)
     if rate is None:
@@ -641,6 +630,5 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
-        tiers.append({"tier": tid, "label": t.label, "share_pct": t.share_pct, "compare": t.compare,
-                      "plan_pct": plan_pct(t.compare, t.share_pct), "lengths": lengths})
+        tiers.append({"tier": tid, "label": t.label, "share_pct": t.share_pct, "compare": t.compare, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers}

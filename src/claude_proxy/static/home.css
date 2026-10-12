@@ -26,8 +26,7 @@ body.home { font-size: 15px; }
 .tier .per { margin: 0; font-size: 14px; color: var(--muted); }
 .tier .countdown, .tier .save { margin: 0; font-size: 13px; }
 .tier .save { color: var(--good-text); font-weight: 600; }
-.tier .plan-pct { margin: 10px 0 16px; font-size: 13.5px; color: var(--ink-2); flex: 1; }
-.tier .get { text-align: center; padding: 9px 12px; font-weight: 600; }
+.tier .get { margin-top: auto; text-align: center; padding: 9px 12px; font-weight: 600; }
 .tier .get[aria-disabled="true"] { cursor: not-allowed; color: var(--muted); }
 .ribbon { position: absolute; top: 14px; inset-inline-end: 14px; font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--s2); color: #fff; }
 .rate-note { font-size: 13px; margin-top: 16px; }
