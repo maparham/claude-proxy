@@ -429,7 +429,7 @@ def test_order_rows_escape_every_buyer_field(tmp_path):
     import json
     from tests.test_tickets_web import _app_fn
     o = _order_row(name=BAD, email=BAD, message=BAD, admin_note=BAD, label=BAD, user_name=BAD, user_id=3)
-    html = _app_fn(tmp_path, ["orderRow", "mailState", "orderActions"], APP_STUBS + f"var out = orderRow({json.dumps(o)});")
+    html = _app_fn(tmp_path, ["orderRow", "mailState", "orderActions", "tierName"], APP_STUBS + f"var out = orderRow({json.dumps(o)});")
     assert "<img" not in html and html.count("&lt;img") >= 5
 
 
@@ -458,7 +458,7 @@ def test_the_buyer_sees_their_order_and_never_the_admin_note(tmp_path):
     from tests.test_tickets_web import _app_fn
     mine = {"id": 4, "label": "<b>Lite</b>", "tier": "lite", "length": "week", "currency": "EUR", "quoted_amount": 7.5}
     orders_ = [mine | {"status": "new"}, mine | {"status": "contacted"}, mine | {"status": "done"}, mine | {"status": "declined"}, None]
-    out = _app_fn(tmp_path, ["myOrderCard"], APP_STUBS + f"var out = {json.dumps(orders_)}.map(myOrderCard);")
+    out = _app_fn(tmp_path, ["myOrderCard", "tierName"], APP_STUBS + f"var out = {json.dumps(orders_)}.map(myOrderCard);")
     assert "Order received: <bdi>&lt;b&gt;Lite&lt;/b&gt;</bdi>, 1 week. The admin will contact you." in out[0] and 'data-my-order="withdraw"' in out[0]
     assert 'data-my-order="withdraw"' in out[1]
     assert "Your order is done." in out[2] and 'data-my-order="dismiss"' in out[2] and "withdraw" not in out[2]
@@ -472,7 +472,7 @@ def _price_list(tmp_path, order=None, pick=None, sold_out_week=False):
     from tests.test_tickets_web import _app_fn
     tk = {"how_to_buy": "", "prices": {"currency": "EUR", "rate_set_at": None, "tiers": [_tier(week={"sold_out": sold_out_week})]}}
     script = APP_STUBS + f"S.pick = {json.dumps(pick)}; var out = priceListCard({json.dumps(tk)}, {json.dumps(order)});"
-    return _app_fn(tmp_path, ["priceListCard", "pickedLine", "takePick"], script)
+    return _app_fn(tmp_path, ["priceListCard", "pickedLine", "takePick", "tierName", "tierNameText"], script)
 
 
 def test_the_price_list_offers_an_order_button_per_price(tmp_path):
@@ -501,7 +501,7 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     from tests.test_tickets_web import _app_fn
     p = {"currency": "EUR", "tiers": [_tier(label=BAD)]}
     script = APP_STUBS + f"var p = {json.dumps(p)}; var out = [orderFormHtml(p, p.tiers[0], 'week', null), orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd')];"
-    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderCurrencies"], script)
+    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderCurrencies", "tierName"], script)
     assert 'name="email"' in without and 'name="email"' not in with_
     assert "This is a request, not a payment. The admin will contact you with payment details." in with_
     assert "<img" not in without and '<option value="EUR" selected' in with_ and '<option value="USD"' in with_

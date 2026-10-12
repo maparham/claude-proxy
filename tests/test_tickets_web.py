@@ -545,7 +545,7 @@ const fs = require("fs"), vm = require("vm");
 const src = fs.readFileSync(process.argv[2], "utf8");
 const i18n = fs.readFileSync(require("path").join(require("path").dirname(process.argv[2]), "i18n.js"), "utf8");
 const grab = (re) => { const m = re.exec(src); if (!m) throw new Error("not found: " + re); return m[0]; };
-const code = grab(/^const esc = .*$/m) + "\n" + grab(/^function pickedLine\([\s\S]*?^}/m);
+const code = grab(/^const esc = .*$/m) + "\n" + grab(/^function tierNameText\([\s\S]*?^}/m) + "\n" + grab(/^function pickedLine\([\s\S]*?^}/m);
 const ctx = { String, console, localStorage: { getItem: () => "en" } };
 vm.runInNewContext(i18n + "\n" + code, ctx);
 const prices = { tiers: [{ tier: "lite", label: "Lite" }, { tier: "pro", label: "<Pro>" }] };
@@ -645,8 +645,8 @@ def test_payment_notice_escapes_apostrophes_and_ampersands_only_once(tmp_path):
     stubs = ('var shown = null; var openDialog = (html) => { shown = html; };\n'
              'const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : len);\n'
              + APP_ESC + '\n')
-    payment = {"status": "failed", "error_shown": "-51: Don't & retry", "label": "Lite", "length": "month", "ref_id": "123"}
-    out = _app_fn(tmp_path, ["paymentNoticeMsg", "infoInline", "showPaymentNotice"],
+    payment = {"status": "failed", "error_shown": "-51: Don't & retry", "tier": "lite", "label": "Lite", "length": "month", "ref_id": "123"}
+    out = _app_fn(tmp_path, ["paymentNoticeMsg", "infoInline", "showPaymentNotice", "tierNameText"],
                   stubs + f"showPaymentNotice({json.dumps(payment)}); var out = shown;")
     assert "Don&#39;t &amp; retry" in out                 # escaped exactly once
     assert "&amp;amp;" not in out and "&amp;#39;" not in out
@@ -656,11 +656,11 @@ def test_payment_notice_uses_the_payment_title(tmp_path):
     import json
     stubs = ('var shown = null; var openDialog = (html) => { shown = html; };\n'
              'const lengthName = (len) => len;\n' + APP_ESC + '\n')
-    payment = {"status": "paid", "label": "Lite", "length": "week", "ref_id": "123"}
-    out = _app_fn(tmp_path, ["paymentNoticeMsg", "infoInline", "showPaymentNotice"],
+    payment = {"status": "paid", "tier": "lite", "label": "Lite", "length": "week", "ref_id": "123"}
+    out = _app_fn(tmp_path, ["paymentNoticeMsg", "infoInline", "showPaymentNotice", "tierNameText"],
                   stubs + f"showPaymentNotice({json.dumps(payment)}); var out = shown;")
     assert out.startswith("<h3>Payment</h3>") and "Could not" not in out and "123" in out
-    out = _app_fn(tmp_path, ["paymentNoticeMsg", "infoInline", "showPaymentNotice"],
+    out = _app_fn(tmp_path, ["paymentNoticeMsg", "infoInline", "showPaymentNotice", "tierNameText"],
                   stubs + f"showPaymentNotice({json.dumps(payment | {'status': 'weird'})}); var out = shown;")
     assert out is None
 

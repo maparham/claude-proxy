@@ -5,6 +5,12 @@
 // Bilingual (i18n.js, loaded first): Persian by default, English on request; applyStatic()/t() give the page's own text.
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const bdi = (v) => `<bdi>${esc(v)}</bdi>`;   // a tier's own name or the admin's "how to pay" text, inside translated copy
+// "Lite"/"Standard" are the tiers' default English names; only an exact, unrenamed match gets a Persian one, so
+// an admin who renamed a tier keeps seeing their own label.
+function tierName(t_) {
+  const defaults = { lite: "Lite", standard: "Standard" }, key = `tier.${t_.tier}`;
+  return defaults[t_.tier] === t_.label && (I18N.fa[key] || I18N.en[key]) ? t(key) : bdi(t_.label);
+}
 const LENGTHS = { day: ["home.per_day", 1], week: ["home.per_week", 7], month: ["home.per_month", 30] };
 function lengthName(len) { return t(`price.1_${len}`); }   // "1 day" / "1 week" / "1 month", shared with the dashboard's price list
 const nf0 = new Intl.NumberFormat(LOC, { useGrouping: false });
@@ -54,7 +60,7 @@ function card(t_, i, len, currency, ordering) {
   const save = savePct(t_, len);
   return `<article class="tier${i === 1 ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
     ${off > 0 ? `<span class="ribbon">${t("home.off_pct", { n: nf0.format(off) })}</span>` : ""}
-    <h3>${bdi(t_.label)}</h3>
+    <h3>${tierName(t_)}</h3>
     ${t_.compare ? `<p class="compare">${t("home.compare", { what: bdi(t_.compare) })}</p>` : ""}
     <p class="share">${t("home.share_of", { pct: nfShare.format(+t_.share_pct) })}</p>
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
@@ -136,7 +142,7 @@ function loadTurnstile() {
 function orderFormHtml(d, t_, len) {
   const l = t_.lengths[len];
   const price = (c) => money(c === "USD" ? l.usd : l.amount, c);
-  return `<h3 id="order-h">${t("ord.title", { what: t("ord.what", { label: bdi(t_.label), len: lengthName(len) }) })}</h3>
+  return `<h3 id="order-h">${t("ord.title", { what: t("ord.what", { label: tierName(t_), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(d.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form class="form-grid order-form" novalidate>
       <label>${t("name.name")}<input type="text" name="name" required maxlength="100" autocomplete="name"></label>

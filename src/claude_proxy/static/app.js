@@ -48,6 +48,17 @@ function topKeys(totals, max = 7) {
 // i18n-formatters:start
 const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 const bdi = (v) => `<bdi>${esc(v)}</bdi>`;   // a name, id or address inside translated text keeps its own direction
+// "Lite"/"Standard" are the tiers' default English names; only an exact, unrenamed match gets a Persian one, so
+// an admin who renamed a tier keeps seeing their own label.
+function tierName(id, label) {
+  const defaults = { lite: "Lite", standard: "Standard" }, key = `tier.${id}`;
+  return defaults[id] === label && (I18N.fa[key] || I18N.en[key]) ? t(key) : bdi(label);
+}
+// Same, but as plain text for an <option> or attribute, which can't hold bdi's markup.
+function tierNameText(id, label) {
+  const defaults = { lite: "Lite", standard: "Standard" }, key = `tier.${id}`;
+  return defaults[id] === label && (I18N.fa[key] || I18N.en[key]) ? t(key) : label;
+}
 const iso = (v) => `\u2068${v}\u2069`;   // the same for plain text (textContent, confirm()): first-strong isolate
 // Persian keyboards type Persian digits (U+06F0..9; Arabic ones U+0660..9, and U+066B as the decimal point);
 // number fields read them as 0-9.
@@ -513,7 +524,7 @@ function showPaymentNotice(p) {
 // The #payment/<id> result notice. infoInline() escapes the message it's handed, so this passes every
 // server value (ref_id, label, error_shown) in raw: escaping it here too would double-escape ' and & etc.
 function paymentNoticeMsg(p) {
-  const what = t("ord.what", { label: p.label, len: lengthName(p.length) });
+  const what = t("ord.what", { label: tierNameText(p.tier, p.label), len: lengthName(p.length) });
   return { paid: t("pay.paid", { ref: p.ref_id, what }), paid_unfulfilled: t("pay.unfulfilled", { ref: p.ref_id }),
     cancelled: t("pay.cancelled"), failed: t("pay.failed", { msg: p.error_shown || "" }), expired: t("pay.expired"),
     started: t("pay.pending") }[p.status];
@@ -526,13 +537,13 @@ function userLimitsCard(me, tk) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div>${t("ov.ticket_line", { label: bdi(c.label), share: fmtShare(c.share_pct) })}</div>
+      <div>${t("ov.ticket_line", { label: tierName(c.tier, c.label), share: fmtShare(c.share_pct) })}</div>
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${t("ov.today_ends", { d: fmtDur(c.day_end - Date.now() / 1000) })}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: fmtShare(b.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
       ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_pct + c.bonus_share) })}</p>` : ""}
-      ${tk.queued ? `<div class="muted">${t("ov.next", { label: bdi(tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
-    : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: bdi(tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
+      ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
+    : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${tk.how_to_buy ? bdi(tk.how_to_buy) : t("ov.ask_admin")}</div>`;
   return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? t("ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
@@ -542,7 +553,7 @@ function userLimitsCard(me, tk) {
 function pickedLine(prices, pick) {
   const tier = pick && typeof pick === "object" ? prices.tiers.find((x) => x.tier === pick.tier) : null;
   const len = tier && ["day", "week", "month"].includes(pick.length) && t(`price.a_${pick.length}`);
-  return len ? t("price.picked", { tier: esc(tier.label), len }) : "";
+  return len ? t("price.picked", { tier: esc(tierNameText(tier.tier, tier.label)), len }) : "";
 }
 function priceListCard(tk, order) {
   const p = tk.prices;
@@ -560,7 +571,7 @@ function priceListCard(tk, order) {
     ${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((tier) => `<tr><td><b>${bdi(tier.label)}</b> <span class="muted">${fmtShare(tier.share_pct)}</span><div class="muted">≈ ${esc(tier.compare)}</div>${planPct(tier)}</td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
+    ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b> <span class="muted">${fmtShare(tier.share_pct)}</span><div class="muted">≈ ${esc(tier.compare)}</div>${planPct(tier)}</td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
 }
 
@@ -570,7 +581,7 @@ const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1
 // The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
 function myOrderCard(o) {
   if (!o) return "";
-  const what = t("ord.what", { label: bdi(o.label), len: lengthName(o.length) });
+  const what = t("ord.what", { label: tierName(o.tier, o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
     return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
       <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div></div>
@@ -587,7 +598,7 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
   const payBtn = payL && !payL.sold_out
     ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payL.amount, pay.currency)) })}</button>` : "";
-  return `<h3>${t("ord.title", { what: t("ord.what", { label: bdi(tier.label), len: lengthName(len) }) })}</h3>
+  return `<h3>${t("ord.title", { what: t("ord.what", { label: tierName(tier.tier, tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form id="f-order" class="form-grid order-form">
       <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
@@ -764,7 +775,7 @@ function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "queued";
   const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
   return `<tr><td><b>${bdi(tk.user_name)}</b>${tk.user_id == null ? ` <span class="badge">${t("tk.deleted")}</span>` : ""}</td>
-    <td>${bdi(tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
+    <td>${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
     <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${tk.effective_end !== tk.ends_at ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(Math.round((tk.effective_end - tk.ends_at) / 86400)) })})</span>` : ""}</td>
     <td class="r">${esc(money(tk.amount, tk.currency))}${tk.discount_id ? `<div class="muted"><s>${fmtPrice(tk.list_usd)}</s> ${fmtPrice(tk.usd)}</div>` : `<div class="muted">${fmtPrice(tk.usd)}</div>`}</td>
     <td>${stateBadge(tk.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
@@ -773,7 +784,7 @@ function ticketRow(tk) {
 }
 async function ticketAction(act, tk, list) {
   if (act === "bonus") return bonusDialog(tk, list);
-  if (!confirmInline(t("tk.confirm_cancel", { name: iso(tk.user_name), tier: iso(tk.tier) }))) return;
+  if (!confirmInline(t("tk.confirm_cancel", { name: iso(tk.user_name), tier: iso(tierNameText(tk.tier, tk.tier)) }))) return;
   try {
     const r = await api(`/api/admin/tickets/${tk.id}/cancel`, { method: "POST", body: {} });
     render();   // the ticket is cancelled either way, and any queued tickets moved
@@ -788,7 +799,7 @@ function grantDialog(users, pre = null) {
   const d = openDialog(`<h3>${pre ? t("tk.grant_for_order", { id: esc(pre.order_id) }) : t("tk.grant")}</h3>
     <form id="f-grant" class="form-grid">
       <label>${t("app.user")}<select name="user" required${pre ? " disabled" : ""}>${pickable.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
-      <label>${t("price.tier")}<select name="tier">${Object.entries(T.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(x.label)} · ${fmtShare(x.share_pct)}</option>`).join("")}</select></label>
+      <label>${t("price.tier")}<select name="tier">${Object.entries(T.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))} · ${fmtShare(x.share_pct)}</option>`).join("")}</select></label>
       <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
       <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label>${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
@@ -844,7 +855,7 @@ function bonusDialog(tk, list) {
   const queued = tk.user_id == null ? [] : list.filter((x) => x.user_id === tk.user_id && x.id !== tk.id && x.state === "queued" && x.starts_at >= tk.effective_end)
     .sort((a, b) => a.starts_at - b.starts_at);
   const moves = (days) => (queued.length && queued[0].starts_at < tk.effective_end + days * 86400 ? queued.length : 0);
-  const d = openDialog(`<h3>${t("tk.bonus_title", { name: bdi(tk.user_name), tier: bdi(tk.tier) })}</h3>
+  const d = openDialog(`<h3>${t("tk.bonus_title", { name: bdi(tk.user_name), tier: tierName(tk.tier, tk.tier) })}</h3>
     <p class="sub">${t("tk.bonus_sub")}</p>
     <form id="f-bonus" class="form-grid">
       <label>${t("tk.extra_share")}<input type="text" inputmode="decimal" dir="ltr" name="share_pct" min="0" step="0.1" value="0"></label>
@@ -895,7 +906,7 @@ function orderRow(o) {
     : `<div class="muted">${t("ord.visitor")}</div>`;
   return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
     <td><b>${bdi(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${bdi(o.email)}</a></div>${account}</td>
-    <td class="nowrap">${bdi(o.label)} · ${lengthName(o.length)}</td>
+    <td class="nowrap">${tierName(o.tier, o.label)} · ${lengthName(o.length)}</td>
     <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
     <td class="order-msg">${o.message ? bdi(o.message) : `<span class="muted">—</span>`}</td>
     <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">${t("ord.ticket_n", { id: esc(o.ticket_id) })}</div>` : ""}</td>
@@ -987,13 +998,13 @@ async function renderPricing(main) {
       </div>
       <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
-        ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${bdi(x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
+        ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
           `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">${t("app.save")}</button></form></td>`).join("")}</tr>`).join("")}
         </tbody></table></div></div>
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
-        <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(x.label)}</option>`).join("")}</select></label>
+        <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))}</option>`).join("")}</select></label>
         <label>${t("tk.length")}<select name="length">${Object.keys(p.lengths).map((l) => `<option value="${esc(l)}">${lengthName(l)}</option>`).join("")}</select></label>
         <label>${t("pr.price_usd")}<input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" required></label>
         <label>${t("tk.from")}<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
@@ -1001,7 +1012,7 @@ async function renderPricing(main) {
         <button class="btn primary" type="submit">${t("pr.create_discount")}</button></form>
       <div class="error" id="disc-err"></div>
       <div class="table-wrap" style="margin-top:12px"><table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.length")}</th><th class="r">USD</th><th>${t("tk.period")}</th><th>${t("tk.state")}</th><th></th></tr></thead><tbody>
-      ${p.discounts.map((x) => `<tr><td>${bdi(p.tiers[x.tier]?.label || x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
+      ${p.discounts.map((x) => `<tr><td>${p.tiers[x.tier] ? tierName(x.tier, p.tiers[x.tier].label) : esc(x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
         <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">${t("app.cancel_ticket")}</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("pr.no_discounts")}</td></tr>`}
       </tbody></table></div></div>
   </section>`;
