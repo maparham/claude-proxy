@@ -15,7 +15,6 @@ const LENGTHS = { day: ["home.per_day", 1], week: ["home.per_week", 7], month: [
 function lengthName(len) { return t(`price.1_${len}`); }   // "1 day" / "1 week" / "1 month", shared with the dashboard's price list
 const nf0 = new Intl.NumberFormat(LOC, { useGrouping: false });
 const nf2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2, useGrouping: false });
-const nfShare = new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 });
 let data = null;
 let length = "week";
 let currency = null;   // set to the page's own currency (IRT today) once /api/pricing answers
@@ -62,7 +61,7 @@ function card(t_, i, len, currency, ordering) {
     ${off > 0 ? `<span class="ribbon">${t("home.off_pct", { n: nf0.format(off) })}</span>` : ""}
     <h3>${tierName(t_)}</h3>
     ${t_.compare ? `<p class="compare">${t("home.compare", { what: bdi(t_.compare) })}</p>` : ""}
-    <p class="share">${t("home.share_of", { pct: nfShare.format(+t_.share_pct) })}</p>
+    ${t_.compare ? `<p class="share">${t("home.share_of", { pct: nf0.format(Math.round((l.days / 30) * 100)), what: bdi(t_.compare) })}</p>` : ""}
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
     <p class="per">${t(LENGTHS[len][0])}</p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
