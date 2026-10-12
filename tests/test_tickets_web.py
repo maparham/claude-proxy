@@ -437,7 +437,7 @@ const ctx = {
 };
 vm.runInNewContext(i18n + "\n" + src, ctx);
 setTimeout(() => {
-  const out = { howToBuy: el("how-to-buy").innerHTML, pricing: el("cards").innerHTML };
+  const out = { pricing: el("cards").innerHTML };
   if (!fail) {
     out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
     out.save = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.savePct(data.tiers[0], k)]));
@@ -533,12 +533,6 @@ def test_home_highlights_the_second_tier_only(tmp_path):
     first, second = r["cards"]["week"].split("</article>")[:2]
     assert "featured" not in first and "featured" in second
     assert "featured" not in _run_home(tmp_path)["cards"]["week"]   # one tier: nothing highlighted
-
-
-def test_home_fills_how_to_buy_with_a_fallback(tmp_path):
-    assert _run_home(tmp_path)["howToBuy"] == "Ask the gateway admin."
-    out = _run_home(tmp_path, _prices(how_to_buy="Bank transfer, then email."))["howToBuy"]
-    assert out == "<bdi>Bank transfer, then email.</bdi>"   # the admin's own text, isolated like any other admin note
 
 
 def test_home_escapes_tier_text(tmp_path):

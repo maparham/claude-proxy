@@ -32,10 +32,6 @@ body.home { font-size: 15px; }
 .tier .get[aria-disabled="true"] { cursor: not-allowed; color: var(--muted); }
 .ribbon { position: absolute; top: 14px; inset-inline-end: 14px; font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--s2); color: #fff; }
 .rate-note { font-size: 13px; margin-top: 16px; }
-.faq { padding: 48px 0; border-top: 1px solid var(--border); max-width: 44rem; }
-.faq details { border-bottom: 1px solid var(--border); padding: 14px 0; }
-.faq summary { cursor: pointer; font-weight: 600; }
-.faq p { margin: 10px 0 0; color: var(--ink-2); line-height: 1.55; }
 .home-foot { padding: 32px 16px 48px; font-size: 13px; color: var(--muted); }
 .home-foot a { color: var(--muted); }
 @media (max-width: 720px) {

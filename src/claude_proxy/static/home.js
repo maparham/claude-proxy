@@ -211,11 +211,6 @@ document.getElementById("length-toggle").addEventListener("click", (e) => {
 fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
   data = d;
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
-  // The admin's own free-text answer (any language they typed it in) stays isolated, like other admin-written notes.
-  document.getElementById("how-to-buy").innerHTML = d.how_to_buy ? bdi(d.how_to_buy) : t("ov.ask_admin");
   render(); setInterval(tick, 1000);
 })
-  .catch(() => {
-    document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`;
-    document.getElementById("how-to-buy").innerHTML = t("ov.ask_admin");
-  });
+  .catch(() => { document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`; });

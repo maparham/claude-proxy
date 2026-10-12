@@ -91,7 +91,7 @@ def test_the_home_page_offers_the_switch_and_marks_its_text():
     html = (STATIC / "home.html").read_text()
     assert html.startswith('<!doctype html>\n<html lang="fa" dir="rtl">')
     assert 'id="lang-toggle"' in html and '/static/i18n.js' in html
-    assert html.count("data-i18n") >= 20
+    assert html.count("data-i18n") >= 12
 
 
 def test_the_privacy_page_offers_the_switch_and_marks_its_text():
@@ -102,7 +102,7 @@ def test_the_privacy_page_offers_the_switch_and_marks_its_text():
 
 
 # Elements whose text is filled by *.js at runtime (via t()), not by applyStatic()'s data-i18n pass.
-_HOME_DYNAMIC_IDS = {"cards", "rate-note", "how-to-buy", "privacy-retention"}
+_HOME_DYNAMIC_IDS = {"cards", "rate-note", "privacy-retention"}
 _HOME_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
 
