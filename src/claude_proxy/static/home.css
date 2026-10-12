@@ -1,9 +1,10 @@
 /* The public home page, on top of app.css's tokens and base styles. */
 body.home { font-size: 15px; }
 .home-top, .home main, .home-foot { max-width: 1040px; margin: 0 auto; padding: 0 16px; }
-.home-top { display: flex; align-items: center; justify-content: space-between; height: 64px; gap: 12px; }
+/* The nav toolbar stays on the visual right in both languages, so each dir gets the flex edge that lands there. */
+.home-top { display: flex; align-items: center; justify-content: flex-end; height: 64px; gap: 12px; }
+html[dir="rtl"] .home-top { justify-content: flex-start; }
 .home-top-right { display: flex; align-items: center; gap: 8px; }
-.home-brand { font-weight: 650; letter-spacing: -0.01em; }
 .home h2 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 20px; }
 .hero { padding: 72px 0 56px; max-width: 44rem; }
 .hero h1 { font-size: clamp(32px, 5vw, 52px); line-height: 1.06; letter-spacing: -0.03em; font-weight: 680; margin: 0 0 18px; text-wrap: balance; }
