@@ -156,6 +156,8 @@ usual reload).
     refuses with 409 and the dialog offers the existing account instead.
   - Creating an account named after an unverified address is safe: only the owner of that address can later sign in to
     it through Clerk, because `clerk_account` matches the verified sign-in address against the name.
+  - The created account gets a $0 `cost_total` limit, so it is served nothing until a ticket is granted; the first
+    ticket removes it, as it does a sign-up credit.
   - The link is stored in `user_id` before the grant dialog opens.
 - **Grant with `order_id`.** `POST /api/admin/tickets` accepts an optional `order_id`. In the same transaction as the
   grant, the server checks that the order is open and that its `user_id` equals the grant's user; otherwise it refuses
