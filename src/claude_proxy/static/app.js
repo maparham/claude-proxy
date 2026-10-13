@@ -994,17 +994,23 @@ async function renderPricing(main) {
     <p class="lede">${t("pr.lede")}</p>
     <div class="grid cols-2">
       <div class="card"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
-        ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
+        <form id="f-rates">
+        ${rates.map((r) => `<div class="limit-row"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
           <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
-          <span class="nowrap">${t("pr.one_usd")} <input type="text" inputmode="decimal" dir="ltr" name="rate" value="${r.rate ?? ""}" placeholder="${esc(t("pr.todays_rate"))}" aria-label="${esc(`${t("pr.one_usd")} ${r.currency}`)}" required style="width:110px"> <b>${esc(r.currency)}</b> <button class="btn small" type="submit">${t("app.save")}</button></span></form>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
+          <span class="nowrap">${t("pr.one_usd")} <input type="text" inputmode="decimal" dir="ltr" name="rate" data-cur="${esc(r.currency)}" data-init="${r.rate ?? ""}" value="${r.rate ?? ""}" placeholder="${esc(t("pr.todays_rate"))}" aria-label="${esc(`${t("pr.one_usd")} ${r.currency}`)}" required style="width:110px"> <b>${esc(r.currency)}</b></span></div>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
+        <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
         <div class="error" id="rates-err"></div>
+        </form>
       </div>
       <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
+        <form id="f-prices">
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
-          `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">${t("app.save")}</button></form></td>`).join("")}</tr>`).join("")}
+          `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="usd" data-tier="${esc(k)}" data-length="${esc(l)}" data-init="${price(k, l)}" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
-        <div class="error" id="prices-err"></div></div>
+        <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
+        <div class="error" id="prices-err"></div>
+        </form></div>
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
@@ -1021,8 +1027,23 @@ async function renderPricing(main) {
       </tbody></table></div></div>
   </section>`;
   const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
-  main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }, $("#rates-err")); }));
-  main.querySelectorAll(".price-form").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: num(f.usd.value) }, $("#prices-err")); }));
+  const inputChanged = (input) => {
+    const v = input.value.trim();
+    const n = num(v);
+    if (!Number.isFinite(n)) return true; // let the server explain, inline
+    if (input.dataset.init === "" || input.dataset.init == null) return v !== "";
+    return n !== Number(input.dataset.init);
+  };
+  const saveChanged = async (form, name, bodyOf, path, errEl) => {
+    errEl.textContent = "";
+    const bodies = [];
+    form.querySelectorAll(`input[name="${name}"]`).forEach((input) => { if (inputChanged(input)) bodies.push(bodyOf(input)); });
+    if (!bodies.length) return;
+    for (const body of bodies) { try { await api(path, { method: "POST", body }); } catch (e) { errEl.textContent = e.message; return; } }
+    render();
+  };
+  $("#f-rates").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "rate", (input) => ({ currency: input.dataset.cur, rate: num(input.value) }), "/api/admin/rates", $("#rates-err")); };
+  $("#f-prices").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: num(input.value) }), "/api/admin/prices", $("#prices-err")); };
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
 }

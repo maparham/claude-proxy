@@ -659,12 +659,16 @@ def test_admin_tips_no_longer_point_at_the_old_pricing_page():
 
 def test_price_and_rate_saves_fail_inline_without_resetting_the_grid():
     # A refused price/rate save used to open a modal dialog whose close re-rendered the grid, wiping what the
-    # admin had typed; like discounts, both forms now report into an inline error and keep their inputs.
+    # admin had typed; each card now has a single Save reporting into an inline error, keeping all inputs,
+    # and unchanged values are skipped so one save doesn't spam the audit log.
     from pathlib import Path
     src = (Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js").read_text()
     assert 'id="prices-err"' in src and 'id="rates-err"' in src
-    assert 'post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: num(f.usd.value) }, $("#prices-err"))' in src
-    assert 'post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }, $("#rates-err"))' in src
+    assert 'id="f-prices"' in src and 'id="f-rates"' in src
+    assert "price-form" not in src and "rate-row" not in src   # no per-cell Save buttons left
+    assert '"/api/admin/prices", $("#prices-err")' in src
+    assert '"/api/admin/rates", $("#rates-err")' in src
+    assert "inputChanged" in src   # only changed cells are posted
 
 
 def test_home_shows_toman_as_whole_numbers(tmp_path):
