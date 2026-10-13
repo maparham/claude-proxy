@@ -92,8 +92,8 @@ def _hours(share: float, row) -> float | None:
 
 
 def hours_hint(conn: sqlite3.Connection, share_pct: float) -> dict:
-    """Per family: hours of steady use a tier share buys per 5-hour window and per ticket day (share ÷ 7 against the
-    weekly bucket), or None while the family has under 50 busy hours of data."""
+    """Per family: hours of steady use a tier share buys per 5-hour window and per weekly piece (share ÷ 7 against the
+    weekly bucket, spendable in fewer days), or None while the family has under 50 busy hours of data."""
     rows = {(r["family"], r["bucket"]): r for r in conn.execute("SELECT * FROM usage_estimates")}
     return {fam: {"per_5h": _hours(share_pct, rows.get((fam, "5h"))), "per_day": _hours(share_pct / 7, rows.get((fam, "7d")))}
             for fam in FAMILIES}

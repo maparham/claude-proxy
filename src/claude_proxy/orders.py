@@ -102,11 +102,15 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
 
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
-           user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None) -> dict:
+           user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
+           terms_version: str | None = None) -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
     Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
-    `notify=False`: no new-order emails (an order paid online)."""
+    `terms_version`: the ticket terms the buyer ticked; equality-checked against tickets.TERMS_VERSION, missing or
+    stale → 400 (2026-10-13 spec, §3). `notify=False`: no new-order emails (an order paid online)."""
     now = _now(now)
+    if terms_version != tickets.TERMS_VERSION:
+        raise OrderError(400, tickets.TERMS_CHANGED)
     if tier not in cfg.tickets.tiers:
         raise OrderError(400, f"Unknown tier {tier!r}.")
     if length not in LENGTHS:
@@ -152,12 +156,12 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             admin_mail, buyer_mail = "pending", "skipped" if sent >= BUYER_MAILS else "pending"
         cur = conn.execute(
             "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, quoted_amount, "
-            "message, status, ip, admin_mail, buyer_mail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?)",
+            "message, status, ip, admin_mail, buyer_mail, terms_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version))
         oid = cur.lastrowid
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
-                                                              "visitor": user_id is None})
+                                                              "visitor": user_id is None, "terms_version": terms_version})
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -262,7 +266,7 @@ def buyer_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
              f"Price at today's rate: {_amount(order)}.", ""]
     if cfg.tickets.how_to_buy:
         lines += ["How to pay:", cfg.tickets.how_to_buy, ""]
-    lines.append("This is a request; the admin will contact you.")
+    lines += [tickets.terms_text(), "This is a request; the admin will contact you."]
     return f"Your order: {label} {order['length']}", "\n".join(lines) + "\n"
 
 

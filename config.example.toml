@@ -58,8 +58,8 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # output = 5.0
 
 # Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). Present = enabled: the dashboard gains
-# Tickets and Pricing tabs and the home page at / shows the public prices. Shares live here because changing one changes capacity; prices
-# are seeded from default_usd on first start and edited in the dashboard afterwards.
+# Tickets and Pricing tabs and the home page at / shows the public prices. Shares and prices
+# are seeded from here on first start and edited in the dashboard afterwards; existing tickets keep what they were sold with.
 # [tickets]
 # how_to_buy = "Send the amount by bank transfer to … and email the admin."
 # max_sold_pct = 80            # tickets and bonuses together may reserve at most this; the rest is headroom

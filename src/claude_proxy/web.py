@@ -322,7 +322,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
         out["tickets"] = {"enabled": cfg.tickets.enabled}
         if is_admin(user) and cfg.tickets.enabled:
-            out["tickets"] |= {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
+            out["tickets"] |= {"tiers": tickets.effective_tiers(conn, cfg),
                                "currencies": list(tickets.currencies(cfg)), "lengths": LENGTHS,
                                "max_sold_pct": cfg.tickets.max_sold_pct, "how_to_buy": cfg.tickets.how_to_buy,
                                "orders_new": orders.new_count(conn)}   # the Orders tab's badge
@@ -897,7 +897,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def prices(request: Request):
         admin(request)
         need_tickets()
-        return {"tiers": {k: {"label": t.label, "share_pct": t.share_pct, "compare": t.compare} for k, t in cfg.tickets.tiers.items()},
+        return {"tiers": tickets.effective_tiers(conn, cfg),
+                "shares": tickets.tier_shares(conn),
                 "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True)}
 
     @app.post("/api/admin/prices")
@@ -908,6 +909,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), _number(body.get("usd"), "The price"),
                     actor["id"])
         return {"ok": True}
+
+    @app.post("/api/admin/shares")
+    async def set_share(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        share = ticket_call(tickets.set_share, conn, cfg, str(body.get("tier", "")), _number(body.get("share_pct"), "The share"),
+                            actor["id"])
+        return {"ok": True, "tier": str(body.get("tier", "")), "share_pct": share, "per_day": share / 7}
 
     @app.post("/api/admin/discounts")
     async def create_discount(request: Request):
@@ -973,10 +983,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(400, "Preview the ticket first and send the usd and rate it showed.")
         quoted = {k: _number(body[k], k) for k in ("usd", "rate")}
         # Granted from an order: it is marked done in the same transaction, or the grant is refused (409, OrderError).
+        # With order_id the order row's stored terms version governs (no new tick); a direct grant needs the tick.
         order_id = None if body.get("order_id") in (None, "") else _number(body["order_id"], "order_id", whole=True)
+        terms_version = body.get("terms_version") if order_id is None else None
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
-                        expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id)
+                        expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version)
         return {"ok": True, "ticket": t}
 
     @app.post("/api/admin/tickets/{tid}/cancel")
@@ -1018,7 +1030,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         now = time.time()
         # `now`: the page counts discounts down on the server's clock, so a visitor's clock ahead of it can't loop reloads.
-        out = {**tickets.price_table(conn, cfg, now, display_currency()), "now": now}
+        out = {**tickets.price_table(conn, cfg, now, display_currency()), "now": now, "terms_version": tickets.TERMS_VERSION}
         if cfg.tickets.turnstile_on():   # public by design: the home page's order dialog renders the widget with it
             out["turnstile_site_key"] = cfg.tickets.turnstile_site_key
         return out
@@ -1042,9 +1054,18 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         cur = st["current"]
         if cur:
             active = tickets.active_bonuses(conn, cur["id"], now)
+            week = tickets.week_bounds(conn, cfg, now)
+            week_end = week[1] if week is not None else tickets.current_day(cur, now)[1]   # display-only fallback; enforcement is 503 then
+            week_piece = None
+            if week is not None:
+                overlap = max(0.0, min(week[1], cur["effective_end"]) - max(week[0], cur["starts_at"]))
+                week_piece = cur["share_pct"] * overlap / tickets.DAY / 7 + sum(
+                    b["share_pct"] * max(0.0, min(week[1], b["ends_at"]) - max(week[0], b["starts_at"])) / tickets.DAY / 7
+                    for b in active)
             out["current"] = {"tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
-                              "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "day_end": tickets.current_day(cur, now)[1],
+                              "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
+                              "week_piece": week_piece,
                               "bonus_share": tickets.bonus_share(conn, cur["id"], now),
                               "bonuses": [{"share_pct": b["share_pct"], "note": b["note"], "ends_at": b["ends_at"]} for b in active]}
             # Extra days with their note; a bonus that also adds a share running now is shown with that share instead.
@@ -1057,6 +1078,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         out["prices"] = tickets.price_table(conn, cfg, now, currency)
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
+        out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
         out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY)}
                       if payments.on(cfg) and payments.rate_ok(conn, now) else None)
@@ -1075,7 +1097,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     def place_order(body: dict, **kw) -> dict:
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
-                        currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""), **kw)
+                        currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""),
+                        terms_version=body.get("terms_version"), **kw)
         if cfg.email is not None:   # after the response: a slow mail server never delays it
             task = asyncio.create_task(orders.dispatch(conn, cfg, o["id"]))
             _mail_tasks.add(task)
@@ -1130,7 +1153,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         # As for an order: the account email, else one typed in the dialog, stored on the order only.
         email = user["email"] or str(body.get("email") or "")
-        return await payments.start(conn, cfg, user, str(body.get("tier") or ""), str(body.get("length") or ""), email)
+        return await payments.start(conn, cfg, user, str(body.get("tier") or ""), str(body.get("length") or ""), email,
+                                    terms_version=body.get("terms_version"))
 
     @app.get("/pay/callback")
     async def pay_callback(Authority: str = "", Status: str = ""):
@@ -1343,7 +1367,7 @@ def _fmt_pct(v) -> str:
 
 
 _PERIOD = {"minute": "per min", "5h": "5h", "daily": "daily", "weekly": "weekly", "monthly": "monthly", "total": "credit"}
-_SHARE_PERIOD = {"5h": "5h", "7d": "week", "day": "today"}
+_SHARE_PERIOD = {"5h": "5h", "7d": "week"}
 
 
 def _amount(v: float, unit: str) -> str:
@@ -1403,7 +1427,7 @@ def _status_line(user, states, account) -> str:
             continue
         if base == "share":
             label = f"{_SHARE_PERIOD.get(period, period)} share"
-            used = (lambda v: f"{v:.1f}") if period == "day" else (lambda v: f"{v:.0f}")
+            used = lambda v: f"{v:.0f}"
         else:
             label, used = _PERIOD.get(period, period), lambda v, u=s.unit: _amount(v, u)
         if s.skipped or s.current is None:

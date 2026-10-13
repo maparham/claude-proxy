@@ -148,6 +148,8 @@ function orderFormHtml(d, t_, len) {
         `<option value="${esc(c)}"${c === d.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3"></textarea></label>
       <div class="turnstile wide"></div>
+      <div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l2")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
+        <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <p class="hint">${t("ord.not_payment")}</p>
       <button class="btn primary" type="submit">${t("ord.send")}</button>
     </form>
@@ -182,6 +184,7 @@ function openOrder(tierId, len) {
     e.preventDefault();
     err.textContent = "";
     if (!f.reportValidity()) return;
+    if (!f.terms.checked) { err.textContent = t("ord.terms_needed"); return; }
     if (!token) { err.textContent = t("home.wait_for_verification"); return; }
     go.disabled = true;
     try {
@@ -189,7 +192,7 @@ function openOrder(tierId, len) {
       try {
         r = await fetch("/api/orders", { method: "POST", credentials: "omit", headers: { "content-type": "application/json" },
           body: JSON.stringify({ tier: t_.tier, length: len, currency: f.currency.value, name: f.name.value, email: f.email.value,
-                                 message: f.message.value, turnstile_token: token }) });
+                                 message: f.message.value, turnstile_token: token, terms_version: data.terms_version }) });
       } catch { throw new Error(t("home.order_not_sent")); }
       let body = null;
       try { body = await r.json(); } catch { /* not JSON */ }

@@ -11,7 +11,7 @@ from tests.tickets_helpers import DAY, NOW, seeded, user
 
 def test_delete_refused_with_a_live_ticket_and_keeps_records_after(db):
     conn, cfg, ids = seeded(db)
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
     dbm.revoke(conn, ids["alice"])
     with pytest.raises(ValueError, match="active or queued ticket"):
         dbm.delete_user(conn, ids["alice"], ids["admin"], now=NOW + 10)
@@ -27,7 +27,8 @@ async def test_web_delete_needs_the_typed_name(db, cfg):
     cfg.tickets = tcfg_.tickets
     gw = make_gateway(cfg, conn)
     # the endpoint uses the wall clock, so the ticket must have ended in real time
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY,
+                      terms_version="v1")
     dbm.revoke(conn, ids["alice"])
     async with admin_client(gw) as c:
         r = await c.post(f"/api/admin/users/{ids['alice']}/delete", json={})

@@ -236,24 +236,41 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     return _finish(st)
 
 
-def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> LimitState:
-    limit = share / 7
-    st = LimitState("share_day", "*", f"{limit:g}", "pct", limit=limit, estimated=True, tier=label,
-                    resets_at=day_end, reset_in=max(1, math.ceil(day_end - now)))
+def _ticket_7d(conn, cfg, user_id, ticket, label, now) -> LimitState:
+    """The ticket's prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1).
+
+    Cap = ticket share × days of this week the ticket covers ÷ 7 + active bonus pieces. Measured from the
+    user's own weighted tokens since max(week_start, ticket starts_at) at the 7d observed rate — the same
+    estimator share_day used, only the window start moves. Unknown week (no resets_at ever) → NO_RATE."""
+    week = tickets.week_bounds(conn, cfg, now)
+    if week is None:
+        st = LimitState("share_7d", "*", "", "pct", limit=None, estimated=True, tier=label)
+        st.skipped, st.no_live_data = NO_RATE, False
+        return st
+    week_start, week_end = week
+    t_start, t_end = ticket["starts_at"], ticket["effective_end"]
+    overlap = max(0.0, min(week_end, t_end) - max(week_start, t_start))
+    cap = ticket["share_pct"] * overlap / DAY / 7
+    for b in tickets.active_bonuses(conn, ticket["id"], now):
+        bover = max(0.0, min(week_end, b["ends_at"]) - max(week_start, b["starts_at"]))
+        cap += b["share_pct"] * bover / DAY / 7
+    st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=cap, estimated=True, tier=label,
+                    resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)))
     # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
-    # whole-percent steps, and a Lite day (0.71 points) is smaller than one step, so the share attributed since the day
-    # began would read 0 for most of a day and then jump. The cheap staleness check only decides the "no live data" mark.
+    # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since
+    # the piece began would read 0 for most of a week and then jump. The cheap staleness check only decides the "no live data" mark.
+    piece_start = max(week_start, t_start)
     newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
     st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
-    used = _weighted_since(conn, cfg, user_id, day_start, now)
+    used = _weighted_since(conn, cfg, user_id, piece_start, now)
     if not used and not st.no_live_data:
-        st.current = 0.0   # live data and nothing used today: no rate needed, so a young account isn't refused
+        st.current = 0.0   # live data and nothing used in this piece: no rate needed, so a young account isn't refused
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
     if rate is None and not st.no_live_data:
         # A young account: utilization has never risen a whole point, so there is no rate yet. Live snapshots still say
         # who moved it, and until the first rise that is nobody, so a lone first user isn't locked out by their own usage.
-        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, day_start, now)
+        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, piece_start, now)
         return _finish(st)
     if rate is None:
         st.skipped, st.no_live_data = NO_RATE, False
@@ -263,16 +280,15 @@ def _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now) -> Li
 
 
 def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | None = None) -> list[LimitState]:
-    """The two share limits a ticket builds (spec section 7): share_5h against Anthropic's 5-hour window, and share_day,
-    one seventh of the share, against the user's weighted tokens since the current ticket day began at the weekly
-    bucket's observed rate."""
+    """The two share limits a ticket builds (2026-10-13 spec, §1): share_5h against Anthropic's 5-hour window, and
+    share_7d, the ticket's prorated piece of Anthropic's current weekly window, against the user's weighted tokens
+    since the piece began at the weekly bucket's observed rate."""
     t = ticket or tickets.covering(conn, user_id, now)
     if t is None:
         return []
-    share = t["share_pct"] + tickets.bonus_share(conn, t["id"], now)
     label = cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]
-    day_start, day_end = tickets.current_day(t, now)
-    return [_ticket_5h(conn, cfg, user_id, share, label, now), _ticket_day(conn, cfg, user_id, share, label, day_start, day_end, now)]
+    share_5h = t["share_pct"] + tickets.bonus_share(conn, t["id"], now)
+    return [_ticket_5h(conn, cfg, user_id, share_5h, label, now), _ticket_7d(conn, cfg, user_id, t, label, now)]
 
 
 def _no_ticket_message(conn, cfg, user_id, now) -> str:
@@ -309,8 +325,8 @@ def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | Non
     return out
 
 
-SHARE_LABELS = {"share_5h": "5-hour limit", "share_7d": "weekly limit", "share_day": "today's share"}
-USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit", "share_day": "today_limit"}   # what a non-admin calls a share limit
+SHARE_LABELS = {"share_5h": "5-hour limit", "share_7d": "weekly limit"}
+USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit"}   # what a non-admin calls a share limit
 TICKET = "ticket"                  # rejected_by: a ticket-gated user with no active ticket, or on a third-party model
 TICKET_NO_DATA = "ticket_no_data"  # rejected_by: the 503 while no usage rate was ever observed
 NO_RATE = "no usage rate observed yet"
@@ -322,9 +338,9 @@ def _describe(st: LimitState) -> str:
     # their own allowance, used up.
     scope = f" for models {st.scope}" if st.scope != "*" else ""
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
-    if st.kind == "share_day":
-        return (f"Today's share of your {st.tier} ticket is used up. It resets at "
-                f"{time.strftime('%H:%M UTC', time.gmtime(st.resets_at))}.")
+    if st.kind == "share_7d":
+        return (f"Weekly share of your {st.tier} ticket is used up. It resets at "
+                f"{_date(st.resets_at) if st.resets_at else 'the next weekly reset'}.")
     if st.kind in SHARE_LABELS:
         return f"Gateway {SHARE_LABELS[st.kind]}{scope} reached: {st.pct or 0:.0f}% used{wait}."
     if st.kind in TOTALS:

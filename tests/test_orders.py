@@ -8,12 +8,13 @@ from tests.tickets_helpers import DAY, NOW, seeded, user
 def visitor(conn, cfg, n=0, now=NOW, **kw):
     """A visitor order: a fresh IP and email per `n` unless given."""
     args = {"tier": "lite", "length": "week", "currency": "EUR", "name": f"Visitor {n}", "email": f"v{n}@example.com",
-            "ip": f"10.0.0.{n}"} | kw
+            "ip": f"10.0.0.{n}", "terms_version": "v1"} | kw
     return orders.create(conn, cfg, now=now, **args)
 
 
 def signed_in(conn, cfg, uid, email="alice@example.com", now=NOW, **kw):
-    args = {"tier": "lite", "length": "week", "currency": "EUR", "name": user(conn, uid)["name"], "email": email} | kw
+    args = {"tier": "lite", "length": "week", "currency": "EUR", "name": user(conn, uid)["name"], "email": email,
+            "terms_version": "v1"} | kw
     return orders.create(conn, cfg, user_id=uid, now=now, **args)
 
 
@@ -48,7 +49,7 @@ def test_orders_table_has_the_spec_columns(db):
     cols = {r[1] for r in db[1].execute("PRAGMA table_info(orders)")}
     assert cols == {"id", "created_at", "updated_at", "user_id", "name", "email", "tier", "length", "currency", "quoted_usd",
                     "quoted_rate", "quoted_amount", "message", "status", "admin_note", "ticket_id", "ip", "admin_mail",
-                    "buyer_mail", "seen_at"}
+                    "buyer_mail", "terms_version", "seen_at"}
 
 
 # ---------- create ----------
@@ -125,7 +126,7 @@ def test_html_in_name_and_message_is_stored_verbatim(env):
 def test_sold_out_is_refused_with_409(env):
     conn, cfg, ids = env
     cfg.tickets.max_sold_pct = 5
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=NOW)
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=NOW, terms_version="v1")
     with refused(409, "sold out") as e:
         visitor(conn, cfg)
     assert e.value.status == 409
@@ -234,6 +235,41 @@ def test_missing_order_is_404(env):
     assert e.value.status == 404
     with refused(404):
         orders.set_status(conn, ids["admin"], 999, "contacted")
+
+
+# ---------- ticket terms (2026-10-13 spec, section 3) ----------
+
+def test_order_without_terms_is_400(env):
+    conn, cfg, ids = env
+    with refused(400, "Ticket terms have changed") as e:
+        orders.create(conn, cfg, tier="lite", length="week", currency="EUR", name="V", email="v@example.com", ip="1.2.3.4")
+    assert e.value.status == 400
+    with refused(400, "Ticket terms have changed"):
+        visitor(conn, cfg, terms_version="v0")
+    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
+
+
+def test_order_stores_the_terms_and_audits_them(env):
+    conn, cfg, ids = env
+    o = visitor(conn, cfg)
+    assert o["terms_version"] == "v1"
+    detail = conn.execute("SELECT detail_json FROM audit_log WHERE action='order_new'").fetchone()[0]
+    assert '"terms_version": "v1"' in detail
+
+
+def test_direct_grant_needs_current_terms_but_an_order_grant_uses_the_orders(env, monkeypatch):
+    conn, cfg, ids = env
+    o = signed_in(conn, cfg, ids["alice"])
+    monkeypatch.setattr(tickets, "TERMS_VERSION", "v2")   # terms changed after the order was placed
+    with pytest.raises(tickets.TicketError, match="Ticket terms have changed"):
+        tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
+    with pytest.raises(orders.OrderError, match="Ticket terms have changed"):
+        signed_in(conn, cfg, add_user(conn, ids, "bob"), email="bob@example.com")
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR",
+                      order_id=o["id"], now=NOW + 60)   # the in-flight v1 order still grants, no new tick
+    assert t["id"] == orders.get(conn, o["id"])["ticket_id"]
+    detail = conn.execute("SELECT detail_json FROM audit_log WHERE action='ticket_grant'").fetchone()[0]
+    assert '"terms_version": "v1"' in detail
 
 
 # ---------- retention ----------
@@ -475,6 +511,8 @@ def test_buyer_mail_carries_nothing_the_buyer_typed(mailing):
     assert subject == "Your order: Lite week"
     assert "Mallory" not in body and "Buy now" not in body and "spam" not in body and "<script>" not in body
     assert "7.50 EUR" in body and cfg.tickets.how_to_buy in body and "This is a request; the admin will contact you." in body
+    for line in tickets.TERMS_LINES:
+        assert line in body
 
 
 def fake_send(monkeypatch, fail=False):
@@ -526,6 +564,7 @@ async def test_dispatch_skips_off_and_skipped(mailing, monkeypatch):
 # ---------- grants that close an order ----------
 
 def grant(conn, cfg, ids, uid, order_id, **kw):
+    kw.setdefault("terms_version", "v1")
     return tickets.grant(conn, cfg, ids["admin"], user(conn, uid), "lite", "week", "EUR", order_id=order_id, now=NOW + 60, **kw)
 
 
@@ -572,7 +611,7 @@ def test_a_failed_grant_leaves_the_order_unchanged(env):
     conn, cfg, ids = env
     o = signed_in(conn, cfg, ids["alice"])
     cfg.tickets.max_sold_pct = 5
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=NOW)
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=NOW, terms_version="v1")
     with pytest.raises(tickets.CapacityError):
         grant(conn, cfg, ids, ids["alice"], o["id"])
     assert orders.get(conn, o["id"])["status"] == "new"

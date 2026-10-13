@@ -29,6 +29,7 @@ class Gateway:
         self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)
+            tickets.seed_shares(conn, cfg)
         else:
             # A ticket-gated user lost their sign-up credit with their first ticket and may have no other limit, so with
             # tickets off limits.evaluate refuses every request of theirs ("Tickets are paused; ask the admin.") until

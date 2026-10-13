@@ -20,6 +20,7 @@ def seeded(db):
     conn = db[1]
     cfg = tcfg()
     tickets.seed_prices(conn, cfg, now=NOW - DAY)
+    tickets.seed_shares(conn, cfg, now=NOW - DAY)
     admin, _ = create_user(conn, "admin", role="admin")
     alice, _ = create_user(conn, "alice")
     tickets.set_rate(conn, cfg, "EUR", 0.92, admin, now=NOW - 3600)

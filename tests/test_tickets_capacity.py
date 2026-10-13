@@ -11,6 +11,7 @@ from tests.tickets_helpers import DAY, NOW, seeded, user
 
 
 def grant(conn, cfg, ids, who="alice", tier="lite", length="week", now=NOW, **kw):
+    kw.setdefault("terms_version", "v1")
     return tickets.grant(conn, cfg, ids["admin"], user(conn, ids[who]), tier, length, kw.pop("currency", "EUR"), now=now, **kw)
 
 
@@ -170,7 +171,7 @@ def test_two_concurrent_grants_cannot_oversell(db):
     def go(c, who):
         start.wait()
         try:
-            tickets.grant(c, cfg, ids["admin"], user(c, ids[who]), "standard", "week", "USD", now=NOW)
+            tickets.grant(c, cfg, ids["admin"], user(c, ids[who]), "standard", "week", "USD", now=NOW, terms_version="v1")
             results.append("ok")
         except tickets.CapacityError:
             results.append("full")
@@ -479,8 +480,8 @@ def test_bonus_days_allowed_when_they_stop_short_of_a_started_later_ticket(db):
 def test_ungate_with_end_live_cancels_the_live_tickets_and_their_bonuses(db):
     # With tickets switched off there is no Tickets tab to cancel from; Ungate does it in the same step.
     conn, cfg, ids = seeded(db)
-    a = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW)
-    b = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW)
+    a = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW, terms_version="v1")
+    b = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
     tickets.add_bonus(conn, cfg, ids["admin"], a["id"], share_pct=2, now=NOW)
     with pytest.raises(tickets.TicketError, match="cancel it before ungating"):
         tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 60)

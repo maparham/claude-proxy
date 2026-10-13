@@ -77,16 +77,17 @@ def _label(cfg: Config, tier: str) -> str:
     return t.label if t else tier
 
 
-async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, email: str, now: float | None = None) -> dict:
-    """Create the order (the usual order rules) and open a ZarinPal payment for its quote. Returns the payment id and
-    the StartPay address the browser goes to."""
+async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, email: str, now: float | None = None,
+              terms_version: str | None = None) -> dict:
+    """Create the order (the usual order rules, terms tick included) and open a ZarinPal payment for its quote.
+    Returns the payment id and the StartPay address the browser goes to."""
     now = _now(now)
     if not on(cfg):
         raise PaymentError(404, "Online payment is not set up on this gateway.")
     if not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
-                      user_id=user["id"], notify=False, now=now)
+                      user_id=user["id"], notify=False, now=now, terms_version=terms_version)
     amount = int(round(o["quoted_amount"]))
     try:
         authority = await zarinpal.request(cfg.zarinpal.merchant_id(), amount,
@@ -277,7 +278,7 @@ def mails(cfg: Config, p: dict, o: dict, ticket: dict | None, reason: str | None
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
                     f"Thank you. Your payment of {_toman(p['amount'])} went through.\n\nTicket: {what}, {span}.\n"
-                    f"ZarinPal reference: {p['ref_id']}\n"))
+                    f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text()}"))
     return out
 
 

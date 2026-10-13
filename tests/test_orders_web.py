@@ -12,7 +12,7 @@ from tests.test_tickets_web import env, grant  # noqa: F401  (the fixture)
 from tests.test_web import admin_client, bearer
 from tests.tickets_helpers import user
 
-ORDER = {"tier": "lite", "length": "week", "currency": "EUR"}
+ORDER = {"tier": "lite", "length": "week", "currency": "EUR", "terms_version": "v1"}
 VISITOR = ORDER | {"name": "Vera Visitor", "email": "vera@example.com", "message": "Hello", "turnstile_token": "tok"}
 HIDDEN = ("ip", "admin_note", "admin_mail", "buyer_mail", "ticket_id")
 
@@ -200,10 +200,24 @@ async def test_signed_in_order_needs_csrf_and_a_full_key(env):
         assert (await c.post("/api/me/orders", json=ORDER | {"email": "a@b.cd"})).status_code == 200
 
 
+async def test_order_endpoints_refuse_missing_or_stale_terms(env, ts):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        bare = {k: v for k, v in VISITOR.items() if k != "terms_version"}
+        r = await c.post("/api/orders", json=bare)
+        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        r = await c.post("/api/orders", json=VISITOR | {"terms_version": "v0"})
+        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        h = bearer(keys["alice"])
+        r = await c.post("/api/me/orders", headers=h, json={k: v for k, v in ORDER.items() if k != "terms_version"} | {"email": "a@b.cd"})
+        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
+
+
 async def test_sold_out_is_409(env):
     gw, conn, cfg, ids, keys = env
     cfg.tickets.max_sold_pct = 5
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=time.time())
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=time.time(), terms_version="v1")
     async with client(gw) as c:
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER | {"email": "a@b.cd"})
     assert r.status_code == 409 and "sold out" in r.json()["error"]

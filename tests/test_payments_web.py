@@ -35,7 +35,7 @@ def client(gw):
 async def test_pay_redirect_callback_and_result(env):
     gw, conn, cfg, ids, keys, zp = env
     async with client(gw) as c:
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         assert r.status_code == 200, r.text
         pid, url = r.json()["payment_id"], r.json()["url"]
         assert url.startswith("https://payment.zarinpal.com/pg/StartPay/")
@@ -55,9 +55,9 @@ async def test_pay_needs_an_email(env):
     gw, conn, cfg, ids, keys, zp = env
     conn.execute("UPDATE users SET email=NULL WHERE id=?", (ids["alice"],))
     async with client(gw) as c:
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         assert r.status_code == 400
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "email": "a@b.co"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "email": "a@b.co", "terms_version": "v1"})
         assert r.status_code == 200
     assert len(zp.requests) == 1 and zp.requests[0]["email"] == "a@b.co"
 
@@ -65,9 +65,9 @@ async def test_pay_needs_an_email(env):
 async def test_pay_needs_sign_in_and_payments_on(env, monkeypatch):
     gw, conn, cfg, ids, keys, zp = env
     async with client(gw) as c:
-        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week"})).status_code == 401
+        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week", "terms_version": "v1"})).status_code == 401
         monkeypatch.delenv("ZARINPAL_MERCHANT_ID")
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         assert r.status_code == 404
         assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"] is None
 
@@ -87,7 +87,7 @@ async def test_callback_unknown_and_cancel(env):
     gw, conn, cfg, ids, keys, zp = env
     async with client(gw) as c:
         assert (await c.get("/pay/callback?Authority=nope&Status=OK")).status_code == 404
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         auth = r.json()["url"].rsplit("/", 1)[1]
         assert (await c.get(f"/pay/callback?Authority={auth}&Status=NOK", follow_redirects=False)).status_code == 302
         me = (await c.get(f"/api/me/payments/{r.json()['payment_id']}", headers=bearer(keys["alice"]))).json()
@@ -97,7 +97,7 @@ async def test_callback_unknown_and_cancel(env):
 async def test_someone_elses_payment_is_404(env):
     gw, conn, cfg, ids, keys, zp = env
     async with client(gw) as c:
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
     async with admin_client(gw) as c:
         assert (await c.get(f"/api/me/payments/{r.json()['payment_id']}")).status_code == 404
 
@@ -116,7 +116,7 @@ async def test_payment_result_hides_the_internal_reason_when_unfulfilled(env, mo
     def full(*a, **k):
         raise tickets.CapacityError("sold out")
     async with client(gw) as c:
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         auth = r.json()["url"].rsplit("/", 1)[1]
         monkeypatch.setattr(tickets, "check_capacity", full)   # capacity is gone by the time the callback grants
         await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
@@ -128,7 +128,7 @@ async def test_payment_result_shows_zarinpals_message_when_failed(env):
     gw, conn, cfg, ids, keys, zp = env
     zp.verify_answer = zarinpal.ZarinpalRefused(-51, "Session is not valid, session is not active paid try.")
     async with client(gw) as c:
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         auth = r.json()["url"].rsplit("/", 1)[1]
         await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
         me = (await c.get(f"/api/me/payments/{r.json()['payment_id']}", headers=bearer(keys["alice"]))).json()
@@ -140,9 +140,9 @@ async def test_pay_needs_csrf_for_cookie_session(env):
     async with client(gw) as c:
         r = await c.post("/api/login/key", json={"key": keys["alice"]})
         assert r.status_code == 200, r.text
-        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week"})).status_code == 403   # cookie, no CSRF
+        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week", "terms_version": "v1"})).status_code == 403   # cookie, no CSRF
         c.headers["x-csrf-token"] = r.json()["csrf"]
-        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week"})).status_code == 200
+        assert (await c.post("/api/orders/pay", json={"tier": "lite", "length": "week", "terms_version": "v1"})).status_code == 200
 
 
 async def test_mail_once_per_payment(env, monkeypatch):
@@ -154,7 +154,7 @@ async def test_mail_once_per_payment(env, monkeypatch):
     sent = []
     monkeypatch.setattr(mail, "send", lambda email, to, subject, body: sent.append(to))
     async with client(gw) as c:
-        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week"})
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         auth = r.json()["url"].rsplit("/", 1)[1]
         for _ in range(2):
             await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)

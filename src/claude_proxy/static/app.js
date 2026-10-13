@@ -135,7 +135,7 @@ const ERROR_LABELS = Object.fromEntries(["gateway_limit", "gateway_auth", "gatew
 // it (no account quota, no share limits, no credential state). These replace every tip that would mention it.
 const USER_TIPS = Object.fromEntries(["weighted", "cost", "burn_rate", "split:provider", "metric:weighted", "metric:cost_usd", "provider_sub", "cache_ratio", "sess_weighted", "sess_cost", "kind:tokens_5h", "kind:cost_total", "kind:5h_limit", "kind:weekly_limit", "err:usage_limit", "err:gateway_unavailable", "err:upstream_request_scoped", "err:overloaded_error"].map((k) => [k, t(`utip.${k}`, { note: KIND_NOTE.window })]));
 const ADMIN_TIPS = { ...TIPS };
-const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit", "today_limit"];   // share limits, as a non-admin's own allowance
+const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
 
 const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
 
@@ -538,7 +538,7 @@ function userLimitsCard(me, tk) {
   const c = tk && tk.current;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
       <div>${t("ov.ticket_line", { label: tierName(c.tier, c.label), share: fmtShare(c.share_pct) })}</div>
-      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${t("ov.today_ends", { d: fmtDur(c.day_end - Date.now() / 1000) })}</div>
+      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_piece != null ? t("ov.week_ends", { date: fmtDate(c.week_end), share: fmtShare(c.week_piece) }) : t("ov.week_unknown")}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: fmtShare(b.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
       ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_pct + c.bonus_share) })}</p>` : ""}
@@ -574,7 +574,7 @@ function priceListCard(tk, order) {
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
+    </tbody></table></div><p class="sub">${t("price.terms_note")}</p><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
 }
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
@@ -606,31 +606,35 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
       <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">${t("ord.email_note")}</span></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
+      <div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l2")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
+        <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <p class="hint">${t("ord.not_payment")}</p>
       <button class="btn primary" type="submit">${t("ord.send")}</button>
       ${payBtn}
     </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`;
 }
-function orderDialog(p, tier, len, pay) {
+function orderDialog(p, tier, len, pay, termsVersion) {
   const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
   const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay));
   const f = $("#f-order", d);
   f.currency.onchange = () => { $("#order-price", d).textContent = f.currency.selectedOptions[0].dataset.price; };
   f.onsubmit = async (e) => {
     e.preventDefault();
+    if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
     try {
-      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: f.currency.value, message: f.message.value, ...(f.email ? { email: f.email.value } : {}) } });
+      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: f.currency.value, message: f.message.value, terms_version: termsVersion, ...(f.email ? { email: f.email.value } : {}) } });
       d.close(); render();
     } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
   };
   const pb = $("#order-pay", d);
   if (pb) pb.onclick = async () => {
     if (f.email && !f.email.reportValidity()) return;
+    if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     pb.disabled = true; pb.textContent = t("pay.going");
     try {
-      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, ...(f.email ? { email: f.email.value } : {}) } });
+      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, ...(f.email ? { email: f.email.value } : {}) } });
       location.href = r.url;
     } catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payL.amount, pay.currency)) }); $("#order-err", d).textContent = err.message; }
   };
@@ -639,7 +643,7 @@ function wireOrdering(root, tk, order) {
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
-    if (tier) orderDialog(tk.prices, tier, len, tk.pay);
+    if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version);
   }));
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
@@ -807,6 +811,8 @@ function grantDialog(users, pre = null) {
       <label>${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
       <div id="grant-preview" class="hint" aria-live="polite">…</div>
       <div id="grant-limits"></div>
+      ${pre ? "" : `<div class="terms"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l2")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
+        <label class="check"><input type="checkbox" name="terms"> ${t("tk.terms_accept")}</label></div>`}
       <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
       <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button>
     </form><div class="error" id="grant-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
@@ -826,8 +832,10 @@ function grantDialog(users, pre = null) {
     const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : t("tk.starts_now");
     const fit = p.available ? `<span class="good">${t("tk.available")}</span>` : `<span class="critical">${bdi(p.reason)}</span>`;
     const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</span>` : "";
+    const weeks = !p.week_split ? `<br><span class="muted">${t("tk.week_split_none")}</span>`
+      : `<br><span class="muted">${plural("tk.week_split", p.week_split.length, { n: nf0.format(p.week_split.length), pieces: p.week_split.map(fmtShare).join(" + ") })}</span>`;
     $("#grant-preview", d).innerHTML = `${price} ${t("app.arrow")} <b>${esc(money(p.amount, p.currency))}</b> ${t("tk.at_rate", { rate: nfFull.format(p.rate) })} ${p.rate_set_at ? `(${t("tk.rate_of", { date: fmtDate(p.rate_set_at) })}${p.stale_rate ? `${t("app.list_sep")}<b>${t("quota.stale")}</b>` : ""})` : ""}<br>
-      ${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}<br>${fit}${soldOut}
+      ${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}<br>${fit}${soldOut}${weeks}
       ${p.credit ? `<br><span class="muted">${t("tk.credit_removed")}</span>` : ""}`;
     $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
     $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">${t("tk.remove_limits")}</p>` +
@@ -839,12 +847,13 @@ function grantDialog(users, pre = null) {
   f.onsubmit = async (e) => {
     e.preventDefault();
     if (!preview) return;
+    if (!pre && !f.terms.checked) { $("#grant-err", d).textContent = t("tk.terms_needed"); return; }
     const rm = [...f.querySelectorAll('input[name="rm"]:checked')].map((c) => ({ kind: preview.limit_rows[+c.value].kind, scope: preview.limit_rows[+c.value].scope }));
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
         note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate,
-        ...(pre ? { order_id: pre.order_id } : {}) } });
+        ...(pre ? { order_id: pre.order_id } : { terms_version: preview.terms_version }) } });
       d.close(); render();
     } catch (err) {
       if (err.status === 409) await refresh();
@@ -1012,6 +1021,16 @@ async function renderPricing(main) {
         <div class="error" id="prices-err"></div>
         </form></div>
     </div>
+    <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
+      <form id="f-shares">
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th></tr></thead><tbody>
+      ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
+        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share" data-tier="${esc(k)}" data-init="${x.share_pct}" value="${x.share_pct}" required style="width:80px"> <span class="muted">%</span></td>
+        <td class="r muted" data-perday="${esc(k)}">${fmtShare(x.share_pct / 7)}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
+      <div class="error" id="shares-err"></div>
+      </form></div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
         <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))}</option>`).join("")}</select></label>
@@ -1044,6 +1063,17 @@ async function renderPricing(main) {
   };
   $("#f-rates").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "rate", (input) => ({ currency: input.dataset.cur, rate: num(input.value) }), "/api/admin/rates", $("#rates-err")); };
   $("#f-prices").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: num(input.value) }), "/api/admin/prices", $("#prices-err")); };
+  const sharesForm = $("#f-shares");
+  if (sharesForm) {
+    sharesForm.querySelectorAll('input[name="share"]').forEach((input) => {
+      input.addEventListener("input", () => {
+        const n = num(input.value);
+        const cell = sharesForm.querySelector(`[data-perday="${input.dataset.tier}"]`);
+        if (cell) cell.textContent = Number.isFinite(n) ? fmtShare(n / 7) : "—";
+      });
+    });
+    sharesForm.onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "share", (input) => ({ tier: input.dataset.tier, share_pct: num(input.value) }), "/api/admin/shares", $("#shares-err")); };
+  }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
 }

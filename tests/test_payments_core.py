@@ -16,7 +16,7 @@ def env(db):
 
 def irt_order(conn, cfg, ids, notify=False):
     return orders.create(conn, cfg, tier="lite", length="week", currency="IRT", name="alice", email="a@example.com",
-                         user_id=ids["alice"], notify=notify, now=NOW)
+                         user_id=ids["alice"], notify=notify, now=NOW, terms_version="v1")
 
 
 def test_order_without_notify_sends_no_mail(env):

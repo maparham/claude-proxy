@@ -151,6 +151,12 @@ SCHEMA = [
         updated_by INTEGER,
         PRIMARY KEY (tier, length)
     )""",
+    """CREATE TABLE IF NOT EXISTS ticket_tier_shares (
+        tier TEXT PRIMARY KEY,
+        share_pct REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        updated_by INTEGER
+    )""",
     """CREATE TABLE IF NOT EXISTS ticket_discounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tier TEXT NOT NULL,
@@ -244,6 +250,7 @@ SCHEMA = [
         ip TEXT,                            -- a visitor's address, for the per-IP limit; cleared on close and after 30 days
         admin_mail TEXT NOT NULL CHECK(admin_mail IN ('pending','sent','failed','off','skipped')),
         buyer_mail TEXT NOT NULL CHECK(buyer_mail IN ('pending','sent','failed','off','skipped')),
+        terms_version TEXT NOT NULL DEFAULT 'v1',   -- ticket terms the buyer accepted (2026-10-13 spec, §3)
         seen_at INTEGER                     -- the buyer dismissed this closed order
     )""",
     "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)",
@@ -306,6 +313,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_clerk ON users(clerk_id)")
     if "client_version" not in _columns(conn, "keys"):
         conn.execute("ALTER TABLE keys ADD COLUMN client_version TEXT")
+    if "terms_version" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN terms_version TEXT NOT NULL DEFAULT 'v1'")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:

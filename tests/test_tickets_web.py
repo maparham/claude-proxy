@@ -26,7 +26,8 @@ async def grant(c, body):
     """Grant as the dashboard does: preview first, then send back the price and rate the preview showed."""
     p = await c.post("/api/admin/tickets/preview", json=body)
     quote = {k: p.json()[k] for k in ("usd", "rate")} if p.status_code == 200 else {}
-    return await c.post("/api/admin/tickets", json=quote | body)
+    terms = {"terms_version": p.json().get("terms_version", "v1")} if p.status_code == 200 else {}
+    return await c.post("/api/admin/tickets", json=quote | body | terms)
 
 
 def last_audit(conn):
@@ -169,7 +170,7 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     now = int(time.time())
     tickets.create_discount(conn, cfg, "lite", "month", 15, now - 10, now + DAY, ids["admin"], now=now)
     cfg.tickets.max_sold_pct = 25
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=now)
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=now, terms_version="v1")
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/pricing")
         assert r.status_code == 200
@@ -237,16 +238,16 @@ async def test_home_ignores_a_stale_session_cookie(env):
 async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_account(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=now - 3600)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=now - 3600, terms_version="v1")
     tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=2, extra_days=1, note="welcome", now=now)
-    q = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "EUR", now=now)
+    q = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "EUR", now=now, terms_version="v1")
     async with asgi_client(create_dashboard_app(gw)) as c:
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["enabled"] and me["gated"]
     cur = me["current"]
     assert (cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == ("Lite", 5, 1, 2)
     assert "id" not in cur and "id" not in me["queued"]          # a ticket id counts the account's sales
-    assert cur["effective_end"] == t["ends_at"] + DAY and cur["day_end"] == t["starts_at"] + DAY
+    assert cur["effective_end"] == t["ends_at"] + DAY and cur["week_end"] == t["starts_at"] + DAY   # no quota data: display-only fallback to the ticket-day end
     assert cur["bonuses"] == [{"share_pct": 2, "note": "welcome", "ends_at": t["ends_at"] + DAY}]
     assert cur["day_bonuses"] == [] and abs(me["now"] - time.time()) < 5   # that bonus's days show with its share
     assert (me["queued"]["label"], me["queued"]["starts_at"]) == ("Lite", t["ends_at"] + DAY)
@@ -307,7 +308,8 @@ async def test_grant_refused_when_the_price_or_rate_changed_since_the_preview(en
     async with admin_client(gw) as c:
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).json()
         assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9})).status_code == 200
-        body = {"user": "alice", "tier": "lite", "length": "week", "currency": "EUR", "usd": p["usd"], "rate": p["rate"]}
+        body = {"user": "alice", "tier": "lite", "length": "week", "currency": "EUR", "usd": p["usd"], "rate": p["rate"],
+                "terms_version": p["terms_version"]}
         r = await c.post("/api/admin/tickets", json=body)
         assert r.status_code == 409 and "price" in r.json()["error"]
         assert (await c.post("/api/admin/rates", json={"currency": "EUR", "rate": 0.95})).status_code == 200
@@ -344,7 +346,7 @@ async def test_dashboard_links_the_pricing_page_only_while_tickets_are_on(env):
 async def test_me_tickets_shows_the_note_of_an_extra_days_bonus(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now - 3600)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now - 3600, terms_version="v1")
     tickets.add_bonus(conn, cfg, ids["admin"], t["id"], extra_days=2, note="sorry for Tuesday", now=now)
     async with asgi_client(create_dashboard_app(gw)) as c:
         cur = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
@@ -353,7 +355,8 @@ async def test_me_tickets_shows_the_note_of_an_extra_days_bonus(env):
 
 async def test_users_with_ungated_tickets_still_have_tickets(env):
     gw, conn, cfg, ids, keys = env
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY,
+                      terms_version="v1")
     tickets.ungate(conn, ids["admin"], ids["alice"])
     async with admin_client(gw) as c:
         users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
@@ -366,6 +369,23 @@ async def test_a_grant_needs_the_quote_its_preview_showed(env):
         r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
         assert r.status_code == 400 and "Preview the ticket first" in r.json()["error"]
     assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
+
+
+async def test_a_grant_needs_the_terms_tick_unless_from_an_order(env):
+    from claude_proxy import orders
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).json()
+        quote = {"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "usd": p["usd"], "rate": p["rate"]}
+        r = await c.post("/api/admin/tickets", json=quote)
+        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        r = await c.post("/api/admin/tickets", json=quote | {"terms_version": "v0"})
+        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        o = orders.create(conn, cfg, tier="lite", length="week", currency="USD", name="alice", email="a@b.cd",
+                          user_id=ids["alice"], now=int(time.time()), terms_version="v1")
+        r = await c.post("/api/admin/tickets", json=quote | {"order_id": o["id"]})   # the order's tick governs: none needed
+        assert r.status_code == 200, r.text
+    assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 1
 
 
 async def test_with_tickets_off_a_paused_user_is_shown_and_can_be_ungated(env):

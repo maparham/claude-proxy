@@ -2,7 +2,7 @@
 
 - **Date:** 2026-10-03
 - **Relates to:** `2026-10-03-paid-tickets-design.md`, sections 5 and 7.
-- **Status:** decision record. The paid-tickets design enforces tickets day by day. This note keeps the problem and the alternative, prorating by window overlap, for when the day rule is revisited.
+- **Status:** superseded 2026-10-13: approach A chosen (`2026-10-13-ticket-weekly-pieces.md`). Kept as the record of why the day was chosen first.
 
 ## 1. The problem
 

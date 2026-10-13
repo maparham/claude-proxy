@@ -11,7 +11,7 @@ import sqlite3
 import time
 from decimal import ROUND_HALF_UP, Decimal
 
-from . import db
+from . import db, quota
 from .config import LENGTHS, Config
 
 DAY = 86400
@@ -22,6 +22,80 @@ USD_ROUND_TO = 0.01
 MAX_USD = 100_000          # generous ceilings: anything above is a typo, not a price
 MAX_RATE = 1e9             # local units per 1 USD; leaves room for currencies counted in the millions
 NOTE_MAX = 200             # the dashboard's maxlength
+
+TERMS_VERSION = "v1"
+# Ticket terms, accepted at order time and repeated in the buyer's emails (order requests design, section 5).
+# Plain text: it goes into emails as is. Names no weekday: Anthropic's reset comes from live quota data, so the
+# refill moment is formatted from resets_at at display time (2026-10-13 spec, §1).
+TERMS_LINES = (
+    "Ticket terms (v1):",
+    "- Your weekly share refills at Anthropic's weekly reset; what you do not use by then is gone.",
+    "- Spend it at your own pace: the week's share may be used up in fewer days.",
+    "- A 5-hour share applies on top, against Anthropic's 5-hour window.",
+    "- Claude models only; anything else needs a separate cost limit.",
+)
+
+
+def terms_text() -> str:
+    """The ticket terms as one block, for order mails and the buyer mails after payment."""
+    return "\n".join(TERMS_LINES) + "\n"
+
+
+TERMS_CHANGED = "Ticket terms have changed; reload and accept the current terms."
+
+
+def _check_terms(terms_version) -> str:
+    """The equality check every order and direct grant goes through (2026-10-13 spec, §3)."""
+    if terms_version != TERMS_VERSION:
+        raise TicketError(TERMS_CHANGED)
+    return terms_version
+
+
+def week_bounds(conn, cfg: Config, now: float) -> tuple[float, float] | None:
+    """The current Anthropic weekly window from the 7d snapshots' reset time (2026-10-13 spec, §1.3).
+
+    Recomputed from the latest attribution on every call — projections are never stored, and a fresh
+    snapshot's `resets_at` always wins. Keys on `resets_at` vs `now` only: a stale snapshot with a future
+    reset still gives known boundaries. `resets_at` passed rolls forward in 7-day steps (assumed fixed
+    cadence); no reset time ever reported → None (the caller refuses 503 NO_RATE)."""
+    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    resets = att["resets_at"]
+    if resets is None:
+        return None
+    if resets > now:
+        return resets - 7 * DAY, resets
+    steps = int((now - resets) // (7 * DAY)) + 1
+    end = resets + steps * 7 * DAY
+    return end - 7 * DAY, end
+
+
+def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int, now: float | None = None) -> list[float] | None:
+    """The §1.1 piece caps for `[starts_at, ends_at)` in every Anthropic week it touches, full precision.
+
+    Future week boundaries project forward from the current `resets_at` in 7-day steps (assumed cadence —
+    informational; enforcement always uses observed resets). None when no `resets_at` is known at all."""
+    now = _now(now)
+    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    resets = att["resets_at"]
+    if resets is None:
+        return None
+    end = resets
+    if end <= now:
+        end += (int((now - end) // (7 * DAY)) + 1) * 7 * DAY
+    start = end - 7 * DAY
+    while end <= starts_at:
+        end += 7 * DAY
+        start += 7 * DAY
+    while start > starts_at:
+        end -= 7 * DAY
+        start -= 7 * DAY
+    out = []
+    while start < ends_at:
+        overlap = max(0, min(start + 7 * DAY, ends_at) - max(start, starts_at))
+        if overlap > 0:
+            out.append(share_pct * overlap / DAY / 7)
+        start += 7 * DAY
+    return out
 
 
 class TicketError(Exception):
@@ -198,6 +272,56 @@ def seed_prices(conn: sqlite3.Connection, cfg: Config, now: float | None = None)
     return n
 
 
+def seed_shares(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> int:
+    """Insert each tier's config share_pct that has no DB row yet. Returns the rows added."""
+    now = int(time.time() if now is None else now)
+    n = 0
+    for tier, t in cfg.tickets.tiers.items():
+        n += conn.execute("INSERT OR IGNORE INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by) VALUES(?,?,?,NULL)",
+                          (tier, float(t.share_pct), now)).rowcount
+    return n
+
+
+def tier_shares(conn: sqlite3.Connection) -> dict[str, dict]:
+    """DB share overrides by tier: {tier: {share_pct, updated_at, updated_by}}."""
+    return {r["tier"]: dict(r) for r in conn.execute("SELECT * FROM ticket_tier_shares")}
+
+
+def effective_share(conn: sqlite3.Connection, cfg: Config, tier: str) -> float:
+    """The share new tickets of this tier are sold with: the dashboard value when set, else the config."""
+    row = conn.execute("SELECT share_pct FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
+    if row is not None:
+        return float(row[0])
+    return float(cfg.tickets.tiers[tier].share_pct)
+
+
+def effective_tiers(conn: sqlite3.Connection, cfg: Config) -> dict[str, dict]:
+    """{tier: {label, share_pct, compare}} with dashboard shares applied, for new grants and display."""
+    out = {}
+    for tid, t in cfg.tickets.tiers.items():
+        out[tid] = {"label": t.label, "share_pct": effective_share(conn, cfg, tid), "compare": t.compare}
+    return out
+
+
+def set_share(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor: int | None, now: float | None = None) -> float:
+    """Change a tier's share for future tickets. Existing tickets keep the share they were sold with."""
+    if tier not in cfg.tickets.tiers:
+        raise TicketError(f"Unknown tier {tier!r}.")
+    if isinstance(share_pct, bool) or not isinstance(share_pct, (int, float)) or not math.isfinite(share_pct):
+        raise TicketError("The share must be a number.")
+    share_pct = float(share_pct)
+    if not 0 < share_pct <= 100:
+        raise TicketError("The share must be above 0 and at most 100.")
+    if share_pct > cfg.tickets.max_sold_pct + 1e-9:
+        raise TicketError(f"The share must be at most {cfg.tickets.max_sold_pct:g}% (max_sold_pct), or the tier could never be sold.")
+    now = _now(now)
+    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by) VALUES(?,?,?,?) "
+                 "ON CONFLICT(tier) DO UPDATE SET share_pct=excluded.share_pct, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                 (tier, share_pct, now, actor))
+    db.audit(conn, actor, "share_set", tier, {"share_pct": share_pct})
+    return share_pct
+
+
 # ---------- capacity (spec section 5) ----------
 
 TICKET_COLS = f"t.*, {db.TICKET_EFFECTIVE_END} AS effective_end"
@@ -344,7 +468,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     if rate is None:
         raise TicketError(f"No exchange rate for {currency}; set one on the Rates panel first.")
     p = price_now(conn, tier, length, now)
-    share = cfg.tickets.tiers[tier].share_pct
+    share = effective_share(conn, cfg, tier)
     starts_at = max(now, last_end(conn, user["id"]) or 0)
     ends_at = starts_at + LENGTHS[length] * DAY
     try:
@@ -360,6 +484,8 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
             "amount": round_local(p["usd"], rate["rate"], steps[currency]),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available,
+            "week_split": week_split(conn, cfg, share, starts_at, ends_at, now),
+            "terms_version": TERMS_VERSION,
             "limit_rows": rows,
             # Only the first ticket takes the sign-up credit; a credit the admin sets after that stays.
             "credit": first and conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).fetchone() is not None,
@@ -368,12 +494,14 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, order_id: int | None = None,
-          paid: bool = False, after=None, now: float | None = None) -> dict:
+          paid: bool = False, after=None, now: float | None = None, terms_version: str | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
     capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
     `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different.
     `order_id`: the order this sells (order requests design, section 7), marked done in the same transaction; an
     order no longer open or linked to someone else raises orders.OrderError (409) and nothing is granted.
+    A grant with `order_id` uses the order row's stored terms version and needs no new tick; a direct grant takes
+    `terms_version`, equality-checked against TERMS_VERSION (2026-10-13 spec, §3).
     `paid`: the order was paid online (payments design, section 4): it sells at the order's quote, whatever the price
     and rate are now, with no stale-rate confirmation. `after(ticket_id)`: called inside the transaction, last."""
     now = _now(now)
@@ -389,6 +517,11 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
     conn.execute("BEGIN IMMEDIATE")
     try:
         p = preview(conn, cfg, user, tier, length, currency, now)
+        if order_id is not None:
+            orow = conn.execute("SELECT terms_version FROM orders WHERE id=?", (order_id,)).fetchone()
+            grant_terms = orow["terms_version"] if orow is not None else TERMS_VERSION
+        else:
+            grant_terms = _check_terms(terms_version)
         if paid:
             q = conn.execute("SELECT quoted_usd, quoted_rate, quoted_amount FROM orders WHERE id=?", (order_id,)).fetchone()
             if q is None:
@@ -416,7 +549,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
                 db.audit(conn, actor, "limit_clear", f"{user['name']}:{kind}:{scope}", {"ticket_id": tid})
         db.audit(conn, actor, "ticket_grant", user["name"], {"ticket_id": tid, "tier": tier, "length": length, "usd": p["usd"],
                                                             "list_usd": p["list_usd"], "currency": currency, "amount": p["amount"],
-                                                            "starts_at": p["starts_at"], "ends_at": p["ends_at"]})
+                                                            "starts_at": p["starts_at"], "ends_at": p["ends_at"],
+                                                            "terms_version": grant_terms})
         if order_id is not None:
             from . import orders   # here, not at the top: orders imports tickets
             orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)
@@ -443,7 +577,7 @@ def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now:
     """A tier and length is sold out when a ticket starting now would fail the capacity rule."""
     now = _now(now)
     try:
-        check_capacity(conn, cfg, ACCOUNT_ID, cfg.tickets.tiers[tier].share_pct, now, now + LENGTHS[length] * DAY)
+        check_capacity(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), now, now + LENGTHS[length] * DAY)
     except CapacityError:
         return True
     return False
@@ -623,6 +757,7 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
         currency, rate = "USD", current_rate(conn, "USD")
     step = currencies(cfg)[currency]
     tiers = []
+    eff = effective_tiers(conn, cfg)
     for tid, t in cfg.tickets.tiers.items():
         lengths = {}
         for length in LENGTHS:
@@ -630,5 +765,5 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
-        tiers.append({"tier": tid, "label": t.label, "share_pct": t.share_pct, "compare": t.compare, "lengths": lengths})
+        tiers.append({"tier": tid, "label": t.label, "share_pct": eff[tid]["share_pct"], "compare": t.compare, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers}

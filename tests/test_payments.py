@@ -53,7 +53,7 @@ def env(db, monkeypatch):
 
 async def start(conn, cfg, ids, **kw):
     return await payments.start(conn, cfg, user(conn, ids["alice"]), kw.get("tier", "lite"), kw.get("length", "week"),
-                                kw.get("email", "alice@example.com"))
+                                kw.get("email", "alice@example.com"), terms_version="v1")
 
 
 def test_on_needs_everything(env, monkeypatch):
@@ -445,6 +445,8 @@ async def test_mails(env):
     m = payments.mails(cfg, p, o, t, None)
     assert [x[0] for x in m] == ["admin@example.com", "alice@example.com"]
     assert "1,250,000 Toman" in m[0][2] and "201" in m[0][2] and "201" in m[1][2]
+    for line in tickets.TERMS_LINES:
+        assert line in m[1][2]
     m = payments.mails(cfg, p | {"status": "paid_unfulfilled"}, o, None, "sold out")
     assert [x[0] for x in m] == ["admin@example.com"] and "NOT granted: sold out" in m[0][2]
 
