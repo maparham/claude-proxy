@@ -60,7 +60,6 @@ function card(t_, i, len, currency, ordering) {
   return `<article class="tier${i === 1 ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
     ${off > 0 ? `<span class="ribbon">${t("home.off_pct", { n: nf0.format(off) })}</span>` : ""}
     <h3>${tierName(t_)}</h3>
-    ${t_.compare ? `<p class="compare">${t("home.compare", { what: bdi(t_.compare) })}</p>` : ""}
     ${t_.compare ? `<p class="share">${t("home.share_of", { pct: nf0.format(Math.round((l.days / 30) * 100)), what: bdi(t_.compare) })}</p>` : ""}
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
     <p class="per">${t(LENGTHS[len][0])}</p>

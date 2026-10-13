@@ -567,12 +567,13 @@ function priceListCard(tk, order) {
   // The home page's pick is the highlighted Order button; a sold-out price has none.
   const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
   // A length's share of a month, expressed against the plan it's compared to: a day is 1/30 of Claude Pro, a month is 100%.
+  // Single line via home.share_of, so the tier cell carries no separate compare line.
   const planShare = (tier, l) => tier.compare ? `<div class="muted">${t("home.share_of", { pct: nf0.format(Math.round((l.days / 30) * 100)), what: bdi(tier.compare) })}</div>` : "";
   const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
     ${planShare(tier, l)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b><div class="muted">≈ ${esc(tier.compare)}</div></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
+    ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
 }
 
