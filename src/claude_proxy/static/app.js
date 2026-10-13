@@ -997,12 +997,14 @@ async function renderPricing(main) {
         ${rates.map((r) => `<form class="limit-row rate-row" data-cur="${esc(r.currency)}"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
           <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
           <span class="nowrap">${t("pr.one_usd")} <input type="text" inputmode="decimal" dir="ltr" name="rate" value="${r.rate ?? ""}" placeholder="${esc(t("pr.todays_rate"))}" aria-label="${esc(`${t("pr.one_usd")} ${r.currency}`)}" required style="width:110px"> <b>${esc(r.currency)}</b> <button class="btn small" type="submit">${t("app.save")}</button></span></form>`).join("") || `<p class="muted">${t("pr.no_currencies")}</p>`}
+        <div class="error" id="rates-err"></div>
       </div>
       <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
           `<td class="r"><form class="price-form" data-tier="${esc(k)}" data-length="${esc(l)}"><input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"> <button class="btn small" type="submit">${t("app.save")}</button></form></td>`).join("")}</tr>`).join("")}
-        </tbody></table></div></div>
+        </tbody></table></div>
+        <div class="error" id="prices-err"></div></div>
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
@@ -1019,8 +1021,8 @@ async function renderPricing(main) {
       </tbody></table></div></div>
   </section>`;
   const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
-  main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }); }));
-  main.querySelectorAll(".price-form").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: num(f.usd.value) }); }));
+  main.querySelectorAll(".rate-row").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }, $("#rates-err")); }));
+  main.querySelectorAll(".price-form").forEach((f) => (f.onsubmit = (e) => { e.preventDefault(); post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: num(f.usd.value) }, $("#prices-err")); }));
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
 }

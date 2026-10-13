@@ -657,6 +657,16 @@ def test_admin_tips_no_longer_point_at_the_old_pricing_page():
     assert "`/pricing asks" not in src and "/pricing shows" not in src   # the tips admins read
 
 
+def test_price_and_rate_saves_fail_inline_without_resetting_the_grid():
+    # A refused price/rate save used to open a modal dialog whose close re-rendered the grid, wiping what the
+    # admin had typed; like discounts, both forms now report into an inline error and keep their inputs.
+    from pathlib import Path
+    src = (Path(__file__).resolve().parent.parent / "src" / "claude_proxy" / "static" / "app.js").read_text()
+    assert 'id="prices-err"' in src and 'id="rates-err"' in src
+    assert 'post("/api/admin/prices", { tier: f.dataset.tier, length: f.dataset.length, usd: num(f.usd.value) }, $("#prices-err"))' in src
+    assert 'post("/api/admin/rates", { currency: f.dataset.cur, rate: num(f.rate.value) }, $("#rates-err"))' in src
+
+
 def test_home_shows_toman_as_whole_numbers(tmp_path):
     data = _prices(_tier(week={"amount": 1250000.4, "list_amount": 1250000.4})) | {"currency": "IRT"}
     r = _run_home(tmp_path, data)
