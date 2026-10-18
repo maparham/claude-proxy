@@ -71,9 +71,10 @@ async def test_share_limit_reads_as_the_users_own_allowance(env):
     assert lim["kind"] == "5h_limit" and lim["limit"] == 100 and lim["unit"] == "pct" and not lim["estimated"]
     assert "kinds" not in mine
     [adm] = [x for x in admins["limits"] if x["user"] == "alice"]
-    assert adm["kind"] == "share_5h" and adm["limit"] == 20
+    # 20 points of the gateway's capacity: the snapshot's 40 points are nobody's, so 60 are left (2026-10-18 spec).
+    assert adm["kind"] == "share_5h" and adm["limit"] == pytest.approx(12)
     if adm["current"] is not None:
-        assert lim["current"] == pytest.approx(100 * adm["current"] / 20)
+        assert lim["current"] == pytest.approx(100 * adm["current"] / adm["limit"])
 
 
 async def test_proxy_strips_account_headers_for_users_but_still_records_them(env, anthropic):
