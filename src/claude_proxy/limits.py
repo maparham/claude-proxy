@@ -3,7 +3,8 @@
 Usage limits count only forwarded requests (never rejections) in a window that opens with the first request and
 then resets all at once, like Claude's own 5-hour limit, optionally restricted to models matching a glob `scope`.
 Share limits compare the user's estimated share of an account bucket (quota.attribution) with an allocation in
-percentage points.
+percentage points of the gateway's capacity: the bucket less the points the gateway can't pin on its users
+(2026-10-18 spec), so a share of 100 ends where Anthropic blocks the account.
 """
 from __future__ import annotations
 
@@ -67,9 +68,9 @@ class LimitState:
 
     @property
     def pct(self) -> float | None:
-        if self.current is None or not self.limit:
+        if self.current is None or self.limit is None:
             return None
-        return 100.0 * self.current / self.limit
+        return 100.0 * self.current / self.limit if self.limit else 100.0   # a share with no capacity left is used up
 
     def to_dict(self) -> dict:
         return {"kind": self.kind, "scope": self.scope, "value": self.value, "unit": self.unit,
@@ -177,10 +178,18 @@ def _total_state(conn, cfg, user_id, row) -> LimitState:
                       remaining=max(0.0, limit - current), exceeded=current >= limit)
 
 
+def _capacity(att, now) -> float:
+    """The points of a bucket available to the gateway (2026-10-18 spec): 100 less what it can't pin on its users,
+    until the window resets. Every share limit is a share of this, not of the whole account."""
+    if att["unattributed"] is None or (att["resets_at"] and att["resets_at"] <= now):
+        return 100.0
+    return min(100.0, max(0.0, 100.0 - att["unattributed"]))
+
+
 def _share_state(conn, cfg, user_id, row, now) -> LimitState:
-    limit = float(row["value"])
-    st = LimitState(row["kind"], row["scope"], row["value"], row["unit"], limit=limit, estimated=True)
     att = quota.attribution(conn, cfg.pricing, SHARE_BUCKETS[row["kind"]], now=now, stale_after_s=cfg.quota.stale_after_s)
+    limit = float(row["value"]) * _capacity(att, now) / 100
+    st = LimitState(row["kind"], row["scope"], row["value"], row["unit"], limit=limit, estimated=True)
     if att["utilization_pct"] is None or att["stale"]:
         st.skipped = f"no account snapshot in the last {cfg.quota.stale_after_s // 60} min"
         return st
@@ -216,8 +225,8 @@ def _finish(st: LimitState) -> LimitState:
 
 
 def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
-    st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share, estimated=True, tier=label)
     att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share * _capacity(att, now) / 100, estimated=True, tier=label)
     if att["resets_at"] and att["resets_at"] > now:
         st.resets_at, st.reset_in = att["resets_at"], max(1, math.ceil(att["resets_at"] - now))
     if att["utilization_pct"] is not None and not att["stale"]:
@@ -239,7 +248,8 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
 def _ticket_7d(conn, cfg, user_id, ticket, label, now) -> LimitState:
     """The ticket's prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1).
 
-    Cap = ticket share × days of this week the ticket covers ÷ 7 + active bonus pieces. Measured from the
+    Cap = ticket share × days of this week the ticket covers ÷ 7 + active bonus pieces, scaled to the gateway's
+    capacity (2026-10-18 spec). Measured from the
     user's own weighted tokens since max(week_start, ticket starts_at) at the 7d observed rate — the same
     estimator share_day used, only the window start moves. Unknown week (no resets_at ever) → NO_RATE."""
     week = tickets.week_bounds(conn, cfg, now)
@@ -254,7 +264,8 @@ def _ticket_7d(conn, cfg, user_id, ticket, label, now) -> LimitState:
     for b in tickets.active_bonuses(conn, ticket["id"], now):
         bover = max(0.0, min(week_end, b["ends_at"]) - max(week_start, b["starts_at"]))
         cap += b["share_pct"] * bover / DAY / 7
-    st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=cap, estimated=True, tier=label,
+    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=cap * _capacity(att, now) / 100, estimated=True, tier=label,
                     resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)))
     # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since

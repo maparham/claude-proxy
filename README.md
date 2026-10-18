@@ -297,7 +297,7 @@ Set in the dashboard (Users & limits → Limits) or the CLI:
 ```sh
 claude-proxy limit set maya tokens_daily 2000000              # weighted tokens, per 24 h window
 claude-proxy limit set omid requests_minute 20
-claude-proxy limit set sara share_5h 30                        # ≤ 30 points of the account's 5-hour bucket (estimated)
+claude-proxy limit set sara share_5h 30                        # ≤ 30% of the gateway's 5-hour capacity (estimated)
 claude-proxy limit set sara requests_daily 100 --scope 'claude-opus-*'
 claude-proxy limit set omid cost_monthly 50                    # USD, API-equivalent estimate
 claude-proxy limit set guest allowed_models 'claude-sonnet-*,muse-spark'
@@ -309,7 +309,7 @@ claude-proxy limit list
 | `requests_minute`, `requests_daily`, `requests_monthly` | count | 60 s, 24 h, 30 d |
 | `tokens_minute`, `tokens_5h`, `tokens_daily`, `tokens_weekly`, `tokens_monthly` | `weighted` (default) or `raw` | 60 s, 5 h, 24 h, 7 d, 30 d |
 | `cost_daily`, `cost_monthly` | USD | 24 h, 30 d |
-| `share_5h`, `share_7d` | percentage points of the account bucket | Anthropic's current window |
+| `share_5h`, `share_7d` | percent of the gateway's capacity: the account bucket less usage from outside the gateway | Anthropic's current window |
 | `allowed_models` | comma-separated globs | — |
 
 A usage limit's window opens with the user's first request, like Claude's own 5-hour limit. When it ends, the count goes
