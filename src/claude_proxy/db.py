@@ -9,6 +9,20 @@ import sqlite3
 import time
 from pathlib import Path
 
+# Named so the migration that rebuilds old single-grant tables reuses it verbatim.
+CREDENTIALS_DDL = """CREATE TABLE IF NOT EXISTS credentials (
+    backend TEXT,
+    account TEXT DEFAULT 'default',
+    encrypted_blob TEXT,
+    expires_at INTEGER,
+    updated_at INTEGER,
+    state TEXT,
+    label TEXT,               -- display name for the dashboard; defaults to the account slug
+    anthropic_sub TEXT,       -- stable Anthropic account id for duplicate detection (NULL on old grants)
+    email TEXT,               -- display only; the encrypted blob stays the source of truth
+    PRIMARY KEY (backend, account)
+)"""
+
 SCHEMA = [
     """CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,13 +87,7 @@ SCHEMA = [
         raw_json TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_quota_bucket_time ON quota_snapshots(bucket, observed_at)",
-    """CREATE TABLE IF NOT EXISTS credentials (
-        backend TEXT PRIMARY KEY,
-        encrypted_blob TEXT,
-        expires_at INTEGER,
-        updated_at INTEGER,
-        state TEXT
-    )""",
+    CREDENTIALS_DDL,
     """CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         at INTEGER NOT NULL,
@@ -285,6 +293,28 @@ def _columns(conn: sqlite3.Connection, table: str) -> set[str]:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Bring databases created by earlier versions up to the current schema."""
+    if "account" not in _columns(conn, "credentials"):
+        # Single-grant databases (PRIMARY KEY on backend alone) become the 'default' account.
+        # One transaction: a crash midway must not strand the only grant in credentials_old.
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("ALTER TABLE credentials RENAME TO credentials_old")
+            conn.execute(CREDENTIALS_DDL)
+            conn.execute("INSERT INTO credentials(backend, account, encrypted_blob, expires_at, updated_at, state) "
+                         "SELECT backend, 'default', encrypted_blob, expires_at, updated_at, state FROM credentials_old")
+            conn.execute("DROP TABLE credentials_old")
+            # The pre-account pending login is unreadable now (spec section 2); drop its verifier.
+            conn.execute("DELETE FROM settings WHERE key='pending_login'")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    for col in ("label TEXT", "anthropic_sub TEXT", "email TEXT"):
+        if col.split()[0] not in _columns(conn, "credentials"):
+            conn.execute(f"ALTER TABLE credentials ADD COLUMN {col}")
+    # One subscription, one slug: enforced here as well as checked in login.finish.
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_sub ON credentials(backend, anthropic_sub) "
+                 "WHERE anthropic_sub IS NOT NULL")
     cols = _columns(conn, "limits")
     if "scope" not in cols:
         conn.execute("ALTER TABLE limits RENAME TO limits_old")

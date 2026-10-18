@@ -33,7 +33,9 @@ from starlette.middleware.base import BaseHTTPMiddleware
 import httpx
 
 from . import clerk, db, limits, orders, payments, quota, tickets, turnstile, upstream, usage
+from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
+from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
 from .config import LENGTHS
 from .gateway import Gateway
 
@@ -871,6 +873,51 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def need_tickets():
         if not cfg.tickets.enabled:
             fail(404, "Tickets are not enabled on this gateway.")
+
+    # --- Subscription accounts (spec 2026-10-13): the same paste-the-code login as `claude-proxy login --account` ---
+
+    def account_call(fn, *args):
+        try:
+            return fn(*args)
+        except (oauth_login.LoginError, ValueError) as e:
+            fail(400, str(e))
+
+    @app.get("/api/admin/accounts")
+    async def accounts(request: Request):
+        admin(request)
+        out = []
+        for r in list_accounts(conn):
+            # The default account's live backend knows its last refresh error; the others are read from the row.
+            st = (gw.backend if r["account"] == DEFAULT_ACCOUNT else OAuthBackend(cfg, conn, None, r["account"])).describe()
+            out.append({"account": r["account"], "label": r["label"] or r["account"], "email": r["email"],
+                        "state": r["state"], "healthy": st.healthy, "detail": st.detail,
+                        "expires_at": st.expires_at, "updated_at": r["updated_at"]})
+        return {"accounts": out, "default": DEFAULT_ACCOUNT}
+
+    @app.post("/api/admin/accounts/{account}/login/start")
+    async def account_login_start(request: Request, account: str):
+        actor = admin(request, write=True)
+        url = account_call(oauth_login.start, conn, cfg, account)
+        db.audit(conn, actor["id"], "login_start", f"oauth:{account}")
+        return {"url": url}
+
+    @app.post("/api/admin/accounts/{account}/login/finish")
+    async def account_login_finish(request: Request, account: str):
+        actor = admin(request, write=True)
+        code = str((await _json(request)).get("code", "")).strip()
+        if not code:
+            fail(400, "Paste the code the sign-in page showed.")
+        try:
+            record = await oauth_login.finish(conn, cfg, gw.http, code, account, actor["id"])
+        except (oauth_login.LoginError, ValueError) as e:
+            fail(400, str(e))
+        return {"ok": True, "email": record.get("account"), "expires_at": record.get("expires_at")}
+
+    @app.post("/api/admin/accounts/{account}/remove")
+    async def account_remove(request: Request, account: str):
+        actor = admin(request, write=True)
+        account_call(oauth_login.remove_account, conn, account, actor["id"])
+        return {"ok": True}
 
     @app.get("/api/admin/rates")
     async def rates(request: Request):

@@ -398,6 +398,7 @@ const VIEWS = {
   pricing: { render: renderPricing, admin: true, feature: "tickets" },
   authorize: { render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { render: renderQuota, admin: true },
+  accounts: { render: renderAccounts, admin: true },
   models: { render: renderModels },
   activity: { render: renderActivity },
   sessions: { render: renderSessions },
@@ -1527,6 +1528,65 @@ async function renderUser(main) {
   else $("#u-usage").outerHTML = none;
   if (heat.cells.length) heatmap($("#u-heat"), heat.cells);
   else $("#u-heat").outerHTML = none;
+}
+
+// Subscription accounts: the same paste-the-code sign-in as `claude-proxy login --account <slug>`.
+async function renderAccounts(main) {
+  const { accounts, default: def } = await api("/api/admin/accounts");
+  const row = (a) => `<tr>
+    <td><b>${bdi(a.label)}</b>${a.account === def ? ` <span class="badge">${t("acct.default_badge")}</span>` : ""}${a.label !== a.account ? `<div class="muted" style="font-size:12px">${bdi(a.account)}</div>` : ""}</td>
+    <td>${a.email ? bdi(a.email) : "—"}</td>
+    <td><span data-tip-html="${esc(esc(a.detail))}"><span class="dot" style="background:${css(a.healthy ? "--good" : "--critical")};margin-inline-end:6px"></span>${a.healthy ? t("acct.ok") : a.state === "needs_login" ? t("acct.needs_login") : t("acct.not_ok")}</span></td>
+    <td>${fmtTime(a.expires_at)}</td><td>${fmtTime(a.updated_at)}</td>
+    <td><div class="row-actions"><button class="btn small" data-relink="${esc(a.account)}">${t("acct.relink")}</button>${a.account === def ? "" : `<button class="btn small danger" data-aremove="${esc(a.account)}">${t("acct.remove")}</button>`}</div></td></tr>`;
+  main.innerHTML = `<section class="view"><h2>${t("tab.accounts")}</h2>
+    <p class="lede">${t("acct.lede", { slug: bdi(def) })}</p>
+    ${accounts.some((a) => a.account === def) ? "" : `<div class="banner critical"><span class="icon">!</span><span>${t("acct.no_default", { slug: bdi(def) })}</span></div>`}
+    <div class="controls"><button class="btn primary" id="acct-add">${t("acct.add")}</button></div>
+    ${accounts.length ? `<div class="card table-wrap"><table class="data"><thead><tr><th>${t("acct.account")}</th><th>${t("acct.email")}</th><th>${t("acct.state")}</th><th>${t("acct.expires")}</th><th>${t("acct.updated")}</th><th></th></tr></thead>
+      <tbody>${accounts.map(row).join("")}</tbody></table></div>` : `<p class="muted">${t("acct.none")}</p>`}
+  </section>`;
+  $("#acct-add").onclick = () => linkAccountDialog(accounts.some((a) => a.account === def) ? null : def, false);
+  main.querySelectorAll("[data-relink]").forEach((b) => (b.onclick = () => linkAccountDialog(b.dataset.relink, true)));
+  main.querySelectorAll("[data-aremove]").forEach((b) => (b.onclick = async () => {
+    const slug = b.dataset.aremove;
+    if (!confirmInline(t("acct.confirm_remove", { slug: iso(slug) }))) return;
+    try { await api(`/api/admin/accounts/${encodeURIComponent(slug)}/remove`, { method: "POST", body: {} }); render(); }
+    catch (e) { alertInline(e.message); }
+  }));
+}
+// `slug` null: the admin names a new account first. `relink`: an existing row, so the sign-in starts at once.
+function linkAccountDialog(slug, relink) {
+  const d = openDialog(`<h3>${relink ? t("acct.relink_title", { slug: bdi(slug) }) : t("acct.link_title")}</h3>
+    ${relink ? `<p class="muted">${t("acct.relink_note")}</p>` : ""}
+    <form id="f-acct-slug" class="form-grid${relink ? " hidden" : ""}"><label><span>${t("acct.slug")}</span><input type="text" name="slug" required maxlength="32"
+      pattern="[a-z0-9][a-z0-9_\-]{0,31}" value="${esc(slug || "")}" autocomplete="off" title="${esc(t("acct.slug_hint"))}"></label>
+      <button class="btn primary" type="submit">${t("acct.start")}</button></form>
+    <div id="acct-step" class="hidden"><p>${t("acct.step_open")}</p><p><a class="btn" id="acct-url" target="_blank" rel="noopener noreferrer">${t("acct.open_signin")}</a></p>
+      <p>${t("acct.step_paste")}</p><form id="f-acct-code" class="form-grid"><label><span>${t("acct.code")}</span><input type="text" name="code" required autocomplete="off" spellcheck="false"></label>
+      <button class="btn primary" type="submit">${t("acct.finish")}</button></form></div>
+    <div class="error" id="acct-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+  const err = $("#acct-err", d);
+  const start = async (s) => {
+    err.textContent = "";
+    try {
+      const r = await api(`/api/admin/accounts/${encodeURIComponent(s)}/login/start`, { method: "POST", body: {} });
+      slug = s;
+      $("#acct-url", d).href = r.url;
+      $("#f-acct-slug", d).classList.add("hidden"); $("#acct-step", d).classList.remove("hidden");
+      $("#f-acct-code input", d).focus();
+    } catch (e) { err.textContent = e.message; }
+  };
+  $("#f-acct-slug", d).onsubmit = (e) => { e.preventDefault(); start(new FormData(e.target).get("slug").trim()); };
+  $("#f-acct-code", d).onsubmit = async (e) => {
+    e.preventDefault();
+    err.textContent = "";
+    try {
+      await api(`/api/admin/accounts/${encodeURIComponent(slug)}/login/finish`, { method: "POST", body: { code: new FormData(e.target).get("code") } });
+      d.close(); render();
+    } catch (e2) { err.textContent = e2.message; }
+  };
+  if (relink) start(slug);
 }
 
 async function renderQuota(main) {

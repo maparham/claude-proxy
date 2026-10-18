@@ -6,6 +6,7 @@ import hashlib
 import json
 import logging
 import os
+import re
 import secrets
 import sqlite3
 import time
@@ -17,6 +18,18 @@ import httpx
 from cryptography.fernet import Fernet
 
 logger = logging.getLogger("claude_proxy")
+
+# One row per linked subscription in `credentials` (spec 2026-10-13, section 2). Pre-multi databases hold a
+# single legacy row, migrated to this account.
+DEFAULT_ACCOUNT = "default"
+ACCOUNT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,31}$")
+
+
+def validate_account(account: str) -> str:
+    account = (account or "").strip()
+    if not ACCOUNT_RE.match(account):
+        raise ValueError(f"account {account!r} must match {ACCOUNT_RE.pattern} (e.g. 'default', 'second')")
+    return account
 
 
 @dataclass
@@ -153,24 +166,44 @@ async def token_request(http: httpx.AsyncClient, cfg, payload: dict) -> httpx.Re
 
 
 def token_record(tok: dict, previous_refresh: str | None = None) -> dict:
+    account = tok.get("account") or {}
+    sub = None
+    if isinstance(account, dict):
+        for key in ("uuid", "id", "sub", "user_id"):   # `uuid` is what Anthropic sends today (spec decision 8)
+            if account.get(key):
+                sub = str(account[key])
+                break
     return {
         "access_token": tok["access_token"],
         "refresh_token": tok.get("refresh_token") or previous_refresh,
         "expires_at": int(time.time()) + int(tok.get("expires_in", 3600)),
         "scope": tok.get("scope"),
-        "account": (tok.get("account") or {}).get("email_address"),
+        "account": account.get("email_address") if isinstance(account, dict) else None,
+        "anthropic_sub": sub,
     }
+
+
+def list_accounts(conn: sqlite3.Connection) -> list[dict]:
+    """Every linked subscription, oldest first. Plaintext columns only; tokens stay encrypted."""
+    return [dict(r) for r in conn.execute(
+        "SELECT account, label, state, email, anthropic_sub, expires_at, updated_at FROM credentials "
+        "WHERE backend='oauth' ORDER BY rowid")]
 
 
 # --- OAuth backend ---
 
 class OAuthBackend:
-    """Holds the gateway's own grant. Sole refresher, single-flight (spec 5.1)."""
+    """Holds the gateway's grant for one subscription account. Sole refresher, single-flight (spec 5.1).
 
-    def __init__(self, cfg, conn: sqlite3.Connection, http: httpx.AsyncClient):
+    One instance per account: locks, backoff and `needs_login` state are per subscription, so a 401 on one
+    account never spends another account's single-use refresh token.
+    """
+
+    def __init__(self, cfg, conn: sqlite3.Connection, http: httpx.AsyncClient, account: str = DEFAULT_ACCOUNT):
         self.cfg = cfg
         self.conn = conn
         self.http = http
+        self.account = validate_account(account)
         self._lock = asyncio.Lock()
         self._cache: dict | None = None
         self._state: str | None = None
@@ -182,7 +215,8 @@ class OAuthBackend:
     def _load(self) -> tuple[dict | None, str | None]:
         # The decrypted grant is cached until the stored row changes (`claude-proxy login` from another process).
         # Compared by content: `updated_at` has one-second resolution and could miss a login in the same second.
-        row = self.conn.execute("SELECT encrypted_blob, state FROM credentials WHERE backend='oauth'").fetchone()
+        row = self.conn.execute("SELECT encrypted_blob, state FROM credentials WHERE backend='oauth' AND account=?",
+                                (self.account,)).fetchone()
         if not row or not row["encrypted_blob"]:
             self._cache = None
             return None, None
@@ -202,16 +236,22 @@ class OAuthBackend:
         # before the old one is gone.
         blob = encrypt_blob(data)
         self.conn.execute(
-            "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,?)",
-            (blob, data["expires_at"], int(time.time()), state),
+            "INSERT INTO credentials(backend, account, encrypted_blob, expires_at, updated_at, state, label, "
+            "anthropic_sub, email) VALUES('oauth',?,?,?,?,?,?,?,?) "
+            "ON CONFLICT(backend, account) DO UPDATE SET encrypted_blob=excluded.encrypted_blob, "
+            "expires_at=excluded.expires_at, updated_at=excluded.updated_at, state=excluded.state, "
+            "anthropic_sub=COALESCE(excluded.anthropic_sub, anthropic_sub), email=COALESCE(excluded.email, email)",
+            (self.account, blob, data["expires_at"], int(time.time()), state,
+             data.get("label") or self.account, data.get("anthropic_sub"), data.get("account")),
         )
         self._cache, self._state, self._blob = data, state, blob
 
     def _mark_needs_login(self, reason: str) -> None:
-        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth'", (int(time.time()),))
+        self.conn.execute("UPDATE credentials SET state='needs_login', updated_at=? WHERE backend='oauth' AND account=?",
+                          (int(time.time()), self.account))
         self._state = "needs_login"
         self.last_error = reason
-        logger.error("oauth grant needs login: %s", reason)
+        logger.error("oauth grant [%s] needs login: %s", self.account, reason)
 
     async def _refresh(self, failed_token: str | None, force: bool) -> bool:
         async with self._lock:
@@ -238,7 +278,7 @@ class OAuthBackend:
             except httpx.HTTPError as e:
                 self.last_error = f"refresh transport error: {e}"
                 self._retry_at = time.time() + REFRESH_BACKOFF_S
-                logger.warning(self.last_error)
+                logger.warning("[%s] %s", self.account, self.last_error)
                 return False
             if resp.status_code != 200:
                 body = resp.text[:300]
@@ -248,20 +288,25 @@ class OAuthBackend:
                 else:
                     self.last_error = f"refresh failed {resp.status_code}: {body}"
                     self._retry_at = time.time() + REFRESH_BACKOFF_S
-                    logger.warning(self.last_error)
+                    logger.warning("[%s] %s", self.account, self.last_error)
                 return False
             try:
                 record = token_record(resp.json(), refresh_token)
+                # A refresh answer may omit `account`; keep the identity from the grant so the
+                # duplicate-subscription check and the displayed email survive refreshes.
+                for key in ("account", "anthropic_sub"):
+                    if not record.get(key):
+                        record[key] = data.get(key)
             except (ValueError, KeyError, TypeError, AttributeError):
                 # A 200 without a usable token; the refresh token may not have been spent, so retry later.
                 self.last_error = f"refresh returned an unreadable token response: {resp.text[:200]}"
                 self._retry_at = time.time() + REFRESH_BACKOFF_S
-                logger.warning(self.last_error)
+                logger.warning("[%s] %s", self.account, self.last_error)
                 return False
             self.store(record)
             self._refreshed_at = time.time()
             self.last_error = None
-            logger.info("oauth access token refreshed")
+            logger.info("oauth access token refreshed [%s]", self.account)
             return True
 
     async def upstream_headers(self) -> dict[str, str]:
@@ -309,14 +354,18 @@ class OAuthBackend:
             data, state = self._load()
         except CredentialKeyMissing as e:
             return BackendStatus("oauth", False, str(e))
+        name = "oauth" if self.account == DEFAULT_ACCOUNT else f"oauth:{self.account}"
         if data is None:
-            return BackendStatus("oauth", False, "not linked — run `claude-proxy login`")
+            return BackendStatus(name, False, f"not linked — run `claude-proxy login --account {self.account}`")
         if state in ("needs_login", "decrypt_failed"):
-            return BackendStatus("oauth", False, f"{state} — run `claude-proxy login`. {self.last_error or ''}".strip(), data.get("expires_at"))
+            return BackendStatus(name, False, f"{state} — run `claude-proxy login --account {self.account}`. "
+                                             f"{self.last_error or ''}".strip(), data.get("expires_at"))
         if data.get("expires_at", 0) <= time.time():
-            return BackendStatus("oauth", False, f"access token expired; refresh retrying ({self.last_error or 'pending'})",
+            return BackendStatus(name, False, f"access token expired; refresh retrying ({self.last_error or 'pending'})",
                                  data.get("expires_at"))
         detail = f"linked{' as ' + data['account'] if data.get('account') else ''}"
+        if self.account != DEFAULT_ACCOUNT:
+            detail += f" (account {self.account})"
         if self.last_error:
             detail += f"; last error: {self.last_error}"
-        return BackendStatus("oauth", True, detail, data.get("expires_at"))
+        return BackendStatus(name, True, detail, data.get("expires_at"))

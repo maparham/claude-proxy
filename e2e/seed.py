@@ -18,8 +18,10 @@ conn = db.init_db(cfg.db.path)
 _, key = db.create_user(conn, "e2e", role="user")
 expires = int(time.time()) + 30 * 86400
 token = os.environ.get("E2E_UPSTREAM_TOKEN") or "e2e-access-token"
-conn.execute("INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) "
-             "VALUES('oauth',?,?,?,'active')",
+conn.execute("INSERT INTO credentials(backend, account, encrypted_blob, expires_at, updated_at, state, label) "
+             "VALUES('oauth','default',?,?,?,'active','default') "
+             "ON CONFLICT(backend, account) DO UPDATE SET encrypted_blob=excluded.encrypted_blob, "
+             "expires_at=excluded.expires_at, updated_at=excluded.updated_at, state=excluded.state",
              (encrypt_blob({"access_token": token, "refresh_token": "none", "expires_at": expires}), expires, int(time.time())))
 conn.commit()
 print(key)

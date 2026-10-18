@@ -121,12 +121,18 @@ def meta():
     return FakeUpstream("meta.fake")
 
 
-def seed_oauth(conn, access="oauth-access", refresh="oauth-refresh", expires_in=3600):
+def seed_oauth(conn, access="oauth-access", refresh="oauth-refresh", expires_in=3600, account="default",
+               sub=None, email=None):
     from claude_proxy.credentials import encrypt_blob
     exp = int(time.time()) + expires_in
     conn.execute(
-        "INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,'active')",
-        (encrypt_blob({"access_token": access, "refresh_token": refresh, "expires_at": exp}), exp, int(time.time())),
+        "INSERT INTO credentials(backend, account, encrypted_blob, expires_at, updated_at, state, label, "
+        "anthropic_sub, email) VALUES('oauth',?,?,?,?,'active',?,?,?) "
+        "ON CONFLICT(backend, account) DO UPDATE SET encrypted_blob=excluded.encrypted_blob, "
+        "expires_at=excluded.expires_at, updated_at=excluded.updated_at, state=excluded.state, "
+        "anthropic_sub=excluded.anthropic_sub, email=excluded.email",
+        (account, encrypt_blob({"access_token": access, "refresh_token": refresh, "expires_at": exp,
+                                "anthropic_sub": sub, "account": email}), exp, int(time.time()), account, sub, email),
     )
 
 

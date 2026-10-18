@@ -46,6 +46,12 @@ you land on). To split this across two commands, run `claude-proxy login --print
 Claude Code's stored login. Refresh tokens are single-use, so don't reuse this grant anywhere
 else.
 
+The gateway can hold several subscriptions, each under its own name: `claude-proxy login --account second`
+links another one (both `--print-url` and `--code` take `--account`; without it the name is `default`).
+Linking the same Claude account under two names is refused. `claude-proxy account list` shows them and
+`claude-proxy account remove <name>` unlinks one; the dashboard's **Subscriptions** tab does the same.
+For now every request is still served from `default`, so it can be re-linked but not removed.
+
 Listeners bind to `127.0.0.1` by default. To serve a LAN, set `host`/`dashboard_host` in the
 config; beyond a LAN, put Caddy in front (`Caddyfile.example`) and set `secure_cookies = true`.
 Docker: `docker run -v gw:/data -e CLAUDE_PROXY_CREDENTIAL_KEY=... -p 8080:8080 -p 8081:8081 <image>`,
@@ -360,7 +366,7 @@ an email for each order and the buyer a confirmation that contains nothing they 
 
 ## Operations
 
-- `claude-proxy status` shows credential health, the latest account figures and the route keys.
+- `claude-proxy status` shows each subscription's credential health (and flags `default` when it is unlinked), the latest account figures and the route keys.
 - If the grant is revoked or expires, Claude requests get a 503 (an admin's says to run
   `claude-proxy login`; a user's says only that the gateway can't serve Claude right now), and the
   admin's dashboard shows a red banner. A running server picks up

@@ -52,20 +52,27 @@ def cmd_init(args, cfg):
 
 
 def cmd_login(args, cfg):
-    """The gateway's own OAuth grant (spec 5.1). Never reads Claude Code's stored credentials.
+    """The gateway's OAuth grants, one per subscription account (spec 2026-10-13). Never reads Claude Code's stored credentials.
 
-    Interactive by default; `--print-url` then `--code` splits it across two commands.
+    Interactive by default; `--print-url` then `--code` splits it across two commands. Repeat with a different
+    `--account` (and a browser signed into the other Claude account) for each extra subscription.
     """
     from . import login
+    from .credentials import validate_account
+    try:
+        account = validate_account(getattr(args, "account", None) or "default")
+    except ValueError as e:
+        sys.exit(str(e))
     check_key()
     conn = _conn(cfg)
     if not args.code:
-        url = login.start(conn, cfg)
-        print("1. Open this URL in a browser signed in to the Claude account that owns the subscription:\n")
+        url = login.start(conn, cfg, account)
+        print(f"Linking subscription account {account!r}: open this URL in a browser signed in to the Claude account "
+              "that owns the subscription:\n")
         print(f"   {url}\n")
         print("2. Approve access, then copy the code the page shows (or the whole URL you land on).")
         if args.print_url:
-            print("3. Run: claude-proxy login --code '<code>'   (within 15 minutes)")
+            print(f"3. Run: claude-proxy login --account {account} --code '<code>'   (within 15 minutes)")
             return
         pasted = input("\nPaste code: ")
     else:
@@ -73,23 +80,31 @@ def cmd_login(args, cfg):
 
     async def run():
         async with httpx.AsyncClient() as http:
-            return await login.finish(conn, cfg, http, pasted)
+            return await login.finish(conn, cfg, http, pasted, account)
     try:
         record = asyncio.run(run())
     except login.LoginError as e:
         sys.exit(str(e))
-    print(f"Linked{' ' + record['account'] if record.get('account') else ''}. Access token valid until "
+    print(f"Linked account {account!r}{' ' + record['account'] if record.get('account') else ''}. Access token valid until "
           f"{time.ctime(record['expires_at'])}; the gateway refreshes it from now on.")
     print("Do not reuse this grant anywhere else: refresh tokens are single-use.")
 
 
 def cmd_status(args, cfg):
+    from .credentials import DEFAULT_ACCOUNT, list_accounts
     conn = _conn(cfg)
-    be = OAuthBackend(cfg, conn, httpx.AsyncClient())
-    st = be.describe()
-    print(f"credential: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
-    if st.expires_at:
-        print(f"access token expires: {time.ctime(st.expires_at)}")
+    rows = list_accounts(conn)
+    if DEFAULT_ACCOUNT not in {r["account"] for r in rows}:
+        # Every request is served from the default account until routing lands (spec section 4).
+        print(f"credential [{DEFAULT_ACCOUNT}]: NOT OK — not linked; the gateway serves from it — "
+              f"run `claude-proxy login`")
+    for r in rows:
+        be = OAuthBackend(cfg, conn, None, r["account"])
+        st = be.describe()
+        tag = f"[{r['account']}]"
+        print(f"credential {tag}: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
+        if st.expires_at:
+            print(f"  access token expires: {time.ctime(st.expires_at)}")
     for r in conn.execute("SELECT bucket, utilization_pct, resets_at, observed_at, source FROM quota_snapshots q "
                           "WHERE observed_at = (SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket=q.bucket) ORDER BY bucket"):
         age = int(time.time() - r["observed_at"])
@@ -100,6 +115,29 @@ def cmd_status(args, cfg):
               f"({route.api_key_env} {'set' if route.api_key() else 'NOT SET'})")
     n = conn.execute("SELECT COUNT(*) FROM users WHERE enabled=1 AND revoked_at IS NULL").fetchone()[0]
     print(f"active users: {n}")
+
+
+def cmd_account_list(args, cfg):
+    from .credentials import list_accounts
+    conn = _conn(cfg)
+    rows = list_accounts(conn)
+    if not rows:
+        print("No subscription accounts linked. Run `claude-proxy login`.")
+        return
+    for r in rows:
+        be = OAuthBackend(cfg, conn, None, r["account"])
+        st = be.describe()
+        print(f"{r['account']:<16} {'OK' if st.healthy else 'NOT OK':<7} "
+              f"{r['email'] or '-':<32} {st.detail}")
+
+
+def cmd_account_remove(args, cfg):
+    from . import login
+    try:
+        login.remove_account(_conn(cfg), args.account)
+    except login.LoginError as e:
+        sys.exit(str(e))
+    print(f"Removed subscription account {args.account.strip()!r}.")
 
 
 def cmd_user_add(args, cfg):
@@ -322,11 +360,16 @@ def main(argv=None):
     s = sub.add_parser("init", help="create the database and the admin account")
     s.add_argument("--admin-name", default="admin")
     s.set_defaults(func=cmd_init)
-    s = sub.add_parser("login", help="link the Claude subscription (OAuth, PKCE)")
+    s = sub.add_parser("login", help="link a Claude subscription (OAuth, PKCE); repeat per --account")
+    s.add_argument("--account", default="default", help="subscription account label, e.g. 'default' or 'second'")
     s.add_argument("--print-url", action="store_true", help="print the URL and exit; finish with --code")
     s.add_argument("--code", help="finish a login started with --print-url")
     s.set_defaults(func=cmd_login)
     sub.add_parser("status", help="credential, quota and route health").set_defaults(func=cmd_status)
+    ac = sub.add_parser("account", help="manage linked subscription accounts").add_subparsers(dest="sub", required=True)
+    ac.add_parser("list", help="list linked subscription accounts").set_defaults(func=cmd_account_list)
+    s = ac.add_parser("remove", help="remove a linked subscription account (refuses the last one)")
+    s.add_argument("account"); s.set_defaults(func=cmd_account_remove)
     sub.add_parser("serve", help="run the proxy and dashboard listeners").set_defaults(func=cmd_serve)
 
     u = sub.add_parser("user").add_subparsers(dest="sub", required=True)

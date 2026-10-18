@@ -145,7 +145,10 @@ def _expired_grant(conn):
     import time as _t
     from claude_proxy.credentials import encrypt_blob
     exp = int(_t.time()) - 10
-    conn.execute("INSERT OR REPLACE INTO credentials(backend, encrypted_blob, expires_at, updated_at, state) VALUES('oauth',?,?,?,'active')",
+    conn.execute("INSERT INTO credentials(backend, account, encrypted_blob, expires_at, updated_at, state, label) "
+                 "VALUES('oauth','default',?,?,?,'active','default') "
+                 "ON CONFLICT(backend, account) DO UPDATE SET encrypted_blob=excluded.encrypted_blob, "
+                 "expires_at=excluded.expires_at, updated_at=excluded.updated_at, state=excluded.state",
                  (encrypt_blob({"access_token": "old", "refresh_token": "r1", "expires_at": exp}), exp, int(_t.time())))
 
 
