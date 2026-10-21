@@ -9,7 +9,7 @@ import httpx
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import limits, quota, titles
+from . import api_credit, limits, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
@@ -39,9 +39,13 @@ def route_model_entries(cfg: Config) -> list[dict]:
 def scope_allows(key_scope: str, method: str, path: str, route: Route | None) -> bool:
     """Whether a key of this scope may make this request (spec 2.3). A routes-only key (OpenCode) gets exactly two
     things: messages and token counts for a routed model, and the model list, which the gateway answers itself.
-    Everything else is refused, so it can never reach the subscription credential."""
+    Everything else is refused, so it can never reach the subscription credential. An API key (2026-10-21 spec) gets
+    messages and token counts for a Claude model, and the model list."""
     if key_scope == "full":
         return True
+    if key_scope == "api":
+        # Claude Code billed per token: messages and token counts on the subscription, and the model list. No routes.
+        return (method == "POST" and path in ROUTED_PATHS and route is None) or (method == "GET" and path == "/v1/models")
     if method == "GET" and path == "/v1/models":
         return True
     return method == "POST" and path in ROUTED_PATHS and route is not None
@@ -80,11 +84,13 @@ class Inflight:
             self.counts.pop(user_id, None)
 
 
-def inflight_of(gw: Gateway) -> Inflight:
-    """The gateway's registry, made on first use so every Gateway (and every test's) has its own."""
-    reg = getattr(gw, "inflight", None)
+def inflight_of(gw: Gateway, attr: str = "inflight") -> Inflight:
+    """The gateway's registry, made on first use so every Gateway (and every test's) has its own. API keys count in
+    their own registry ("api_inflight"): their cap is the account's API limit, not [limits] max_inflight."""
+    reg = getattr(gw, attr, None)
     if reg is None:
-        reg = gw.inflight = Inflight()
+        reg = Inflight()
+        setattr(gw, attr, reg)
     return reg
 
 
@@ -201,7 +207,11 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             inflight.release(base["user_id"])
             held = False
         try:
-            insert_request(conn, **{**base, "ended_at": time.time(), **kw})
+            rid = insert_request(conn, **{**base, "ended_at": time.time(), **kw})
+            if base.get("api_key_id") and "rejected_by" not in kw:
+                # Priced by the model the gate approved; the reply's model id only if that one has no rate.
+                model_ = base.get("requested_model") if api_credit.rate_for(conn, base.get("requested_model")) else kw.get("model")
+                api_credit.charge(conn, base["user_id"], base["api_key_id"], rid, model_, kw)
         except Exception:
             logger.exception("could not record request")
 
@@ -211,7 +221,10 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         record(user_id=None, status=e.status, stream=0, complete=1, error_type=e.body["error"]["type"], rejected_by="auth")
         return JSONResponse(status_code=e.status, content=e.body)
     base["user_id"] = user["id"]
-    is_admin = user["role"] == "admin"
+    is_admin = user["role"] == "admin"   # an API key is never an admin's (db.find_user_by_key), so its replies are always scrubbed
+    is_api = user["key_scope"] == "api"
+    base["api_key_id"] = user.get("api_key_id")
+    inflight = inflight_of(gw, "api_inflight" if is_api else "inflight")
     base["session_id"] = session_id(request.headers)
     base["client_version"] = (request.headers.get("user-agent") or "")[:128] or None
 
@@ -227,12 +240,16 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
 
+    if is_api and not cfg.api.enabled:
+        record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
+        return api_error(403, "permission_error", "The API is not enabled on this gateway.")
     if not scope_allows(user["key_scope"], request.method, path, route):
         # Before the model check and limits: this key never reaches Claude, whatever else is wrong with the request.
         record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
-        return api_error(403, "permission_error", f"This key is for third-party models only ({_route_patterns(cfg)}). "
-                         "Claude models need your Claude Code key.")
-    if user["key_scope"] != "full" and path == "/v1/models":
+        msg = ("API keys reach Claude models only, through /v1/messages." if is_api else
+               f"This key is for third-party models only ({_route_patterns(cfg)}). Claude models need your Claude Code key.")
+        return api_error(403, "permission_error", msg)
+    if user["key_scope"] == "routes" and path == "/v1/models":
         base["provider"] = "gateway"
         record(status=200, stream=0, complete=1)
         entries = route_model_entries(cfg)
@@ -252,7 +269,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # What limits count: a forwarded request for a model (not count_tokens, not the model list). While one is being
     # served it is in `inflight`, so the next request sees it even though it is recorded only when it ends.
     metered = model is not None and path != COUNT_TOKENS_PATH
-    decision = limits.evaluate(conn, cfg, user["id"], model, path, inflight=inflight.get(user["id"]) if metered else 0)
+    held_now = inflight.get(user["id"]) if metered else 0
+    decision = (api_credit.evaluate(conn, cfg, user["id"], model, path, inflight=held_now) if is_api
+                else limits.evaluate(conn, cfg, user["id"], model, path, inflight=held_now))
     if decision:
         record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
         logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
@@ -328,6 +347,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers={"retry-after": retry} if retry else None)
 
         if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:
+            if is_api:
+                return await _models_for_api(gw, resp, resp_headers, record)
             return await _models_with_routes(gw, resp, resp_headers, record)
 
         is_stream = "text/event-stream" in resp.headers.get("content-type", "")
@@ -349,7 +370,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                     yield chunk
                 finished = True
             finally:
-                await resp.aclose()
+                # Record first: on a client disconnect the await below can be cancelled, and a request never recorded
+                # would keep its inflight slot and go uncharged.
                 mr = meter.finalize() if meter is not None else parse_non_streaming(bytes(buf), path, collect_text=wants_title)
                 record(
                     model=mr.model or base["model"], status=resp.status_code, stream=1 if is_stream else 0,
@@ -367,6 +389,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                         set_session_title(conn, user["id"], base["session_id"], title)
                     except Exception:
                         logger.exception("could not record session title")
+                await resp.aclose()
 
         return StreamingResponse(relay(), status_code=status, headers=resp_headers)
     except BaseException:
@@ -376,6 +399,24 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             inflight.release(base["user_id"])
             held = False
         raise
+
+
+async def _models_for_api(gw: Gateway, resp: httpx.Response, headers: dict, record) -> Response:
+    """Anthropic's list cut to the models an API key may use: those with an API rate."""
+    raw = await resp.aread()
+    await resp.aclose()
+    try:
+        data = json.loads(raw)
+        data["data"] = [m for m in data.get("data", []) if api_credit.rate_for(gw.conn, m.get("id"))]
+        ids = [m["id"] for m in data["data"]]
+        data["first_id"], data["last_id"] = (ids[0], ids[-1]) if ids else (None, None)
+        raw = json.dumps(data).encode()
+    except (ValueError, AttributeError, TypeError, KeyError):
+        data = {"data": [], "has_more": False, "first_id": None, "last_id": None}   # unreadable: list nothing rather than everything
+        raw = json.dumps(data).encode()
+    record(status=200, stream=0, complete=1)
+    headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
+    return Response(raw, status_code=200, headers=headers, media_type="application/json")
 
 
 async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, record) -> Response:

@@ -146,8 +146,9 @@ def _window_state(conn, cfg, user_id, row, now, inflight: int = 0) -> LimitState
     kind, scope, unit = row["kind"], row["scope"], row["unit"]
     limit = float(row["value"])
     # The rows a usage limit sees, for opening its window and for filling it alike: forwarded requests for a model.
-    # A model-less request (GET /v1/models) costs nothing and is neither.
-    where = "user_id=? AND rejected_by IS NULL AND path!=? AND COALESCE(requested_model, model) IS NOT NULL"
+    # A model-less request (GET /v1/models) costs nothing and is neither. API-key requests are paid from API credit.
+    where = ("user_id=? AND rejected_by IS NULL AND path!=? AND COALESCE(requested_model, model) IS NOT NULL "
+             "AND api_key_id IS NULL")
     params = [user_id, COUNT_TOKENS_PATH]
     start = _window_start(conn, user_id, row, now, where, params)
     pending = float(inflight) if kind.startswith("requests_") else 0.0
@@ -169,7 +170,7 @@ def _total_state(conn, cfg, user_id, row) -> LimitState:
     kind, scope, unit = row["kind"], row["scope"], row["unit"]
     limit = float(row["value"])
     groups = conn.execute(f"SELECT requested_model AS rm, model, {SUMS} FROM requests WHERE user_id=? AND rejected_by IS NULL "
-                          f"AND path!=? GROUP BY rm, model", (user_id, COUNT_TOKENS_PATH)).fetchall()
+                          f"AND path!=? AND api_key_id IS NULL GROUP BY rm, model", (user_id, COUNT_TOKENS_PATH)).fetchall()
     if scope != "*":
         groups = [g for g in groups if fnmatch.fnmatchcase(g["rm"] or "", scope) or fnmatch.fnmatchcase(g["model"] or "", scope)]
     current = sum(_amount(kind, unit, price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])))
@@ -211,7 +212,8 @@ def _gated(conn, cfg, user_id) -> bool:
 
 def _weighted_since(conn, cfg, user_id, since, now) -> float:
     """The user's weighted Anthropic tokens that ended in (since, now], weighed as quota.observed_rate weighs them."""
-    span = "user_id=? AND provider='anthropic' AND rejected_by IS NULL AND path!=? AND ended_at>? AND ended_at<=?"
+    span = ("user_id=? AND provider='anthropic' AND rejected_by IS NULL AND path!=? AND api_key_id IS NULL "
+            "AND ended_at>? AND ended_at<=?")
     params = (user_id, COUNT_TOKENS_PATH, since, now)
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
     w, args = quota.weighted_sql(cfg.pricing, models)
@@ -391,7 +393,7 @@ def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tupl
     that is at the cap, the seconds until enough of it has left the window to be under it."""
     cap = cfg.signup.free_daily_cap_usd
     where = ("user_id IN (SELECT user_id FROM limits WHERE kind='cost_total') AND started_at>? "
-             "AND rejected_by IS NULL AND path!=?")
+             "AND rejected_by IS NULL AND path!=? AND api_key_id IS NULL")
     params: list = [now - DAY, COUNT_TOKENS_PATH]
     groups = conn.execute(f"SELECT model, {SUMS} FROM requests WHERE {where} GROUP BY model", params).fetchall()
     spent = sum(price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])).cost_usd
