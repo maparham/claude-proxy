@@ -269,7 +269,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # What limits count: a forwarded request for a model (not count_tokens, not the model list). While one is being
     # served it is in `inflight`, so the next request sees it even though it is recorded only when it ends.
     metered = model is not None and path != COUNT_TOKENS_PATH
-    held_now = inflight.get(user["id"]) if metered else 0
+    # An API key holds a slot for everything it forwards, token counts and the model list included: its rpm counts them.
+    counted = metered or is_api
+    held_now = inflight.get(user["id"]) if counted else 0
     decision = (api_credit.evaluate(conn, cfg, user["id"], model, path, inflight=held_now) if is_api
                 else limits.evaluate(conn, cfg, user["id"], model, path, inflight=held_now))
     if decision:
@@ -277,7 +279,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
         return JSONResponse(status_code=decision.status, content=decision.body,
                             headers={"retry-after": str(decision.retry_after)} if decision.retry_after else None)
-    if metered:
+    if counted:
         inflight.acquire(user["id"])
         held = True
 

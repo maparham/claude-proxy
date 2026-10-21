@@ -126,10 +126,23 @@ def test_garbage_line_before_cut_off_still_estimates_from_later_streamed_chars()
     assert r.output_tokens == 1000   # every content_block_delta after the bad line was still counted
 
 
-def test_line_cap_still_stops_metering():
+def test_an_oversized_event_is_skipped_and_metering_resumes():
+    # One huge event (a large tool result) must not leave the rest of the stream unbilled.
     m = SSEMeter()
     m.feed(b"data: " + b"x" * (1_048_576 + 10) + b"\n\n")
     m.feed(sse_events(output_tokens=64))
     r = m.finalize()
     assert r.meter_error and r.meter_error_detail == "event_cap"
-    assert r.output_tokens == 0 and not r.complete
+    assert r.output_tokens == 64 and r.complete
+
+
+def test_an_oversized_event_split_across_chunks_is_skipped_too():
+    events = sse_events(output_tokens=64)
+    m = SSEMeter()
+    m.feed(b"event: content_block_start\ndata: " + b"x" * 700_000)
+    m.feed(b"x" * 700_000)                      # over the cap with no delimiter yet: skip until the event ends
+    m.feed(b"x" * 1000 + b"\n")
+    m.feed(b"\n" + events)                      # the delimiter split across chunks
+    r = m.finalize()
+    assert r.meter_error and r.meter_error_detail == "line_cap"
+    assert r.output_tokens == 64 and r.complete

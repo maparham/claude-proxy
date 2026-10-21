@@ -208,19 +208,19 @@ def set_account_limits(conn, user_id: int, max_inflight: int | None, rpm: int | 
 
 def evaluate(conn, cfg: Config, user_id: int, model: str | None, path: str, inflight: int = 0, now=None) -> Decision | None:
     """None to forward, or the refusal. Replaces limits.evaluate for API keys: tickets, shares and limit rows don't apply."""
-    if model is None:   # GET /v1/models: nothing to price, nothing to charge
-        return None
     now = time.time() if now is None else now
-    is_count = path == COUNT_TOKENS_PATH
     lim = account_limits(conn, cfg, user_id)
-    if not is_count and inflight >= lim["max_inflight"]:
-        return Decision(429, REJECT_INFLIGHT, _err("rate_limit_error", f"{inflight} of {lim['max_inflight']} requests are "
-                        "already in flight for this account; wait for one to finish."), 1)
-    if rate_for(conn, model) is None:
-        return Decision(404, REJECT_UNPRICED, _err("not_found_error", f"model: {model} is not available on this API."))
-    if not is_count and balance(conn, user_id) <= 0:
-        return Decision(400, REJECT_CREDIT, _err("invalid_request_error", LOW_CREDIT))
-    # Token counts are free but still reach the subscription, so they count here: a key with no credit can't flood it.
+    if model is not None:   # GET /v1/models has nothing to price or charge, but it still gets the rpm check below
+        is_count = path == COUNT_TOKENS_PATH
+        if not is_count and inflight >= lim["max_inflight"]:
+            return Decision(429, REJECT_INFLIGHT, _err("rate_limit_error", f"{inflight} of {lim['max_inflight']} requests are "
+                            "already in flight for this account; wait for one to finish."), 1)
+        if rate_for(conn, model) is None:
+            return Decision(404, REJECT_UNPRICED, _err("not_found_error", f"model: {model} is not available on this API."))
+        if not is_count and balance(conn, user_id) <= 0:
+            return Decision(400, REJECT_CREDIT, _err("invalid_request_error", LOW_CREDIT))
+    # Token counts and the model list are free but still reach the subscription, so they count here, the ones in flight
+    # included (app.handle holds a slot for every API request): a key with no credit can't flood it.
     recent = conn.execute("SELECT COUNT(*) FROM requests WHERE user_id=? AND api_key_id IS NOT NULL AND rejected_by IS NULL "
                           "AND started_at>=?", (user_id, now - 60)).fetchone()[0]
     if recent + inflight >= lim["rpm"]:

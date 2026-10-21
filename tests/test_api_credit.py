@@ -246,10 +246,11 @@ def test_count_tokens_needs_a_priced_model_and_rpm_room_but_no_credit(db, api_cf
     assert api_credit.evaluate(conn, api_cfg, uid, "claude-x", COUNT_TOKENS_PATH).kind == api_credit.REJECT_RPM
 
 
-def test_no_model_means_nothing_to_gate(db, api_cfg):
+def test_the_model_list_needs_no_credit_but_counts_for_rpm(db, api_cfg):
     conn = db[1]
     uid, _ = create_user(conn, "alice")
-    assert api_credit.evaluate(conn, api_cfg, uid, None, "/v1/models", inflight=99) is None
+    assert api_credit.evaluate(conn, api_cfg, uid, None, "/v1/models", inflight=2) is None   # no credit, no price
+    assert api_credit.evaluate(conn, api_cfg, uid, None, "/v1/models", inflight=3).kind == api_credit.REJECT_RPM
 
 
 def test_usage_by_key_and_day_and_admin_accounts(db, api_cfg):

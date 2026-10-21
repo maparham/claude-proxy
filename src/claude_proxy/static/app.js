@@ -1116,6 +1116,8 @@ async function renderApi(main) {
       ${me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
         <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
       </tbody></table></div></div>
+    ${adm ? "" : `<div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
+      <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}
     ${adm ? `
     <div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
       <form id="f-arates"><div class="table-wrap"><table class="data">${rateHead(true)}<tbody>${adm.rates.map((r) => rateRow(r, true)).join("")}</tbody></table></div>
@@ -1128,49 +1130,66 @@ async function renderApi(main) {
         <label>${t("tk.note")}<input name="note" maxlength="200" required></label><button class="btn primary" type="submit">${t("api.add_credit")}</button></form><div class="error" id="acredit-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th class="r">${t("api.balance")}</th><th class="r">${t("api.spent_30d")}</th><th class="r">${t("api.keys")}</th><th class="r">${t("api.max_inflight")}</th><th class="r">${t("api.rpm")}</th><th></th></tr></thead><tbody>
       ${adm.accounts.map((a) => `<tr><td>${bdi(a.name)}</td><td class="r num">${fmtSigned(a.balance)}</td><td class="r num">${fmtUsd(a.spent_30d)}</td><td class="r num">${nfFull.format(a.keys)}</td>
-        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${esc(a.name)}" value="${a.custom ? a.max_inflight : ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
-        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${esc(a.name)}" value="${a.custom ? a.rpm : ""}" placeholder="${a.rpm}" style="width:60px"></td>
-        <td><button class="btn small" data-lsave="${esc(a.name)}">${t("app.save")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
+        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${a.user_id}" value="${a.custom ? a.max_inflight : ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
+        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.custom ? a.rpm : ""}" placeholder="${a.rpm}" style="width:60px"></td>
+        <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
       </tbody></table></div></div>` : ""}
   </section>`;
 
-  const post = async (path, body, errEl) => { try { const r = await api(path, { method: "POST", body }); return r; } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); return null; } };
+  const say = (msg, errEl) => (errEl ? (errEl.textContent = msg) : alertInline(msg));
+  // The button stays disabled while the request runs: a double click must not grant credit or make a key twice.
+  const post = async (path, body, errEl, btn) => {
+    if (btn) btn.disabled = true;
+    try { return await api(path, { method: "POST", body }); } catch (e) { say(e.message, errEl); return null; } finally { if (btn) btn.disabled = false; }
+  };
+  // A typo must be refused here: JSON sends NaN as null, which the server reads as "use the default".
+  const numv = (v) => num(String(v ?? "").replace(/\u2212/g, "-"));   // the page prints negatives with U+2212
+  const bad = (vals, errEl) => (vals.some(Number.isNaN) ? (say(t("api.bad_number"), errEl), true) : false);
   $("#f-akey").onsubmit = async (e) => {
     e.preventDefault();
-    const r = await post("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"));
-    if (r) keyDialog(t("api.new_key"), r.key, t("api.key_how"));
+    const r = await post("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"), e.submitter);
+    if (r) { await render(); keyDialog(t("api.new_key"), r.key, t("api.key_how")); }
   };
   main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
     if (!confirm(t("api.revoke_confirm"))) return;
-    if (await post(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {})) render();
+    if (await post(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {}, null, b)) render();
   }));
   if (!adm) return;
   $("#f-arates").onsubmit = async (e) => {
     e.preventDefault();
     const changed = {};
-    e.target.querySelectorAll("input[data-pattern]").forEach((i) => { if (num(i.value) !== Number(i.dataset.init)) (changed[i.dataset.pattern] ||= {})[i.name] = num(i.value); });
+    const inputs = [...e.target.querySelectorAll("input[data-pattern]")];
+    if (bad(inputs.map((i) => numv(i.value)), $("#arates-err"))) return;
+    inputs.forEach((i) => { if (numv(i.value) !== Number(i.dataset.init)) (changed[i.dataset.pattern] ||= {})[i.name] = numv(i.value); });
     for (const [pattern, edits] of Object.entries(changed)) {
       const r = adm.rates.find((x) => x.pattern === pattern);
-      if (!(await post("/api/admin/api/rates", { ...r, ...edits, pattern }, $("#arates-err")))) return;
+      if (!(await post("/api/admin/api/rates", { ...r, ...edits, pattern }, $("#arates-err"), e.submitter))) return;
     }
     render();
   };
   main.querySelectorAll("[data-rdel]").forEach((b) => (b.onclick = async () => {
-    if (confirm(t("api.delete_confirm", { pattern: b.dataset.rdel })) && (await post("/api/admin/api/rates/delete", { pattern: b.dataset.rdel }))) render();
+    if (confirm(t("api.delete_confirm", { pattern: iso(b.dataset.rdel) })) && (await post("/api/admin/api/rates/delete", { pattern: b.dataset.rdel }, null, b))) render();
   }));
   $("#f-arate-add").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
-    if (await post("/api/admin/api/rates", { pattern: f.pattern.value.trim(), input: num(f.input.value), output: num(f.output.value) }, $("#arate-add-err"))) render();
+    const input = numv(f.input.value), output = numv(f.output.value);
+    if (bad([input, output], $("#arate-add-err"))) return;
+    if (await post("/api/admin/api/rates", { pattern: f.pattern.value.trim(), input, output }, $("#arate-add-err"), e.submitter)) render();
   };
   $("#f-acredit").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
-    if (await post("/api/admin/api/credit", { user: f.user.value.trim(), usd: num(f.usd.value), note: f.note.value }, $("#acredit-err"))) render();
+    const usd = numv(f.usd.value);
+    if (bad([usd], $("#acredit-err"))) return;
+    if (await post("/api/admin/api/credit", { user: f.user.value.trim(), usd, note: f.note.value }, $("#acredit-err"), e.submitter)) render();
   };
   main.querySelectorAll("[data-lsave]").forEach((b) => (b.onclick = async () => {
-    const v = (k) => { const i = main.querySelector(`input[data-lim="${k}"][data-user="${CSS.escape(b.dataset.lsave)}"]`); return i.value.trim() === "" ? null : num(i.value); };
-    if (await post("/api/admin/api/limits", { user: b.dataset.lsave, max_inflight: v("max_inflight"), rpm: v("rpm") })) render();
+    const v = (k) => { const i = main.querySelector(`input[data-lim="${k}"][data-user="${b.dataset.lsave}"]`); return i.value.trim() === "" ? null : numv(i.value); };
+    const max_inflight = v("max_inflight"), rpm = v("rpm");
+    if (bad([max_inflight, rpm])) return;
+    // By id: target_user reads a name of digits as an id.
+    if (await post("/api/admin/api/limits", { user: Number(b.dataset.lsave), max_inflight, rpm }, null, b)) render();
   }));
 }
 

@@ -74,7 +74,7 @@ class SSEMeter:
     """Bounded SSE parser per spec 6.1-6.3.
 
     - Buffers at most one event (processes as soon as \\n\\n found)
-    - Caps line buffer at 1 MiB; on cap sets meter_error and stops metering but forwarding continues
+    - Caps line buffer at 1 MiB; on cap sets meter_error and skips that event, metering resumes at the next one
     - One unparsable event sets meter_error (for observability) but is skipped; later events are still metered,
       so message_delta's final output_tokens is not lost to a single bad line
     - SSE rule: message_start usage -> input/cache/model/id, message_delta overwrites output (cumulative) and overwrites input/cache if present
@@ -88,7 +88,7 @@ class SSEMeter:
         self._collect_text = collect_text
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")   # chunks may split a character
         self._streamed_chars = 0
-        self._stopped = False   # set by the size caps only; a bad line does not stop metering
+        self._skipping = False  # inside an event over the size cap: dropped until it ends
 
     @property
     def meter_error(self) -> bool:
@@ -99,22 +99,37 @@ class SSEMeter:
         if self.result.meter_error_detail is None:   # keep the first cause
             self.result.meter_error_detail = detail
 
-    def _stop(self, detail: str) -> None:
+    def _skip(self, detail: str) -> None:
+        # Drop the oversized event in progress and resume at the next one: memory stays bounded, and the usage after
+        # it (message_delta's final counts) is still metered, so one huge tool result can't leave a stream unbilled.
         self._flag(detail)
-        self._stopped = True
+        self._skipping = True
         self._buf = ""
 
+    @staticmethod
+    def _delimiter(buf: str) -> tuple[int, int]:
+        """(index, length) of the earliest event delimiter, or (-1, 0)."""
+        idx, idx2 = buf.find("\n\n"), buf.find("\r\n\r\n")
+        if idx2 != -1 and (idx == -1 or idx2 < idx):
+            return idx2, 4
+        return (idx, 2) if idx != -1 else (-1, 0)
+
     def feed(self, chunk: bytes):
-        if self._stopped:
-            return
         self._buf += self._decoder.decode(chunk)
+        if self._skipping:
+            at, n = self._delimiter(self._buf)
+            if at == -1:
+                self._buf = self._buf[-3:]   # a delimiter may be split across chunks
+                return
+            self._buf = self._buf[at + n:]
+            self._skipping = False
 
         # Quick cap check: if buffer grows huge without delimiter
         if len(self._buf.encode("utf-8")) > MAX_LINE_BYTES and "\n\n" not in self._buf and "\r\n\r\n" not in self._buf:
             # Check if any single line already exceeds
             # Simplest: if buffer exceeds cap, flag error and stop metering
-            logger.warning("meter line cap hit (%d bytes) — metering stopped", len(self._buf.encode("utf-8")))
-            self._stop("line_cap")
+            logger.warning("meter line cap hit (%d bytes) — skipping that event", len(self._buf.encode("utf-8")))
+            self._skip("line_cap")
             return
 
         # Process at most one event per feed iteration? Spec says ≤1 event buffered — drain all available
@@ -124,8 +139,8 @@ class SSEMeter:
             if idx == -1 and idx2 == -1:
                 # No complete event yet; check if current partial line already over cap
                 if len(self._buf.encode("utf-8")) > MAX_LINE_BYTES:
-                    logger.warning("meter line cap hit on partial event — metering stopped")
-                    self._stop("line_cap")
+                    logger.warning("meter line cap hit on partial event — skipping that event")
+                    self._skip("line_cap")
                 break
             # choose earliest delimiter
             if idx != -1 and idx2 != -1:
@@ -142,9 +157,9 @@ class SSEMeter:
             self._buf = self._buf[use_idx + delim_len :]
 
             if len(block.encode("utf-8")) > MAX_LINE_BYTES:
-                logger.warning("meter event cap hit (%d bytes) — metering stopped", len(block.encode("utf-8")))
-                self._stop("event_cap")
-                break
+                logger.warning("meter event cap hit (%d bytes) — skipping that event", len(block.encode("utf-8")))
+                self._flag("event_cap")
+                continue
 
             if not block.strip():
                 continue

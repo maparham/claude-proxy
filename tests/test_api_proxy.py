@@ -192,3 +192,25 @@ async def test_api_traffic_does_not_count_against_limit_rows(env, anthropic):
         for _ in range(2):
             assert (await c.post("/v1/messages", json={**MSG, "stream": False}, headers=h)).status_code == 200
     assert limits.evaluate(conn, gw.cfg, uid, "claude-sonnet-5", "/v1/messages") is None
+
+
+async def test_no_credit_cannot_flood_the_subscription_with_token_counts_or_model_lists(env, anthropic):
+    gw, conn, uid, kid, h = env   # no credit; rpm 3
+    gw.cfg.api.rpm = 3
+    gate = asyncio.Event()
+
+    async def held_body():
+        await gate.wait()
+        yield b'{"input_tokens": 12}'
+
+    anthropic.default = lambda req: StreamingResponse(held_body(), media_type="application/json")
+    async with asgi_client(create_app(gw)) as c:
+        body = {"model": "claude-sonnet-5", "messages": []}
+        tasks = [asyncio.create_task(c.post("/v1/messages/count_tokens", json=body, headers=h)) for _ in range(6)]
+        await asyncio.sleep(0.05)
+        gate.set()
+        codes = sorted(r.status_code for r in await asyncio.gather(*tasks))
+        assert codes == [200, 200, 200, 429, 429, 429] and len(anthropic.calls) == 3   # in-flight counts toward rpm
+        anthropic.default = lambda req: JSONResponse({"data": [{"id": "claude-sonnet-5"}], "has_more": False})
+        r = await c.get("/v1/models", headers=h)
+        assert r.status_code == 429 and len(anthropic.calls) == 3   # the model list is rate-limited too
