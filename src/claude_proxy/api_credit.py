@@ -37,6 +37,9 @@ def _price(v, what: str) -> float:
 
 # ---------- rates ----------
 
+def _tidy(v: float) -> float:
+    return round(v, 6)   # derived cache prices: 3 * 0.1 is 0.30000000000000004, which the rate editor would show
+
 def rates(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT pattern, input, output, cache_write_5m, cache_write_1h, cache_read, updated_at FROM api_rates")
     return sorted((dict(r) for r in rows), key=lambda r: (-len(r["pattern"]), r["pattern"]))
@@ -58,8 +61,7 @@ def set_rate(conn, pattern: str, input, output, cache_write_5m=None, cache_write
         raise CreditError("A model pattern needs 1-128 characters and no spaces, such as claude-sonnet-5*.")
     inp, out = _price(input, "The input price"), _price(output, "The output price")
     p = Price(inp, out, *(None if v is None else _price(v, "A cache price") for v in (cache_write_5m, cache_write_1h, cache_read)))
-    row = {"pattern": pattern, "input": p.input, "output": p.output, "cache_write_5m": p.cache_write_5m,
-           "cache_write_1h": p.cache_write_1h, "cache_read": p.cache_read}
+    row = {"pattern": pattern, **{k: _tidy(getattr(p, k)) for k in RATE_FIELDS}}
     conn.execute("INSERT INTO api_rates(pattern, input, output, cache_write_5m, cache_write_1h, cache_read, updated_at, updated_by) "
                  "VALUES(:pattern,:input,:output,:cache_write_5m,:cache_write_1h,:cache_read,:at,:by) ON CONFLICT(pattern) DO UPDATE SET "
                  "input=excluded.input, output=excluded.output, cache_write_5m=excluded.cache_write_5m, "
@@ -85,7 +87,7 @@ def seed_rates(conn, cfg: Config, now=None) -> int:
     for pattern, p in cfg.pricing.prices.items():
         if pattern.startswith("claude-"):
             conn.execute("INSERT INTO api_rates(pattern, input, output, cache_write_5m, cache_write_1h, cache_read, updated_at) "
-                         "VALUES(?,?,?,?,?,?,?)", (pattern, p.input, p.output, p.cache_write_5m, p.cache_write_1h, p.cache_read, at))
+                         "VALUES(?,?,?,?,?,?,?)", (pattern, *(_tidy(getattr(p, k)) for k in RATE_FIELDS), at))
             n += 1
     return n
 

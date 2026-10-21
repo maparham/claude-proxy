@@ -276,3 +276,11 @@ def test_gateway_seeds_rates_only_with_the_api_on(db, cfg):
     cfg.api.enabled = True
     make_gateway(cfg, conn)
     assert api_credit.rates(conn) != []
+
+
+def test_rates_are_stored_without_float_noise(db, cfg):
+    conn = db[1]
+    api_credit.seed_rates(conn, cfg)
+    assert api_credit.set_rate(conn, "claude-z*", 3, 15)["cache_read"] == 0.3   # 3 * 0.1 is 0.30000000000000004
+    assert all(r[f] == round(r[f], 6) for r in api_credit.rates(conn) for f in api_credit.RATE_FIELDS)
+    assert any(r["cache_read"] == 0.3 for r in api_credit.rates(conn))

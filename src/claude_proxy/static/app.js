@@ -396,6 +396,7 @@ const VIEWS = {
   tickets: { render: renderTickets, admin: true, feature: "tickets" },
   orders: { render: renderOrders, admin: true, feature: "tickets" },
   pricing: { render: renderPricing, admin: true, feature: "tickets" },
+  api: { render: renderApi, feature: "api" },
   authorize: { render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { render: renderQuota, admin: true },
   accounts: { render: renderAccounts, admin: true },
@@ -407,9 +408,11 @@ const VIEWS = {
   user: { render: renderUser, admin: true, hidden: true, parent: "users" },   // #user/<id>, opened from Users & limits
 };
 const isAdmin = () => S.user && S.user.role === "admin";
+// A view's feature is "tickets" or "api": on when that config section is.
+const featureOn = (v) => !v.feature || (v.feature === "api" ? S.api?.enabled : S.tickets?.enabled);
 
 function renderTabs() {
-  const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && (!v.feature || S.tickets?.enabled));
+  const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && featureOn(v));
   const current = VIEWS[S.tab]?.parent || S.tab;
   const badge = (k) => (k === "orders" && S.tickets?.orders_new > 0 ? ` <span class="badge tab-count" aria-label="${esc(t("tab.orders_new", { n: S.tickets.orders_new }))}">${nf0.format(S.tickets.orders_new)}</span>` : "");
   $("#tabs").innerHTML = tabs.map(([k]) => `<button role="tab" data-tab="${k}" aria-selected="${k === current}">${esc(t(`tab.${k}`))}${badge(k)}</button>`).join("");
@@ -423,7 +426,7 @@ async function render() {
   renderTabs();
   hideTip();
   disposeCharts();
-  const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && (!VIEWS[S.tab].feature || S.tickets?.enabled) ? VIEWS[S.tab] : VIEWS.overview;
+  const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && featureOn(VIEWS[S.tab]) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
   main.innerHTML = `<p class="muted">${t("app.loading")}</p>`;
   try { await view.render(main); } catch (e) {
@@ -1077,6 +1080,98 @@ async function renderPricing(main) {
   }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
+}
+
+// ---------- API keys on prepaid credit (design 2026-10-21) ----------
+
+const fmtSigned = (v) => (v < 0 ? `−${fmtUsd(-v)}` : fmtUsd(v));   // fmtUsd prints any negative as <$0.01
+
+async function renderApi(main) {
+  const tz = -new Date().getTimezoneOffset() * 60;
+  const [me, adm] = await Promise.all([api(`/api/me/api?tz_offset_s=${tz}`), isAdmin() ? api("/api/admin/api") : null]);
+  const keyName = Object.fromEntries(me.keys.map((k) => [k.id, k.label]));
+  const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code></td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
+    edit ? `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="${f}" data-pattern="${esc(r.pattern)}" data-init="${r[f]}" value="${r[f]}" required style="width:70px"></td>`
+      : `<td class="r num">${esc(String(r[f]))}</td>`).join("")}${edit ? `<td><button class="btn small danger" type="button" data-rdel="${esc(r.pattern)}">${t("api.delete")}</button></td>` : ""}</tr>`;
+  const rateHead = (edit) => `<thead><tr><th>${t("api.model")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cw5")}</th><th class="r">${t("api.cw1")}</th><th class="r">${t("api.cr")}</th>${edit ? "<th></th>" : ""}</tr></thead>`;
+  const env = me.base_url ? `ANTHROPIC_BASE_URL=${me.base_url}\nANTHROPIC_API_KEY=sk-proxy-a-…` : t("api.no_base_url");
+  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>
+    <p class="lede">${t("api.lede")}</p>
+    <div class="grid cols-2">
+      <div class="card tile"><div class="label">${t("api.balance")}</div><div class="value num ${me.balance <= 0 ? "critical" : ""}">${fmtSigned(me.balance)}</div>
+        <p class="foot">${me.balance <= 0 ? t("api.empty") : t("api.limits", { n: nfFull.format(me.limits.max_inflight), rpm: nfFull.format(me.limits.rpm) })}</p>
+        ${me.grants.length ? `<details><summary>${t("api.grants")}</summary><table class="data"><tbody>${me.grants.map((g) =>
+          `<tr><td>${fmtDate(g.at)}</td><td class="r num">${fmtSigned(g.usd)}</td><td>${bdi(g.note)}</td></tr>`).join("")}</tbody></table></details>` : ""}</div>
+      <div class="card"><h3>${t("api.setup")}</h3><p class="sub">${t("api.setup_sub")}</p><code dir="ltr" class="key" style="white-space:pre;overflow-x:auto">${esc(env)}</code></div>
+    </div>
+    <div class="card" style="margin-top:16px"><h3>${t("api.keys")}</h3>
+      <form id="f-akey" class="form-grid"><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
+        <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-err"></div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
+      ${me.keys.map((k) => `<tr><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
+        <td><button class="btn small danger" data-krevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">${t("api.no_keys")}</td></tr>`}
+      </tbody></table></div></div>
+    <div class="card" style="margin-top:16px"><h3>${t("api.usage")}</h3>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.day")}</th><th>${t("api.key_label")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cost")}</th></tr></thead><tbody>
+      ${me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
+        <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
+      </tbody></table></div></div>
+    ${adm ? `
+    <div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
+      <form id="f-arates"><div class="table-wrap"><table class="data">${rateHead(true)}<tbody>${adm.rates.map((r) => rateRow(r, true)).join("")}</tbody></table></div>
+        <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div><div class="error" id="arates-err"></div></form>
+      <form id="f-arate-add" class="form-grid" style="margin-top:12px"><label>${t("api.model")}<input name="pattern" dir="ltr" required placeholder="claude-sonnet-5*"></label>
+        <label>${t("api.in")}<input name="input" inputmode="decimal" dir="ltr" required></label><label>${t("api.out")}<input name="output" inputmode="decimal" dir="ltr" required></label>
+        <button class="btn" type="submit">${t("api.add_rate")}</button></form><div class="error" id="arate-add-err"></div></div>
+    <div class="card" style="margin-top:16px"><h3>${t("api.accounts")}</h3>
+      <form id="f-acredit" class="form-grid"><label>${t("app.user")}<input name="user" required></label><label>${t("api.amount")}<input name="usd" inputmode="decimal" dir="ltr" required></label>
+        <label>${t("tk.note")}<input name="note" maxlength="200" required></label><button class="btn primary" type="submit">${t("api.add_credit")}</button></form><div class="error" id="acredit-err"></div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th class="r">${t("api.balance")}</th><th class="r">${t("api.spent_30d")}</th><th class="r">${t("api.keys")}</th><th class="r">${t("api.max_inflight")}</th><th class="r">${t("api.rpm")}</th><th></th></tr></thead><tbody>
+      ${adm.accounts.map((a) => `<tr><td>${bdi(a.name)}</td><td class="r num">${fmtSigned(a.balance)}</td><td class="r num">${fmtUsd(a.spent_30d)}</td><td class="r num">${nfFull.format(a.keys)}</td>
+        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${esc(a.name)}" value="${a.custom ? a.max_inflight : ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
+        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${esc(a.name)}" value="${a.custom ? a.rpm : ""}" placeholder="${a.rpm}" style="width:60px"></td>
+        <td><button class="btn small" data-lsave="${esc(a.name)}">${t("app.save")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
+      </tbody></table></div></div>` : ""}
+  </section>`;
+
+  const post = async (path, body, errEl) => { try { const r = await api(path, { method: "POST", body }); return r; } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); return null; } };
+  $("#f-akey").onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await post("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"));
+    if (r) keyDialog(t("api.new_key"), r.key, t("api.key_how"));
+  };
+  main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(t("api.revoke_confirm"))) return;
+    if (await post(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {})) render();
+  }));
+  if (!adm) return;
+  $("#f-arates").onsubmit = async (e) => {
+    e.preventDefault();
+    const changed = {};
+    e.target.querySelectorAll("input[data-pattern]").forEach((i) => { if (num(i.value) !== Number(i.dataset.init)) (changed[i.dataset.pattern] ||= {})[i.name] = num(i.value); });
+    for (const [pattern, edits] of Object.entries(changed)) {
+      const r = adm.rates.find((x) => x.pattern === pattern);
+      if (!(await post("/api/admin/api/rates", { ...r, ...edits, pattern }, $("#arates-err")))) return;
+    }
+    render();
+  };
+  main.querySelectorAll("[data-rdel]").forEach((b) => (b.onclick = async () => {
+    if (confirm(t("api.delete_confirm", { pattern: b.dataset.rdel })) && (await post("/api/admin/api/rates/delete", { pattern: b.dataset.rdel }))) render();
+  }));
+  $("#f-arate-add").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    if (await post("/api/admin/api/rates", { pattern: f.pattern.value.trim(), input: num(f.input.value), output: num(f.output.value) }, $("#arate-add-err"))) render();
+  };
+  $("#f-acredit").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    if (await post("/api/admin/api/credit", { user: f.user.value.trim(), usd: num(f.usd.value), note: f.note.value }, $("#acredit-err"))) render();
+  };
+  main.querySelectorAll("[data-lsave]").forEach((b) => (b.onclick = async () => {
+    const v = (k) => { const i = main.querySelector(`input[data-lim="${k}"][data-user="${CSS.escape(b.dataset.lsave)}"]`); return i.value.trim() === "" ? null : num(i.value); };
+    if (await post("/api/admin/api/limits", { user: b.dataset.lsave, max_inflight: v("max_inflight"), rpm: v("rpm") })) render();
+  }));
 }
 
 function openDialog(html) {
@@ -1791,6 +1886,7 @@ async function boot() {
     const s = await api("/api/session");
     S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows };
     S.tickets = s.tickets || { enabled: false };
+    S.api = s.api || { enabled: false };
     if (s.settings) S.settings = { ...S.settings, ...s.settings };
     Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
     $("#cred-pill").hidden = !s.credential;
