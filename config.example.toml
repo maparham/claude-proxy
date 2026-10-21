@@ -34,6 +34,12 @@ stale_after_s = 1800        # share limits are skipped when account figures are 
 [limits]
 max_inflight = 8            # requests one user may have in flight at once; limits can be overshot by at most this many
 
+# API keys billed per token against prepaid credit (Claude Code with ANTHROPIC_API_KEY). Present = on.
+# [api]
+# max_inflight = 4          # concurrent requests per account (the admin can override per account)
+# rpm = 60                  # requests per minute per account
+
+
 [db]
 path = "claude_proxy.db"
 

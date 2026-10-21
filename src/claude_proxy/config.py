@@ -99,6 +99,14 @@ class LimitsConfig:
     max_inflight: int = 8
 
 
+@dataclass
+class ApiConfig:
+    """API keys on prepaid credit (2026-10-21 spec). On while the [api] section exists, like [tickets]."""
+    enabled: bool = False
+    max_inflight: int = 4    # per account, unless the admin set its own on the API tab
+    rpm: int = 60            # requests per minute per account, likewise
+
+
 LENGTHS = {"day": 1, "week": 7, "month": 30}   # ticket lengths in days (paid-tickets design, section 3)
 ESTIMATE_DAYS = 30   # how far back the daily usage estimates read; retention must keep at least this much
 
@@ -365,6 +373,7 @@ class Config:
     credential: CredentialConfig = field(default_factory=CredentialConfig)
     quota: QuotaConfig = field(default_factory=QuotaConfig)
     limits: LimitsConfig = field(default_factory=LimitsConfig)
+    api: ApiConfig = field(default_factory=ApiConfig)
     db: DBConfig = field(default_factory=DBConfig)
     signup: SignupConfig = field(default_factory=SignupConfig)
     tickets: TicketsConfig = field(default_factory=TicketsConfig)
@@ -423,6 +432,19 @@ class Config:
             if cfg.tickets.turnstile_site_key and not cfg.tickets.turnstile_secret():
                 logger.warning("[tickets] turnstile_site_key is set but TURNSTILE_SECRET is not in the environment; "
                                "visitors cannot order from the home page")
+        if "api" in data:
+            a = dict(data["api"])
+            if "enabled" in a:
+                raise ConfigError(f"{toml_path}: [api].enabled is not a setting: the API is on while the [api] section "
+                                  "exists; remove the [api] section to switch it off")
+            cfg.api = ApiConfig(enabled=True)
+            for k, v in a.items():
+                if k not in ("max_inflight", "rpm"):
+                    raise ConfigError(f"{toml_path}: unknown key [api].{k}; [api] takes max_inflight, rpm")
+                if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+                    raise ConfigError(f"{toml_path}: [api].{k} must be a whole number of at least 1")
+                setattr(cfg.api, k, v)
+
         if "email" in data:
             cfg.email = _load_email(toml_path, data["email"])
         if "zarinpal" in data:

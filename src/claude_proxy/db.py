@@ -71,7 +71,8 @@ SCHEMA = [
         client_version TEXT,
         error_type TEXT,
         meter_error INTEGER DEFAULT 0,
-        rejected_by TEXT
+        rejected_by TEXT,
+        api_key_id INTEGER
     )""",
     "CREATE INDEX IF NOT EXISTS idx_requests_user_time ON requests(user_id, started_at)",
     "CREATE INDEX IF NOT EXISTS idx_requests_time ON requests(started_at)",
@@ -280,6 +281,56 @@ SCHEMA = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)",
     "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status, created_at)",
+    # ---- API keys on prepaid credit (design 2026-10-21) ----
+    """CREATE TABLE IF NOT EXISTS api_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key_hash TEXT NOT NULL UNIQUE,
+        key_prefix TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)",
+    # USD per million tokens per model glob; the longest matching pattern wins.
+    """CREATE TABLE IF NOT EXISTS api_rates (
+        pattern TEXT PRIMARY KEY,
+        input REAL NOT NULL,
+        output REAL NOT NULL,
+        cache_write_5m REAL NOT NULL,
+        cache_write_1h REAL NOT NULL,
+        cache_read REAL NOT NULL,
+        updated_at INTEGER NOT NULL,
+        updated_by INTEGER
+    )""",
+    # Append-only: a balance is the sum of its rows. Never touched by retention cleanup.
+    """CREATE TABLE IF NOT EXISTS api_ledger (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        at REAL NOT NULL,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('grant','charge')),
+        usd REAL NOT NULL,                  -- grants as given (+/-), charges negative
+        api_key_id INTEGER,
+        request_id INTEGER,
+        model TEXT,
+        input_tokens INTEGER NOT NULL DEFAULT 0,
+        output_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_write_tokens INTEGER NOT NULL DEFAULT 0,
+        cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+        actor_user_id INTEGER,
+        note TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_api_ledger_user ON api_ledger(user_id, at)",
+    "CREATE INDEX IF NOT EXISTS idx_api_ledger_key ON api_ledger(api_key_id, at)",
+    """CREATE TABLE IF NOT EXISTS api_account_limits (
+        user_id INTEGER PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+        max_inflight INTEGER,               -- NULL: [api].max_inflight
+        rpm INTEGER,                        -- NULL: [api].rpm
+        updated_at INTEGER NOT NULL,
+        updated_by INTEGER
+    )""",
+
 ]
 
 # A ticket's effective end: ends_at plus its non-cancelled bonus days. For queries that alias tickets as `t`.
@@ -345,6 +396,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE keys ADD COLUMN client_version TEXT")
     if "terms_version" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN terms_version TEXT NOT NULL DEFAULT 'v1'")
+    if "api_key_id" not in _columns(conn, "requests"):
+        conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
@@ -379,6 +433,8 @@ def hash_key(raw: str) -> str:
 
 FULL_KEY_PREFIX = "sk-proxy-"
 ROUTES_KEY_PREFIX = "sk-proxy-r-"   # only for people to tell the keys apart; scope comes from the column that matched
+API_KEY_PREFIX = "sk-proxy-a-"      # an API key (2026-10-21): Claude Code billed per token against prepaid credit
+
 
 
 def generate_virtual_key(prefix: str = FULL_KEY_PREFIX) -> tuple[str, str, str]:
@@ -403,11 +459,20 @@ def create_user(conn: sqlite3.Connection, name: str, role: str = "user", passwor
 
 def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
     """The user a gateway key belongs to, with `key_scope`: "full" for their Claude Code key or a machine's key,
-    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows)."""
+    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows), "api" for an API key."""
     h = hash_key(raw_key)
     row = conn.execute("SELECT * FROM users WHERE key_hash=? OR routes_key_hash=?", (h, h)).fetchone()
     if row is not None:
         return {**dict(row), "key_scope": "full" if row["key_hash"] == h else "routes"}
+    a = conn.execute("SELECT id, user_id, last_used_at FROM api_keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
+    if a is not None:
+        row = conn.execute("SELECT * FROM users WHERE id=?", (a["user_id"],)).fetchone()
+        now = int(time.time())
+        if (a["last_used_at"] or 0) < now - 3600:
+            conn.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, a["id"]))
+        # Never admin powers, like a machine key: an API key is handed to tools and pasted into config files.
+        return {**dict(row), "key_scope": "api", "role": "user", "api_key_id": a["id"]}
+
     k = conn.execute("SELECT id, user_id, last_used_at FROM keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
     row = conn.execute("SELECT * FROM users WHERE id=?", (k["user_id"],)).fetchone() if k else None
     if row is None:
