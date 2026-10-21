@@ -1788,6 +1788,7 @@ const ERR_FA = {
   "You have 20 API keys already; revoke one first.": "همین حالا ۲۰ کلید API دارید؛ اول یکی را ابطال کنید.",
   "Concurrent requests must be a whole number from 1 to 10000, or empty for the default.": "تعداد درخواست‌های هم‌زمان باید عدد صحیحی از ۱ تا ۱۰۰۰۰ باشد، یا خالی برای مقدار پیش‌فرض.",
   "Requests per minute must be a whole number from 1 to 10000, or empty for the default.": "تعداد درخواست در دقیقه باید عدد صحیحی از ۱ تا ۱۰۰۰۰ باشد، یا خالی برای مقدار پیش‌فرض.",
+  "A computer's key cannot manage API keys. Sign in with your first key to manage them.": "کلید یک کامپیوتر نمی‌تواند کلیدهای API را مدیریت کند. برای مدیریت آن‌ها با کلید اصلی‌تان وارد شوید.",
   "ZarinPal is not available right now; try again or send an order request.": "زرین‌پال اکنون در دسترس نیست؛ دوباره تلاش کنید یا یک درخواست سفارش بفرستید.",
 };
 const ERR_PATTERNS = [

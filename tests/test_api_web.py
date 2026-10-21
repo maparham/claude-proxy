@@ -78,3 +78,21 @@ async def test_writes_need_the_csrf_token(env):  # noqa: F811
     async with admin_client(gw) as c:
         del c.headers["x-csrf-token"]
         assert (await c.post("/api/me/api/keys", json={"label": "x"})).status_code == 403
+
+
+async def test_a_computers_key_cannot_create_or_revoke_api_keys(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    on(gw)
+    from claude_proxy.db import add_machine_key
+    laptop = add_machine_key(conn, ids["alice"], "laptop")
+    kid, _ = api_credit.create_key(conn, ids["alice"], "ci")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.post("/api/me/api/keys", json={"label": "x"}, headers=bearer(laptop))
+        assert r.status_code == 403 and r.json()["error"] == MACHINE
+        r = await c.post(f"/api/me/api/keys/{kid}/revoke", headers=bearer(laptop))
+        assert r.status_code == 403
+        assert (await c.get("/api/me/api", headers=bearer(laptop))).status_code == 200   # reading is fine
+    assert [k["label"] for k in api_credit.keys(conn, ids["alice"])] == ["ci"]
+
+
+MACHINE = "A computer's key cannot manage API keys. Sign in with your first key to manage them."

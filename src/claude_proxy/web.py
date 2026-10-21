@@ -773,6 +773,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.api.enabled:
             fail(404, "The API is not enabled on this gateway.")
 
+    def not_a_computer(user):
+        # A leaked laptop key must not mint API keys that outlive the laptop's removal, nor revoke the owner's others.
+        if user.get("machine_key_id") or user.get("session_key_id"):
+            fail(403, "A computer's key cannot manage API keys. Sign in with your first key to manage them.")
+
     def credit_call(fn, *args):
         try:
             return fn(*args)
@@ -794,6 +799,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def me_api_key_add(request: Request):
         user = principal(request, write=True)
         need_api()
+        not_a_computer(user)
         body = await _json(request)
         kid, raw = credit_call(api_credit.create_key, conn, user["id"], str(body.get("label", "")))
         return {"ok": True, "id": kid, "key": raw}
@@ -802,6 +808,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def me_api_key_revoke(request: Request, kid: int):
         user = principal(request, write=True)
         need_api()
+        not_a_computer(user)
         if not api_credit.revoke_key(conn, user["id"], kid, user["id"]):
             fail(404, "No such API key.")
         return {"ok": True}
