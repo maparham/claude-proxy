@@ -5,7 +5,7 @@ import sqlite3
 
 import httpx
 
-from . import tickets
+from . import api_credit, tickets
 from .config import Config
 from .credentials import OAuthBackend
 from .quota import Poller
@@ -38,6 +38,8 @@ class Gateway:
             if n:
                 logger.warning("tickets are off in the config but %d users are ticket-gated; their requests are refused "
                                "until each is ungated on the Users page", n)
+        if cfg.api.enabled:
+            api_credit.seed_rates(conn, cfg)
 
     async def aclose(self) -> None:
         await self.http.aclose()
