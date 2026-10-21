@@ -32,7 +32,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import clerk, db, limits, orders, payments, quota, tickets, turnstile, upstream, usage
+from . import api_credit, clerk, db, limits, orders, payments, quota, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
@@ -176,6 +176,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 user = authenticate(conn, request.headers)
             except AuthError as e:
                 fail(e.status, e.body["error"]["message"])
+            if user["key_scope"] == "api":
+                fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
             # A routes-only key (OpenCode) may read its own status and nothing else, and never acts as an admin.
             if user["key_scope"] != "full" and not (routes_ok and user["key_scope"] == "routes"):
                 fail(403, "This key only works for third-party models; use your Claude Code key for the dashboard.")
@@ -233,6 +235,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         except AuthError:
             limiter.failed(ip)
             fail(401, "Unknown, disabled or revoked key.")
+        if user["key_scope"] == "api":   # a valid key, so not counted as a failed attempt
+            fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
         if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
         return start_session(user, key_id=user.get("machine_key_id"))
@@ -323,6 +327,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
         out["tickets"] = {"enabled": cfg.tickets.enabled}
+        out["api"] = {"enabled": cfg.api.enabled}
         if is_admin(user) and cfg.tickets.enabled:
             out["tickets"] |= {"tiers": tickets.effective_tiers(conn, cfg),
                                "currencies": list(tickets.currencies(cfg)), "lengths": LENGTHS,
@@ -761,6 +766,90 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if u is None:
             fail(404, f"No user {ref!r}.")
         return u
+
+    # ---------- API keys on prepaid credit (2026-10-21 spec) ----------
+
+    def need_api():
+        if not cfg.api.enabled:
+            fail(404, "The API is not enabled on this gateway.")
+
+    def credit_call(fn, *args):
+        try:
+            return fn(*args)
+        except api_credit.CreditError as e:
+            fail(400, str(e))
+
+    @app.get("/api/me/api")
+    async def me_api(request: Request, tz_offset_s: int = 0):
+        user = principal(request)
+        need_api()
+        uid = user["id"]
+        tz_offset_s = max(-50400, min(50400, tz_offset_s))
+        return {"balance": api_credit.balance(conn, uid), "keys": api_credit.keys(conn, uid),
+                "usage": api_credit.usage(conn, uid, time.time() - 30 * 86400, tz_offset_s),
+                "grants": api_credit.grants(conn, uid), "rates": api_credit.rates(conn),
+                "limits": api_credit.account_limits(conn, cfg, uid), "base_url": cfg.listener.public_url}
+
+    @app.post("/api/me/api/keys")
+    async def me_api_key_add(request: Request):
+        user = principal(request, write=True)
+        need_api()
+        body = await _json(request)
+        kid, raw = credit_call(api_credit.create_key, conn, user["id"], str(body.get("label", "")))
+        return {"ok": True, "id": kid, "key": raw}
+
+    @app.post("/api/me/api/keys/{kid}/revoke")
+    async def me_api_key_revoke(request: Request, kid: int):
+        user = principal(request, write=True)
+        need_api()
+        if not api_credit.revoke_key(conn, user["id"], kid, user["id"]):
+            fail(404, "No such API key.")
+        return {"ok": True}
+
+    @app.get("/api/admin/api")
+    async def admin_api(request: Request):
+        admin(request)
+        need_api()
+        return {"rates": api_credit.rates(conn), "accounts": api_credit.accounts(conn, cfg)}
+
+    @app.post("/api/admin/api/rates")
+    async def admin_api_rate(request: Request):
+        actor = admin(request, write=True)
+        need_api()
+        body = await _json(request)
+        opt = lambda k: None if body.get(k) in (None, "") else _number(body[k], "A cache price")  # noqa: E731
+        rate = credit_call(api_credit.set_rate, conn, str(body.get("pattern", "")), _number(body.get("input"), "The input price"),
+                           _number(body.get("output"), "The output price"), opt("cache_write_5m"), opt("cache_write_1h"),
+                           opt("cache_read"), actor["id"])
+        return {"ok": True, "rate": rate}
+
+    @app.post("/api/admin/api/rates/delete")
+    async def admin_api_rate_delete(request: Request):
+        actor = admin(request, write=True)
+        need_api()
+        body = await _json(request)
+        if not api_credit.delete_rate(conn, str(body.get("pattern", "")), actor["id"]):
+            fail(404, "No such rate.")
+        return {"ok": True}
+
+    @app.post("/api/admin/api/credit")
+    async def admin_api_credit(request: Request):
+        actor = admin(request, write=True)
+        need_api()
+        body = await _json(request)
+        u = target_user(body.get("user"))
+        bal = credit_call(api_credit.grant, conn, u["id"], _number(body.get("usd"), "The amount"), str(body.get("note", "")), actor["id"])
+        return {"ok": True, "balance": bal}
+
+    @app.post("/api/admin/api/limits")
+    async def admin_api_limits(request: Request):
+        actor = admin(request, write=True)
+        need_api()
+        body = await _json(request)
+        u = target_user(body.get("user"))
+        val = lambda k: None if body.get(k) in (None, "") else _number(body[k], "A limit", whole=True)  # noqa: E731
+        credit_call(api_credit.set_account_limits, conn, u["id"], val("max_inflight"), val("rpm"), actor["id"])
+        return {"ok": True, "limits": api_credit.account_limits(conn, cfg, u["id"])}
 
     @app.post("/api/admin/users")
     async def create_user(request: Request):
