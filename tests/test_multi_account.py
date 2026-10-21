@@ -165,3 +165,14 @@ def test_status_flags_missing_default(cfg, db, capsys):
 def test_invalid_account_slug_rejected(cfg, db):
     with pytest.raises(ValueError, match="account"):
         login.start(db[1], cfg, "NOPE CAPS")
+
+
+def test_status_summarises_the_serving_account_for_the_deploy_check(cfg, db, capsys):
+    # deploy/lightsail/claude-gateway-deploy, as installed on the box, greps '^credential: OK'.
+    from claude_proxy import cli
+    seed_oauth(db[1], access="a", refresh="r", account="second")
+    cli.cmd_status(argparse.Namespace(), cfg)
+    assert "\ncredential: NOT OK" in "\n" + capsys.readouterr().out   # the gateway serves from default, unlinked
+    seed_oauth(db[1], access="a", refresh="r")
+    cli.cmd_status(argparse.Namespace(), cfg)
+    assert "\ncredential: OK" in "\n" + capsys.readouterr().out

@@ -94,6 +94,9 @@ def cmd_status(args, cfg):
     from .credentials import DEFAULT_ACCOUNT, list_accounts
     conn = _conn(cfg)
     rows = list_accounts(conn)
+    # One line for the account the gateway serves from: the deploy script installed on the box greps '^credential: OK'.
+    serving = DEFAULT_ACCOUNT in {r["account"] for r in rows} and OAuthBackend(cfg, conn, None, DEFAULT_ACCOUNT).describe().healthy
+    print(f"credential: {'OK' if serving else 'NOT OK'}")
     if DEFAULT_ACCOUNT not in {r["account"] for r in rows}:
         # Every request is served from the default account until routing lands (spec section 4).
         print(f"credential [{DEFAULT_ACCOUNT}]: NOT OK — not linked; the gateway serves from it — "
