@@ -364,6 +364,35 @@ account or to a new one named after its email. With an `[email]` section (passwo
 an email for each order and the buyer a confirmation that contains nothing they typed. Design:
 `docs/superpowers/specs/2026-10-04-order-requests-design.md`.
 
+## API keys (pay per token)
+
+With an `[api]` section in the config, a user can run Claude Code (terminal or the VS Code extension) on an API key
+billed per token against a prepaid USD credit, like Anthropic's own API. Claude Code is the only supported client.
+The two settings are per-account defaults the admin can override on the **API** tab:
+
+```toml
+[api]
+max_inflight = 4   # concurrent requests per account
+rpm = 60           # requests per minute per account
+```
+
+The user creates a key on the **API** tab (shown once) and sets two variables where Claude Code runs (shell profile, or
+the environment settings of the Claude Code extension in VS Code):
+
+```
+export ANTHROPIC_BASE_URL=https://<your gateway>
+export ANTHROPIC_API_KEY=sk-proxy-a-…
+```
+
+The admin adds credit (positive, or negative to correct, each with a note) and edits the rates on the same tab. Rates
+are USD per million tokens per model glob, seeded once from the config's Claude list prices; the longest matching glob
+wins (unlike `[pricing.models]`, where the first match wins). A model with no rate is refused. A request is refused while
+the balance is at or below zero; one already running is charged in full, so a balance can go slightly negative.
+
+On a machine set up with gclaude or `claude-gateway on`, the gateway key in `x-gateway-key` or `ANTHROPIC_AUTH_TOKEN`
+wins over `ANTHROPIC_API_KEY`, so that traffic is billed to the ticket, not the credit; unset those to use the API key.
+Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
+
 ## Operations
 
 - `claude-proxy status` shows each subscription's credential health (and flags `default` when it is unlinked), the latest account figures and the route keys.
