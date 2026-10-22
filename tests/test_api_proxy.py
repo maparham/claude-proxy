@@ -214,3 +214,48 @@ async def test_no_credit_cannot_flood_the_subscription_with_token_counts_or_mode
         anthropic.default = lambda req: JSONResponse({"data": [{"id": "claude-sonnet-5"}], "has_more": False})
         r = await c.get("/v1/models", headers=h)
         assert r.status_code == 429 and len(anthropic.calls) == 3   # the model list is rate-limited too
+
+
+async def test_a_non_streamed_reply_over_the_buffer_cap_is_still_charged(env, anthropic):
+    gw, conn, uid, kid, h = env
+    api_credit.grant(conn, uid, 10, "x", None)
+    big = message_json("claude-sonnet-5", input_tokens=1000, output_tokens=200, cc5=0, cc1=0, text="x" * (9 * 1024 * 1024))
+    raw = json.dumps(big).encode()
+
+    async def chunks():   # as a real upstream sends it: many reads, not one
+        for i in range(0, len(raw), 1024 * 1024):
+            yield raw[i:i + 1024 * 1024]
+
+    anthropic.queue.append(lambda req: StreamingResponse(chunks(), media_type="application/json"))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**MSG, "stream": False}, headers=h)
+        assert r.status_code == 200 and len(r.content) > 9 * 1024 * 1024    # forwarded whole
+    row = last(conn)
+    assert (row["input_tokens"], row["output_tokens"]) == (1000, 200)       # usage read from the tail
+    [ch] = ledger(conn)
+    assert ch["usd"] == pytest.approx(-(1000 * 3 + 200 * 15) / 1e6)
+
+
+@pytest.mark.parametrize("extra,headers,needle", [
+    ({"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]}, {}, "Web search"),
+    ({"speed": "fast"}, {}, "Fast mode"),
+    ({}, {"anthropic-beta": "fast-mode-2026-02-01"}, "Fast mode"),
+    ({}, {"anthropic-beta": "oauth-2025-04-20, context-1m-2025-08-07"}, "1M-token context"),
+])
+async def test_extras_priced_above_tokens_are_refused_on_api_keys(env, anthropic, extra, headers, needle):
+    gw, conn, uid, kid, h = env
+    api_credit.grant(conn, uid, 10, "x", None)
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**MSG, **extra}, headers={**h, **headers})
+    assert r.status_code == 400 and needle in r.json()["error"]["message"]
+    assert anthropic.calls == [] and last(conn)["rejected_by"] == api_credit.REJECT_EXTRA
+
+
+async def test_ordinary_tools_and_betas_still_pass(env, anthropic):
+    gw, conn, uid, kid, h = env
+    api_credit.grant(conn, uid, 10, "x", None)
+    anthropic.queue.append(lambda req: sse_response(model="claude-sonnet-5"))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**MSG, "speed": "standard"},
+                         headers={**h, "anthropic-beta": "interleaved-thinking-2025-05-14"})
+    assert r.status_code == 200

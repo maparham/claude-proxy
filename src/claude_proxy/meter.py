@@ -4,6 +4,7 @@ import codecs
 import json
 import logging
 import math
+import re
 from dataclasses import dataclass
 
 from .forwarder import COUNT_TOKENS_PATH
@@ -283,3 +284,42 @@ def parse_non_streaming(body: bytes, path: str, collect_text: bool = False) -> M
         res.text = "".join(b["text"] for b in data["content"]
                            if isinstance(b, dict) and b.get("type") == "text" and isinstance(b.get("text"), str))[:MAX_TEXT_CHARS]
     return res
+
+
+class BodyMeter:
+    """A non-streamed reply, fed as it is relayed. Keeps the first MAX_BODY_BYTES to parse whole; past that, only
+    the last TAIL_BYTES, because `usage` is a message's last field: a reply too big to keep is still metered."""
+    MAX_BODY_BYTES = 8 * 1024 * 1024
+    TAIL_BYTES = 64 * 1024
+
+    def __init__(self):
+        self.head = bytearray()
+        self.tail = bytearray()
+        self.over = False
+
+    def feed(self, chunk: bytes) -> None:
+        if not self.over and len(self.head) + len(chunk) <= self.MAX_BODY_BYTES:
+            self.head.extend(chunk)
+            return
+        self.over = True
+        self.tail.extend(chunk)
+        del self.tail[:-self.TAIL_BYTES]
+
+    def result(self, path: str, collect_text: bool = False) -> MeterResult:
+        if not self.over:
+            return parse_non_streaming(bytes(self.head), path, collect_text=collect_text)
+        res = MeterResult(stream=False, complete=True, meter_error=True, meter_error_detail="body_cap")
+        m = re.search(r'"model"\s*:\s*"([^"\\]{1,200})"', bytes(self.head[:4096]).decode("utf-8", errors="replace"))
+        if m:
+            res.model = m.group(1)
+        tail = bytes(self.tail).decode("utf-8", errors="replace")
+        at = tail.rfind('"usage"')   # a key: inside a string the quotes would be escaped
+        if at != -1:
+            colon = tail.find(":", at)
+            try:
+                value_at = colon + 1 + (len(tail[colon + 1:]) - len(tail[colon + 1:].lstrip()))
+                usage, _ = json.JSONDecoder().raw_decode(tail, value_at)
+                _apply_usage_to_result(res, usage if isinstance(usage, dict) else None)
+            except ValueError:
+                pass
+        return res

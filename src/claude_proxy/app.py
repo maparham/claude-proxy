@@ -17,7 +17,7 @@ from .db import insert_request, set_session_title
 from .forwarder import (COUNT_TOKENS_PATH, filter_request_headers, filter_response_headers, merge_beta, session_id,
                         should_forward, strip_account_headers)
 from .gateway import Gateway
-from .meter import SSEMeter, parse_non_streaming
+from .meter import BodyMeter, SSEMeter
 
 logger = logging.getLogger("claude_proxy")
 
@@ -265,6 +265,10 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         # Model allow-lists, scoped limits and routing all need the model; never forward a body the gateway can't read.
         record(status=400, stream=0, complete=1, error_type="gateway_bad_request", rejected_by="request")
         return api_error(400, "invalid_request_error", "The gateway could not read a string `model` from the JSON request body.")
+    extra = api_credit.refuse_extras(data, request.headers.get("anthropic-beta")) if is_api and path == "/v1/messages" else None
+    if extra:
+        record(status=extra.status, stream=0, complete=1, error_type=extra.body["error"]["type"], rejected_by=extra.kind)
+        return JSONResponse(status_code=extra.status, content=extra.body)
 
     # What limits count: a forwarded request for a model (not count_tokens, not the model list). While one is being
     # served it is in `inflight`, so the next request sees it even though it is recorded only when it ends.
@@ -357,7 +361,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
 
         async def relay():
             meter = SSEMeter(collect_text=wants_title) if is_stream else None
-            buf = bytearray() if not is_stream else None
+            body_meter = BodyMeter() if not is_stream else None
             finished = False
             try:
                 async for chunk in resp.aiter_bytes():
@@ -367,14 +371,14 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                         except Exception as e:   # metering never affects forwarding
                             meter.result.meter_error = True
                             meter.result.meter_error_detail = str(e)[:200]
-                    elif len(buf) < 8 * 1024 * 1024:
-                        buf.extend(chunk)
+                    else:
+                        body_meter.feed(chunk)
                     yield chunk
                 finished = True
             finally:
                 # Record first: on a client disconnect the await below can be cancelled, and a request never recorded
                 # would keep its inflight slot and go uncharged.
-                mr = meter.finalize() if meter is not None else parse_non_streaming(bytes(buf), path, collect_text=wants_title)
+                mr = meter.finalize() if meter is not None else body_meter.result(path, collect_text=wants_title)
                 record(
                     model=mr.model or base["model"], status=resp.status_code, stream=1 if is_stream else 0,
                     complete=1 if finished and (mr.complete or not is_stream) else 0,

@@ -285,3 +285,13 @@ def test_rates_are_stored_without_float_noise(db, cfg):
     assert api_credit.set_rate(conn, "claude-z*", 3, 15)["cache_read"] == 0.3   # 3 * 0.1 is 0.30000000000000004
     assert all(r[f] == round(r[f], 6) for r in api_credit.rates(conn) for f in api_credit.RATE_FIELDS)
     assert any(r["cache_read"] == 0.3 for r in api_credit.rates(conn))
+
+
+def test_seeded_rates_price_opus_4_and_4_1_at_their_own_list_price(db, cfg):
+    conn = db[1]
+    api_credit.seed_rates(conn, cfg)
+    assert api_credit.rate_for(conn, "claude-opus-4-1-20250805")["input"] == 15
+    assert api_credit.rate_for(conn, "claude-opus-4-20250514")["output"] == 75
+    assert api_credit.rate_for(conn, "claude-opus-4-0")["input"] == 15
+    assert api_credit.rate_for(conn, "claude-opus-4-5-20251101")["input"] == 5
+    assert cfg.pricing.price_for("claude-opus-4-1-20250805").input == 15   # ticket estimates too

@@ -146,3 +146,29 @@ def test_an_oversized_event_split_across_chunks_is_skipped_too():
     r = m.finalize()
     assert r.meter_error and r.meter_error_detail == "line_cap"
     assert r.output_tokens == 64 and r.complete
+
+
+def test_a_non_streamed_body_over_the_cap_is_metered_from_its_tail():
+    import json as _json
+    from claude_proxy.meter import BodyMeter
+    from tests.conftest import message_json
+    raw = _json.dumps(message_json("claude-sonnet-5", input_tokens=1000, output_tokens=200, cc5=7, cc1=3,
+                                   text="x" * (9 * 1024 * 1024))).encode()
+    m = BodyMeter()
+    for i in range(0, len(raw), 1024 * 1024):
+        m.feed(raw[i:i + 1024 * 1024])
+    r = m.result("/v1/messages")
+    assert (r.input_tokens, r.output_tokens, r.cache_creation_5m, r.cache_creation_1h) == (1000, 200, 7, 3)
+    assert r.model == "claude-sonnet-5" and r.meter_error and r.meter_error_detail == "body_cap"
+
+
+def test_a_small_body_is_parsed_whole():
+    import json as _json
+    from claude_proxy.meter import BodyMeter
+    from tests.conftest import message_json
+    m = BodyMeter()
+    raw = _json.dumps(message_json("claude-sonnet-5", input_tokens=5, output_tokens=6)).encode()
+    m.feed(raw[:20])
+    m.feed(raw[20:])
+    r = m.result("/v1/messages")
+    assert (r.input_tokens, r.output_tokens, r.meter_error) == (5, 6, False)

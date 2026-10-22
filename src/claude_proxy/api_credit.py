@@ -17,6 +17,7 @@ from .limits import Decision
 MAX_KEYS = 20
 MAX_GRANT_USD = 1_000_000
 REJECT_INFLIGHT, REJECT_UNPRICED, REJECT_CREDIT, REJECT_RPM = "api_inflight", "api_unpriced", "api_credit", "api_rpm"
+REJECT_EXTRA = "api_extra"
 LOW_CREDIT = "Your credit balance is too low to access the API. Ask the gateway admin to add credit."
 RATE_FIELDS = ("input", "output", "cache_write_5m", "cache_write_1h", "cache_read")
 
@@ -227,6 +228,20 @@ def evaluate(conn, cfg: Config, user_id: int, model: str | None, path: str, infl
         return Decision(429, REJECT_RPM, _err("rate_limit_error", f"This account may make {lim['rpm']} requests a minute; "
                         "try again shortly."), 60)
     return None
+
+
+def refuse_extras(data: dict | None, beta_header: str | None) -> Decision | None:
+    """Features Anthropic prices above plain tokens, which the per-token rates can't charge: refused on API keys."""
+    tools = data.get("tools") if isinstance(data, dict) else None
+    betas = [b.strip() for b in (beta_header or "").split(",")]
+    msg = None
+    if isinstance(tools, list) and any(isinstance(t, dict) and str(t.get("type", "")).startswith("web_search") for t in tools):
+        msg = "Web search is not available with API keys; turn off the WebSearch tool."
+    elif (isinstance(data, dict) and data.get("speed") not in (None, "standard")) or any(b.startswith("fast-mode") for b in betas):
+        msg = "Fast mode is not available with API keys; turn it off with /fast."
+    elif any(b.startswith("context-1m") for b in betas):
+        msg = "The 1M-token context is not available with API keys; pick a model without [1m]."
+    return Decision(400, REJECT_EXTRA, _err("invalid_request_error", msg)) if msg else None
 
 
 # ---------- admin view ----------

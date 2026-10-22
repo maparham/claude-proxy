@@ -216,6 +216,10 @@ def _default_prices() -> dict[str, Price]:
         "claude-fable-5*": Price(10.0, 50.0),
         "claude-opus-5-5*": Price(4.0, 20.0, cache_read=0.20),
         "claude-opus-5*": Price(5.0, 25.0),
+        # Opus 4 and 4.1 list at three times Opus 4.5 and later: claude-opus-4-0, -4-1-…, -4-2025….
+        "claude-opus-4-0*": Price(15.0, 75.0),
+        "claude-opus-4-1*": Price(15.0, 75.0),
+        "claude-opus-4-2*": Price(15.0, 75.0),
         "claude-opus-4*": Price(5.0, 25.0),
         "claude-sonnet-5-5*": Price(2.0, 10.0, cache_read=0.10),
         "claude-sonnet-5*": Price(2.0, 10.0),
