@@ -683,7 +683,7 @@ async function renderUsage(main) {
   main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
     <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
     <div class="controls">
-      ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")]], p.range)}
+      ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range)}
       ${seg("granularity", [["hour", t("gran.hour")], ["day", t("gran.day")], ["week", t("gran.week")]], p.granularity)}
       ${seg("split", splits, p.split)}
       ${seg("metric", Object.entries(METRICS).map(([k, v]) => [k, v, `metric:${k}`]), p.metric)}
@@ -1706,11 +1706,12 @@ function linkAccountDialog(slug, relink) {
 
 async function renderQuota(main) {
   const p = S.prefs;
-  const d = await api(`/api/quota/timeline?bucket=${encodeURIComponent(p.bucket)}&range=${p.range === "1d" ? "1d" : p.range}`);
+  const qr = ["1d", "7d", "30d"].includes(p.range) ? p.range : "30d";  // quota snapshots are dense; longer spans stop at 30 days
+  const d = await api(`/api/quota/timeline?bucket=${encodeURIComponent(p.bucket)}&range=${qr}`);
   const bname = (b) => (b === "5h" || b === "7d" ? t(`quota.bucket_${b}`) : b);
   main.innerHTML = `<section class="view"><h2>${t("tab.quota")}</h2>
     <p class="lede">${t("quota.lede", { estimated: tipT(t("quota.estimated"), "share") })}</p>
-    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, bname(b), `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], p.range)}</div>
+    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, bname(b), `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], qr)}</div>
     <div class="grid cols-2">
       <div class="card"><h3>${t("quota.reported")}${tipI("reported")}</h3><p class="sub">${t("quota.reported_sub")}</p><div class="chart" id="q-line"></div></div>
       <div class="card"><h3>${t("quota.share_title")}${tipI("share")}</h3><p class="sub">${t("quota.share_sub", { unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
@@ -1766,7 +1767,7 @@ async function renderModels(main) {
     : k === "anthropic" ? `${t("models.claude_sub")}${tipI("provider_sub")}` : `${t("models.own_key", { p: bdi(k) })}${tipI("provider_own")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.models")}</h2>
     <p class="lede">${isAdmin() ? t("models.lede_admin") : t("models.lede_user")}</p>
-    <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", t("models.m_cost"), "metric:cost_usd"], ["weighted", t("models.m_weighted"), "metric:weighted"], ["raw", t("metric.raw"), "metric:raw"], ["requests", t("metric.requests"), "metric:requests"]], mm)}</div>
+    <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range === "1d" ? "7d" : p.range)} ${seg("modelMetric", [["cost_usd", t("models.m_cost"), "metric:cost_usd"], ["weighted", t("models.m_weighted"), "metric:weighted"], ["raw", t("metric.raw"), "metric:raw"], ["requests", t("metric.requests"), "metric:requests"]], mm)}</div>
     <div class="tiles">${Object.entries(d.providers).map(([k, v]) => `<div class="card tile"><div class="label">${provLabel(k)}</div><div class="value">${fmtUsd(v.cost_usd)}</div><div class="foot">${t("models.tile_foot", { r: fmtNum(v.requests), n: fmtNum(v.raw) })}</div></div>`).join("")}</div>
     <div class="grid cols-2">
       <div class="card"><h3>${t("models.by_model", { metric: esc(METRICS[mm]) })}</h3><p class="sub">${t("models.largest")}</p><div class="chart" id="m-bars"></div></div>
@@ -1800,7 +1801,7 @@ async function renderActivity(main) {
   const p = S.prefs;
   const d = await api(`/api/heatmap?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.activity")}</h2><p class="lede">${t("act.lede")}</p>
-    <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")]], p.range === "1d" ? "7d" : p.range)}</div>
+    <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range === "1d" ? "7d" : p.range)}</div>
     <div class="card heat-wrap"><div class="chart" id="heat"></div></div></section>`;
   wireSegs(main, render);
   heatmap($("#heat"), d.cells);
@@ -1840,7 +1841,7 @@ function sessionsTable(sessions, showUser) {
 
 async function renderErrors(main) {
   const p = S.prefs;
-  const range = p.range === "90d" ? "30d" : p.range;
+  const range = ["90d", "365d"].includes(p.range) ? "30d" : p.range;
   const d = await api(`/api/errors?range=${range}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.errors")}</h2><p class="lede">${!isAdmin() ? t("errs.lede_user") : t("errs.lede_admin", { quota: tipT(t("errs.quota"), "err:upstream_quota"), throttle: tipT(t("errs.throttle"), "err:upstream_throttle"), one: tipT(t("errs.one"), "err:upstream_request_scoped") })}</p>
     <div class="controls">${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], range)}</div>
