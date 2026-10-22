@@ -60,6 +60,11 @@ round_to = 1000
 [tickets.currencies.EUR]
 round_to = 0.50
 
+# API keys billed per token against prepaid credit (Claude Code with ANTHROPIC_API_KEY). Present = on.
+[api]
+max_inflight = 4            # concurrent requests per account (the admin can override per account)
+rpm = 60                    # requests per minute per account
+
 # ZarinPal (docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md). Terminal registered for rahkar.pro and
 # 3.139.146.5. Off until ZARINPAL_MERCHANT_ID is in gateway.env.
 [zarinpal]
