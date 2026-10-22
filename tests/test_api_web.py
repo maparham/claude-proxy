@@ -64,7 +64,7 @@ async def test_admin_edits_rates_grants_credit_and_sets_limits(env):  # noqa: F8
         assert (await c.post("/api/admin/api/credit", json={"user": "alice", "usd": 0, "note": "x"})).status_code == 400
         assert (await c.post("/api/admin/api/credit", json={"user": "nobody", "usd": 1, "note": "x"})).status_code == 404
         r = await c.post("/api/admin/api/limits", json={"user": "alice", "max_inflight": 9, "rpm": None})
-        assert r.json()["limits"] == {"max_inflight": 9, "rpm": gw.cfg.api.rpm, "custom": True}
+        assert r.json()["limits"] == {"max_inflight": 9, "rpm": gw.cfg.api.rpm, "custom": True, "own_max_inflight": 9, "own_rpm": None}
         [a] = (await c.get("/api/admin/api")).json()["accounts"]
         assert (a["name"], a["balance"], a["max_inflight"]) == ("alice", 20, 9)
     async with asgi_client(create_dashboard_app(gw)) as c:
@@ -96,3 +96,14 @@ async def test_a_computers_key_cannot_create_or_revoke_api_keys(env):  # noqa: F
 
 
 MACHINE = "A computer's key cannot manage API keys. Sign in with your first key to manage them."
+
+
+async def test_usage_takes_the_viewers_time_zone(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    on(gw)
+    kid, _ = api_credit.create_key(conn, ids["alice"], "k")
+    api_credit.charge(conn, ids["alice"], kid, 1, "claude-sonnet-5", {"input_tokens": 1000, "output_tokens": 0}, now=1792794600.0)
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        for q in ("tz=Europe/Berlin&tz_offset_s=3600", "tz=Not/AZone&tz_offset_s=3600", "tz=../../etc/passwd", "tz=" + "x" * 500):
+            r = await c.get(f"/api/me/api?{q}", headers=bearer(keys["alice"]))
+            assert r.status_code == 200 and len(r.json()["usage"]) == 1   # a bad zone falls back to the offset

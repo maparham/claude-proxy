@@ -5,9 +5,11 @@ as the admin gave them, charges negative, one per forwarded request that reporte
 """
 from __future__ import annotations
 
+import datetime
 import math
 import sqlite3
 import time
+import zoneinfo
 
 from . import db
 from .config import Config, Price
@@ -80,10 +82,14 @@ def delete_rate(conn, pattern: str, actor: int | None) -> bool:
 
 
 def seed_rates(conn, cfg: Config, now=None) -> int:
-    """Fill an empty rate table from the config's Claude list prices. Never refills: an admin's deletions stay."""
-    if conn.execute("SELECT 1 FROM api_rates LIMIT 1").fetchone():
+    """Fill an empty rate table from the config's Claude list prices, once. Never refills: an admin who deleted every
+    rate (to switch the API's models off) keeps an empty table across restarts."""
+    if conn.execute("SELECT 1 FROM settings WHERE key='api_rates_seeded'").fetchone():
         return 0
     at = int(time.time() if now is None else now)
+    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES('api_rates_seeded', ?)", (str(at),))
+    if conn.execute("SELECT 1 FROM api_rates LIMIT 1").fetchone():   # seeded before this flag existed
+        return 0
     n = 0
     for pattern, p in cfg.pricing.prices.items():
         if pattern.startswith("claude-"):
@@ -141,7 +147,15 @@ def grants(conn, user_id: int, limit: int = 50) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-def usage(conn, user_id: int, since: float, tz_offset_s: int = 0) -> list[dict]:
+def usage(conn, user_id: int, since: float, tz_offset_s: int = 0, tz: str | None = None) -> list[dict]:
+    """Charges per local day and key. With `tz` (an IANA zone such as Europe/Berlin) days follow the zone's clock
+    changes; otherwise, or for a zone this system doesn't know, they use the fixed `tz_offset_s`."""
+    try:
+        zone = zoneinfo.ZoneInfo(tz) if tz else None
+    except (zoneinfo.ZoneInfoNotFoundError, ValueError):
+        zone = None
+    if zone is not None:
+        return _usage_in_zone(conn, user_id, since, zone)
     off = int(tz_offset_s)
     day = f"(CAST((at + {off}) / 86400 AS INTEGER) * 86400 - {off})"
     rows = conn.execute(f"SELECT {day} AS day, api_key_id, COUNT(*) AS requests, SUM(input_tokens) AS input, "
@@ -149,6 +163,24 @@ def usage(conn, user_id: int, since: float, tz_offset_s: int = 0) -> list[dict]:
                         "-SUM(usd) AS usd FROM api_ledger WHERE user_id=? AND kind='charge' AND at>=? "
                         "GROUP BY day, api_key_id ORDER BY day DESC, api_key_id", (user_id, since))
     return [dict(r) for r in rows]
+
+
+def _usage_in_zone(conn, user_id: int, since: float, zone: zoneinfo.ZoneInfo) -> list[dict]:
+    # Grouped here, not in SQL: SQLite knows no time zones. A day is the epoch of its local midnight.
+    out: dict[tuple[int, int], dict] = {}
+    for r in conn.execute("SELECT at, api_key_id, input_tokens, output_tokens, cache_write_tokens, cache_read_tokens, usd "
+                          "FROM api_ledger WHERE user_id=? AND kind='charge' AND at>=?", (user_id, since)):
+        local = datetime.datetime.fromtimestamp(r["at"], zone)
+        day = int(datetime.datetime(local.year, local.month, local.day, tzinfo=zone).timestamp())
+        u = out.setdefault((day, r["api_key_id"]), {"day": day, "api_key_id": r["api_key_id"], "requests": 0, "input": 0,
+                                                    "output": 0, "cache_write": 0, "cache_read": 0, "usd": 0.0})
+        u["requests"] += 1
+        u["input"] += r["input_tokens"]
+        u["output"] += r["output_tokens"]
+        u["cache_write"] += r["cache_write_tokens"]
+        u["cache_read"] += r["cache_read_tokens"]
+        u["usd"] -= r["usd"]
+    return sorted(out.values(), key=lambda u: (-u["day"], u["api_key_id"] or 0))
 
 
 # ---------- keys ----------
@@ -187,7 +219,9 @@ def account_limits(conn, cfg: Config, user_id: int) -> dict:
     r = conn.execute("SELECT max_inflight, rpm FROM api_account_limits WHERE user_id=?", (user_id,)).fetchone()
     mi = r["max_inflight"] if r and r["max_inflight"] is not None else None
     rpm = r["rpm"] if r and r["rpm"] is not None else None
-    return {"max_inflight": mi or cfg.api.max_inflight, "rpm": rpm or cfg.api.rpm, "custom": mi is not None or rpm is not None}
+    # own_*: the admin's override, or None where the [api] default applies (the dashboard fills in only those).
+    return {"max_inflight": mi or cfg.api.max_inflight, "rpm": rpm or cfg.api.rpm, "custom": mi is not None or rpm is not None,
+            "own_max_inflight": mi, "own_rpm": rpm}
 
 
 def set_account_limits(conn, user_id: int, max_inflight: int | None, rpm: int | None, actor: int | None, now=None) -> None:

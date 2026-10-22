@@ -189,9 +189,11 @@ def test_key_count_and_label_are_bounded(db):
 def test_account_limits_default_to_config_and_can_be_overridden(db, api_cfg):
     conn = db[1]
     uid, _ = create_user(conn, "alice")
-    assert api_credit.account_limits(conn, api_cfg, uid) == {"max_inflight": 2, "rpm": 3, "custom": False}
+    assert api_credit.account_limits(conn, api_cfg, uid) == {"max_inflight": 2, "rpm": 3, "custom": False,
+                                                               "own_max_inflight": None, "own_rpm": None}
     api_credit.set_account_limits(conn, uid, 10, None, None)
-    assert api_credit.account_limits(conn, api_cfg, uid) == {"max_inflight": 10, "rpm": 3, "custom": True}
+    assert api_credit.account_limits(conn, api_cfg, uid) == {"max_inflight": 10, "rpm": 3, "custom": True,
+                                                               "own_max_inflight": 10, "own_rpm": None}
     api_credit.set_account_limits(conn, uid, None, None, None)
     assert api_credit.account_limits(conn, api_cfg, uid)["custom"] is False
 
@@ -295,3 +297,50 @@ def test_seeded_rates_price_opus_4_and_4_1_at_their_own_list_price(db, cfg):
     assert api_credit.rate_for(conn, "claude-opus-4-0")["input"] == 15
     assert api_credit.rate_for(conn, "claude-opus-4-5-20251101")["input"] == 5
     assert cfg.pricing.price_for("claude-opus-4-1-20250805").input == 15   # ticket estimates too
+
+
+def test_deleting_every_rate_stays_deleted_after_a_restart(db, cfg):
+    conn = db[1]
+    assert api_credit.seed_rates(conn, cfg) > 0
+    for r in api_credit.rates(conn):
+        api_credit.delete_rate(conn, r["pattern"], None)
+    assert api_credit.seed_rates(conn, cfg) == 0 and api_credit.rates(conn) == []
+
+
+def test_a_table_seeded_before_the_flag_existed_is_not_refilled_either(db, cfg):
+    conn = db[1]
+    api_credit.set_rate(conn, "claude-x*", 1, 1)   # an older gateway seeded or the admin added a rate: no flag yet
+    assert api_credit.seed_rates(conn, cfg) == 0
+    api_credit.delete_rate(conn, "claude-x*", None)
+    assert api_credit.seed_rates(conn, cfg) == 0
+
+
+def test_account_limits_say_which_value_is_overridden(db, api_cfg):
+    conn = db[1]
+    uid, _ = create_user(conn, "alice")
+    api_credit.set_account_limits(conn, uid, 10, None, None)
+    lim = api_credit.account_limits(conn, api_cfg, uid)
+    assert (lim["own_max_inflight"], lim["own_rpm"]) == (10, None)
+    api_credit.grant(conn, uid, 1, "x", None)
+    [a] = api_credit.accounts(conn, api_cfg)
+    assert (a["own_max_inflight"], a["own_rpm"], a["rpm"]) == (10, None, 3)
+
+
+def test_usage_days_follow_the_viewers_time_zone_across_a_clock_change(db):
+    import datetime
+    import zoneinfo
+    conn = db[1]
+    uid, _ = create_user(conn, "alice")
+    kid, _ = api_credit.create_key(conn, uid, "k")
+    api_credit.set_rate(conn, "claude-*", 1, 1)
+    row = {"input_tokens": 1_000_000, "output_tokens": 0, "cache_creation_tokens": 0, "cache_creation_5m": 0,
+           "cache_creation_1h": 0, "cache_read_tokens": 0}
+    # 00:30 on 24 Oct 2026 in Berlin is 22:30 UTC on 23 Oct (summer time, UTC+2). Viewed after 25 Oct (winter time,
+    # UTC+1), a fixed offset of today's +1 h puts it at 23:30 on the 23rd: the wrong day.
+    at = 1792794600.0   # 2026-10-23T22:30:00Z
+    api_credit.charge(conn, uid, kid, 1, "claude-x", row, now=at)
+    berlin = zoneinfo.ZoneInfo("Europe/Berlin")
+    [u] = api_credit.usage(conn, uid, at - 1, tz="Europe/Berlin")
+    assert datetime.datetime.fromtimestamp(u["day"], berlin).strftime("%Y-%m-%d %H:%M") == "2026-10-24 00:00"
+    [u] = api_credit.usage(conn, uid, at - 1, tz_offset_s=3600, tz="Not/AZone")   # unknown zone: the fixed offset
+    assert datetime.datetime.fromtimestamp(u["day"], berlin).strftime("%Y-%m-%d") == "2026-10-23"

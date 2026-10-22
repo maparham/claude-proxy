@@ -785,13 +785,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(400, str(e))
 
     @app.get("/api/me/api")
-    async def me_api(request: Request, tz_offset_s: int = 0):
+    async def me_api(request: Request, tz_offset_s: int = 0, tz: str = ""):
         user = principal(request)
         need_api()
         uid = user["id"]
         tz_offset_s = max(-50400, min(50400, tz_offset_s))
         return {"balance": api_credit.balance(conn, uid), "keys": api_credit.keys(conn, uid),
-                "usage": api_credit.usage(conn, uid, time.time() - 30 * 86400, tz_offset_s),
+                "usage": api_credit.usage(conn, uid, time.time() - 30 * 86400, tz_offset_s, tz[:64] or None),
                 "grants": api_credit.grants(conn, uid), "rates": api_credit.rates(conn),
                 "limits": api_credit.account_limits(conn, cfg, uid), "base_url": cfg.listener.public_url}
 

@@ -1087,8 +1087,9 @@ async function renderPricing(main) {
 const fmtSigned = (v) => (v < 0 ? `−${fmtUsd(-v)}` : fmtUsd(v));   // fmtUsd prints any negative as <$0.01
 
 async function renderApi(main) {
-  const tz = -new Date().getTimezoneOffset() * 60;
-  const [me, adm] = await Promise.all([api(`/api/me/api?tz_offset_s=${tz}`), isAdmin() ? api("/api/admin/api") : null]);
+  // The zone name lets usage days follow clock changes; the offset is the fallback for a zone the server doesn't know.
+  const tz = new URLSearchParams({ tz_offset_s: -new Date().getTimezoneOffset() * 60, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" });
+  const [me, adm] = await Promise.all([api(`/api/me/api?${tz}`), isAdmin() ? api("/api/admin/api") : null]);
   const keyName = Object.fromEntries(me.keys.map((k) => [k.id, k.label]));
   const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code></td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
     edit ? `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="${f}" data-pattern="${esc(r.pattern)}" data-init="${r[f]}" value="${r[f]}" required style="width:70px"></td>`
@@ -1130,8 +1131,8 @@ async function renderApi(main) {
         <label>${t("tk.note")}<input name="note" maxlength="200" required></label><button class="btn primary" type="submit">${t("api.add_credit")}</button></form><div class="error" id="acredit-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th class="r">${t("api.balance")}</th><th class="r">${t("api.spent_30d")}</th><th class="r">${t("api.keys")}</th><th class="r">${t("api.max_inflight")}</th><th class="r">${t("api.rpm")}</th><th></th></tr></thead><tbody>
       ${adm.accounts.map((a) => `<tr><td>${bdi(a.name)}</td><td class="r num">${fmtSigned(a.balance)}</td><td class="r num">${fmtUsd(a.spent_30d)}</td><td class="r num">${nfFull.format(a.keys)}</td>
-        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${a.user_id}" value="${a.custom ? a.max_inflight : ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
-        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.custom ? a.rpm : ""}" placeholder="${a.rpm}" style="width:60px"></td>
+        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${a.user_id}" value="${a.own_max_inflight ?? ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
+        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.own_rpm ?? ""}" placeholder="${a.rpm}" style="width:60px"></td>
         <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
       </tbody></table></div></div>` : ""}
   </section>`;
