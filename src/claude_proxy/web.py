@@ -43,7 +43,7 @@ logger = logging.getLogger("claude_proxy")
 
 STATIC = Path(__file__).parent / "static"
 COOKIE = "cp_session"
-RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400}
+RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400, "365d": 365 * 86400}
 GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
 BUCKETS = ("5h", "7d")
 IS_ERROR = "(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL)"
@@ -377,6 +377,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         where, params = scope_where(user, user_id)
         totals = {k: usage.total(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, now - s)).to_dict()
                   for k, s in (("24h", 86400), ("7d", 7 * 86400), ("30d", 30 * 86400))}
+        if user_id is not None:  # one user's page also offers the longer spans, back to the retention limit
+            totals.update({k: usage.total(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, now - RANGES[k])).to_dict()
+                           for k in ("90d", "365d")})
         recent = usage.total(conn, cfg.pricing, f"{where} AND started_at>=? AND provider='anthropic'", (*params, now - 900))
         active = conn.execute(f"SELECT COUNT(DISTINCT user_id) FROM requests WHERE {where} AND started_at>=? AND rejected_by IS NULL",
                               (*params, now - 86400)).fetchone()[0]

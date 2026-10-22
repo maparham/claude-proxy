@@ -1581,8 +1581,8 @@ function limitsDialog(u) {
 
 async function renderUser(main) {
   const id = S.userId, p = S.prefs;
-  const period = ["24h", "7d", "30d"].includes(p.userPeriod) ? p.userPeriod : "7d";
-  const range = { "24h": "1d", "7d": "7d", "30d": "30d" }[period], gran = range === "1d" ? "hour" : "day";
+  const period = ["24h", "7d", "30d", "90d", "365d"].includes(p.userPeriod) ? p.userPeriod : "7d";
+  const range = period === "24h" ? "1d" : period, gran = range === "1d" ? "hour" : "day";
   const q = `user_id=${id}&tz_offset=${tzOffset()}`;
   const [{ users }, lim] = await Promise.all([api("/api/users"), api("/api/limits")]);
   S.kinds = lim.kinds;
@@ -1606,7 +1606,7 @@ async function renderUser(main) {
       <p class="crumb"><a href="#users">${t("user.back")}</a></p>
       <h2><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:8px"></span>${bdi(u.name)} ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}</h2>
       <p class="lede">${t("user.lede", { key: `<code>${esc(u.prefix)}…</code>`, added: fmtTime(u.created_at), last: fmtAgo(u.last_seen) })}</p>
-      <div class="controls">${seg("userPeriod", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], period)}<span class="spacer"></span>${userActions(u)}</div>
+      <div class="controls">${seg("userPeriod", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")], ["90d", t("period.90d")], ["365d", t("period.365d")]], period)}<span class="spacer"></span>${userActions(u)}</div>
       <div class="tiles">
         <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
         <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>

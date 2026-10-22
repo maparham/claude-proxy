@@ -1,3 +1,5 @@
+retention_days = 365        # requests and quota snapshots older than this are deleted
+
 [listener]
 host = "127.0.0.1"
 port = 18480
