@@ -267,6 +267,31 @@ async def test_sessions_page_with_offset_and_say_when_more_remain(env):
     assert [s["session_id"] for s in first["sessions"] + rest["sessions"]] == [s["session_id"] for s in whole["sessions"]]
 
 
+async def test_sessions_search_by_title_id_prefix_or_user(env):
+    gw, conn, ids, keys = env
+    from claude_proxy.db import set_session_title
+    set_session_title(conn, ids["alice"], f"s-{ids['alice']}", "Login 100%_done")
+    async with admin_client(gw) as c:
+        hits = {q: [s["session_id"] for s in (await c.get("/api/sessions", params={"q": q})).json()["sessions"]]
+                for q in ("login", "100%_", "1000", "bob", f"s-{ids['bob']}", "nothing")}
+    assert hits["login"] == hits["100%_"] == [f"s-{ids['alice']}"]
+    assert hits["1000"] == [] and hits["nothing"] == []          # % and _ match only themselves
+    assert hits["bob"] == hits[f"s-{ids['bob']}"] == [f"s-{ids['bob']}"]
+
+
+async def test_audit_search_and_action_filter(env):
+    gw, conn, ids, keys = env
+    from claude_proxy.db import audit
+    audit(conn, None, "enable", str(ids["bob"]))                  # an old entry naming bob by id
+    audit(conn, None, "limit_set", "alice", {"kind": "weighted_daily"})
+    async with admin_client(gw) as c:
+        get = lambda **p: c.get("/api/audit", params=p)  # noqa: E731
+        bob, daily, sets = [(await get(**p)).json() for p in ({"q": "bob"}, {"q": "weighted_daily"}, {"action": "limit_set"})]
+    assert [(e["action"], e["target"]) for e in bob["entries"]] == [("enable", "bob")]
+    assert [e["target"] for e in daily["entries"]] == ["alice"]
+    assert {e["action"] for e in sets["entries"]} == {"limit_set"} and "enable" in sets["actions"]
+
+
 async def test_audit_names_the_user_even_for_old_id_entries(env):
     gw, conn, ids, keys = env
     from claude_proxy.db import audit, set_enabled

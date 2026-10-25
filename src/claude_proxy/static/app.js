@@ -773,14 +773,26 @@ async function renderTickets(main) {
         <p class="sub" style="margin-top:12px">${t("tk.util_sub")}</p></div>
     </div>
     <div class="controls"><button class="btn primary" id="grant">${t("tk.grant")}</button>
-      <select id="ticket-user"><option value="">${t("tk.all_users")}</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(t("tk.deleted_name", { name: n }))}</option>`).join("")}</select></div>
-    <div class="card table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
-      <tbody>${foldRows(tickets.map(ticketRow)) || `<tr><td colspan="8" class="muted">${t("tk.none")}</td></tr>`}</tbody></table>${moreButton(tickets.length)}</div>
+      <select id="ticket-user"><option value="">${t("tk.all_users")}</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(t("tk.deleted_name", { name: n }))}</option>`).join("")}</select>
+      <select id="ticket-state"><option value="">${t("tk.all_states")}</option>${[...new Set(tickets.map((tk) => tk.state))].map((st) => `<option value="${esc(st)}" ${S.ticketState === st ? "selected" : ""}>${esc(I18N.en[`state.${st}`] ? t(`state.${st}`) : st)}</option>`).join("")}</select>
+      ${searchBox("ticket-q", S.ticketQ, t("tk.search"))}</div>
+    <div class="card table-wrap" id="tk-list"></div>
   </section>`;
-  wireMore(main);
+  const fill = () => {
+    const q = (S.ticketQ || "").trim().toLowerCase();
+    const shown = tickets.filter((tk) => (!S.ticketState || tk.state === S.ticketState)
+      && (!q || [tk.user_name, tk.note, tk.tier].some((v) => (v || "").toLowerCase().includes(q))));
+    const list = $("#tk-list");
+    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${foldRows(shown.map(ticketRow)) || `<tr><td colspan="8" class="muted">${t(tickets.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
+    wireMore(list);
+    list.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
+  };
+  fill();
   $("#grant").onclick = () => grantDialog(users);
   $("#ticket-user").onchange = (e) => { const v = e.target.value; S.ticketUser = !v ? null : v.startsWith("d:") ? v : +v; render(); };
-  main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
+  $("#ticket-state").onchange = (e) => { S.ticketState = e.target.value; fill(); };
+  wireSearch($("#ticket-q"), (v) => { S.ticketQ = v; fill(); });
 }
 function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "queued";
@@ -1848,18 +1860,28 @@ function heatmap(el, cells) {
 
 const SESS_PAGE = 50;
 async function renderSessions(main) {
-  const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}`);
-  const d = await page(0);
+  const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.sessQ || "")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
-    <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">${t("sess.none")}</p>`}
-    ${d.more ? `<button class="btn small more-rows" id="sess-more">${t("tbl.show_more_page")}</button>` : ""}</div></section>`;
-  let offset = d.sessions.length;
+    <div class="controls">${searchBox("sess-q", S.sessQ, t(isAdmin() ? "sess.search_admin" : "sess.search"))}</div>
+    <div class="card table-wrap" id="sess-list"></div></section>`;
+  const fill = latest(async (fresh) => {
+    const d = await page(0);
+    if (!fresh()) return;
+    const list = $("#sess-list");
+    list.innerHTML = `${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">${t(S.sessQ ? "search.none" : "sess.none")}</p>`}
+      ${d.more ? `<button class="btn small more-rows" id="sess-more">${t("tbl.show_more_page")}</button>` : ""}`;
+    wireSessMore(list, page, d.sessions.length);
+  });
+  wireSearch($("#sess-q"), (v) => { S.sessQ = v; fill(); });
+  await fill();
+}
+function wireSessMore(list, page, offset) {
   const more = $("#sess-more");
   if (more) more.onclick = async () => {
     more.disabled = true;
     const next = await page(offset);
     offset += next.sessions.length;
-    main.querySelector("tbody").insertAdjacentHTML("beforeend", next.sessions.map((s) => sessionRow(s, isAdmin())).join(""));
+    list.querySelector("tbody").insertAdjacentHTML("beforeend", next.sessions.map((s) => sessionRow(s, isAdmin())).join(""));
     if (next.more) more.disabled = false;
     else more.remove();
   };
@@ -1878,6 +1900,17 @@ function wireMore(root) {
     if (left > 0) b.textContent = t("tbl.show_more", { n: nfFull.format(left) });
     else b.remove();
   }));
+}
+const searchBox = (id, value, label) => `<input type="search" class="search" id="${id}" value="${esc(value || "")}" placeholder="${esc(label)}" aria-label="${esc(label)}">`;
+// Runs fn once typing pauses, so each keystroke doesn't refetch.
+function wireSearch(input, fn) {
+  let timer;
+  input.addEventListener("input", () => { clearTimeout(timer); timer = setTimeout(() => fn(input.value.trim()), 250); });
+}
+// Wraps an async fill so a slow, older response can't overwrite a newer one: fn gets a fresh() check to call after awaiting.
+function latest(fn) {
+  let n = 0;
+  return (...args) => { const mine = ++n; return fn(() => mine === n, ...args); };
 }
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`;
@@ -1910,12 +1943,27 @@ function auditDetail(json) {
   try { return Object.entries(JSON.parse(json)).map(([k, v]) => `${k.replace(/_/g, " ")}: ${v}`).join(" · "); } catch { return json; }
 }
 async function renderAudit(main) {
-  const d = await api("/api/audit");
+  const get = () => api(`/api/audit?q=${encodeURIComponent(S.auditQ || "")}&action=${encodeURIComponent(S.auditAction || "")}`);
+  const first = await get();
   main.innerHTML = `<section class="view"><h2>${t("tab.audit")}</h2><p class="lede">${t("audit.lede")}</p>
-    <div class="card table-wrap"><table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("audit.actor")}</th><th>${t("audit.action")}</th><th>${t("audit.target")}</th><th>${t("audit.detail")}</th></tr></thead><tbody>
-      ${foldRows(d.entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${bdi(e.actor ?? "—")}</td><td><code>${esc(e.action)}</code></td><td>${bdi(e.target ?? "")}</td><td class="muted" dir="ltr">${esc(auditDetail(e.detail_json))}</td></tr>`))}
-    </tbody></table>${moreButton(d.entries.length)}</div></section>`;
-  wireMore(main);
+    <div class="controls"><select id="audit-action"><option value="">${t("audit.all_actions")}</option>${first.actions.map((a) => `<option value="${esc(a)}" ${S.auditAction === a ? "selected" : ""}>${esc(a)}</option>`).join("")}</select>
+      ${searchBox("audit-q", S.auditQ, t("audit.search"))}</div>
+    <div class="card table-wrap" id="audit-list"></div></section>`;
+  const fill = latest(async (fresh, d) => {
+    d = d || await get();
+    if (!fresh()) return;
+    const list = $("#audit-list");
+    list.innerHTML = d.entries.length ? auditTable(d.entries) : `<p class="muted">${t("search.none")}</p>`;
+    wireMore(list);
+  });
+  fill(first);
+  $("#audit-action").onchange = (e) => { S.auditAction = e.target.value; fill(); };
+  wireSearch($("#audit-q"), (v) => { S.auditQ = v; fill(); });
+}
+function auditTable(entries) {
+  return `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("audit.actor")}</th><th>${t("audit.action")}</th><th>${t("audit.target")}</th><th>${t("audit.detail")}</th></tr></thead><tbody>
+      ${foldRows(entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${bdi(e.actor ?? "—")}</td><td><code>${esc(e.action)}</code></td><td>${bdi(e.target ?? "")}</td><td class="muted" dir="ltr">${esc(auditDetail(e.detail_json))}</td></tr>`))}
+    </tbody></table>${moreButton(entries.length)}`;
 }
 
 $("#dialog").addEventListener("close", hideTip);

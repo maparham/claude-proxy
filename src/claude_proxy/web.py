@@ -342,6 +342,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     names = lambda: {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM users")}  # noqa: E731
 
+    def named(n: dict, q: str) -> list[str]:
+        """The ids, as strings, of users whose name contains q."""
+        return [str(i) for i, name in n.items() if q.lower() in (name or "").lower()]
+
     # Non-admins never learn about the subscription behind the gateway: no account quota, credential state
     # or Anthropic rate-limit detail. Their own limits are all they have.
     is_admin = lambda user: user["role"] == "admin"  # noqa: E731
@@ -445,16 +449,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"cells": [[r["hour"], r["dow"], r["n"]] for r in rows]}
 
     @app.get("/api/sessions")
-    async def sessions(request: Request, range: str = "7d", user_id: int | None = None, offset: int = 0, limit: int = 200):
+    async def sessions(request: Request, range: str = "7d", user_id: int | None = None, offset: int = 0, limit: int = 200,
+                       q: str = ""):
         user = principal(request)
         limit, offset = min(max(limit, 1), 200), max(offset, 0)
         where, params = scope_where(user, user_id)
         since = time.time() - RANGES.get(range, RANGES["7d"])
+        match, mparams = "", ()
+        if q := q.strip():   # a title, a session id prefix, or a user's name
+            ids = named(names(), q)
+            match = (f"AND (session_id LIKE ? ESCAPE '\\' OR user_id IN ({','.join('?' * len(ids)) or 'NULL'}) OR EXISTS "
+                     f"(SELECT 1 FROM session_titles st WHERE st.user_id=requests.user_id AND st.session_id=requests.session_id "
+                     f"AND st.title LIKE ? ESCAPE '\\')) ")
+            mparams = (_like(q, prefix=True), *ids, _like(q))
         meta = conn.execute(
             f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
             f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "
-            f"AND rejected_by IS NULL AND {where} AND started_at>=? GROUP BY user_id, session_id ORDER BY last DESC LIMIT ? OFFSET ?",
-            (*params, since, limit + 1, offset)).fetchall()
+            f"AND rejected_by IS NULL AND {where} AND started_at>=? {match}GROUP BY user_id, session_id ORDER BY last DESC LIMIT ? OFFSET ?",
+            (*params, since, *mparams, limit + 1, offset)).fetchall()
         more, meta = len(meta) > limit, meta[:limit]   # one extra row says whether another page exists
         # Session ids come from clients, so two users' sessions may share one; each stays its own row.
         tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since),
@@ -567,16 +579,27 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return out | {"kinds": {k: list(v) for k, v in limits.UNITS.items()}} if is_admin(user) else out
 
     @app.get("/api/audit")
-    async def audit(request: Request, limit: int = 200):
+    async def audit(request: Request, limit: int = 200, q: str = "", action: str = ""):
         admin(request)
         n = names()
-        rows = conn.execute("SELECT * FROM audit_log ORDER BY id DESC LIMIT ?", (min(limit, 1000),)).fetchall()
         # Older entries named the user by id for these actions; show the name, or say the user is gone.
         by_id = ("rotate_key", "enable", "disable", "revoke")
+        cond, params = "1", []
+        if action:
+            cond, params = "action=?", [action]
+        if q := q.strip():   # the actor's or target's name, the action, or anything in the detail
+            ids = named(n, q)
+            marks = ",".join("?" * len(ids)) or "NULL"
+            cond += (f" AND (action LIKE ? ESCAPE '\\' OR target LIKE ? ESCAPE '\\' OR detail_json LIKE ? ESCAPE '\\' "
+                     f"OR actor_user_id IN ({marks}) OR (action IN ({','.join('?' * len(by_id))}) AND target IN ({marks})))")
+            params += [_like(q)] * 3 + ids + list(by_id) + ids
+        rows = conn.execute(f"SELECT * FROM audit_log WHERE {cond} ORDER BY id DESC LIMIT ?", (*params, min(limit, 1000))).fetchall()
+        actions = [r[0] for r in conn.execute("SELECT DISTINCT action FROM audit_log ORDER BY action")]
         target = lambda r: (n.get(int(r["target"]), f"user #{r['target']} (deleted)")  # noqa: E731
                             if r["action"] in by_id and (r["target"] or "").isdigit() else r["target"])
         return {"entries": [{**dict(r), "target": target(r),
-                             "actor": n.get(r["actor_user_id"], "cli" if r["actor_user_id"] is None else None)} for r in rows]}
+                             "actor": n.get(r["actor_user_id"], "cli" if r["actor_user_id"] is None else None)} for r in rows],
+                "actions": actions}
 
     @app.get("/api/me/status")
     async def me_status(request: Request, format: str = "json"):
@@ -1549,6 +1572,12 @@ def _amount(v: float, unit: str) -> str:
 
 
 # What a non-admin sees instead of error kinds and limit names that describe the account.
+def _like(q: str, prefix: bool = False) -> str:
+    """A LIKE pattern (ESCAPE '\\') matching q literally: anywhere, or only at the start."""
+    q = q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"{q}%" if prefix else f"%{q}%"
+
+
 _USER_ERROR_KINDS = {"upstream_quota": "usage_limit", "upstream_throttle": "usage_limit",
                      "gateway_needs_login": "gateway_unavailable", "gateway_refresh_unavailable": "gateway_unavailable"}
 
