@@ -205,6 +205,19 @@ def keys(conn, user_id: int) -> list[dict]:
     return [dict(r) for r in rows]
 
 
+def all_keys(conn) -> list[dict]:
+    """Every live API key, with its owner's name: the admin's list."""
+    rows = conn.execute("SELECT k.id, k.user_id, u.name, k.key_prefix, k.label, k.created_at, k.last_used_at FROM api_keys k "
+                        "JOIN users u ON u.id=k.user_id WHERE k.revoked_at IS NULL ORDER BY u.name, k.created_at DESC, k.id DESC")
+    return [dict(r) for r in rows]
+
+
+def key_owner(conn, key_id: int) -> int | None:
+    """The user a live API key belongs to, or None."""
+    r = conn.execute("SELECT user_id FROM api_keys WHERE id=? AND revoked_at IS NULL", (key_id,)).fetchone()
+    return r["user_id"] if r else None
+
+
 def revoke_key(conn, user_id: int, key_id: int, actor: int | None) -> bool:
     n = conn.execute("UPDATE api_keys SET revoked_at=? WHERE id=? AND user_id=? AND revoked_at IS NULL",
                      (int(time.time()), key_id, user_id)).rowcount

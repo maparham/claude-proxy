@@ -823,7 +823,26 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def admin_api(request: Request):
         admin(request)
         need_api()
-        return {"rates": api_credit.rates(conn), "accounts": api_credit.accounts(conn, cfg)}
+        return {"rates": api_credit.rates(conn), "accounts": api_credit.accounts(conn, cfg), "keys": api_credit.all_keys(conn)}
+
+    @app.post("/api/admin/api/keys")
+    async def admin_api_key_add(request: Request):
+        # For a user who can't make their own, e.g. one without a dashboard sign-in. Shown once, to the admin.
+        actor = admin(request, write=True)
+        need_api()
+        body = await _json(request)
+        u = target_user(body.get("user"))
+        kid, raw = credit_call(api_credit.create_key, conn, u["id"], str(body.get("label", "")), actor["id"])
+        return {"ok": True, "id": kid, "key": raw, "name": u["name"]}
+
+    @app.post("/api/admin/api/keys/{kid}/revoke")
+    async def admin_api_key_revoke(request: Request, kid: int):
+        actor = admin(request, write=True)
+        need_api()
+        owner = api_credit.key_owner(conn, kid)
+        if owner is None or not api_credit.revoke_key(conn, owner, kid, actor["id"]):
+            fail(404, "No such API key.")
+        return {"ok": True}
 
     @app.post("/api/admin/api/rates")
     async def admin_api_rate(request: Request):

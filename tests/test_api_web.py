@@ -107,3 +107,37 @@ async def test_usage_takes_the_viewers_time_zone(env):  # noqa: F811
         for q in ("tz=Europe/Berlin&tz_offset_s=3600", "tz=Not/AZone&tz_offset_s=3600", "tz=../../etc/passwd", "tz=" + "x" * 500):
             r = await c.get(f"/api/me/api?{q}", headers=bearer(keys["alice"]))
             assert r.status_code == 200 and len(r.json()["usage"]) == 1   # a bad zone falls back to the offset
+
+
+async def test_admin_creates_lists_and_revokes_a_users_api_keys(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    on(gw)
+    from claude_proxy.db import find_user_by_key
+    async with admin_client(gw) as c:
+        r = await c.post("/api/admin/api/keys", json={"user": "alice", "label": "for her laptop"})
+        assert r.status_code == 200 and r.json()["key"].startswith("sk-proxy-a-")
+        kid, raw = r.json()["id"], r.json()["key"]
+        assert find_user_by_key(conn, raw)["id"] == ids["alice"]
+        [k] = (await c.get("/api/admin/api")).json()["keys"]
+        assert (k["id"], k["name"], k["label"]) == (kid, "alice", "for her laptop") and "key_hash" not in k
+        assert (await c.post("/api/admin/api/keys", json={"user": "nobody", "label": "x"})).status_code == 404
+        assert (await c.post("/api/admin/api/keys", json={"user": "alice", "label": " "})).status_code == 400
+        assert (await c.post(f"/api/admin/api/keys/{kid}/revoke")).status_code == 200
+        assert (await c.post(f"/api/admin/api/keys/{kid}/revoke")).status_code == 404
+        assert find_user_by_key(conn, raw) is None and (await c.get("/api/admin/api")).json()["keys"] == []
+    audit = [r[0] for r in conn.execute("SELECT action FROM audit_log ORDER BY id")]
+    assert "api_key_add" in audit and "api_key_revoke" in audit
+
+
+async def test_only_an_admin_manages_other_peoples_api_keys(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    on(gw)
+    kid, _ = api_credit.create_key(conn, ids["bob"], "bob's")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        h = bearer(keys["alice"])
+        assert (await c.post("/api/admin/api/keys", json={"user": "bob", "label": "x"}, headers=h)).status_code == 403
+        assert (await c.post(f"/api/admin/api/keys/{kid}/revoke", headers=h)).status_code == 403
+    async with admin_client(gw) as c:
+        del c.headers["x-csrf-token"]
+        assert (await c.post("/api/admin/api/keys", json={"user": "bob", "label": "x"})).status_code == 403
+    assert len(api_credit.keys(conn, ids["bob"])) == 1

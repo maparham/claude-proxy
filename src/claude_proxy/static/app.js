@@ -1134,6 +1134,13 @@ async function renderApi(main) {
         <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${a.user_id}" value="${a.own_max_inflight ?? ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
         <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.own_rpm ?? ""}" placeholder="${a.rpm}" style="width:60px"></td>
         <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
+      </tbody></table></div></div>
+    <div class="card" style="margin-top:16px"><h3>${t("api.all_keys")}</h3><p class="sub">${t("api.all_keys_sub")}</p>
+      <form id="f-akey-admin" class="form-grid"><label>${t("app.user")}<input name="user" required></label><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
+        <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-admin-err"></div>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
+      ${adm.keys.map((k) => `<tr><td>${bdi(k.name)}</td><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
+        <td><button class="btn small danger" data-akrevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("api.no_all_keys")}</td></tr>`}
       </tbody></table></div></div>` : ""}
   </section>`;
 
@@ -1191,6 +1198,17 @@ async function renderApi(main) {
     if (bad([max_inflight, rpm])) return;
     // By id: target_user reads a name of digits as an id.
     if (await post("/api/admin/api/limits", { user: Number(b.dataset.lsave), max_inflight, rpm }, null, b)) render();
+  }));
+  $("#f-akey-admin").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target;
+    const r = await post("/api/admin/api/keys", { user: f.user.value.trim(), label: f.label.value }, $("#akey-admin-err"), e.submitter);
+    if (r) { await render(); keyDialog(t("api.new_key_for", { name: bdi(r.name) }), r.key, t("api.key_how_admin")); }
+  };
+  main.querySelectorAll("[data-akrevoke]").forEach((b) => (b.onclick = async () => {
+    const k = adm.keys.find((x) => x.id === Number(b.dataset.akrevoke));
+    if (!confirm(t("api.revoke_for_confirm", { name: iso(k.name), label: iso(k.label) }))) return;
+    if (await post(`/api/admin/api/keys/${k.id}/revoke`, {}, null, b)) render();
   }));
 }
 
