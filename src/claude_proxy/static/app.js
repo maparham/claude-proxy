@@ -393,6 +393,7 @@ const VIEWS = {
   overview: { render: renderOverview },
   usage: { render: renderUsage },
   users: { render: renderUsers, admin: true },
+  apiadmin: { render: renderApiAdmin, admin: true, feature: "api" },
   tickets: { render: renderTickets, admin: true, feature: "tickets" },
   orders: { render: renderOrders, admin: true, feature: "tickets" },
   pricing: { render: renderPricing, admin: true, feature: "tickets" },
@@ -1095,15 +1096,26 @@ async function renderPricing(main) {
 
 const fmtSigned = (v) => (v < 0 ? `−${fmtUsd(-v)}` : fmtUsd(v));   // fmtUsd prints any negative as <$0.01
 
+const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code></td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
+  edit ? `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="${f}" data-pattern="${esc(r.pattern)}" data-init="${r[f]}" value="${r[f]}" required style="width:70px"></td>`
+    : `<td class="r num">${esc(String(r[f]))}</td>`).join("")}${edit ? `<td><button class="btn small danger" type="button" data-rdel="${esc(r.pattern)}">${t("api.delete")}</button></td>` : ""}</tr>`;
+const rateHead = (edit) => `<thead><tr><th>${t("api.model")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cw5")}</th><th class="r">${t("api.cw1")}</th><th class="r">${t("api.cr")}</th>${edit ? "<th></th>" : ""}</tr></thead>`;
+
+// The button stays disabled while the request runs: a double click must not grant credit or make a key twice.
+async function apiPost(path, body, errEl, btn) {
+  if (btn) btn.disabled = true;
+  try { return await api(path, { method: "POST", body }); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); return null; } finally { if (btn) btn.disabled = false; }
+}
+
+// A typo must be refused here: JSON sends NaN as null, which the server reads as "use the default".
+const numv = (v) => num(String(v ?? "").replace(/\u2212/g, "-"));   // the page prints negatives with U+2212
+const badNum = (vals, errEl) => (vals.some(Number.isNaN) ? (errEl ? (errEl.textContent = t("api.bad_number")) : alertInline(t("api.bad_number")), true) : false);
+
 async function renderApi(main) {
   // The zone name lets usage days follow clock changes; the offset is the fallback for a zone the server doesn't know.
   const tz = new URLSearchParams({ tz_offset_s: -new Date().getTimezoneOffset() * 60, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" });
-  const [me, adm] = await Promise.all([api(`/api/me/api?${tz}`), isAdmin() ? api("/api/admin/api") : null]);
+  const me = await api(`/api/me/api?${tz}`);
   const keyName = Object.fromEntries(me.keys.map((k) => [k.id, k.label]));
-  const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code></td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
-    edit ? `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="${f}" data-pattern="${esc(r.pattern)}" data-init="${r[f]}" value="${r[f]}" required style="width:70px"></td>`
-      : `<td class="r num">${esc(String(r[f]))}</td>`).join("")}${edit ? `<td><button class="btn small danger" type="button" data-rdel="${esc(r.pattern)}">${t("api.delete")}</button></td>` : ""}</tr>`;
-  const rateHead = (edit) => `<thead><tr><th>${t("api.model")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cw5")}</th><th class="r">${t("api.cw1")}</th><th class="r">${t("api.cr")}</th>${edit ? "<th></th>" : ""}</tr></thead>`;
   const env = me.base_url ? `ANTHROPIC_BASE_URL=${me.base_url}\nANTHROPIC_API_KEY=sk-proxy-a-…` : t("api.no_base_url");
   main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>
     <p class="lede">${t("api.lede")}</p>
@@ -1126,9 +1138,26 @@ async function renderApi(main) {
       ${foldRows(me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
         <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`)) || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
       </tbody></table>${moreButton(me.usage.length)}</div></div>
-    ${adm ? "" : `<div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
+    ${isAdmin() ? "" : `<div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
       <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}
-    ${adm ? `
+  </section>`;
+
+  $("#f-akey").onsubmit = async (e) => {
+    e.preventDefault();
+    const r = await apiPost("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"), e.submitter);
+    if (r) { await render(); keyDialog(t("api.new_key"), r.key, t("api.key_how")); }
+  };
+  wireMore(main);
+  main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(t("api.revoke_confirm"))) return;
+    if (await apiPost(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {}, null, b)) render();
+  }));
+}
+
+// The admin's side of the API: rates, everyone's credit and limits, everyone's keys.
+async function renderApiAdmin(main) {
+  const adm = await api("/api/admin/api");
+  main.innerHTML = `<section class="view"><h2>${t("tab.apiadmin")}</h2>
     <div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
       <form id="f-arates"><div class="table-wrap"><table class="data">${rateHead(true)}<tbody>${adm.rates.map((r) => rateRow(r, true)).join("")}</tbody></table></div>
         <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div><div class="error" id="arates-err"></div></form>
@@ -1145,62 +1174,41 @@ async function renderApi(main) {
         <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button> <button class="btn small" data-acredit="${a.user_id}">${t("api.add_credit")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
       </tbody></table></div></div>
     <div class="card" style="margin-top:16px"><h3>${t("api.all_keys")}</h3><p class="sub">${t("api.all_keys_sub")}</p>
-      <form id="f-akey-admin" class="form-grid"><label>${t("app.user")}<input name="user" required></label><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
+      <form id="f-akey-admin" class="form-grid"><label>${t("app.user")}<select name="user" required><option value=""></option>${adm.users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
         <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-admin-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
       ${adm.keys.map((k) => `<tr><td>${bdi(k.name)}</td><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
         <td><button class="btn small danger" data-akrevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("api.no_all_keys")}</td></tr>`}
-      </tbody></table></div></div>` : ""}
-  </section>`;
+      </tbody></table></div></div>  </section>`;
 
-  const say = (msg, errEl) => (errEl ? (errEl.textContent = msg) : alertInline(msg));
-  // The button stays disabled while the request runs: a double click must not grant credit or make a key twice.
-  const post = async (path, body, errEl, btn) => {
-    if (btn) btn.disabled = true;
-    try { return await api(path, { method: "POST", body }); } catch (e) { say(e.message, errEl); return null; } finally { if (btn) btn.disabled = false; }
-  };
-  // A typo must be refused here: JSON sends NaN as null, which the server reads as "use the default".
-  const numv = (v) => num(String(v ?? "").replace(/\u2212/g, "-"));   // the page prints negatives with U+2212
-  const bad = (vals, errEl) => (vals.some(Number.isNaN) ? (say(t("api.bad_number"), errEl), true) : false);
-  $("#f-akey").onsubmit = async (e) => {
-    e.preventDefault();
-    const r = await post("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"), e.submitter);
-    if (r) { await render(); keyDialog(t("api.new_key"), r.key, t("api.key_how")); }
-  };
-  wireMore(main);
-  main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
-    if (!confirm(t("api.revoke_confirm"))) return;
-    if (await post(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {}, null, b)) render();
-  }));
-  if (!adm) return;
   $("#f-arates").onsubmit = async (e) => {
     e.preventDefault();
     const changed = {};
     const inputs = [...e.target.querySelectorAll("input[data-pattern]")];
-    if (bad(inputs.map((i) => numv(i.value)), $("#arates-err"))) return;
+    if (badNum(inputs.map((i) => numv(i.value)), $("#arates-err"))) return;
     inputs.forEach((i) => { if (numv(i.value) !== Number(i.dataset.init)) (changed[i.dataset.pattern] ||= {})[i.name] = numv(i.value); });
     for (const [pattern, edits] of Object.entries(changed)) {
       const r = adm.rates.find((x) => x.pattern === pattern);
-      if (!(await post("/api/admin/api/rates", { ...r, ...edits, pattern }, $("#arates-err"), e.submitter))) return;
+      if (!(await apiPost("/api/admin/api/rates", { ...r, ...edits, pattern }, $("#arates-err"), e.submitter))) return;
     }
     render();
   };
   main.querySelectorAll("[data-rdel]").forEach((b) => (b.onclick = async () => {
-    if (confirm(t("api.delete_confirm", { pattern: iso(b.dataset.rdel) })) && (await post("/api/admin/api/rates/delete", { pattern: b.dataset.rdel }, null, b))) render();
+    if (confirm(t("api.delete_confirm", { pattern: iso(b.dataset.rdel) })) && (await apiPost("/api/admin/api/rates/delete", { pattern: b.dataset.rdel }, null, b))) render();
   }));
   $("#f-arate-add").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
     const input = numv(f.input.value), output = numv(f.output.value);
-    if (bad([input, output], $("#arate-add-err"))) return;
-    if (await post("/api/admin/api/rates", { pattern: f.pattern.value.trim(), input, output }, $("#arate-add-err"), e.submitter)) render();
+    if (badNum([input, output], $("#arate-add-err"))) return;
+    if (await apiPost("/api/admin/api/rates", { pattern: f.pattern.value.trim(), input, output }, $("#arate-add-err"), e.submitter)) render();
   };
   $("#f-acredit").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
     const usd = numv(f.usd.value);
-    if (bad([usd], $("#acredit-err"))) return;
-    if (await post("/api/admin/api/credit", { user: f.user.value, usd, note: f.note.value }, $("#acredit-err"), e.submitter)) render();
+    if (badNum([usd], $("#acredit-err"))) return;
+    if (await apiPost("/api/admin/api/credit", { user: f.user.value, usd, note: f.note.value }, $("#acredit-err"), e.submitter)) render();
   };
   // A row's button picks that user in the form above, so only the amount is left to type.
   main.querySelectorAll("[data-acredit]").forEach((b) => (b.onclick = () => {
@@ -1212,22 +1220,21 @@ async function renderApi(main) {
   main.querySelectorAll("[data-lsave]").forEach((b) => (b.onclick = async () => {
     const v = (k) => { const i = main.querySelector(`input[data-lim="${k}"][data-user="${b.dataset.lsave}"]`); return i.value.trim() === "" ? null : numv(i.value); };
     const max_inflight = v("max_inflight"), rpm = v("rpm");
-    if (bad([max_inflight, rpm])) return;
+    if (badNum([max_inflight, rpm])) return;
     // By id: target_user reads a name of digits as an id.
-    if (await post("/api/admin/api/limits", { user: Number(b.dataset.lsave), max_inflight, rpm }, null, b)) render();
+    if (await apiPost("/api/admin/api/limits", { user: Number(b.dataset.lsave), max_inflight, rpm }, null, b)) render();
   }));
   $("#f-akey-admin").onsubmit = async (e) => {
     e.preventDefault();
     const f = e.target;
-    const r = await post("/api/admin/api/keys", { user: f.user.value.trim(), label: f.label.value }, $("#akey-admin-err"), e.submitter);
+    const r = await apiPost("/api/admin/api/keys", { user: f.user.value, label: f.label.value }, $("#akey-admin-err"), e.submitter);
     if (r) { await render(); keyDialog(t("api.new_key_for", { name: bdi(r.name) }), r.key, t("api.key_how_admin")); }
   };
   main.querySelectorAll("[data-akrevoke]").forEach((b) => (b.onclick = async () => {
     const k = adm.keys.find((x) => x.id === Number(b.dataset.akrevoke));
     if (!confirm(t("api.revoke_for_confirm", { name: iso(k.name), label: iso(k.label) }))) return;
-    if (await post(`/api/admin/api/keys/${k.id}/revoke`, {}, null, b)) render();
-  }));
-}
+    if (await apiPost(`/api/admin/api/keys/${k.id}/revoke`, {}, null, b)) render();
+  }));}
 
 function openDialog(html) {
   const d = $("#dialog");
