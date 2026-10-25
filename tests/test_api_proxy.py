@@ -280,10 +280,15 @@ async def test_identity_line_prepended_for_non_claude_code_clients(env, anthropi
 
 
 def test_claude_code_system_prompt_left_alone():
-    for system in (CC["text"], [CC, {"type": "text", "text": "x"}],
-                   "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."):
+    for system in (CC["text"], [CC, {"type": "text", "text": "x"}]):
         data = {"system": system}
         assert not with_claude_code_identity(data) and data["system"] == system
+
+
+def test_identity_line_sharing_a_block_still_gets_its_own():
+    # Anthropic refuses the line followed by more text in the same block, so it is added as a block of its own.
+    data = {"system": CC["text"] + " Be terse."}
+    assert with_claude_code_identity(data) and data["system"] == [CC, {"type": "text", "text": CC["text"] + " Be terse."}]
 
 
 async def test_request_scoped_429_is_not_called_a_usage_limit(env, anthropic):
