@@ -249,6 +249,15 @@ function chart(el) {
   return c;
 }
 window.addEventListener("resize", () => S.charts.forEach((c) => c.resize()));
+// A "Reset zoom" button in the chart's card title, shown while an inside dataZoom is narrowed.
+function zoomReset(c) {
+  const h3 = c.getDom().closest(".card").querySelector("h3");
+  h3.insertAdjacentHTML("beforeend", `<button type="button" class="btn small zoom-reset hidden">${t("chart.reset_zoom")}</button>`);
+  const btn = h3.lastElementChild;
+  c.on("datazoom", () => { const z = c.getOption().dataZoom[0]; btn.classList.toggle("hidden", z.start <= 0 && z.end >= 100); });
+  btn.onclick = () => c.dispatchAction({ type: "dataZoom", start: 0, end: 100 });
+  return c;
+}
 
 const narrow = () => document.documentElement.clientWidth < 600;
 function baseOption() {
@@ -1765,7 +1774,7 @@ async function renderQuota(main) {
   const pctAxis = (v) => fmtPct(v);
   if (!d.snapshots.length) { $("#q-line").outerHTML = `<p class="muted">${t("quota.no_reports")}</p>`; }
   else {
-    chart($("#q-line")).setOption({
+    zoomReset(chart($("#q-line"))).setOption({
       ...o, legend: { show: false },
       tooltip: { ...o.tooltip, valueFormatter: (v) => fmtPct(v, 1) },
       xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", max: 100, axisLabel: { ...o.yAxis.axisLabel, formatter: pctAxis } },
@@ -1776,7 +1785,7 @@ async function renderQuota(main) {
   }
   if (!d.rate.length && d.rate_now == null) { $("#q-rate").outerHTML = `<p class="muted">${t("quota.no_rate")}</p>`; }
   else {
-    chart($("#q-rate")).setOption({
+    zoomReset(chart($("#q-rate"))).setOption({
       ...o, tooltip: { ...o.tooltip, valueFormatter: (v) => fmtNum(v) },
       xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", scale: true, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtNum(v) } },
       dataZoom: [{ type: "inside" }],
