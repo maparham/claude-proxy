@@ -48,6 +48,7 @@ STATIC = Path(__file__).parent / "static"
 COOKIE = "cp_session"
 RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400, "365d": 365 * 86400}
 GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
+SOURCES = {"all": "1=1", "cli": "api_key_id IS NULL", "api": "api_key_id IS NOT NULL"}
 BUCKETS = ("5h", "7d")
 IS_ERROR = "(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL)"
 ERROR_KIND = ("CASE WHEN rejected_by = 'auth' THEN 'gateway_auth' WHEN rejected_by = 'request' THEN 'gateway_bad_request' "
@@ -368,6 +369,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(404, "No such user.")
         return "user_id=?", (user_id,)
 
+    def by_source(source: str) -> str:
+        """Requests sent from Claude Code with a gateway key ("cli"), with a pay-per-token API key ("api"), or both."""
+        if source not in SOURCES:
+            fail(400, "source must be all, cli or api")
+        return SOURCES[source]
+
     def quota_view(now: float) -> list[dict]:
         out = []
         n = names()
@@ -383,10 +390,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     # ---------- read API ----------
 
     @app.get("/api/overview")
-    async def overview(request: Request, user_id: int | None = None):
+    async def overview(request: Request, user_id: int | None = None, source: str = "all"):
         user = principal(request)
         now = time.time()
         where, params = scope_where(user, user_id)
+        where = f"{where} AND {by_source(source)}"
         totals = {k: usage.total(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, now - s)).to_dict()
                   for k, s in (("24h", 86400), ("7d", 7 * 86400), ("30d", 30 * 86400))}
         if user_id is not None:  # one user's page also offers the longer spans, back to the retention limit
@@ -411,11 +419,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/series")
     async def series(request: Request, range: str = "7d", granularity: str = "day", split: str = "user",
-                     tz_offset: int = 0, provider: str | None = None, user_id: int | None = None):
+                     tz_offset: int = 0, provider: str | None = None, user_id: int | None = None, source: str = "all"):
         user = principal(request)
         if range not in RANGES or granularity not in GRANULARITY or split not in ("user", "model", "provider", "none"):
             fail(400, "bad range, granularity or split")
         where, params = scope_where(user, user_id)
+        where = f"{where} AND {by_source(source)}"
         if provider:
             where, params = f"{where} AND provider=?", (*params, provider)
         pts = usage.series(conn, cfg.pricing, time.time() - RANGES[range], GRANULARITY[granularity],
@@ -427,9 +436,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"range": range, "granularity": granularity, "split": split, "points": pts}
 
     @app.get("/api/models")
-    async def models(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None):
+    async def models(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None, source: str = "all"):
         user = principal(request)
         where, params = scope_where(user, user_id)
+        where = f"{where} AND {by_source(source)}"
         since = time.time() - RANGES.get(range, RANGES["30d"])
         by_model = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="model")
         by_provider = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="provider")
@@ -442,9 +452,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         }
 
     @app.get("/api/heatmap")
-    async def heatmap(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None):
+    async def heatmap(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None, source: str = "all"):
         user = principal(request)
         where, params = scope_where(user, user_id)
+        where = f"{where} AND {by_source(source)}"
         off = int(tz_offset)
         rows = conn.execute(
             f"SELECT CAST(strftime('%w', started_at + {off}, 'unixepoch') AS INTEGER) AS dow, "
@@ -455,10 +466,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/sessions")
     async def sessions(request: Request, range: str = "7d", user_id: int | None = None, offset: int = 0, limit: int = 200,
-                       q: str = ""):
+                       q: str = "", source: str = "all"):
         user = principal(request)
         limit, offset = min(max(limit, 1), 200), max(offset, 0)
         where, params = scope_where(user, user_id)
+        src = by_source(source)
         since = time.time() - RANGES.get(range, RANGES["7d"])
         match, mparams = "", ()
         if q := q.strip():   # a title, a session id prefix, or a user's name
@@ -470,11 +482,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         meta = conn.execute(
             f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
             f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "
-            f"AND rejected_by IS NULL AND {where} AND started_at>=? {match}GROUP BY user_id, session_id ORDER BY last DESC LIMIT ? OFFSET ?",
+            f"AND rejected_by IS NULL AND {where} AND {src} AND started_at>=? {match}GROUP BY user_id, session_id ORDER BY last DESC LIMIT ? OFFSET ?",
             (*params, since, *mparams, limit + 1, offset)).fetchall()
         more, meta = len(meta) > limit, meta[:limit]   # one extra row says whether another page exists
         # Session ids come from clients, so two users' sessions may share one; each stays its own row.
-        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since),
+        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND {src} AND started_at>=?", (*params, since),
                             group="user_id || '|' || session_id")
         n = names()
         ids = [r["session_id"] for r in meta]
@@ -488,9 +500,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                              for r in meta], "more": more}
 
     @app.get("/api/errors")
-    async def errors(request: Request, range: str = "7d", tz_offset: int = 0, user_id: int | None = None):
+    async def errors(request: Request, range: str = "7d", tz_offset: int = 0, user_id: int | None = None,
+                     source: str = "all"):
         user = principal(request)
         where, params = scope_where(user, user_id)
+        where = f"{where} AND {by_source(source)}"
         since = time.time() - RANGES.get(range, RANGES["7d"])
         b = 3600 if range in ("1d", "7d") else 86400
         off = int(tz_offset)
@@ -531,12 +545,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
 
     @app.get("/api/requests")
-    async def recent_requests(request: Request, user_id: int | None = None, limit: int = 100):
+    async def recent_requests(request: Request, user_id: int | None = None, limit: int = 100, source: str = "all"):
         user = principal(request)
         where, params = scope_where(user, user_id)
+        src = by_source(source)
         rows = conn.execute(
             f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, "
-            f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind FROM requests WHERE {where} "
+            f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind FROM requests WHERE {where} AND {src} "
             f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, min(max(limit, 1), 500))).fetchall()
         ids = [r["id"] for r in rows]
         marks = ",".join("?" * len(ids))
@@ -560,11 +575,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"requests": out}
 
     @app.get("/api/users")
-    async def users(request: Request):
+    async def users(request: Request, source: str = "all"):
         admin(request)
         now = time.time()
         periods = {"24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
-        tot = {k: usage.grouped(conn, cfg.pricing, "started_at>=?", (now - s,), group="user_id") for k, s in periods.items()}
+        src = by_source(source)
+        tot = {k: usage.grouped(conn, cfg.pricing, f"started_at>=? AND {src}", (now - s,), group="user_id") for k, s in periods.items()}
         atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s) for b in BUCKETS}
         out = []
         for u in conn.execute("SELECT * FROM users ORDER BY name").fetchall():

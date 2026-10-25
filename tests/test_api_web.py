@@ -1,4 +1,6 @@
 """API keys on the dashboard (2026-10-21 spec, section 5)."""
+import time
+
 from claude_proxy import api_credit
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
@@ -141,3 +143,31 @@ async def test_only_an_admin_manages_other_peoples_api_keys(env):  # noqa: F811
         del c.headers["x-csrf-token"]
         assert (await c.post("/api/admin/api/keys", json={"user": "bob", "label": "x"})).status_code == 403
     assert len(api_credit.keys(conn, ids["bob"])) == 1
+
+
+async def test_usage_views_split_cli_from_api_requests(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    on(gw)
+    kid, _ = api_credit.create_key(conn, ids["alice"], "k")
+    now = time.time()
+    conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, status, input_tokens, "
+                 "output_tokens, session_id, api_key_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                 (ids["alice"], now - 60, now - 59, "POST", "/v1/messages", "anthropic", "claude-opus-5", 200, 7000, 900, "s-api", kid))
+    async with admin_client(gw) as c:
+        async def n(path, source):
+            return (await c.get(f"{path}{'&' if '?' in path else '?'}source={source}")).json()
+        assert [(await n("/api/overview", s))["totals"]["24h"]["requests"] for s in ("all", "cli", "api")] == [4, 3, 1]
+        assert [(await n("/api/overview?user_id=%d" % ids["alice"], s))["totals"]["24h"]["requests"] for s in ("cli", "api")] == [2, 1]
+        assert [p["key"] for p in (await n("/api/series?split=user", "api"))["points"]] == ["alice"]
+        assert [m["model"] for m in (await n("/api/models", "api"))["models"]] == ["claude-opus-5"]
+        assert [s["session_id"] for s in (await n("/api/sessions", "api"))["sessions"]] == ["s-api"]
+        assert "s-api" not in [s["session_id"] for s in (await n("/api/sessions", "cli"))["sessions"]]
+        assert [r["session_id"] for r in (await n("/api/requests", "api"))["requests"]] == ["s-api"]
+        assert sum(cell[2] for cell in (await n("/api/heatmap", "api"))["cells"]) == 1
+        users = {u["name"]: u["usage"]["24h"]["requests"] for u in (await n("/api/users", "api"))["users"]}
+        assert users == {"admin": 0, "alice": 1, "bob": 0}
+        assert (await c.get("/api/overview?source=nope")).status_code == 400
+    async with asgi_client(create_dashboard_app(gw)) as c:   # a user sees their own split too
+        h = bearer(keys["alice"])
+        assert (await c.get("/api/overview?source=api", headers=h)).json()["totals"]["24h"]["requests"] == 1
+        assert (await c.get("/api/overview?source=cli", headers=h)).json()["totals"]["24h"]["requests"] == 2

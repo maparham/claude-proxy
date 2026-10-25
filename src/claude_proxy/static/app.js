@@ -19,7 +19,7 @@ document.title = t("app.title");
 $("#lang-toggle").onclick = $("#lang-signin").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
 
 function loadPrefs() {
-  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open" };
+  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open", source: "cli" };
   try { return { ...d, ...JSON.parse(localStorage.getItem("cp-prefs") || "{}") }; } catch { return d; }
 }
 function loadSlots() { try { return JSON.parse(localStorage.getItem("cp-colors") || "{}"); } catch { return {}; } }
@@ -99,7 +99,12 @@ const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
 const METRICS = Object.fromEntries(["weighted", "raw", "cost_usd", "requests"].map((k) => [k, t(`metric.${k}`)]));
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
+// The usage views count CLI requests or API-key ones, by the switch on top of them; everything while API keys are off.
+const BY_SOURCE = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|users)(\?|$)/;
+const withSource = (path) => (S.api?.enabled && BY_SOURCE.test(path) ? `${path}${path.includes("?") ? "&" : "?"}source=${S.prefs.source}` : path);
+
 async function api(path, opts = {}) {
+  if (!opts.method || opts.method === "GET") path = withSource(path);
   const headers = { ...(opts.headers || {}) };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.method && opts.method !== "GET" && S.csrf) headers["x-csrf-token"] = S.csrf;
@@ -115,7 +120,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -455,6 +460,17 @@ function subTabs(main, view) {
   };
   show(panes.some((p) => p.dataset.sub === S.sub[view]) ? S.sub[view] : panes[0].dataset.sub);
 }
+// CLI | API on the usage views, first in the view's controls row; the views' calls carry it (withSource).
+const SOURCE_VIEWS = new Set(["overview", "usage", "users", "user", "models", "activity", "sessions", "errors"]);
+function sourceSwitch(main, view) {
+  if (!S.api?.enabled || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
+  const box = document.createElement("span");
+  box.innerHTML = seg("source", [["cli", t("source.cli"), "source:cli"], ["api", t("source.api"), "source:api"]], S.prefs.source);
+  const row = main.querySelector(".controls");
+  if (row) row.prepend(box.firstChild);
+  else { const div = Object.assign(document.createElement("div"), { className: "controls" }); div.append(box.firstChild); main.querySelector(".lede")?.after(div); }
+  wireSegs(main.querySelector('.seg[data-pref="source"]').parentElement, render);
+}
 async function render() {
   renderTabs();
   hideTip();
@@ -462,7 +478,7 @@ async function render() {
   const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && featureOn(VIEWS[S.tab]) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
   main.innerHTML = `<p class="muted">${t("app.loading")}</p>`;
-  try { await view.render(main); subTabs(main, view === VIEWS[S.tab] ? S.tab : "overview"); } catch (e) {
+  try { await view.render(main); sourceSwitch(main, view); subTabs(main, view === VIEWS[S.tab] ? S.tab : "overview"); } catch (e) {
     if (e.message !== "signed out") main.innerHTML = `<div class="banner critical"><span class="icon">!</span><span>${esc(e.message)}</span></div>`;
   }
   if (S.toPrices) { S.toPrices = false; scrollToPrices(); }
