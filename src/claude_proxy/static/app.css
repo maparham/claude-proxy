@@ -353,7 +353,9 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .badge.state-contacted { border-color: var(--s4); }
 .badge.state-done { border-color: var(--good); color: var(--good-text); }
 .badge.state-declined { border-color: var(--critical); color: var(--critical-text); }
-.form-grid label.wide { grid-column: 1 / -1; }
+.form-grid .wide { grid-column: 1 / -1; }
+.terms ul { margin: 4px 0 10px; padding-inline-start: 18px; font-size: 13px; line-height: 1.6; }
+.terms li + li { margin-top: 4px; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
 .order-price { margin: 0 0 12px; font-size: 18px; font-variant-numeric: tabular-nums; }
 dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;
