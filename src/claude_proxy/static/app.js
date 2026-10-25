@@ -610,7 +610,7 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
       <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">${t("ord.email_note")}</span></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
-      <div class="terms wide"><ul class="muted"><li>${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
+      <div class="terms wide"><ul class="muted"><li>${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <button class="btn primary" type="submit">${t("ord.send")}</button>
       ${payBtn}
@@ -827,7 +827,7 @@ function grantDialog(users, pre = null) {
       <label>${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
       <div id="grant-preview" class="hint" aria-live="polite">…</div>
       <div id="grant-limits"></div>
-      ${pre ? "" : `<div class="terms"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
+      ${pre ? "" : `<div class="terms"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("tk.terms_accept")}</label></div>`}
       <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
       <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button>
