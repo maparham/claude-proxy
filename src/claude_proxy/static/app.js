@@ -775,8 +775,9 @@ async function renderTickets(main) {
     <div class="controls"><button class="btn primary" id="grant">${t("tk.grant")}</button>
       <select id="ticket-user"><option value="">${t("tk.all_users")}</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(t("tk.deleted_name", { name: n }))}</option>`).join("")}</select></div>
     <div class="card table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
-      <tbody>${tickets.map(ticketRow).join("") || `<tr><td colspan="8" class="muted">${t("tk.none")}</td></tr>`}</tbody></table></div>
+      <tbody>${foldRows(tickets.map(ticketRow)) || `<tr><td colspan="8" class="muted">${t("tk.none")}</td></tr>`}</tbody></table>${moreButton(tickets.length)}</div>
   </section>`;
+  wireMore(main);
   $("#grant").onclick = () => grantDialog(users);
   $("#ticket-user").onchange = (e) => { const v = e.target.value; S.ticketUser = !v ? null : v.startsWith("d:") ? v : +v; render(); };
   main.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
@@ -1114,9 +1115,9 @@ async function renderApi(main) {
       </tbody></table></div></div>
     <div class="card" style="margin-top:16px"><h3>${t("api.usage")}</h3>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.day")}</th><th>${t("api.key_label")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cost")}</th></tr></thead><tbody>
-      ${me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
-        <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
-      </tbody></table></div></div>
+      ${foldRows(me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
+        <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`)) || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
+      </tbody></table>${moreButton(me.usage.length)}</div></div>
     ${adm ? "" : `<div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
       <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}
     ${adm ? `
@@ -1158,6 +1159,7 @@ async function renderApi(main) {
     const r = await post("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"), e.submitter);
     if (r) { await render(); keyDialog(t("api.new_key"), r.key, t("api.key_how")); }
   };
+  wireMore(main);
   main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
     if (!confirm(t("api.revoke_confirm"))) return;
     if (await post(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {}, null, b)) render();
@@ -1894,9 +1896,10 @@ async function renderErrors(main) {
     <div class="controls">${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
     <div class="card table-wrap" style="margin-top:16px"><h3>${t("errs.recent")}</h3>${d.recent.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th>${isAdmin() ? `<th>${t("app.user")}</th>` : ""}<th>${t("errs.kind")}</th><th>${t("errs.model")}</th><th class="r">${t("errs.status")}</th></tr></thead><tbody>
-      ${d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
-    </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div></section>`;
+      ${foldRows(d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`))}
+    </tbody></table>${moreButton(d.recent.length)}` : `<p class="muted">${t("errs.none")}</p>`}</div></section>`;
   wireSegs(main, render);
+  wireMore(main);
   if (!d.points.length) { $("#err-chart").outerHTML = `<p class="muted">${t("errs.nothing")}</p>`; return; }
   const pts = d.points.map((x) => ({ t: x.t, key: ERROR_LABELS[x.k] || x.k, n: x.n }));
   stackedTime($("#err-chart"), pts, "n", "error", d.bucket_s === 3600 ? "hour" : "day");
@@ -1910,8 +1913,9 @@ async function renderAudit(main) {
   const d = await api("/api/audit");
   main.innerHTML = `<section class="view"><h2>${t("tab.audit")}</h2><p class="lede">${t("audit.lede")}</p>
     <div class="card table-wrap"><table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("audit.actor")}</th><th>${t("audit.action")}</th><th>${t("audit.target")}</th><th>${t("audit.detail")}</th></tr></thead><tbody>
-      ${d.entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${bdi(e.actor ?? "—")}</td><td><code>${esc(e.action)}</code></td><td>${bdi(e.target ?? "")}</td><td class="muted" dir="ltr">${esc(auditDetail(e.detail_json))}</td></tr>`).join("")}
-    </tbody></table></div></section>`;
+      ${foldRows(d.entries.map((e) => `<tr><td class="nowrap">${fmtTime(e.at)}</td><td>${bdi(e.actor ?? "—")}</td><td><code>${esc(e.action)}</code></td><td>${bdi(e.target ?? "")}</td><td class="muted" dir="ltr">${esc(auditDetail(e.detail_json))}</td></tr>`))}
+    </tbody></table>${moreButton(d.entries.length)}</div></section>`;
+  wireMore(main);
 }
 
 $("#dialog").addEventListener("close", hideTip);
