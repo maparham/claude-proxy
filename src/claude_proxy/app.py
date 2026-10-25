@@ -371,7 +371,11 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
 
         if route is None:
             # Awaited, so the next request's checks see these figures; shielded, so a cancel never drops them.
-            await asyncio.shield(gw.db.run(_record_quota, resp.headers))
+            try:
+                await asyncio.shield(gw.db.run(_record_quota, resp.headers))
+            except BaseException:
+                await resp.aclose()   # cancelled before the relay owns it: nothing else would close the upstream stream
+                raise
 
         status = client_status(request.headers, resp.status_code)
         resp_headers = filter_response_headers(dict(resp.headers))

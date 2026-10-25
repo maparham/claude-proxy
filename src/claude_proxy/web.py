@@ -143,6 +143,11 @@ class HomeHost(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+def who(names: dict, user_id: int | None) -> str:
+    """A user's name for a chart; NULL is deleted users' anonymized requests."""
+    return "(deleted users)" if user_id is None else names.get(user_id, f"#{user_id}")
+
+
 def create_dashboard_app(gw: Gateway) -> FastAPI:
     app = FastAPI(title="claude-proxy dashboard", docs_url=None, redoc_url=None, openapi_url=None)
     conn, cfg = gw.conn, gw.cfg
@@ -370,7 +375,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
             if att["utilization_pct"] is None and b not in BUCKETS:
                 continue
-            shares = {n.get(uid, f"#{uid}"): v for uid, v in att["shares"].items()}
+            shares = {who(n, uid): v for uid, v in att["shares"].items()}
             out.append({k: att[k] for k in ("bucket", "utilization_pct", "resets_at", "observed_at", "stale", "unattributed")}
                        | {"shares": shares})
         return out
@@ -417,8 +422,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                            None if split == "none" else split, where, params, tz_offset_s=tz_offset)
         if split == "user":
             n = names()
-            for p in pts:   # NULL: deleted users' anonymized requests
-                p["key"] = "(deleted users)" if p["key"] is None else n.get(p["key"], f"#{p['key']}")
+            for p in pts:
+                p["key"] = who(n, p["key"])
         return {"range": range, "granularity": granularity, "split": split, "points": pts}
 
     @app.get("/api/models")
@@ -517,7 +522,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         n = names()
         history = []
         for h in att["history"]:
-            shares = {n.get(uid, f"#{uid}"): v for uid, v in h["shares"].items()}
+            shares = {who(n, uid): v for uid, v in h["shares"].items()}
             history.append({"t": h["t"], "utilization_pct": h["utilization_pct"], "shares": shares})
         # The rate walks every request of range + 7 days; the tab offers no more than 30 days, nor does the API.
         rate = quota.rate_history(conn, cfg.pricing, bucket, now - RANGES[range if range in ("1d", "7d", "30d") else "30d"], now)
