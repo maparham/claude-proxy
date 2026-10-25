@@ -612,7 +612,6 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <div class="terms wide"><ul class="muted"><li>${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
-      <p class="hint">${t("ord.not_payment")}</p>
       <button class="btn primary" type="submit">${t("ord.send")}</button>
       ${payBtn}
     </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`;

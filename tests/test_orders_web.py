@@ -517,7 +517,6 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     script = APP_STUBS + f"var p = {json.dumps(p)}; var out = [orderFormHtml(p, p.tiers[0], 'week', null), orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd')];"
     without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderCurrencies", "tierName"], script)
     assert 'name="email"' in without and 'name="email"' not in with_
-    assert "This is a request, not a payment. The admin will contact you with payment details." in with_
     assert "<img" not in without and '<option value="EUR" selected' in with_ and '<option value="USD"' in with_
 
 
@@ -611,7 +610,6 @@ def test_the_visitor_dialog_offers_signing_in_and_escapes(tmp_path):
     assert '<a href="/dashboard?tier=lite&amp;length=week">Or sign in to order</a>' in form
     for field in ('name="name"', 'name="email"', 'name="currency"', 'name="message"', 'class="turnstile'):
         assert field in form
-    assert "This is a request, not a payment. The admin will contact you with payment details." in form
     assert '<option value="EUR" selected' in form and '<option value="USD"' in form
     assert "<img" not in form
 

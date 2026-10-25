@@ -150,7 +150,6 @@ function orderFormHtml(d, t_, len) {
       <div class="turnstile wide"></div>
       <div class="terms wide"><ul class="muted"><li>${splitTerms(d.week_split, len, l.days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
-      <p class="hint">${t("ord.not_payment")}</p>
       <button class="btn primary" type="submit">${t("ord.send")}</button>
     </form>
     <div class="error" role="alert"></div>
