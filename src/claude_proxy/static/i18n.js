@@ -632,10 +632,11 @@ const I18N = {
     "ord.message_ph": "Anything the admin should know",
     "ord.not_payment": "This is a request, not a payment. The admin will contact you with payment details.",
     "ord.terms_l1": "Your allowance is split across Anthropic's weekly windows by the days each one covers; each piece is spendable at your own pace and expires at its window's reset.",
-    "ord.split_now": "Started now, about {first} of it falls before Anthropic's weekly reset on {date}, and {rest} after it.",
-    "ord.split_at": "Starting {start} after your current ticket, about {first} of it falls before Anthropic's weekly reset on {date}, and {rest} after it.",
-    "ord.split_one_now": "Started now, all of it falls before Anthropic's weekly reset on {date}.",
-    "ord.split_one_at": "Starting {start} after your current ticket, all of it falls before Anthropic's weekly reset on {date}.",
+    "ord.split": "Use of your ticket will be limited in {n} parts: {pieces}.",
+    "ord.split_one": "Your whole ticket is usable until {date}.",
+    "ord.split_piece": "{pct} until {date}",
+    "ord.split_and": " and ",
+    "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
     "ord.terms_l2": "Spend it at your own pace: the week's share may be used up in fewer days.",
     "ord.terms_l3": "A 5-hour share applies on top, against Anthropic's 5-hour window.",
     "ord.terms_l4": "Claude models only; anything else needs a separate cost limit.",
@@ -1499,10 +1500,11 @@ const I18N = {
     "ord.message_ph": "هر چه مدیر باید بداند",
     "ord.not_payment": "این فقط یک درخواست است، نه پرداخت. مدیر برای ارائهٔ جزئیات پرداخت با شما تماس می‌گیرد.",
     "ord.terms_l1": "سهم شما به نسبت روزهایی که هر بازهٔ هفتگی آنتروپیک پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
-    "ord.split_now": "اگر الان شروع شود، حدود {first} آن پیش از ریست هفتگی آنتروپیک در {date} است و {rest} بعد از آن.",
-    "ord.split_at": "با شروع در {start}، بعد از تیکت فعلی‌تان، حدود {first} آن پیش از ریست هفتگی آنتروپیک در {date} است و {rest} بعد از آن.",
-    "ord.split_one_now": "اگر الان شروع شود، همهٔ آن پیش از ریست هفتگی آنتروپیک در {date} است.",
-    "ord.split_one_at": "با شروع در {start}، بعد از تیکت فعلی‌تان، همهٔ آن پیش از ریست هفتگی آنتروپیک در {date} است.",
+    "ord.split": "استفاده از تیکت شما در {n} قسمت محدود خواهد بود: {pieces}.",
+    "ord.split_one": "کل تیکت شما تا {date} قابل استفاده است.",
+    "ord.split_piece": "{pct} تا {date}",
+    "ord.split_and": " و ",
+    "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
     "ord.terms_l2": "با سرعت خودتان مصرف کنید: سهم هفته را می‌توان در چند روز تمام کرد.",
     "ord.terms_l3": "روی آن، سهم ۵ ساعته هم اعمال می‌شود، بر اساس بازهٔ ۵ ساعتهٔ آنتروپیک.",
     "ord.terms_l4": "فقط مدل‌های کلاد؛ هر چیز دیگری سقف جداگانهٔ هزینه لازم دارد.",
@@ -1764,17 +1766,21 @@ function t(key, vars) {
 }
 function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other"}`, { n, ...vars }); }
 
-// The order terms' line on how a ticket of `len` splits across Anthropic's weeks, from the price list's week_split
-// (fractions of the ticket per week, whole percents here: "rough" is the promise). "" without quota data.
-function splitTerms(ws, len, now = Date.now() / 1000) {
+// The order terms' line on how a `days`-long ticket of `len` splits across Anthropic's weeks, from the price list's
+// week_split (fractions of the ticket per week): each piece with the date it runs until, a weekly reset or the
+// ticket's end. Whole percents: "rough" is the promise. "" without quota data.
+function splitTerms(ws, len, days) {
   const parts = ws && ws[len];
-  if (!parts || !parts.length) return "";
+  if (!parts || !parts.length || !days) return "";
   const pct = (v) => (v > 0 && v < 0.01 ? `<${new Intl.NumberFormat(LOC, { style: "percent" }).format(0.01)}`
     : new Intl.NumberFormat(LOC, { style: "percent", maximumFractionDigits: 0 }).format(v));
-  const when = (ts) => new Date(ts * 1000).toLocaleString(LOC, { weekday: "long", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-  const later = ws.starts_at > now + 60;
-  const vars = { date: when(ws.first_reset), start: when(ws.starts_at), first: pct(parts[0]), rest: parts.slice(1).map(pct).join(" + ") };
-  return t(`ord.split${parts.length === 1 ? "_one" : ""}_${later ? "at" : "now"}`, vars);
+  const when = (ts) => new Date(ts * 1000).toLocaleDateString(LOC, { weekday: "long", month: "long", day: "numeric" });
+  const end = ws.starts_at + days * 86400;
+  const until = (i) => Math.min(ws.first_reset + i * 7 * 86400, end);
+  if (parts.length === 1) return t("ord.split_one", { date: when(end) });
+  const pieces = parts.map((v, i) => t("ord.split_piece", { pct: pct(v), date: when(until(i)) }));
+  const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
+  return t("ord.split", { n: t(`num.${parts.length}`), pieces: list });
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"
