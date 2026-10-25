@@ -1824,7 +1824,7 @@ async function renderQuota(main) {
       <div class="card"><h3>${t("quota.reported")}${tipI("reported")}</h3><p class="sub">${t("quota.reported_sub")}</p><div class="chart" id="q-line"></div></div>
       <div class="card"><h3>${t("quota.share_title")}${tipI("share")}</h3><p class="sub">${t("quota.share_sub", { unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>${t("quota.rate_title", { bucket: bname(p.bucket) })}${tipI("rate")}</h3><p class="sub">${t("quota.rate_sub")}${d.rate_now == null ? "" : ` ${t("quota.rate_now", { v: esc(fmtNum(d.rate_now)) })}`}</p><div class="chart" id="q-rate"></div></div></section>`;
+    <div class="card" style="margin-top:16px"><h3>${t("quota.rate_title", { bucket: bname(p.bucket) })}${tipI("rate")}</h3><p class="sub">${t("quota.rate_sub")}${d.rate_now == null ? "" : ` ${t("quota.rate_now", { v: esc(fmtNum(d.rate_now)) })}`}${d.plan ? ` ${t("quota.plan_now", { plan: esc(d.plan) })}` : ""}</p><div class="chart" id="q-rate"></div></div></section>`;
   wireSegs(main, render);
   const o = baseOption();
   const pctAxis = (v) => fmtPct(v);
@@ -1851,7 +1851,9 @@ async function renderQuota(main) {
       dataZoom: [{ type: "inside" }],
       series: [
         { name: t("quota.rate_rise"), type: "scatter", clip: true, symbolSize: 5, itemStyle: { color: css("--s1"), opacity: 0.45 }, data: d.rate.map((r) => [r.t * 1000, r.ratio]) },
-        { name: t("quota.rate_median"), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s2") }, itemStyle: { color: css("--s2") }, data: d.rate.map((r) => [r.t * 1000, r.median]).concat(d.rate_now == null ? [] : [[d.now * 1000, d.rate_now]]) },
+        { name: t("quota.rate_median"), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s2") }, itemStyle: { color: css("--s2") }, data: d.rate.map((r) => [r.t * 1000, r.median]).concat(d.rate_now == null ? [] : [[d.now * 1000, d.rate_now]]),
+          markLine: { silent: true, symbol: "none", lineStyle: { type: "dashed", color: css("--muted") }, label: { formatter: (m) => m.name, color: css("--muted") },
+                      data: d.plan_changes.map((c) => ({ name: t("quota.plan_changed", { to: c.to }), xAxis: c.t * 1000 })) } },
       ],
     });
   }

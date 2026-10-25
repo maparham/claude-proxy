@@ -539,8 +539,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             shares = {who(n, uid): v for uid, v in h["shares"].items()}
             history.append({"t": h["t"], "utilization_pct": h["utilization_pct"], "shares": shares})
         # The rate walks every request of range + 7 days, so a year is slow but bounded.
-        rate = quota.rate_history(conn, cfg.pricing, bucket, now - RANGES.get(range, RANGES["7d"]), now)
-        return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history, "rate": rate,
+        since = now - RANGES.get(range, RANGES["7d"])
+        rate = quota.rate_history(conn, cfg.pricing, bucket, since, now)
+        plans = [c for c in quota.plan_changes(conn) if c["t"] >= since]
+        plan = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans ORDER BY observed_at DESC, id DESC LIMIT 1").fetchone()
+        return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history, "rate": rate, "plan_changes": plans,
+                "plan": (plan["rate_limit_tier"] or plan["organization_type"]) if plan else None,
                 "rate_now": quota.observed_rate(conn, cfg.pricing, bucket, now), "now": now,
                 "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
 

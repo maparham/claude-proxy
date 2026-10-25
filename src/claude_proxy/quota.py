@@ -345,16 +345,54 @@ def _ratios(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, 
     return ratios
 
 
+PLAN_CHECK_S = 3600   # how often the poller asks Anthropic for the account's plan
+
+
+def plan_scale(organization_type: str | None, rate_limit_tier: str | None) -> float | None:
+    """A plan's quota as a multiple of Pro's: Max 5x is 5, Max 20x 20. None for a plan this can't read."""
+    m = re.search(r"max_(\d+)x", rate_limit_tier or "")
+    if m:
+        return float(m.group(1))
+    return 1.0 if organization_type == "claude_pro" else None
+
+
+def record_plan(conn: sqlite3.Connection, organization_type: str | None, rate_limit_tier: str | None, now: float) -> bool:
+    """Store the account's plan when it differs from the last one stored. True when that was a change of plan."""
+    last = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans ORDER BY observed_at DESC, id DESC LIMIT 1").fetchone()
+    if last is not None and tuple(last) == (organization_type, rate_limit_tier):
+        return False
+    conn.execute("INSERT INTO account_plans(observed_at, organization_type, rate_limit_tier) VALUES(?,?,?)",
+                 (now, organization_type, rate_limit_tier))
+    return last is not None
+
+
+def plan_changes(conn: sqlite3.Connection) -> list[dict]:
+    """Each change of plan as {t, from, to, scale}: scale is the new plan's quota over the old one's, 1 when either
+    plan is unreadable. The first plan ever seen is not a change. Rises are only compared within one plan."""
+    rows = conn.execute("SELECT observed_at, organization_type, rate_limit_tier FROM account_plans ORDER BY observed_at, id").fetchall()
+    out = []
+    for a, b in zip(rows, rows[1:]):
+        old, new = plan_scale(a[1], a[2]), plan_scale(b[1], b[2])
+        out.append({"t": b[0], "from": a[2] or a[1], "to": b[2] or b[1], "scale": new / old if old and new else 1.0})
+    return out
+
+
 def rate_history(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float,
                  days: int = 7) -> list[dict]:
     """The observed rate over time, for the dashboard: each rise since `since` as {t, ratio, median}, where median is
-    over the rises of the trailing `days`. Close to what observed_rate() returned at t but not identical: that walks
-    each window afresh (its first rise carries no tokens from before it) and falls back to the whole history."""
-    pts = _ratios(conn, pricing, bucket, since - days * 86400, now)
+    over the rises of the trailing `days` on the same plan. Close to what observed_rate() returned at t but not
+    identical: that walks each window afresh (its first rise carries no tokens from before it) and falls back to the
+    whole history, or to the previous plan's rate scaled."""
+    lo = since - days * 86400
+    cuts = [c["t"] for c in plan_changes(conn) if lo < c["t"] < now]
+    # Each plan walked on its own: its first snapshot is only a baseline, so no rise mixes tokens of two plans.
+    pts = [p for a, b in zip([lo, *cuts], [*cuts, now]) for p in _ratios(conn, pricing, bucket, a, b)]
     out, window, j = [], [], 0
     for t, r in pts:
         bisect.insort(window, r)
-        while pts[j][0] < t - days * 86400:
+        k = bisect.bisect_left(cuts, t)
+        start = cuts[k - 1] if k else float("-inf")   # a rise at or before a change belongs to the plan before it
+        while pts[j][0] < t - days * 86400 or pts[j][0] <= start:
             window.pop(bisect.bisect_left(window, pts[j][1]))
             j += 1
         if t >= since:
@@ -366,8 +404,10 @@ def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: 
     """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of rises above the
     high-water mark, each with the forwarded Anthropic requests since the previous rise (_median_ratio). When the account has been quiet for
     that long and no such pair falls in the window, falls back to the median over the whole retained history instead,
-    so a ticket user whose account merely went quiet is never locked out. None when no qualifying pair exists at all:
-    utilization has never risen a whole point in retained history (a young account). Converts a ticket user's tokens
+    so a ticket user whose account merely went quiet is never locked out. Only rises on the current plan count (see
+    plan_changes); right after a change, before any rise, the previous plan's rate is scaled to the new plan. None
+    when no qualifying pair exists at all: utilization has never risen a whole point in retained history (a young
+    account). Converts a ticket user's tokens
     to points for the weekly piece, and for share_5h while snapshots are stale.
 
     Process-local cache: this runs on the hot path (every request a stale-snapshot ticket user makes), so the result
@@ -377,10 +417,21 @@ def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: 
     cached = _rate_cache.get(key)
     if cached is not None and now - cached[0] < RATE_CACHE_S:
         return cached[1]
-    rate = _median_ratio(conn, pricing, bucket, now - days * 86400, now)
-    if rate is None:
-        rate = _median_ratio(conn, pricing, bucket, 0, now)   # the whole retained history, not just the last `days`
+    rate = _plan_rate(conn, pricing, bucket, now, days, [c for c in plan_changes(conn) if c["t"] <= now])
     _rate_cache[key] = (now, rate)
+    return rate
+
+
+def _plan_rate(conn, pricing: Pricing, bucket: str, now: float, days: int, changes: list[dict]) -> float | None:
+    """observed_rate() without the cache, over the rises since the last change of plan in `changes`. A plan with no
+    rise yet borrows the previous plan's rate, scaled by how much bigger the new plan is."""
+    start = changes[-1]["t"] if changes else 0.0
+    rate = _median_ratio(conn, pricing, bucket, max(now - days * 86400, start), now)
+    if rate is None:
+        rate = _median_ratio(conn, pricing, bucket, start, now)   # the plan's whole retained history, not just the last `days`
+    if rate is None and changes:
+        before = _plan_rate(conn, pricing, bucket, start, days, changes[:-1])
+        rate = before * changes[-1]["scale"] if before is not None else None
     return rate
 
 
@@ -399,12 +450,16 @@ class Poller:
         self.next_allowed = 0.0
         self.backoff = 0.0
         self.last_status: int | None = None
+        self.next_plan_check = 0.0
 
     async def _run(self, fn, *args, **kwargs):
         return await self.db.run(fn, *args, **kwargs) if self.db else fn(self.conn, *args, **kwargs)
 
     async def tick(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
+        if now >= self.next_plan_check:
+            self.next_plan_check = now + PLAN_CHECK_S
+            await self.check_plan(now)
         newest = await self._run(lambda c: c.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0])
         if newest is not None and now - newest < self.qc.poll_idle_s:
             return
@@ -424,6 +479,19 @@ class Poller:
         self.next_allowed = now + self.qc.poll_min_interval_s
         if status == 200 and body:
             await self._run(record, parse_poll(body), now=now)
+
+    async def check_plan(self, now: float) -> None:
+        """Record the subscription's plan from its profile; a change restarts the observed rate (plan_changes)."""
+        fetch = getattr(self.backend, "fetch_profile", None)
+        try:
+            org = ((await fetch()) or {}).get("organization") if fetch else None
+        except Exception:   # e.g. RefreshUnavailable: the request path reports it
+            org = None
+        if not isinstance(org, dict) or not (org.get("organization_type") or org.get("rate_limit_tier")):
+            return
+        if await self._run(record_plan, org.get("organization_type"), org.get("rate_limit_tier"), now):
+            logger.warning("subscription plan changed to %s; the observed rate restarts", org.get("rate_limit_tier"))
+            clear_rate_cache()
 
     async def run(self, interval_s: float = 60.0) -> None:
         while True:

@@ -66,8 +66,9 @@ class CredentialConfig:
         "user:profile user:inference user:sessions:claude_code user:mcp_servers user:file_upload user:plugins"))
     beta_flag: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_BETA", "oauth-2025-04-20"))
     usage_url: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_USAGE_URL", "https://api.anthropic.com/api/oauth/usage"))
+    profile_url: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_PROFILE_URL", "https://api.anthropic.com/api/oauth/profile"))
     redirect_uri: str = field(default_factory=lambda: _env("CLAUDE_PROXY_OAUTH_REDIRECT_URI", "https://platform.claude.com/oauth/code/callback"))
-    # Sent only on the gateway's own calls (refresh, usage poll). Proxied requests keep the client's User-Agent.
+    # Sent only on the gateway's own calls (refresh, usage poll, profile). Proxied requests keep the client's User-Agent.
     user_agent: str = field(default_factory=lambda: _env("CLAUDE_PROXY_USER_AGENT", "claude-code/2.1.280"))
 
 

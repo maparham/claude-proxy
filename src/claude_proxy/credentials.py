@@ -44,6 +44,7 @@ class CredentialBackend(Protocol):
     async def upstream_headers(self) -> dict[str, str]: ...
     async def on_unauthorized(self, failed_token: str | None) -> bool: ...
     async def poll_usage(self) -> tuple[int, dict | None]: ...
+    async def fetch_profile(self) -> dict | None: ...
     def describe(self) -> BackendStatus: ...
 
 
@@ -348,6 +349,19 @@ class OAuthBackend:
             return 200, resp.json()
         except ValueError:
             return 200, None
+
+    async def fetch_profile(self) -> dict | None:
+        """The account's profile as Claude Code reads it; its organization names the plan. None on any failure."""
+        try:
+            headers = await self.upstream_headers()
+        except NeedsLogin:
+            return None
+        headers["user-agent"] = self.cfg.credential.user_agent
+        try:
+            resp = await self.http.get(self.cfg.credential.profile_url, headers=headers, timeout=20)
+            return resp.json() if resp.status_code == 200 else None
+        except (httpx.HTTPError, ValueError):
+            return None
 
     def describe(self) -> BackendStatus:
         try:

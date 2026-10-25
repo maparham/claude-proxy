@@ -88,6 +88,13 @@ SCHEMA = [
         raw_json TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_quota_bucket_time ON quota_snapshots(bucket, observed_at)",
+    # The subscription's plan, a row each time it changes (quota.record_plan): tokens per point differ by plan.
+    """CREATE TABLE IF NOT EXISTS account_plans (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        observed_at REAL NOT NULL,
+        organization_type TEXT,
+        rate_limit_tier TEXT
+    )""",
     CREDENTIALS_DDL,
     """CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

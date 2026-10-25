@@ -423,3 +423,80 @@ def test_request_shares_give_the_rise_after_a_known_reset_to_the_requests_after_
     assert quota.attributed_since(conn, Pricing(), "7d", a, since=0, now=1110) == pytest.approx(2)
     assert quota.attributed_since(conn, Pricing(), "7d", b, since=0, now=1110) == 0
     assert quota.attributed_since(conn, Pricing(), "7d", a, since=1060, now=1110) == 0
+
+
+@pytest.mark.parametrize("org,tier,scale", [
+    ("claude_pro", None, 1.0), ("claude_max", "default_claude_max_5x", 5.0), ("claude_max", "default_claude_max_20x", 20.0),
+    ("claude_team", "default_raven", None), (None, None, None),
+])
+def test_plan_scale(org, tier, scale):
+    assert quota.plan_scale(org, tier) == scale
+
+
+def test_record_plan_stores_only_changes(db):
+    conn = db[1]
+    assert quota.record_plan(conn, "claude_pro", None, 100) is False   # the first plan seen is no change
+    assert quota.record_plan(conn, "claude_pro", None, 200) is False   # same plan: nothing stored
+    assert quota.record_plan(conn, "claude_max", "default_claude_max_5x", 300) is True
+    assert conn.execute("SELECT COUNT(*) FROM account_plans").fetchone()[0] == 2
+    assert quota.plan_changes(conn) == [{"t": 300, "from": "claude_pro", "to": "default_claude_max_5x", "scale": 5.0}]
+
+
+def test_observed_rate_counts_only_rises_on_the_current_plan(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    quota.record_plan(conn, "claude_pro", None, now - 9000)
+    _snap(conn, now - 8000, 0)
+    _req(conn, a, now - 7500, 1000)
+    _snap(conn, now - 7000, 5)                 # 200 per point on Pro
+    quota.record_plan(conn, "claude_max", "default_claude_max_5x", now - 5000)
+    # No rise on the new plan yet: the Pro rate, scaled 5x.
+    assert quota.observed_rate(conn, Pricing(), "5h", now - 4000) == 1000
+    _snap(conn, now - 4000, 5)
+    _req(conn, a, now - 3500, 1800)
+    _req(conn, a, now - 3500, 1800)
+    _snap(conn, now - 3000, 9)                 # 900 per point on Max 5x; the Pro rise no longer counts
+    quota.clear_rate_cache()
+    assert quota.observed_rate(conn, Pricing(), "5h", now) == 900
+
+
+def test_rate_history_restarts_the_median_at_a_plan_change(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    _snap(conn, now - 8000, 0)
+    _req(conn, a, now - 7500, 1000)
+    _snap(conn, now - 7000, 5)                 # 200 per point
+    quota.record_plan(conn, "claude_pro", None, now - 9000)
+    quota.record_plan(conn, "claude_max", "default_claude_max_5x", now - 6000)
+    _req(conn, a, now - 5800, 3000)            # straddles the change: the first snapshot on the new plan is a baseline
+    _snap(conn, now - 5500, 5)
+    _req(conn, a, now - 5200, 3000)
+    _snap(conn, now - 5000, 8)                 # 1000 per point
+    h = quota.rate_history(conn, Pricing(), "5h", now - 86400, now)
+    assert [(p["ratio"], p["median"]) for p in h] == [(200, 200), (1000, 1000)]   # not (1000, 600)
+
+
+class ProfileBackend(FakeBackend):
+    def __init__(self, profiles):
+        super().__init__([])
+        self.profiles = list(profiles)
+
+    async def fetch_profile(self):
+        return self.profiles.pop(0)
+
+
+async def test_poller_checks_the_plan_hourly(db):
+    from claude_proxy.config import QuotaConfig
+    conn = db[1]
+    be = ProfileBackend([{"organization": {"organization_type": "claude_pro"}}, None,
+                         {"organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_5x"}}])
+    p = quota.Poller(conn, be, QuotaConfig())
+    _snap(conn, 1000, 1)                       # fresh: no usage poll, but the plan check runs
+    await p.tick(now=1001)
+    await p.tick(now=1100)                     # within the hour: no check
+    assert len(be.profiles) == 2
+    await p.tick(now=1001 + quota.PLAN_CHECK_S)        # a failed fetch records nothing
+    await p.tick(now=1001 + 2 * quota.PLAN_CHECK_S)
+    assert [c["to"] for c in quota.plan_changes(conn)] == ["default_claude_max_5x"]
