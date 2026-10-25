@@ -433,7 +433,7 @@ $("#tabs").addEventListener("click", (e) => {
 });
 
 // A view's independent sections as a side panel of sub-tabs: each [data-sub] element is one, named by its
-// data-sub-label. The open one is kept per view in S.sub and in the address (#pricing/shares), so a reload keeps it.
+// data-sub-label. The open one is kept per view in S.sub and in the address (#apiadmin/credit), so a reload keeps it.
 function subTabs(main, view) {
   const panes = [...main.querySelectorAll("[data-sub]")];
   if (panes.length < 2) return;
@@ -1047,7 +1047,8 @@ async function renderPricing(main) {
   const dstate = (x) => (x.cancelled_at ? "cancelled" : x.ends_at <= now ? "ended" : x.starts_at > now ? "upcoming" : "active");
   main.innerHTML = `<section class="view"><h2>${t("tab.pricing")}</h2>
     <p class="lede">${t("pr.lede")}</p>
-      <div class="card" data-sub="fx" data-sub-label="${esc(t("sub.fx"))}" style="margin-top:16px"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
+    <div class="grid cols-2">
+      <div class="card"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
         <form id="f-rates">
         ${rates.map((r) => `<div class="limit-row"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
           <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
@@ -1056,7 +1057,7 @@ async function renderPricing(main) {
         <div class="error" id="rates-err"></div>
         </form>
       </div>
-      <div class="card" data-sub="prices" data-sub-label="${esc(t("sub.prices"))}" style="margin-top:16px"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
+      <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
         <form id="f-prices">
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
@@ -1065,7 +1066,8 @@ async function renderPricing(main) {
         <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
         <div class="error" id="prices-err"></div>
         </form></div>
-    <div class="card" data-sub="shares" data-sub-label="${esc(t("sub.shares"))}" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
+    </div>
+    <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
       <form id="f-shares">
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
@@ -1075,7 +1077,7 @@ async function renderPricing(main) {
       <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
       <div class="error" id="shares-err"></div>
       </form></div>
-    <div class="card" data-sub="discounts" data-sub-label="${esc(t("sub.discounts"))}" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
+    <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
         <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))}</option>`).join("")}</select></label>
         <label>${t("tk.length")}<select name="length">${Object.keys(p.lengths).map((l) => `<option value="${esc(l)}">${lengthName(l)}</option>`).join("")}</select></label>
