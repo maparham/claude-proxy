@@ -34,11 +34,17 @@ TERMS_LINES = (
     "- A 5-hour share applies on top, against Anthropic's 5-hour window.",
     "- Claude models only; anything else needs a separate cost limit.",
 )
+TERMS_LINES_FA = (   # the same terms, for a buyer who ordered from the Persian page
+    "شرایط تیکت (v1):",
+    "- سهم هفتگی شما با ریست هفتگی آنتروپیک دوباره پر می‌شود؛ هر چه تا آن موقع مصرف نکنید از بین می‌رود.",
+    "- سهم ۵ ساعته هم جداگانه، در بازهٔ ۵ ساعتهٔ آنتروپیک اعمال می‌شود.",
+    "- فقط مدل‌های کلاد؛ بقیه سقف هزینهٔ جداگانه لازم دارند.",
+)
 
 
-def terms_text() -> str:
-    """The ticket terms as one block, for order mails and the buyer mails after payment."""
-    return "\n".join(TERMS_LINES) + "\n"
+def terms_text(lang: str = "en") -> str:
+    """The ticket terms as one block, for order mails and the buyer mails after payment, in the buyer's language."""
+    return "\n".join(TERMS_LINES_FA if lang == "fa" else TERMS_LINES) + "\n"
 
 
 TERMS_CHANGED = "Ticket terms have changed; reload and accept the current terms."

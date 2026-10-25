@@ -624,7 +624,7 @@ function orderDialog(p, tier, len, pay, termsVersion) {
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
     try {
-      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: p.currency, message: f.message.value, terms_version: termsVersion, ...(f.email ? { email: f.email.value } : {}) } });
+      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: p.currency, message: f.message.value, terms_version: termsVersion, lang: LANG, ...(f.email ? { email: f.email.value } : {}) } });
       d.close(); render();
     } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
   };
@@ -634,7 +634,7 @@ function orderDialog(p, tier, len, pay, termsVersion) {
     if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     pb.disabled = true; pb.textContent = t("pay.going");
     try {
-      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, ...(f.email ? { email: f.email.value } : {}) } });
+      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, ...(f.email ? { email: f.email.value } : {}) } });
       location.href = r.url;
     } catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payL.amount, pay.currency)) }); $("#order-err", d).textContent = err.message; }
   };

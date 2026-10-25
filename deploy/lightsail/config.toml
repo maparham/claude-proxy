@@ -38,6 +38,7 @@ admin_to = "support@chartkar.app"
 # on first start; after that they are edited on the dashboard's Pricing tab.
 [tickets]
 how_to_buy = "Send the amount by bank transfer to the admin and email them with the ticket you want."
+how_to_buy_fa = "مبلغ را با انتقال بانکی برای مدیر بفرستید و تیکتی را که می‌خواهید به او ایمیل کنید."
 max_sold_pct = 80
 # Visitor orders on the home page: Turnstile widget "Claude Gateway orders" for claude-dash.rahkar.pro. The secret is
 # TURNSTILE_SECRET in gateway.env; without it the home page keeps its sign-in link.

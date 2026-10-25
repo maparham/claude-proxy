@@ -103,11 +103,12 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
-           terms_version: str | None = None) -> dict:
+           terms_version: str | None = None, lang: str = "en") -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
     Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
     `terms_version`: the ticket terms the buyer ticked; equality-checked against tickets.TERMS_VERSION, missing or
-    stale → 400 (2026-10-13 spec, §3). `notify=False`: no new-order emails (an order paid online)."""
+    stale → 400 (2026-10-13 spec, §3). `notify=False`: no new-order emails (an order paid online).
+    `lang`: the page's language; the buyer's emails use it (anything but "fa" is English)."""
     now = _now(now)
     if terms_version != tickets.TERMS_VERSION:
         raise OrderError(400, tickets.TERMS_CHANGED)
@@ -119,6 +120,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
     if currency not in steps:
         raise OrderError(400, f"Unknown currency {currency!r}.")
     name, email, message = _one_line(name), _email(email), str(message or "").strip()
+    lang = "fa" if lang == "fa" else "en"
     if not name:
         raise OrderError(400, "Please give your name.")
     if len(name) > NAME_MAX:
@@ -156,9 +158,9 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             admin_mail, buyer_mail = "pending", "skipped" if sent >= BUYER_MAILS else "pending"
         cur = conn.execute(
             "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, quoted_amount, "
-            "message, status, ip, admin_mail, buyer_mail, terms_version) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?)",
+            "message, status, ip, admin_mail, buyer_mail, terms_version, lang) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang))
         oid = cur.lastrowid
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
                                                               "visitor": user_id is None, "terms_version": terms_version})
@@ -258,9 +260,34 @@ def admin_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
     return f"New order: {label} {order['length']}", "\n".join(lines) + "\n"
 
 
+# Persian for the buyer's emails: the dashboard's own words (i18n.js tier.*, price.1_*, cur.toman).
+FA_TIERS = {"lite": ("Lite", "لایت"), "standard": ("Standard", "استاندارد")}   # translated only while the label is the default
+FA_LENGTHS = {"day": "روز", "week": "هفته", "month": "ماه"}
+FA_DIGITS = str.maketrans("0123456789,.", "۰۱۲۳۴۵۶۷۸۹٬٫")
+
+
+def fa_num(s) -> str:
+    return str(s).translate(FA_DIGITS)
+
+
+def fa_label(cfg: Config, tier: str) -> str:
+    t = cfg.tickets.tiers.get(tier)
+    label = t.label if t else tier
+    default, fa = FA_TIERS.get(tier, (None, None))
+    return fa if label == default else label
+
+
+def fa_amount(amount: float, currency: str) -> str:
+    if currency == "IRT":
+        return f"{fa_num(f'{round(amount):,}')} تومان"
+    return f"{fa_num(f'{amount:,.2f}')} {currency}"
+
+
 def buyer_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
-    """(subject, body) for the buyer. Nothing the buyer typed goes in (no name, no message), so the form cannot carry
-    content to a stranger's inbox."""
+    """(subject, body) for the buyer, in the language of the page they ordered from. Nothing the buyer typed goes in
+    (no name, no message), so the form cannot carry content to a stranger's inbox."""
+    if order.get("lang") == "fa":
+        return _buyer_mail_fa(cfg, order)
     label = _label(cfg, order)
     lines = [f"Your order: a {label} ticket for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
              f"Price at today's rate: {_amount(order)}.", ""]
@@ -268,6 +295,17 @@ def buyer_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
         lines += ["How to pay:", cfg.tickets.how_to_buy, ""]
     lines += [tickets.terms_text(), "This is a request; the admin will contact you."]
     return f"Your order: {label} {order['length']}", "\n".join(lines) + "\n"
+
+
+def _buyer_mail_fa(cfg: Config, order: dict) -> tuple[str, str]:
+    label, length = fa_label(cfg, order["tier"]), FA_LENGTHS.get(order["length"], order["length"])
+    lines = [f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
+             f"قیمت با نرخ امروز: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
+    how = cfg.tickets.how_to_buy_fa or cfg.tickets.how_to_buy
+    if how:
+        lines += ["روش پرداخت:", how, ""]
+    lines += [tickets.terms_text("fa"), "این یک درخواست است؛ مدیر با شما تماس می‌گیرد."]
+    return f"سفارش شما: {label}، ۱ {length}", "\n".join(lines) + "\n"
 
 
 async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:

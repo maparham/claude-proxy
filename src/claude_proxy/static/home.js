@@ -188,7 +188,7 @@ function openOrder(tierId, len) {
       try {
         r = await fetch("/api/orders", { method: "POST", credentials: "omit", headers: { "content-type": "application/json" },
           body: JSON.stringify({ tier: t_.tier, length: len, currency: currency || data.currency, name: f.name.value, email: f.email.value,
-                                 message: f.message.value, turnstile_token: token, terms_version: data.terms_version }) });
+                                 message: f.message.value, turnstile_token: token, terms_version: data.terms_version, lang: LANG }) });
       } catch { throw new Error(t("home.order_not_sent")); }
       let body = null;
       try { body = await r.json(); } catch { /* not JSON */ }

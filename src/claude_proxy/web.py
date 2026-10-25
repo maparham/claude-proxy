@@ -1294,7 +1294,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def place_order(body: dict, **kw) -> dict:
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
                         currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""),
-                        terms_version=body.get("terms_version"), **kw)
+                        terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""), **kw)
         if cfg.email is not None:   # after the response: a slow mail server never delays it
             task = asyncio.create_task(orders.dispatch(conn, cfg, o["id"]))
             _mail_tasks.add(task)
@@ -1350,7 +1350,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         # As for an order: the account email, else one typed in the dialog, stored on the order only.
         email = user["email"] or str(body.get("email") or "")
         return await payments.start(conn, cfg, user, str(body.get("tier") or ""), str(body.get("length") or ""), email,
-                                    terms_version=body.get("terms_version"))
+                                    terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""))
 
     @app.get("/pay/callback")
     async def pay_callback(Authority: str = "", Status: str = ""):

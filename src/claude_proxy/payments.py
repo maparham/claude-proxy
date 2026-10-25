@@ -78,7 +78,7 @@ def _label(cfg: Config, tier: str) -> str:
 
 
 async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, email: str, now: float | None = None,
-              terms_version: str | None = None) -> dict:
+              terms_version: str | None = None, lang: str = "en") -> dict:
     """Create the order (the usual order rules, terms tick included) and open a ZarinPal payment for its quote.
     Returns the payment id and the StartPay address the browser goes to."""
     now = _now(now)
@@ -87,7 +87,7 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
     if not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
-                      user_id=user["id"], notify=False, now=now, terms_version=terms_version)
+                      user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang)
     amount = int(round(o["quoted_amount"]))
     try:
         authority = await zarinpal.request(cfg.zarinpal.merchant_id(), amount,
@@ -274,7 +274,13 @@ def mails(cfg: Config, p: dict, o: dict, ticket: dict | None, reason: str | None
         return [(cfg.email.admin_to, f"Paid, ticket NOT granted: order #{o['id']}",
                  f"{head}\n\nThe ticket was NOT granted: {reason}. Grant it from the order or refund the payment.{link}\n")]
     out = [(cfg.email.admin_to, f"Paid: {_label(cfg, o['tier'])} {o['length']}", f"{head}\nThe ticket is live.{link}\n")]
-    if ticket is not None:
+    if ticket is not None and o.get("lang") == "fa":   # the buyer's mail in the language of the page they paid from
+        what_fa = f"{orders.fa_label(cfg, o['tier'])}، ۱ {orders.FA_LENGTHS.get(o['length'], o['length'])}"
+        span = f"از {orders.fa_num(tickets._date(ticket['starts_at']))} تا {orders.fa_num(tickets._date(ticket['ends_at']))}"
+        out.append((o["email"], f"پرداخت شما: {what_fa}",
+                    f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n\nتیکت: {what_fa}، {span}.\n"
+                    f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text('fa')}"))
+    elif ticket is not None:
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
                     f"Thank you. Your payment of {_toman(p['amount'])} went through.\n\nTicket: {what}, {span}.\n"

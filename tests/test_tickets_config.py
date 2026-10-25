@@ -56,7 +56,7 @@ def test_empty_tickets_section_keeps_default_tiers(tmp_path):
     ("[tickets]\ncurrencies = 5\n", "bad [tickets] entry"),
     ("[tickets]\ntiers = 'lite'\n", "bad [tickets] entry"),
     ("[tickets]\nenabled = false\n", "remove the [tickets] section"),
-    ("[tickets]\nbogus = 1\n", "how_to_buy, max_sold_pct"),
+    ("[tickets]\nbogus = 1\n", "how_to_buy, how_to_buy_fa, max_sold_pct"),
     ("[tickets]\nmax_sold_pct = 20\n", "could never be sold"),          # standard's 25% is above it
     ("retention_days = 7\n[tickets]\n", "retention_days must be at least 30"),
 ])

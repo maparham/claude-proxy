@@ -49,7 +49,7 @@ def test_orders_table_has_the_spec_columns(db):
     cols = {r[1] for r in db[1].execute("PRAGMA table_info(orders)")}
     assert cols == {"id", "created_at", "updated_at", "user_id", "name", "email", "tier", "length", "currency", "quoted_usd",
                     "quoted_rate", "quoted_amount", "message", "status", "admin_note", "ticket_id", "ip", "admin_mail",
-                    "buyer_mail", "terms_version", "seen_at"}
+                    "buyer_mail", "terms_version", "lang", "seen_at"}
 
 
 # ---------- create ----------
@@ -513,6 +513,31 @@ def test_buyer_mail_carries_nothing_the_buyer_typed(mailing):
     assert "7.50 EUR" in body and cfg.tickets.how_to_buy in body and "This is a request; the admin will contact you." in body
     for line in tickets.TERMS_LINES:
         assert line in body
+
+
+@pytest.mark.parametrize("lang,stored", [("fa", "fa"), ("en", "en"), ("", "en"), ("de", "en")])
+def test_order_keeps_the_pages_language(env, lang, stored):
+    conn, cfg, ids = env
+    assert visitor(conn, cfg, lang=lang)["lang"] == stored
+
+
+def test_buyer_mail_in_persian_for_an_order_from_the_persian_page(mailing):
+    conn, cfg, ids = mailing
+    cfg.tickets.how_to_buy_fa = "مبلغ را به مدیر بفرستید."
+    o = visitor(conn, cfg, lang="fa")
+    subject, body = orders.buyer_mail_text(cfg, o)
+    assert subject == "سفارش شما: لایت، ۱ هفته"
+    assert "تیکت لایت برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
+    assert cfg.tickets.how_to_buy_fa in body and cfg.tickets.how_to_buy not in body
+    for line in tickets.TERMS_LINES_FA:
+        assert line in body
+    assert "Ticket terms" not in body
+    cfg.tickets.how_to_buy_fa = ""   # no Persian text configured: the English one rather than none
+    assert cfg.tickets.how_to_buy in orders.buyer_mail_text(cfg, o)[1]
+
+
+def test_persian_amounts_in_toman():
+    assert orders.fa_amount(9450000, "IRT") == "۹٬۴۵۰٬۰۰۰ تومان"
 
 
 def fake_send(monkeypatch, fail=False):

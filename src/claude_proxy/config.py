@@ -150,6 +150,7 @@ class TicketsConfig:
     """Paid tickets (design 2026-10-03). `enabled` is set when the config file has a [tickets] section."""
     enabled: bool = False
     how_to_buy: str = ""
+    how_to_buy_fa: str = ""       # the same in Persian, for buyers who ordered from the Persian page; else how_to_buy
     max_sold_pct: float = 80      # ceiling on what tickets and bonuses may reserve; the rest is headroom
     tiers: dict[str, Tier] = field(default_factory=_default_tiers)
     currencies: dict[str, Currency] = field(default_factory=dict)   # USD is built in and must not appear here

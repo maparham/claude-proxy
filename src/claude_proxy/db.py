@@ -260,6 +260,7 @@ SCHEMA = [
         admin_mail TEXT NOT NULL CHECK(admin_mail IN ('pending','sent','failed','off','skipped')),
         buyer_mail TEXT NOT NULL CHECK(buyer_mail IN ('pending','sent','failed','off','skipped')),
         terms_version TEXT NOT NULL DEFAULT 'v1',   -- ticket terms the buyer accepted (2026-10-13 spec, §3)
+        lang TEXT NOT NULL DEFAULT 'en',    -- the page's language at order time: the buyer's emails use it ('en' or 'fa')
         seen_at INTEGER                     -- the buyer dismissed this closed order
     )""",
     "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)",
@@ -396,6 +397,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE keys ADD COLUMN client_version TEXT")
     if "terms_version" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN terms_version TEXT NOT NULL DEFAULT 'v1'")
+    if "lang" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
     if "api_key_id" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")
