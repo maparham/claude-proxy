@@ -851,7 +851,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def admin_api(request: Request):
         admin(request)
         need_api()
-        return {"rates": api_credit.rates(conn), "accounts": api_credit.accounts(conn, cfg), "keys": api_credit.all_keys(conn)}
+        return {"rates": api_credit.rates(conn), "accounts": api_credit.accounts(conn, cfg), "keys": api_credit.all_keys(conn),
+                "users": [{"id": r["id"], "name": r["name"]} for r in conn.execute("SELECT id, name FROM users ORDER BY name")]}
 
     @app.post("/api/admin/api/keys")
     async def admin_api_key_add(request: Request):

@@ -1136,13 +1136,13 @@ async function renderApi(main) {
         <label>${t("api.in")}<input name="input" inputmode="decimal" dir="ltr" required></label><label>${t("api.out")}<input name="output" inputmode="decimal" dir="ltr" required></label>
         <button class="btn" type="submit">${t("api.add_rate")}</button></form><div class="error" id="arate-add-err"></div></div>
     <div class="card" style="margin-top:16px"><h3>${t("api.accounts")}</h3>
-      <form id="f-acredit" class="form-grid"><label>${t("app.user")}<input name="user" required></label><label>${t("api.amount")}<input name="usd" inputmode="decimal" dir="ltr" required></label>
+      <form id="f-acredit" class="form-grid"><label>${t("app.user")}<select name="user" required><option value=""></option>${adm.users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label><label>${t("api.amount")}<input name="usd" inputmode="decimal" dir="ltr" required></label>
         <label>${t("tk.note")}<input name="note" maxlength="200" required></label><button class="btn primary" type="submit">${t("api.add_credit")}</button></form><div class="error" id="acredit-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th class="r">${t("api.balance")}</th><th class="r">${t("api.spent_30d")}</th><th class="r">${t("api.keys")}</th><th class="r">${t("api.max_inflight")}</th><th class="r">${t("api.rpm")}</th><th></th></tr></thead><tbody>
       ${adm.accounts.map((a) => `<tr><td>${bdi(a.name)}</td><td class="r num">${fmtSigned(a.balance)}</td><td class="r num">${fmtUsd(a.spent_30d)}</td><td class="r num">${nfFull.format(a.keys)}</td>
         <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${a.user_id}" value="${a.own_max_inflight ?? ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
         <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.own_rpm ?? ""}" placeholder="${a.rpm}" style="width:60px"></td>
-        <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
+        <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button> <button class="btn small" data-acredit="${a.user_id}">${t("api.add_credit")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
       </tbody></table></div></div>
     <div class="card" style="margin-top:16px"><h3>${t("api.all_keys")}</h3><p class="sub">${t("api.all_keys_sub")}</p>
       <form id="f-akey-admin" class="form-grid"><label>${t("app.user")}<input name="user" required></label><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
@@ -1200,8 +1200,15 @@ async function renderApi(main) {
     const f = e.target;
     const usd = numv(f.usd.value);
     if (bad([usd], $("#acredit-err"))) return;
-    if (await post("/api/admin/api/credit", { user: f.user.value.trim(), usd, note: f.note.value }, $("#acredit-err"), e.submitter)) render();
+    if (await post("/api/admin/api/credit", { user: f.user.value, usd, note: f.note.value }, $("#acredit-err"), e.submitter)) render();
   };
+  // A row's button picks that user in the form above, so only the amount is left to type.
+  main.querySelectorAll("[data-acredit]").forEach((b) => (b.onclick = () => {
+    const f = $("#f-acredit");
+    f.user.value = b.dataset.acredit;
+    f.scrollIntoView({ block: "center", behavior: "smooth" });
+    f.usd.focus({ preventScroll: true });
+  }));
   main.querySelectorAll("[data-lsave]").forEach((b) => (b.onclick = async () => {
     const v = (k) => { const i = main.querySelector(`input[data-lim="${k}"][data-user="${b.dataset.lsave}"]`); return i.value.trim() === "" ? null : numv(i.value); };
     const max_inflight = v("max_inflight"), rpm = v("rpm");
