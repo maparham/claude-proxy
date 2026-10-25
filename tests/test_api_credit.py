@@ -344,3 +344,20 @@ def test_usage_days_follow_the_viewers_time_zone_across_a_clock_change(db):
     assert datetime.datetime.fromtimestamp(u["day"], berlin).strftime("%Y-%m-%d %H:%M") == "2026-10-24 00:00"
     [u] = api_credit.usage(conn, uid, at - 1, tz_offset_s=3600, tz="Not/AZone")   # unknown zone: the fixed offset
     assert datetime.datetime.fromtimestamp(u["day"], berlin).strftime("%Y-%m-%d") == "2026-10-23"
+
+
+def test_haiku_5_5_prompts_over_100k_tokens_pay_five_times(db):
+    conn = db[1]
+    uid, _ = create_user(conn, "alice")
+    api_credit.set_rate(conn, "claude-haiku-5-5*", 0.10, 0.50, cache_read=0.01)
+    row = {"input_tokens": 1000, "output_tokens": 1_000_000, "cache_creation_tokens": 0, "cache_creation_5m": 0,
+           "cache_creation_1h": 0, "cache_read_tokens": 99_000}
+    assert api_credit.charge(conn, uid, 1, 1, "claude-haiku-5-5", row) == pytest.approx(0.5 + 0.0001 + 0.00099)
+    row["cache_read_tokens"] = 99_001   # the prompt counts cache reads and writes too
+    assert api_credit.charge(conn, uid, 1, 2, "claude-haiku-5-5", row) == pytest.approx(5 * (0.5 + 0.0001 + 0.00099001))
+    assert api_credit.charge(conn, uid, 1, 3, "claude-sonnet-5", row) == 0.0   # no rate
+    api_credit.set_rate(conn, "claude-sonnet-5*", 2, 10)
+    assert api_credit.charge(conn, uid, 1, 4, "claude-sonnet-5", row) == pytest.approx(2 * 0.001 + 10 + 0.2 * 0.099001)
+    [h] = [r for r in api_credit.rates(conn) if r["pattern"] == "claude-haiku-5-5*"]
+    assert h["long_prompt"] == {"over": 100_000, "times": 5}
+    assert "long_prompt" not in [r for r in api_credit.rates(conn) if r["pattern"] == "claude-sonnet-5*"][0]

@@ -386,7 +386,8 @@ export ANTHROPIC_API_KEY=sk-proxy-a-…
 
 The admin adds credit (positive, or negative to correct, each with a note) and edits the rates on the same tab. Rates
 are USD per million tokens per model glob, seeded once from the config's Claude list prices; the longest matching glob
-wins (unlike `[pricing.models]`, where the first match wins). A model with no rate is refused. A request is refused while
+wins (unlike `[pricing.models]`, where the first match wins). A model with no rate is refused. Like Anthropic, a Claude Haiku
+5.5 request whose prompt (input, cache reads and cache writes) is over 100,000 tokens pays five times its rates. A request is refused while
 the balance is at or below zero; one already running is charged in full, so a balance can go slightly negative.
 Features Anthropic prices above plain tokens are refused on API keys: web search (Claude Code's WebSearch tool), fast
 mode (`/fast`) and the 1M-token context (`[1m]` models).

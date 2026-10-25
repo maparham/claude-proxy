@@ -6,6 +6,7 @@ as the admin gave them, charges negative, one per forwarded request that reporte
 from __future__ import annotations
 
 import datetime
+import fnmatch
 import math
 import sqlite3
 import time
@@ -22,6 +23,13 @@ REJECT_INFLIGHT, REJECT_UNPRICED, REJECT_CREDIT, REJECT_RPM = "api_inflight", "a
 REJECT_EXTRA = "api_extra"
 LOW_CREDIT = "Your credit balance is too low to access the API. Ask the gateway admin to add credit."
 RATE_FIELDS = ("input", "output", "cache_write_5m", "cache_write_1h", "cache_read")
+# Models whose every price goes up for a whole request when its prompt (input, cache reads and cache writes) is over a
+# threshold: (model glob, prompt tokens, multiplier). Anthropic's list prices, 2026-10-25.
+LONG_PROMPT = (("claude-haiku-5-5*", 100_000, 5),)
+
+
+def long_prompt(model: str) -> tuple[int, float] | None:
+    return next(((over, x) for glob, over, x in LONG_PROMPT if fnmatch.fnmatchcase(model.lower(), glob)), None)
 
 
 class CreditError(ValueError):
@@ -45,7 +53,11 @@ def _tidy(v: float) -> float:
 
 def rates(conn: sqlite3.Connection) -> list[dict]:
     rows = conn.execute("SELECT pattern, input, output, cache_write_5m, cache_write_1h, cache_read, updated_at FROM api_rates")
-    return sorted((dict(r) for r in rows), key=lambda r: (-len(r["pattern"]), r["pattern"]))
+    out = sorted((dict(r) for r in rows), key=lambda r: (-len(r["pattern"]), r["pattern"]))
+    for r in out:   # a pattern names the models it starts with
+        if lp := long_prompt(r["pattern"].rstrip("*")):
+            r["long_prompt"] = {"over": lp[0], "times": lp[1]}
+    return out
 
 
 def rate_for(conn: sqlite3.Connection, model: str | None) -> dict | None:
@@ -132,6 +144,8 @@ def charge(conn, user_id: int, api_key_id: int, request_id: int, model: str | No
     cw5 = g("cache_creation_5m") if split else g("cache_creation_tokens")
     cw1 = g("cache_creation_1h") if split else 0
     usd = cost_usd(rate, g("input_tokens"), g("output_tokens"), cw5, cw1, g("cache_read_tokens"))
+    if (lp := long_prompt(model)) and g("input_tokens") + cw5 + cw1 + g("cache_read_tokens") > lp[0]:
+        usd *= lp[1]
     if usd <= 0:
         return 0.0
     conn.execute("INSERT INTO api_ledger(at, user_id, kind, usd, api_key_id, request_id, model, input_tokens, output_tokens, "

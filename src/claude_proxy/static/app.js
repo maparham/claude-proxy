@@ -101,6 +101,7 @@ function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNu
 
 // The usage views count CLI requests or API-key ones, by the switch on top of them; everything while API keys are off.
 const BY_SOURCE = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|users)(\?|$)/;
+const apiView = () => S.api?.enabled && S.prefs.source === "api";
 const withSource = (path) => (S.api?.enabled && BY_SOURCE.test(path) ? `${path}${path.includes("?") ? "&" : "?"}source=${S.prefs.source}` : path);
 
 async function api(path, opts = {}) {
@@ -528,7 +529,7 @@ async function renderOverview(main) {
         <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
         <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
         <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
-        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
+        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : apiView() ? t("ov.api_charged") : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
         ${isAdmin() ? `<div class="card tile"><div class="label">${t("ov.active_users")}${tipI("active_users")}</div><div class="value">${nfFull.format(ov.active_users_24h)}</div><div class="foot">${t("ov.last_24h")}</div></div>` : ""}
         <div class="card tile"><div class="label">${t("ov.burn_rate")}${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">${t("ov.burn_foot")}</div></div>
       </div>
@@ -1144,7 +1145,7 @@ async function renderPricing(main) {
 
 const fmtSigned = (v) => (v < 0 ? `−${fmtUsd(-v)}` : fmtUsd(v));   // fmtUsd prints any negative as <$0.01
 
-const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code></td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
+const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code>${r.long_prompt ? `<div class="muted" dir="auto">${t("api.long_prompt", { x: r.long_prompt.times, n: fmtNum(r.long_prompt.over) })}</div>` : ""}</td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
   edit ? `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="${f}" data-pattern="${esc(r.pattern)}" data-init="${r[f]}" value="${r[f]}" required style="width:70px"></td>`
     : `<td class="r num">${esc(String(r[f]))}</td>`).join("")}${edit ? `<td><button class="btn small danger" type="button" data-rdel="${esc(r.pattern)}">${t("api.delete")}</button></td>` : ""}</tr>`;
 const rateHead = (edit) => `<thead><tr><th>${t("api.model")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cw5")}</th><th class="r">${t("api.cw1")}</th><th class="r">${t("api.cr")}</th>${edit ? "<th></th>" : ""}</tr></thead>`;
@@ -1701,7 +1702,7 @@ async function renderUser(main) {
         <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
         <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
         <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
-        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${t("ov.not_billed")}</div></div>
+        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${t(apiView() ? "ov.api_charged" : "ov.not_billed")}</div></div>
         ${share("5h")}${share("7d")}
       </div>
       <div class="grid cols-2">

@@ -225,7 +225,8 @@ def _default_prices() -> dict[str, Price]:
         "claude-sonnet-5-5*": Price(2.0, 10.0, cache_read=0.10),
         "claude-sonnet-5*": Price(2.0, 10.0),
         "claude-sonnet-4*": Price(3.0, 15.0),
-        # Haiku 5.5 costs 5x this on prompts over 100K tokens; one price per model here, so those are undercounted.
+        # Haiku 5.5 costs 5x this on prompts over 100K tokens. API-key charges apply it (api_credit.LONG_PROMPT);
+        # these estimates have one price per model, so they undercount such prompts.
         "claude-haiku-5-5*": Price(0.10, 0.50, cache_read=0.01),
         "claude-haiku-4*": Price(1.0, 5.0),
         "muse-spark-1.3-contributor*": Price(0.10, 0.20, cache_write_5m=0.10, cache_write_1h=0.10, cache_read=0.002),
