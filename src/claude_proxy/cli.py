@@ -6,6 +6,7 @@ import getpass
 import logging
 import os
 import sys
+import threading
 import time
 
 import httpx
@@ -282,48 +283,71 @@ async def _serve(cfg: Config):
 
     conn = _conn(cfg)
     gw = Gateway(cfg, conn)
-    servers = [
-        uvicorn.Server(uvicorn.Config(create_app(gw), host=cfg.listener.host, port=cfg.listener.port, log_level="info")),
-        uvicorn.Server(uvicorn.Config(create_dashboard_app(gw), host=cfg.listener.dashboard_host,
-                                      port=cfg.listener.dashboard_port, log_level="info")),
-    ]
+    proxy = uvicorn.Server(uvicorn.Config(create_app(gw), host=cfg.listener.host, port=cfg.listener.port, log_level="info"))
+    # The dashboard runs on its own thread and event loop, with its own connection and HTTP client: its pages run
+    # long synchronous aggregates, and on the proxy's loop they would stall every request and stream in flight.
+    dash_conn = db.get_conn(cfg.db.path)
+    dash_gw = gw.view(dash_conn, httpx.AsyncClient(timeout=httpx.Timeout(cfg.upstream.timeout_s, connect=15.0)))
+    dashboard = uvicorn.Server(uvicorn.Config(create_dashboard_app(dash_gw), host=cfg.listener.dashboard_host,
+                                              port=cfg.listener.dashboard_port, log_level="info"))
+    loop = asyncio.get_running_loop()
+    dash_done = loop.create_future()
+
+    def run_dashboard():
+        async def serve():
+            # Reconciling payments runs here, beside the dashboard's payment callback: both settle a payment on a
+            # "no await between check and grant" guard, which holds only on one loop and one connection.
+            reconcile = asyncio.create_task(_reconcile_payments(dash_conn, cfg))
+            try:
+                await dashboard.serve()
+            finally:
+                reconcile.cancel()
+                await dash_gw.http.aclose()
+        try:
+            # asyncio.run cancels what is left on exit: a pending mail stays "pending" (spec section 5); a send
+            # already in smtplib finishes in its thread.
+            asyncio.run(serve())
+        finally:
+            loop.call_soon_threadsafe(lambda: dash_done.done() or dash_done.set_result(None))
+
     print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
     print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
     payments.warn_if_off(cfg)
-    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(gw.status_page.run()), asyncio.create_task(_maintenance(conn, cfg)),
-                  asyncio.create_task(_reconcile_payments(conn, cfg))]
-    running = [asyncio.create_task(s.serve()) for s in servers]
+    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(gw.status_page.run()),
+                  asyncio.create_task(_maintenance(db.get_conn(cfg.db.path), cfg))]
+    dash_thread = threading.Thread(target=run_dashboard, name="dashboard", daemon=True)
+    dash_thread.start()
+    running = asyncio.create_task(proxy.serve())
     try:
-        await asyncio.wait(running, return_when=asyncio.FIRST_COMPLETED)
+        await asyncio.wait([running, dash_done], return_when=asyncio.FIRST_COMPLETED)
     finally:
-        for s in servers:
-            s.should_exit = True
-        await asyncio.gather(*running, return_exceptions=True)
+        # Signals reach the main thread only (uvicorn installs no handlers elsewhere): stop the dashboard from here.
+        proxy.should_exit = dashboard.should_exit = True
+        await asyncio.gather(running, return_exceptions=True)
+        await asyncio.to_thread(dash_thread.join, 30)
         for t in background:
-            t.cancel()
-        from . import web
-        for t in list(web._mail_tasks):   # their mail stays "pending" (spec section 5); a send already in smtplib finishes in its thread
             t.cancel()
         await gw.aclose()
 
 
 async def _maintenance(conn, cfg: Config):
+    """`conn` is this task's own: each step runs on a worker thread, as a big retention delete would stall the loop."""
     while True:
         # Each task on its own, so one failing does not skip the other.
         try:
-            removed = db.cleanup(conn, cfg.retention_days)
+            removed = await asyncio.to_thread(db.cleanup, conn, cfg.retention_days)
             if any(removed.values()):
                 logger.info("retention cleanup: %s", removed)
         except Exception:
             logger.exception("retention cleanup failed")
         try:
-            done = estimates.refresh_if_due(conn, cfg)
+            done = await asyncio.to_thread(estimates.refresh_if_due, conn, cfg)
             if done:
                 logger.info("usage estimates refreshed: %s", done)
         except Exception:
             logger.exception("usage estimates refresh failed")
         try:
-            cleared = orders.clear_old_ips(conn)
+            cleared = await asyncio.to_thread(orders.clear_old_ips, conn)
             if cleared:
                 logger.info("cleared the IP of %d orders older than 30 days", cleared)
         except Exception:

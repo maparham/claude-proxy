@@ -391,17 +391,21 @@ def buckets(conn: sqlite3.Connection, since: float) -> list[str]:
 class Poller:
     """Polls the usage endpoint only when no snapshot has arrived recently (spec 7.1)."""
 
-    def __init__(self, conn: sqlite3.Connection, backend, qc: QuotaConfig):
+    def __init__(self, conn: sqlite3.Connection, backend, qc: QuotaConfig, db=None):
         self.conn = conn
+        self.db = db   # a dbpool.DbPool: the gateway's, so a poll never blocks the proxy's loop on the write lock
         self.backend = backend
         self.qc = qc
         self.next_allowed = 0.0
         self.backoff = 0.0
         self.last_status: int | None = None
 
+    async def _run(self, fn, *args, **kwargs):
+        return await self.db.run(fn, *args, **kwargs) if self.db else fn(self.conn, *args, **kwargs)
+
     async def tick(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
-        newest = self.conn.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0]
+        newest = await self._run(lambda c: c.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0])
         if newest is not None and now - newest < self.qc.poll_idle_s:
             return
         if now < self.next_allowed:
@@ -419,7 +423,7 @@ class Poller:
         self.backoff = 0.0
         self.next_allowed = now + self.qc.poll_min_interval_s
         if status == 200 and body:
-            record(self.conn, parse_poll(body), now=now)
+            await self._run(record, parse_poll(body), now=now)
 
     async def run(self, interval_s: float = 60.0) -> None:
         while True:

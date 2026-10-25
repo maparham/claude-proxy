@@ -1,6 +1,7 @@
 """The proxy listener (spec section 4). Serves only /health and /v1/*; the dashboard is a separate app."""
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -152,6 +153,34 @@ USAGE_FRESH_SQL = ("SELECT MIN((SELECT MAX(observed_at) FROM quota_snapshots WHE
                    "(SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket='7d'))")
 
 
+def _usage_fresh(conn) -> float | None:
+    return conn.execute(USAGE_FRESH_SQL).fetchone()[0]
+
+
+def _save(conn, row: dict, title: str | None) -> None:
+    """One request's log row, its API charge and its session title, on a db worker thread."""
+    try:
+        rid = insert_request(conn, **row)
+        if row.get("api_key_id") and "rejected_by" not in row:
+            # Priced by the model the gate approved; the reply's model id only if that one has no rate.
+            model_ = row.get("requested_model") if api_credit.rate_for(conn, row.get("requested_model")) else row.get("model")
+            api_credit.charge(conn, row["user_id"], row["api_key_id"], rid, model_, row)
+    except Exception:
+        logger.exception("could not record request")
+    if title:
+        try:
+            set_session_title(conn, row["user_id"], row["session_id"], title)
+        except Exception:
+            logger.exception("could not record session title")
+
+
+def _record_quota(conn, headers) -> None:
+    try:
+        quota.record(conn, quota.parse_headers(headers))
+    except Exception:
+        logger.exception("could not record quota headers")
+
+
 def usage_fresh_s(qc) -> int:
     """How old the figures may be before /health says stale. An idle gateway gets figures only from the usage poll,
     which backs off up to poll_max_backoff_s after 429s; that alone is no reason to email the admin."""
@@ -166,7 +195,7 @@ def create_app(gw: Gateway) -> FastAPI:
     async def health():
         # Unauthenticated, so only yes/no answers: whether the subscription login works, and whether Anthropic's
         # usage figures are fresh (share limits and tickets depend on them). The detail stays on the dashboard.
-        oldest_newest = gw.conn.execute(USAGE_FRESH_SQL).fetchone()[0]
+        oldest_newest = await gw.db.run(_usage_fresh)
         fresh = oldest_newest is not None and time.time() - oldest_newest <= usage_fresh_s(gw.cfg.quota)
         return {"ok": True, "credential": gw.backend.describe().healthy, "usage_fresh": fresh}
 
@@ -192,7 +221,7 @@ async def read_body(request: Request, cap: int) -> bytes | None:
 
 
 async def handle(gw: Gateway, request: Request, path: str) -> Response:
-    conn, cfg = gw.conn, gw.cfg
+    cfg = gw.cfg
     inflight = inflight_of(gw)
     started = time.time()
     if not should_forward(path):
@@ -201,24 +230,22 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base = {"started_at": started, "method": request.method, "path": path}
     held = False   # this request is counted in `inflight` until it is recorded
 
-    def record(**kw) -> None:
+    async def record(title: str | None = None, **kw) -> None:
+        # The slot is given back once the row is written, never before: between the two the request would count
+        # nowhere, and a burst could pass limits it should not. Shielded, so a client disconnect (which cancels the
+        # relay) still records and charges the request and frees its slot.
         nonlocal held
+        fut = gw.db.run(_save, {**base, "ended_at": time.time(), **kw}, title)
         if held:
-            inflight.release(base["user_id"])
+            uid = base["user_id"]
+            fut.add_done_callback(lambda _: inflight.release(uid))
             held = False
-        try:
-            rid = insert_request(conn, **{**base, "ended_at": time.time(), **kw})
-            if base.get("api_key_id") and "rejected_by" not in kw:
-                # Priced by the model the gate approved; the reply's model id only if that one has no rate.
-                model_ = base.get("requested_model") if api_credit.rate_for(conn, base.get("requested_model")) else kw.get("model")
-                api_credit.charge(conn, base["user_id"], base["api_key_id"], rid, model_, kw)
-        except Exception:
-            logger.exception("could not record request")
+        await asyncio.shield(fut)
 
     try:
-        user = authenticate(conn, request.headers)
+        user = await gw.db.run(authenticate, request.headers)
     except AuthError as e:
-        record(user_id=None, status=e.status, stream=0, complete=1, error_type=e.body["error"]["type"], rejected_by="auth")
+        await record(user_id=None, status=e.status, stream=0, complete=1, error_type=e.body["error"]["type"], rejected_by="auth")
         return JSONResponse(status_code=e.status, content=e.body)
     base["user_id"] = user["id"]
     is_admin = user["role"] == "admin"   # an API key is never an admin's (db.find_user_by_key), so its replies are always scrubbed
@@ -230,7 +257,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
 
     body = await read_body(request, MAX_BODY_BYTES)
     if body is None:
-        record(status=413, stream=0, complete=1, error_type="request_too_large", rejected_by="body_size")
+        await record(status=413, stream=0, complete=1, error_type="request_too_large", rejected_by="body_size")
         return api_error(413, "request_too_large", f"Request body exceeds the gateway's limit of {MAX_BODY_BYTES // (1024 * 1024)} MiB.")
     model, data = _model_of(body) if body else (None, None)
     route = cfg.route_for(model) if request.method == "POST" and path in ROUTED_PATHS else None
@@ -241,33 +268,33 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
 
     if is_api and not cfg.api.enabled:
-        record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
+        await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
         return api_error(403, "permission_error", "The API is not enabled on this gateway.")
     if not scope_allows(user["key_scope"], request.method, path, route):
         # Before the model check and limits: this key never reaches Claude, whatever else is wrong with the request.
-        record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
+        await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
         msg = ("API keys reach Claude models only, through /v1/messages." if is_api else
                f"This key is for third-party models only ({_route_patterns(cfg)}). Claude models need your Claude Code key.")
         return api_error(403, "permission_error", msg)
     if user["key_scope"] == "routes" and path == "/v1/models":
         base["provider"] = "gateway"
-        record(status=200, stream=0, complete=1)
+        await record(status=200, stream=0, complete=1)
         entries = route_model_entries(cfg)
         return JSONResponse({"data": entries, "has_more": False, "first_id": entries[0]["id"] if entries else None,
                              "last_id": entries[-1]["id"] if entries else None})
 
     if path == BATCHES_PREFIX or path.startswith(BATCHES_PREFIX + "/"):
-        record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="unmetered_path")
+        await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="unmetered_path")
         return api_error(403, "permission_error", "The gateway cannot meter the Batches API (its models and usage are "
                          "not in the request), so it does not forward it. Use /v1/messages.")
 
     if request.method == "POST" and path in ROUTED_PATHS and model is None:
         # Model allow-lists, scoped limits and routing all need the model; never forward a body the gateway can't read.
-        record(status=400, stream=0, complete=1, error_type="gateway_bad_request", rejected_by="request")
+        await record(status=400, stream=0, complete=1, error_type="gateway_bad_request", rejected_by="request")
         return api_error(400, "invalid_request_error", "The gateway could not read a string `model` from the JSON request body.")
     extra = api_credit.refuse_extras(data, request.headers.get("anthropic-beta")) if is_api and path == "/v1/messages" else None
     if extra:
-        record(status=extra.status, stream=0, complete=1, error_type=extra.body["error"]["type"], rejected_by=extra.kind)
+        await record(status=extra.status, stream=0, complete=1, error_type=extra.body["error"]["type"], rejected_by=extra.kind)
         return JSONResponse(status_code=extra.status, content=extra.body)
 
     # What limits count: a forwarded request for a model (not count_tokens, not the model list). While one is being
@@ -276,21 +303,31 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # An API key holds a slot for everything it forwards, token counts and the model list included: its rpm counts them.
     counted = metered or is_api
     held_now = inflight.get(user["id"]) if counted else 0
-    decision = (api_credit.evaluate(conn, cfg, user["id"], model, path, inflight=held_now) if is_api
-                else limits.evaluate(conn, cfg, user["id"], model, path, inflight=held_now))
+    if counted:
+        # Taken before the check, which yields to the loop: a request arriving meanwhile counts this one.
+        inflight.acquire(user["id"])
+        held = True
+    evaluate = api_credit.evaluate if is_api else limits.evaluate
+    try:
+        decision = await gw.db.run(evaluate, cfg, user["id"], model, path, inflight=held_now)
+    except BaseException:
+        if held:
+            inflight.release(user["id"])
+            held = False
+        raise
     if decision:
-        record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
+        # Refused: its slot goes back now, not after the reject row is written (rejected rows count toward nothing).
+        if held:
+            inflight.release(user["id"])
+            held = False
+        await record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
         logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
         return JSONResponse(status_code=decision.status, content=decision.body,
                             headers={"retry-after": str(decision.retry_after)} if decision.retry_after else None)
-    if counted:
-        inflight.acquire(user["id"])
-        held = True
-
     try:
         if route is not None:
             if not route.api_key():
-                record(status=503, stream=0, complete=1, error_type="gateway_route_unconfigured")
+                await record(status=503, stream=0, complete=1, error_type="gateway_route_unconfigured")
                 return api_error(503, "api_error", f"Model {model!r} is routed to {route.name}, but {route.api_key_env} is not set on the gateway.")
             dropped = [f for f in route.drop_body_fields if f in data]
             if route.upstream_model(model) != model or dropped:
@@ -314,26 +351,23 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 await resp.aclose()
                 resp = await send()
         except RefreshUnavailable:
-            record(status=503, stream=0, complete=1, error_type="gateway_refresh_unavailable")
+            await record(status=503, stream=0, complete=1, error_type="gateway_refresh_unavailable")
             if not is_admin:
                 return api_error(503, "api_error", UNAVAILABLE)
             return api_error(503, "api_error", "The gateway could not renew its Claude subscription token just now "
                              "(a temporary error at Anthropic's sign-in service). It retries automatically; try again in a minute.")
         except NeedsLogin as e:
-            record(status=503, stream=0, complete=1, error_type="gateway_needs_login")
+            await record(status=503, stream=0, complete=1, error_type="gateway_needs_login")
             if not is_admin:
                 return api_error(503, "api_error", UNAVAILABLE)
             return api_error(503, "api_error", f"The gateway's Claude subscription login needs renewing: the admin must run `claude-proxy login` ({e}).")
         except httpx.HTTPError as e:
             logger.warning("upstream %s unreachable: %s", upstream.provider, e)
-            record(status=502, stream=0, complete=0, error_type="gateway_upstream_unreachable")
+            await record(status=502, stream=0, complete=0, error_type="gateway_upstream_unreachable")
             return api_error(502, "api_error", f"The gateway could not reach {upstream.provider}.")
 
         if route is None:
-            try:
-                quota.record(conn, quota.parse_headers(resp.headers))
-            except Exception:
-                logger.exception("could not record quota headers")
+            gw.db.run(_record_quota, resp.headers)   # not awaited: a cancel here would leave the request unrecorded
 
         status = client_status(request.headers, resp.status_code)
         resp_headers = filter_response_headers(dict(resp.headers))
@@ -344,7 +378,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             # Anthropic's own 429/401/403 bodies speak of the account and its login; say it the gateway's way.
             if route is None and resp.status_code in (401, 403, 429):
                 await resp.aclose()
-                record(status=resp.status_code, stream=0, complete=1, upstream_request_id=resp.headers.get("request-id"),
+                await record(status=resp.status_code, stream=0, complete=1, upstream_request_id=resp.headers.get("request-id"),
                        error_type=error_type or f"upstream_{resp.status_code}")
                 if resp.status_code != 429:
                     return api_error(503, "api_error", UNAVAILABLE)
@@ -376,26 +410,22 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                     yield chunk
                 finished = True
             finally:
-                # Record first: on a client disconnect the await below can be cancelled, and a request never recorded
-                # would keep its inflight slot and go uncharged.
+                # Record first: on a client disconnect this is cancelled; record is shielded, so the request is still
+                # recorded, charged and its inflight slot freed.
                 mr = meter.finalize() if meter is not None else body_meter.result(path, collect_text=wants_title)
-                record(
-                    model=mr.model or base["model"], status=resp.status_code, stream=1 if is_stream else 0,
-                    complete=1 if finished and (mr.complete or not is_stream) else 0,
-                    input_tokens=mr.input_tokens, output_tokens=mr.output_tokens,
-                    cache_creation_tokens=mr.cache_creation_tokens, cache_creation_5m=mr.cache_creation_5m,
-                    cache_creation_1h=mr.cache_creation_1h, cache_read_tokens=mr.cache_read_tokens,
-                    upstream_request_id=mr.upstream_request_id or resp.headers.get("request-id"),
-                    error_type=error_type or mr.error_type or (f"upstream_{resp.status_code}" if resp.status_code >= 400 else None),
-                    meter_error=1 if mr.meter_error else 0,
-                )
                 title = titles.parse_title(mr.text) if wants_title and finished and resp.status_code == 200 else None
-                if title:
-                    try:
-                        set_session_title(conn, user["id"], base["session_id"], title)
-                    except Exception:
-                        logger.exception("could not record session title")
-                await resp.aclose()
+                try:
+                    await record(
+                        model=mr.model or base["model"], status=resp.status_code, stream=1 if is_stream else 0,
+                        complete=1 if finished and (mr.complete or not is_stream) else 0,
+                        input_tokens=mr.input_tokens, output_tokens=mr.output_tokens,
+                        cache_creation_tokens=mr.cache_creation_tokens, cache_creation_5m=mr.cache_creation_5m,
+                        cache_creation_1h=mr.cache_creation_1h, cache_read_tokens=mr.cache_read_tokens,
+                        upstream_request_id=mr.upstream_request_id or resp.headers.get("request-id"),
+                        error_type=error_type or mr.error_type or (f"upstream_{resp.status_code}" if resp.status_code >= 400 else None),
+                        meter_error=1 if mr.meter_error else 0, title=title)
+                finally:
+                    await resp.aclose()
 
         return StreamingResponse(relay(), status_code=status, headers=resp_headers)
     except BaseException:
@@ -413,14 +443,15 @@ async def _models_for_api(gw: Gateway, resp: httpx.Response, headers: dict, reco
     await resp.aclose()
     try:
         data = json.loads(raw)
-        data["data"] = [m for m in data.get("data", []) if api_credit.rate_for(gw.conn, m.get("id"))]
+        rated = await gw.db.run(lambda conn: {m.get("id") for m in data["data"] if api_credit.rate_for(conn, m.get("id"))})
+        data["data"] = [m for m in data["data"] if m.get("id") in rated]
         ids = [m["id"] for m in data["data"]]
         data["first_id"], data["last_id"] = (ids[0], ids[-1]) if ids else (None, None)
         raw = json.dumps(data).encode()
     except (ValueError, AttributeError, TypeError, KeyError):
         data = {"data": [], "has_more": False, "first_id": None, "last_id": None}   # unreadable: list nothing rather than everything
         raw = json.dumps(data).encode()
-    record(status=200, stream=0, complete=1)
+    await record(status=200, stream=0, complete=1)
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     return Response(raw, status_code=200, headers=headers, media_type="application/json")
 
@@ -435,6 +466,6 @@ async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, 
         raw = json.dumps(data).encode()
     except (ValueError, AttributeError, TypeError, KeyError):   # not the usual shape: pass it on as is
         pass
-    record(status=200, stream=0, complete=1)
+    await record(status=200, stream=0, complete=1)
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     return Response(raw, status_code=200, headers=headers, media_type="application/json")

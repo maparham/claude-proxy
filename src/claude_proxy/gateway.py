@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 import logging
 import sqlite3
 
@@ -8,6 +9,7 @@ import httpx
 from . import api_credit, tickets
 from .config import Config
 from .credentials import OAuthBackend
+from .dbpool import DbPool
 from .quota import Poller
 from .upstream import StatusPage
 
@@ -20,12 +22,13 @@ class Gateway:
     def __init__(self, cfg: Config, conn: sqlite3.Connection, http: httpx.AsyncClient | None = None, backend=None):
         self.cfg = cfg
         self.conn = conn
+        self.db = DbPool(conn)   # the proxy's per-request queries, off the event loop
         # HTTP/1.1 connection pool: avoids the documented stall of many large uploads on one HTTP/2 connection.
         self.http = http or httpx.AsyncClient(http1=True, http2=False,
                                               timeout=httpx.Timeout(cfg.upstream.timeout_s, connect=15.0),
                                               limits=httpx.Limits(max_connections=100, max_keepalive_connections=20))
         self.backend = backend or OAuthBackend(cfg, conn, self.http)
-        self.poller = Poller(conn, self.backend, cfg.quota)
+        self.poller = Poller(conn, self.backend, cfg.quota, self.db)
         self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)
@@ -41,5 +44,26 @@ class Gateway:
         if cfg.api.enabled:
             api_credit.seed_rates(conn, cfg)
 
+    def view(self, conn: sqlite3.Connection, http: httpx.AsyncClient) -> Gateway:
+        """This gateway for an app served on another thread's event loop (the dashboard): its own connection and
+        HTTP client, the same backend state, poller and status page."""
+        v = copy.copy(self)
+        v.conn, v.http, v.backend = conn, http, _BackendView(self.backend, conn)
+        return v
+
     async def aclose(self) -> None:
         await self.http.aclose()
+        self.db.close()
+
+
+class _BackendView:
+    """The credential backend as another thread reads it: its live state (last_error), loaded through that thread's
+    connection, since two threads must not share one."""
+
+    def __init__(self, backend, conn: sqlite3.Connection):
+        self._backend, self._conn = backend, conn
+
+    def describe(self):
+        b = copy.copy(self._backend)
+        b.conn = self._conn
+        return b.describe()
