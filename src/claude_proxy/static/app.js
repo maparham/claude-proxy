@@ -1808,12 +1808,16 @@ async function renderQuota(main) {
   }
   if (!d.rate.length && d.rate_now == null) { $("#q-rate").outerHTML = `<p class="muted">${t("quota.no_rate")}</p>`; }
   else {
+    // A rise of a sliver of a point divides by almost zero; cap the axis at 2x the 95th percentile so outliers don't flatten the rest.
+    const ratios = d.rate.map((r) => r.ratio).sort((a, b) => a - b);
+    const p95 = ratios.length ? ratios[Math.floor((ratios.length - 1) * 0.95)] : 0;
+    const yMax = Math.max(2 * p95, d.rate_now || 0, ...d.rate.map((r) => r.median)) || undefined;
     zoomReset(chart($("#q-rate"))).setOption({
       ...o, tooltip: { ...o.tooltip, valueFormatter: (v) => fmtNum(v) },
-      xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", scale: true, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtNum(v) } },
+      xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", scale: true, max: yMax, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtNum(v) } },
       dataZoom: [{ type: "inside" }],
       series: [
-        { name: t("quota.rate_rise"), type: "scatter", symbolSize: 5, itemStyle: { color: css("--s1"), opacity: 0.45 }, data: d.rate.map((r) => [r.t * 1000, r.ratio]) },
+        { name: t("quota.rate_rise"), type: "scatter", clip: true, symbolSize: 5, itemStyle: { color: css("--s1"), opacity: 0.45 }, data: d.rate.map((r) => [r.t * 1000, r.ratio]) },
         { name: t("quota.rate_median"), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s2") }, itemStyle: { color: css("--s2") }, data: d.rate.map((r) => [r.t * 1000, r.median]).concat(d.rate_now == null ? [] : [[d.now * 1000, d.rate_now]]) },
       ],
     });
