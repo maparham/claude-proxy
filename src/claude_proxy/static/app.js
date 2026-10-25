@@ -1797,12 +1797,12 @@ function linkAccountDialog(slug, relink) {
 
 async function renderQuota(main) {
   const p = S.prefs;
-  const qr = ["1d", "7d", "30d"].includes(p.range) ? p.range : "30d";  // quota snapshots are dense; longer spans stop at 30 days
+  const qr = ["1d", "7d", "30d", "90d", "365d"].includes(p.range) ? p.range : "30d";
   const d = await api(`/api/quota/timeline?bucket=${encodeURIComponent(p.bucket)}&range=${qr}`);
   const bname = (b) => (b === "5h" || b === "7d" ? t(`quota.bucket_${b}`) : b);
   main.innerHTML = `<section class="view"><h2>${t("tab.quota")}</h2>
     <p class="lede">${t("quota.lede", { estimated: tipT(t("quota.estimated"), "share") })}</p>
-    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, bname(b), `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], qr)}</div>
+    <div class="controls">${seg("bucket", d.buckets.map((b) => [b, bname(b), `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], qr)}</div>
     <div class="grid cols-2">
       <div class="card"><h3>${t("quota.reported")}${tipI("reported")}</h3><p class="sub">${t("quota.reported_sub")}</p><div class="chart" id="q-line"></div></div>
       <div class="card"><h3>${t("quota.share_title")}${tipI("share")}</h3><p class="sub">${t("quota.share_sub", { unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
@@ -1818,7 +1818,7 @@ async function renderQuota(main) {
       tooltip: { ...o.tooltip, valueFormatter: (v) => fmtPct(v, 1) },
       xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", max: 100, axisLabel: { ...o.yAxis.axisLabel, formatter: pctAxis } },
       dataZoom: [{ type: "inside" }],
-      series: [{ name: t("quota.utilization", { bucket: bname(p.bucket) }), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
+      series: [{ name: t("quota.utilization", { bucket: bname(p.bucket) }), type: "line", step: "end", showSymbol: false, sampling: "lttb", lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
                  data: d.snapshots.map((s) => [s.observed_at * 1000, s.utilization_pct]) }],
     });
   }
