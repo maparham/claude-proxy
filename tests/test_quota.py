@@ -425,21 +425,13 @@ def test_request_shares_give_the_rise_after_a_known_reset_to_the_requests_after_
     assert quota.attributed_since(conn, Pricing(), "7d", a, since=1060, now=1110) == 0
 
 
-@pytest.mark.parametrize("org,tier,scale", [
-    ("claude_pro", None, 1.0), ("claude_max", "default_claude_max_5x", 5.0), ("claude_max", "default_claude_max_20x", 20.0),
-    ("claude_team", "default_raven", None), (None, None, None),
-])
-def test_plan_scale(org, tier, scale):
-    assert quota.plan_scale(org, tier) == scale
-
-
 def test_record_plan_stores_only_changes(db):
     conn = db[1]
     assert quota.record_plan(conn, "claude_pro", None, 100) is False   # the first plan seen is no change
     assert quota.record_plan(conn, "claude_pro", None, 200) is False   # same plan: nothing stored
     assert quota.record_plan(conn, "claude_max", "default_claude_max_5x", 300) is True
     assert conn.execute("SELECT COUNT(*) FROM account_plans").fetchone()[0] == 2
-    assert quota.plan_changes(conn) == [{"t": 300, "from": "claude_pro", "to": "default_claude_max_5x", "scale": 5.0}]
+    assert quota.plan_changes(conn) == [{"t": 300, "from": "claude_pro", "to": "default_claude_max_5x"}]
 
 
 def test_observed_rate_counts_only_rises_on_the_current_plan(db):
@@ -451,8 +443,8 @@ def test_observed_rate_counts_only_rises_on_the_current_plan(db):
     _req(conn, a, now - 7500, 1000)
     _snap(conn, now - 7000, 5)                 # 200 per point on Pro
     quota.record_plan(conn, "claude_max", "default_claude_max_5x", now - 5000)
-    # No rise on the new plan yet: the Pro rate, scaled 5x.
-    assert quota.observed_rate(conn, Pricing(), "5h", now - 4000) == 1000
+    # No rise on the new plan yet: no rate, as for a young account; the Pro rate isn't carried over.
+    assert quota.observed_rate(conn, Pricing(), "5h", now - 4000) is None
     _snap(conn, now - 4000, 5)
     _req(conn, a, now - 3500, 1800)
     _req(conn, a, now - 3500, 1800)
