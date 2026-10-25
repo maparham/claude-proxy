@@ -445,15 +445,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"cells": [[r["hour"], r["dow"], r["n"]] for r in rows]}
 
     @app.get("/api/sessions")
-    async def sessions(request: Request, range: str = "7d", user_id: int | None = None):
+    async def sessions(request: Request, range: str = "7d", user_id: int | None = None, offset: int = 0, limit: int = 200):
         user = principal(request)
+        limit, offset = min(max(limit, 1), 200), max(offset, 0)
         where, params = scope_where(user, user_id)
         since = time.time() - RANGES.get(range, RANGES["7d"])
         meta = conn.execute(
             f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
             f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "
-            f"AND rejected_by IS NULL AND {where} AND started_at>=? GROUP BY user_id, session_id ORDER BY last DESC LIMIT 200",
-            (*params, since)).fetchall()
+            f"AND rejected_by IS NULL AND {where} AND started_at>=? GROUP BY user_id, session_id ORDER BY last DESC LIMIT ? OFFSET ?",
+            (*params, since, limit + 1, offset)).fetchall()
+        more, meta = len(meta) > limit, meta[:limit]   # one extra row says whether another page exists
         # Session ids come from clients, so two users' sessions may share one; each stays its own row.
         tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND started_at>=?", (*params, since),
                             group="user_id || '|' || session_id")
@@ -466,7 +468,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                               "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
                               "duration_s": r["last"] - r["first"], "requests": r["n"], "models": (r["models"] or "").split(","),
                               **{k: v for k, v in tot.get(f"{r['user_id']}|{r['session_id']}", usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
-                             for r in meta]}
+                             for r in meta], "more": more}
 
     @app.get("/api/errors")
     async def errors(request: Request, range: str = "7d", tz_offset: int = 0, user_id: int | None = None):

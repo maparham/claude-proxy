@@ -1645,18 +1645,19 @@ async function renderUser(main) {
           ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
           </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div>
       </div>
-      <div class="card table-wrap" style="margin-top:16px"><h3>${t("tab.sessions")}</h3><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false) : `<p class="muted">${t("user.no_sessions")}</p>`}</div>
-      <div class="card table-wrap" style="margin-top:16px"><h3>${t("user.recent_requests")}${tipI("recent_requests")}</h3><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
-        ${reqs.requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
+      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("tab.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
+      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.recent_requests")}${tipI("recent_requests")} <span class="badge">${nfFull.format(reqs.requests.length)}</span></h3></summary><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
+        ${foldRows(reqs.requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
           <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
-          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`).join("")}
-        </tbody></table>` : `<p class="muted">${t("user.no_requests")}</p>`}</div>
+          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`))}
+        </tbody></table>${moreButton(reqs.requests.length)}` : `<p class="muted">${t("user.no_requests")}</p>`}</details>
       ${machinesCard(keys.keys, null, u.name)}
     </section>`;
   wireSegs(main, render);
   wireUserActions(main, users);
   wireMachines(main);
+  wireMore(main);
   if (series.points.length) stackedTime($("#u-usage"), series.points, "weighted", "model", gran);
   else $("#u-usage").outerHTML = none;
   if (heat.cells.length) heatmap($("#u-heat"), heat.cells);
@@ -1843,18 +1844,46 @@ function heatmap(el, cells) {
   });
 }
 
+const SESS_PAGE = 50;
 async function renderSessions(main) {
-  const d = await api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}`);
+  const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}`);
+  const d = await page(0);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
-    <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">${t("sess.none")}</p>`}</div></section>`;
+    <div class="card table-wrap">${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">${t("sess.none")}</p>`}
+    ${d.more ? `<button class="btn small more-rows" id="sess-more">${t("tbl.show_more_page")}</button>` : ""}</div></section>`;
+  let offset = d.sessions.length;
+  const more = $("#sess-more");
+  if (more) more.onclick = async () => {
+    more.disabled = true;
+    const next = await page(offset);
+    offset += next.sessions.length;
+    main.querySelector("tbody").insertAdjacentHTML("beforeend", next.sessions.map((s) => sessionRow(s, isAdmin())).join(""));
+    if (next.more) more.disabled = false;
+    else more.remove();
+  };
 }
 const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${bdi(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
   : id ? `<span class="muted">${esc(id.slice(0, 8))}</span>` : `<span class="muted">—</span>`);
-function sessionsTable(sessions, showUser) {
+// Long tables open on their first FOLD rows; each "Show more" click reveals FOLD_STEP more.
+const FOLD = 10, FOLD_STEP = 25;
+const foldRows = (rows) => rows.map((r, i) => (i < FOLD ? r : r.replace("<tr", "<tr hidden"))).join("");
+const moreButton = (n) => (n > FOLD ? `<button class="btn small more-rows" data-more>${t("tbl.show_more", { n: nfFull.format(n - FOLD) })}</button>` : "");
+function wireMore(root) {
+  root.querySelectorAll("[data-more]").forEach((b) => (b.onclick = () => {
+    const hidden = [...b.previousElementSibling.querySelectorAll("tr[hidden]")];
+    hidden.slice(0, FOLD_STEP).forEach((r) => (r.hidden = false));
+    const left = hidden.length - FOLD_STEP;
+    if (left > 0) b.textContent = t("tbl.show_more", { n: nfFull.format(left) });
+    else b.remove();
+  }));
+}
+const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
+        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`;
+function sessionsTable(sessions, showUser, fold = false) {
+  const rows = sessions.map((s) => sessionRow(s, showUser));
   return `<table class="data"><thead><tr><th>${t("sess.session")}${tipI("session")}</th>${showUser ? `<th>${t("app.user")}${tipI("sess_user")}</th>` : ""}<th>${t("sess.started")}${tipI("sess_started")}</th><th class="r">${t("sess.duration")}${tipI("sess_duration")}</th><th class="r">${t("metric.requests")}${tipI("sess_requests")}</th><th class="r">${t("models.m_weighted")}${tipI("sess_weighted")}</th><th class="r">${t("models.m_cost")}${tipI("sess_cost")}</th><th>${t("sess.models")}${tipI("sess_models")}</th></tr></thead><tbody>
-      ${sessions.map((s) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
-        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`).join("")}
-    </tbody></table>`;
+      ${fold ? foldRows(rows) : rows.join("")}
+    </tbody></table>${fold ? moreButton(rows.length) : ""}`;
 }
 
 async function renderErrors(main) {

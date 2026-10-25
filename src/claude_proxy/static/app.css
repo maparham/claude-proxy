@@ -125,6 +125,13 @@ table.data td.nowrap, bdi.nowrap { white-space: nowrap; }
 .table-wrap { overflow-x: auto; }
 details.tableview { margin-top: 8px; }
 details.tableview summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
+details.fold > summary { list-style: none; cursor: pointer; }
+details.fold > summary::-webkit-details-marker { display: none; }
+details.fold > summary h3::before { content: "›"; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+details.fold > summary h3:dir(rtl)::before { transform: scaleX(-1); }
+details.fold[open] > summary h3::before { transform: rotate(90deg); }
+details.fold:not([open]) > summary h3 { margin-bottom: 0; }
+.more-rows { margin-top: 8px; }
 
 .meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin-top: 4px; min-width: 90px; }
 .meter > span { display: block; height: 100%; border-radius: 3px; background: var(--s1); }

@@ -257,6 +257,16 @@ async def test_sessions_carry_their_title_only_for_the_owner(env):
     assert [(s["session_id"], s["title"]) for s in mine] == [(f"s-{ids['bob']}", None)]
 
 
+async def test_sessions_page_with_offset_and_say_when_more_remain(env):
+    gw, conn, ids, keys = env
+    async with admin_client(gw) as c:
+        first = (await c.get("/api/sessions?limit=1")).json()
+        rest = (await c.get("/api/sessions?limit=1&offset=1")).json()
+        whole = (await c.get("/api/sessions")).json()
+    assert first["more"] is True and rest["more"] is False and whole["more"] is False
+    assert [s["session_id"] for s in first["sessions"] + rest["sessions"]] == [s["session_id"] for s in whole["sessions"]]
+
+
 async def test_audit_names_the_user_even_for_old_id_entries(env):
     gw, conn, ids, keys = env
     from claude_proxy.db import audit, set_enabled
