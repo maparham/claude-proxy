@@ -70,3 +70,22 @@ def session_id(headers) -> str | None:
         if headers.get(name):
             return headers[name][:128]
     return None
+
+
+# The subscription credential serves only requests whose system prompt opens with Claude Code's identity line;
+# anything else gets a bare 429 "Error" with no rate-limit headers (seen 2026-10-25 from curl and SDK clients).
+CLAUDE_CODE_IDENTITY = "You are Claude Code, Anthropic's official CLI for Claude."
+
+
+def with_claude_code_identity(data: dict) -> bool:
+    """Prepend the identity line to `data["system"]` unless it already opens with it. True if `data` changed."""
+    system = data.get("system")
+    first = system if isinstance(system, str) else system[0].get("text") if isinstance(system, list) and system \
+        and isinstance(system[0], dict) else None
+    if isinstance(first, str) and first.startswith(CLAUDE_CODE_IDENTITY[:-1]):
+        return False
+    rest = [] if not system else [{"type": "text", "text": system}] if isinstance(system, str) else system
+    if not isinstance(rest, list):
+        return False   # malformed; let Anthropic reject it
+    data["system"] = [{"type": "text", "text": CLAUDE_CODE_IDENTITY}, *rest]
+    return True

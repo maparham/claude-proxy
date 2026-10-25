@@ -8,8 +8,10 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from claude_proxy import api_credit
 from claude_proxy.app import create_app, scope_allows
 from claude_proxy.db import create_user, set_enabled
+from claude_proxy.forwarder import CLAUDE_CODE_IDENTITY, with_claude_code_identity
 from tests.conftest import asgi_client, make_gateway, message_json, seed_oauth, sse_response
 
+CC = {"type": "text", "text": CLAUDE_CODE_IDENTITY}
 MSG = {"model": "claude-sonnet-5", "max_tokens": 64, "stream": True,
        "tools": [{"name": "Read", "input_schema": {"type": "object"}}], "messages": [{"role": "user", "content": "hi"}]}
 
@@ -259,3 +261,36 @@ async def test_ordinary_tools_and_betas_still_pass(env, anthropic):
         r = await c.post("/v1/messages", json={**MSG, "speed": "standard"},
                          headers={**h, "anthropic-beta": "interleaved-thinking-2025-05-14"})
     assert r.status_code == 200
+
+
+@pytest.mark.parametrize("system,expected", [
+    (None, [CC]),
+    ("Be terse.", [CC, {"type": "text", "text": "Be terse."}]),
+    ([{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}],
+     [CC, {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}]),
+])
+async def test_identity_line_prepended_for_non_claude_code_clients(env, anthropic, system, expected):
+    gw, conn, uid, kid, h = env
+    api_credit.grant(conn, uid, 10, "x", None)
+    anthropic.queue.append(lambda req: sse_response(model="claude-sonnet-5", input_tokens=10, output_tokens=2))
+    body = {**MSG, **({"system": system} if system is not None else {})}
+    async with asgi_client(create_app(gw)) as c:
+        assert (await c.post("/v1/messages", json=body, headers=h)).status_code == 200
+    assert anthropic.calls[-1]["json"]["system"] == expected
+
+
+def test_claude_code_system_prompt_left_alone():
+    for system in (CC["text"], [CC, {"type": "text", "text": "x"}],
+                   "You are Claude Code, Anthropic's official CLI for Claude, running within the Claude Agent SDK."):
+        data = {"system": system}
+        assert not with_claude_code_identity(data) and data["system"] == system
+
+
+async def test_request_scoped_429_is_not_called_a_usage_limit(env, anthropic):
+    gw, conn, uid, kid, h = env
+    api_credit.grant(conn, uid, 10, "x", None)
+    anthropic.queue.append(lambda req: JSONResponse(status_code=429, content={"type": "error", "error": {"type": "rate_limit_error", "message": "Error"}}))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers=h)
+    assert r.status_code == 429 and "not a usage limit" in r.json()["error"]["message"]
+    assert last(conn)["error_type"] == "upstream_request_scoped"

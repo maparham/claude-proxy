@@ -225,7 +225,7 @@ async def test_oversized_body_is_refused_while_reading(setup, anthropic, monkeyp
 async def test_body_at_the_cap_is_forwarded(setup, anthropic, monkeypatch):
     gw, conn, uid, h = setup
     monkeypatch.setattr(app_mod, "MAX_BODY_BYTES", 4096)
-    body = b'{"model":"claude-sonnet-5","max_tokens":1,"messages":[],"pad":"' + b"x" * 3000 + b'"}'
+    body = b'{"model":"claude-sonnet-5","max_tokens":1,"system":"You are Claude Code, Anthropic\'s official CLI for Claude.","messages":[],"pad":"' + b"x" * 3000 + b'"}'
     async with asgi_client(create_app(gw)) as c:
         r = await c.post("/v1/messages", content=body, headers={**h, "content-type": "application/json"})
     assert r.status_code == 200 and anthropic.calls[0]["body"] == body

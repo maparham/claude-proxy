@@ -41,7 +41,8 @@ async def test_streaming_bytes_forwarded_unchanged_and_metered(setup, anthropic)
 
 async def test_anthropic_request_body_is_byte_identical_and_credentials_swapped(setup, anthropic):
     gw, conn, uid, h = setup
-    body = b'{"model":"claude-sonnet-5",  "max_tokens":1,"messages":[]}'
+    # A Claude Code request (it opens its system prompt with the identity line), so nothing is added to it.
+    body = b'{"model":"claude-sonnet-5",  "max_tokens":1,"system":"You are Claude Code, Anthropic\'s official CLI for Claude.","messages":[]}'
     async with asgi_client(create_app(gw)) as c:
         await c.post("/v1/messages?beta=true", content=body, headers={**h, "content-type": "application/json"})
     call = anthropic.calls[0]
