@@ -298,6 +298,12 @@ def test_rate_history_lists_each_rise_with_the_trailing_median(db):
     h = quota.rate_history(conn, Pricing(), "5h", now - 86400, now)
     assert [(p["t"], p["ratio"], p["median"]) for p in h] == [(now - 4000, 500, 500), (now - 3000, 3000, 1750)]
     assert h[-1]["median"] == quota.observed_rate(conn, Pricing(), "5h", now)
+    _req(conn, a, now - 2500, 2000)
+    _snap(conn, now - 2000, 5)                 # 2000 per point
+    _req(conn, a, now - 1500, 9000)
+    _snap(conn, now - 1000, 6)                 # 9000 per point; the 500 rise is still in the window
+    h = quota.rate_history(conn, Pricing(), "5h", now - 86400, now, days=0.03)   # a 2592 s window
+    assert [p["median"] for p in h] == [500, 1750, 2000, 3000]   # the last window has dropped the 500 rise
 
 
 def test_observed_rate_falls_back_to_the_whole_history_when_quiet_for_7_days(db):

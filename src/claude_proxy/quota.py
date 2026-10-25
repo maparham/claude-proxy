@@ -10,6 +10,7 @@ in proportion to the weighted tokens of their Anthropic-route requests that comp
 from __future__ import annotations
 
 import asyncio
+import bisect
 import json
 import logging
 import re
@@ -347,14 +348,17 @@ def _ratios(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, 
 def rate_history(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float,
                  days: int = 7) -> list[dict]:
     """The observed rate over time, for the dashboard: each rise since `since` as {t, ratio, median}, where median is
-    the trailing `days` median observed_rate() would have returned at t (without its whole-history fallback)."""
+    over the rises of the trailing `days`. Close to what observed_rate() returned at t but not identical: that walks
+    each window afresh (its first rise carries no tokens from before it) and falls back to the whole history."""
     pts = _ratios(conn, pricing, bucket, since - days * 86400, now)
-    out, j = [], 0
-    for i, (t, r) in enumerate(pts):
+    out, window, j = [], [], 0
+    for t, r in pts:
+        bisect.insort(window, r)
         while pts[j][0] < t - days * 86400:
+            window.pop(bisect.bisect_left(window, pts[j][1]))
             j += 1
         if t >= since:
-            out.append({"t": t, "ratio": r, "median": statistics.median(x for _, x in pts[j:i + 1])})
+            out.append({"t": t, "ratio": r, "median": statistics.median(window)})
     return out
 
 

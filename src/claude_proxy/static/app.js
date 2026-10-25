@@ -1745,7 +1745,7 @@ async function renderQuota(main) {
       <div class="card"><h3>${t("quota.reported")}${tipI("reported")}</h3><p class="sub">${t("quota.reported_sub")}</p><div class="chart" id="q-line"></div></div>
       <div class="card"><h3>${t("quota.share_title")}${tipI("share")}</h3><p class="sub">${t("quota.share_sub", { unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>${t("quota.rate_title", { bucket: bname(p.bucket) })}${tipI("rate")}</h3><p class="sub">${t("quota.rate_sub")}</p><div class="chart" id="q-rate"></div></div></section>`;
+    <div class="card" style="margin-top:16px"><h3>${t("quota.rate_title", { bucket: bname(p.bucket) })}${tipI("rate")}</h3><p class="sub">${t("quota.rate_sub")}${d.rate_now == null ? "" : ` ${t("quota.rate_now", { v: esc(fmtNum(d.rate_now)) })}`}</p><div class="chart" id="q-rate"></div></div></section>`;
   wireSegs(main, render);
   const o = baseOption();
   const pctAxis = (v) => fmtPct(v);
@@ -1760,7 +1760,7 @@ async function renderQuota(main) {
                  data: d.snapshots.map((s) => [s.observed_at * 1000, s.utilization_pct]) }],
     });
   }
-  if (!d.rate.length) { $("#q-rate").outerHTML = `<p class="muted">${t("quota.no_rate")}</p>`; }
+  if (!d.rate.length && d.rate_now == null) { $("#q-rate").outerHTML = `<p class="muted">${t("quota.no_rate")}</p>`; }
   else {
     chart($("#q-rate")).setOption({
       ...o, tooltip: { ...o.tooltip, valueFormatter: (v) => fmtNum(v) },
@@ -1768,7 +1768,7 @@ async function renderQuota(main) {
       dataZoom: [{ type: "inside" }],
       series: [
         { name: t("quota.rate_rise"), type: "scatter", symbolSize: 5, itemStyle: { color: css("--s1"), opacity: 0.45 }, data: d.rate.map((r) => [r.t * 1000, r.ratio]) },
-        { name: t("quota.rate_median"), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s2") }, itemStyle: { color: css("--s2") }, data: d.rate.map((r) => [r.t * 1000, r.median]) },
+        { name: t("quota.rate_median"), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s2") }, itemStyle: { color: css("--s2") }, data: d.rate.map((r) => [r.t * 1000, r.median]).concat(d.rate_now == null ? [] : [[d.now * 1000, d.rate_now]]) },
       ],
     });
   }
