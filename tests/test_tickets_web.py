@@ -180,6 +180,7 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     assert lite["compare"] == "Claude Pro" and lite["lengths"]["month"] == {
         "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5, "sold_out": True}   # 25 sold: nothing fits today
     assert lite["lengths"]["week"]["sold_out"] is True and lite["lengths"]["week"]["discount_ends_at"] is None
+    assert p["week_split"] is None   # no quota data: the terms keep their general line
     text = r.text
     for leaked in ("utilization", "alice", "sold_now", "shares"):
         assert leaked not in text
@@ -256,6 +257,21 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
         assert leaked not in str(me)
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/me/tickets")).status_code == 401
+
+
+async def test_order_terms_split_from_the_pricing_payloads(env):
+    """The order terms' weekly split: from now on the public page, from the end of the queue when signed in."""
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (now - 60, "header", "7d", 10, now + DAY))
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=now, terms_version="v1")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        public = (await c.get("/api/pricing")).json()["week_split"]
+        mine = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["prices"]["week_split"]
+    assert public["first_reset"] == now + DAY and public["week"] == pytest.approx([1 / 7, 6 / 7], abs=1e-3)
+    assert mine["starts_at"] == t["effective_end"] and mine["first_reset"] == now + DAY + 7 * DAY   # queued past one reset
+    assert mine["week"] == pytest.approx([1 / 7, 6 / 7], abs=1e-3)
 
 
 async def test_pricing_api_says_the_servers_time(env):

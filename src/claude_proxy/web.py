@@ -1269,7 +1269,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             q = st["queued"]
             out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
-        out["prices"] = tickets.price_table(conn, cfg, now, currency)
+        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.last_end(conn, user["id"]))   # a new ticket queues after the last
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.

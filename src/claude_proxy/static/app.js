@@ -610,7 +610,7 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
       <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">${t("ord.email_note")}</span></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
-      <div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l2")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
+      <div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")} ${splitTerms(p.week_split, len, Date.now() / 1000 + (S.tkSkew || 0))}</li><li>${t("ord.terms_l2")}</li><li>${t("ord.terms_l3")}</li><li>${t("ord.terms_l4")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <p class="hint">${t("ord.not_payment")}</p>
       <button class="btn primary" type="submit">${t("ord.send")}</button>

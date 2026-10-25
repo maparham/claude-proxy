@@ -631,7 +631,11 @@ const I18N = {
     "ord.message": "Message (optional)",
     "ord.message_ph": "Anything the admin should know",
     "ord.not_payment": "This is a request, not a payment. The admin will contact you with payment details.",
-    "ord.terms_l1": "Your weekly allowance is split across Anthropic's weekly windows in proportion to the days it covers. Each piece is spendable at your own pace within its window and expires at that window's reset.",
+    "ord.terms_l1": "Your allowance is split across Anthropic's weekly windows by the days each one covers; each piece is spendable at your own pace and expires at its window's reset.",
+    "ord.split_now": "Started now, about {first} of it falls before Anthropic's weekly reset on {date}, and {rest} after it.",
+    "ord.split_at": "Starting {start} after your current ticket, about {first} of it falls before Anthropic's weekly reset on {date}, and {rest} after it.",
+    "ord.split_one_now": "Started now, all of it falls before Anthropic's weekly reset on {date}.",
+    "ord.split_one_at": "Starting {start} after your current ticket, all of it falls before Anthropic's weekly reset on {date}.",
     "ord.terms_l2": "Spend it at your own pace: the week's share may be used up in fewer days.",
     "ord.terms_l3": "A 5-hour share applies on top, against Anthropic's 5-hour window.",
     "ord.terms_l4": "Claude models only; anything else needs a separate cost limit.",
@@ -1494,7 +1498,11 @@ const I18N = {
     "ord.message": "پیام (اختیاری)",
     "ord.message_ph": "هر چه مدیر باید بداند",
     "ord.not_payment": "این فقط یک درخواست است، نه پرداخت. مدیر برای ارائهٔ جزئیات پرداخت با شما تماس می‌گیرد.",
-    "ord.terms_l1": "سهم هفتگی شما به نسبت روزهایی که پوشش می‌دهد بین بازه‌های هفتگی آنتروپیک تقسیم می‌شود. هر قسمت را می‌توانید با سرعت خودتان در بازهٔ خودش مصرف کنید و با ریست همان بازه منقضی می‌شود.",
+    "ord.terms_l1": "سهم شما به نسبت روزهایی که هر بازهٔ هفتگی آنتروپیک پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
+    "ord.split_now": "اگر الان شروع شود، حدود {first} آن پیش از ریست هفتگی آنتروپیک در {date} است و {rest} بعد از آن.",
+    "ord.split_at": "با شروع در {start}، بعد از تیکت فعلی‌تان، حدود {first} آن پیش از ریست هفتگی آنتروپیک در {date} است و {rest} بعد از آن.",
+    "ord.split_one_now": "اگر الان شروع شود، همهٔ آن پیش از ریست هفتگی آنتروپیک در {date} است.",
+    "ord.split_one_at": "با شروع در {start}، بعد از تیکت فعلی‌تان، همهٔ آن پیش از ریست هفتگی آنتروپیک در {date} است.",
     "ord.terms_l2": "با سرعت خودتان مصرف کنید: سهم هفته را می‌توان در چند روز تمام کرد.",
     "ord.terms_l3": "روی آن، سهم ۵ ساعته هم اعمال می‌شود، بر اساس بازهٔ ۵ ساعتهٔ آنتروپیک.",
     "ord.terms_l4": "فقط مدل‌های کلاد؛ هر چیز دیگری سقف جداگانهٔ هزینه لازم دارد.",
@@ -1755,6 +1763,19 @@ function t(key, vars) {
   return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
 }
 function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other"}`, { n, ...vars }); }
+
+// The order terms' line on how a ticket of `len` splits across Anthropic's weeks, from the price list's week_split
+// (fractions of the ticket per week, whole percents here: "rough" is the promise). "" without quota data.
+function splitTerms(ws, len, now = Date.now() / 1000) {
+  const parts = ws && ws[len];
+  if (!parts || !parts.length) return "";
+  const pct = (v) => (v > 0 && v < 0.01 ? `<${new Intl.NumberFormat(LOC, { style: "percent" }).format(0.01)}`
+    : new Intl.NumberFormat(LOC, { style: "percent", maximumFractionDigits: 0 }).format(v));
+  const when = (ts) => new Date(ts * 1000).toLocaleString(LOC, { weekday: "long", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+  const later = ws.starts_at > now + 60;
+  const vars = { date: when(ws.first_reset), start: when(ws.starts_at), first: pct(parts[0]), rest: parts.slice(1).map(pct).join(" + ") };
+  return t(`ord.split${parts.length === 1 ? "_one" : ""}_${later ? "at" : "now"}`, vars);
+}
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"
 // sets attributes. The English in index.html is what shows without JS.

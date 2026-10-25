@@ -98,6 +98,24 @@ def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int
     return out
 
 
+
+def order_split(conn, cfg: Config, starts_at: float, now: float | None = None) -> dict | None:
+    """What a buyer is told before ordering: per length, the fraction of the ticket each Anthropic week holds if it
+    starts at `starts_at`, and the first weekly reset after that start. Informational, like week_split: boundaries
+    project forward in 7-day steps. None without a known weekly reset."""
+    now = _now(now)
+    week = week_bounds(conn, cfg, now)
+    if week is None:
+        return None
+    first = week[1]
+    while first <= starts_at:
+        first += 7 * DAY
+    out = {"starts_at": starts_at, "first_reset": first}
+    for length, days in LENGTHS.items():
+        parts = week_split(conn, cfg, 7 / days, int(starts_at), int(starts_at) + days * DAY, now) or []
+        out[length] = parts   # share 7/days per week makes the pieces fractions of the whole ticket
+    return out
+
 class TicketError(Exception):
     """A refused ticket operation. The message is written for the admin who asked."""
 
@@ -748,9 +766,10 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
             "has_tickets": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is not None}
 
 
-def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str) -> dict:
+def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str, starts_at: float | None = None) -> dict:
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
-    amounts and a sold-out flag. Nothing about who holds what. Falls back to USD without a rate."""
+    amounts and a sold-out flag, and how a ticket starting at `starts_at` (default now) splits across Anthropic's
+    weeks. Nothing about who holds what. Falls back to USD without a rate."""
     now = _now(now)
     rate = current_rate(conn, currency)
     if rate is None:
@@ -766,4 +785,5 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
         tiers.append({"tier": tid, "label": t.label, "share_pct": eff[tid]["share_pct"], "compare": t.compare, "lengths": lengths})
-    return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers}
+    return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
+            "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}

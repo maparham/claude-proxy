@@ -502,3 +502,15 @@ def test_a_young_account_with_fresh_snapshots_does_not_lock_out_its_first_ticket
     assert check(conn, cfg, ids["alice"], now=NOW + 10) is None
     st = by_kind(conn, cfg, ids["alice"], now=NOW + 10)["share_7d"]
     assert (st.current, st.skipped, st.no_live_data) == (0, None, False)
+
+
+def test_order_split_gives_each_week_its_fraction_of_the_ticket(db):
+    """The order terms: a week ticket starting a day into Anthropic's week holds 1/7 there and 6/7 in the next."""
+    conn, cfg, ids = seeded(db)
+    assert tickets.order_split(conn, cfg, NOW, now=NOW) is None   # no weekly reset known yet
+    fresh(conn, NOW - 600)
+    s = tickets.order_split(conn, cfg, RESET7 - DAY, now=NOW)
+    assert s["first_reset"] == RESET7 and s["week"] == pytest.approx([1 / 7, 6 / 7])
+    assert s["day"] == pytest.approx([1.0]) and sum(s["month"]) == pytest.approx(1.0)
+    later = tickets.order_split(conn, cfg, RESET7 + 2 * DAY, now=NOW)   # queued past this reset: the next one is first
+    assert later["first_reset"] == RESET7 + 7 * DAY and later["week"] == pytest.approx([5 / 7, 2 / 7])
