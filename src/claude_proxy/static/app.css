@@ -215,6 +215,19 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
 .os-tabs button:hover { color: var(--ink); }
 .os-tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--ink); font-weight: 600; }
 .os-tabs + .signin-cmd { margin-top: 10px; }
+.subview { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 20px; align-items: start; margin-top: 16px; }
+.subview .subpanes > .card { margin-top: 0 !important; }
+.subnav { display: flex; flex-direction: column; gap: 2px; position: sticky; top: 16px; }
+.subnav button { border: 0; background: none; text-align: start; padding: 8px 12px; border-radius: 6px; cursor: pointer; color: var(--ink-2);
+                 border-inline-start: 2px solid transparent; border-start-start-radius: 0; border-end-start-radius: 0; font: inherit; }
+.subnav button:hover { color: var(--ink); background: var(--surface); }
+.subnav button[aria-selected="true"] { color: var(--ink); font-weight: 600; border-inline-start-color: var(--ink); background: var(--surface); }
+@media (max-width: 720px) {
+  .subview { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .subnav { flex-direction: row; overflow-x: auto; position: static; border-bottom: 1px solid var(--border); }
+  .subnav button { white-space: nowrap; border-inline-start: 0; border-bottom: 2px solid transparent; border-radius: 0; margin-bottom: -1px; }
+  .subnav button[aria-selected="true"] { border-bottom-color: var(--ink); background: none; }
+}
 .signin-cmd { margin: 10px 0 0; display: flex; align-items: flex-start; gap: 8px; padding: 6px 6px 6px 14px; border-radius: 8px;
               background: var(--wash); border: 1px solid var(--border); }
 .signin-cmd pre { flex: 1; min-width: 0; margin: 0; padding: 5px 0; font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;

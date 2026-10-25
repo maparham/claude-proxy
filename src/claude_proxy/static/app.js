@@ -3,7 +3,7 @@
 // ---------- state & helpers ----------
 
 const S = {
-  user: null, csrf: null, tab: "overview", charts: [],
+  user: null, csrf: null, tab: "overview", charts: [], sub: {},
   settings: { reference_model: "claude-sonnet-5", stale_after_s: 1800 },   // replaced by /api/session
   prefs: loadPrefs(),
   colorSlots: loadSlots(),   // dimension -> {key: slot}; colour follows the entity, kept across page loads
@@ -432,6 +432,29 @@ $("#tabs").addEventListener("click", (e) => {
   S.tab = b.dataset.tab; location.hash = S.tab; render();
 });
 
+// A view's independent sections as a side panel of sub-tabs: each [data-sub] element is one, named by its
+// data-sub-label. The open one is kept per view in S.sub and in the address (#pricing/shares), so a reload keeps it.
+function subTabs(main, view) {
+  const panes = [...main.querySelectorAll("[data-sub]")];
+  if (panes.length < 2) return;
+  const box = document.createElement("div");
+  box.className = "subview";
+  box.innerHTML = `<nav class="subnav" role="tablist" aria-orientation="vertical">${panes.map((p) =>
+    `<button type="button" role="tab" data-subtab="${esc(p.dataset.sub)}">${esc(p.dataset.subLabel)}</button>`).join("")}</nav><div class="subpanes"></div>`;
+  panes[0].before(box);
+  box.lastChild.append(...panes);
+  const show = (k) => {
+    S.sub[view] = k;
+    panes.forEach((p) => (p.hidden = p.dataset.sub !== k));
+    box.querySelectorAll("[data-subtab]").forEach((b) => b.setAttribute("aria-selected", b.dataset.subtab === k));
+  };
+  box.firstChild.onclick = (e) => {
+    const b = e.target.closest("[data-subtab]"); if (!b) return;
+    show(b.dataset.subtab);
+    history.replaceState(null, "", `#${view}/${b.dataset.subtab}`);
+  };
+  show(panes.some((p) => p.dataset.sub === S.sub[view]) ? S.sub[view] : panes[0].dataset.sub);
+}
 async function render() {
   renderTabs();
   hideTip();
@@ -439,7 +462,7 @@ async function render() {
   const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && featureOn(VIEWS[S.tab]) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
   main.innerHTML = `<p class="muted">${t("app.loading")}</p>`;
-  try { await view.render(main); } catch (e) {
+  try { await view.render(main); subTabs(main, view === VIEWS[S.tab] ? S.tab : "overview"); } catch (e) {
     if (e.message !== "signed out") main.innerHTML = `<div class="banner critical"><span class="icon">!</span><span>${esc(e.message)}</span></div>`;
   }
   if (S.toPrices) { S.toPrices = false; scrollToPrices(); }
@@ -1024,8 +1047,7 @@ async function renderPricing(main) {
   const dstate = (x) => (x.cancelled_at ? "cancelled" : x.ends_at <= now ? "ended" : x.starts_at > now ? "upcoming" : "active");
   main.innerHTML = `<section class="view"><h2>${t("tab.pricing")}</h2>
     <p class="lede">${t("pr.lede")}</p>
-    <div class="grid cols-2">
-      <div class="card"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
+      <div class="card" data-sub="fx" data-sub-label="${esc(t("sub.fx"))}" style="margin-top:16px"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
         <form id="f-rates">
         ${rates.map((r) => `<div class="limit-row"><span><b>${esc(r.currency)}</b> <span class="muted">${t("pr.rounds_to", { n: nfFull.format(r.round_to) })}</span>${r.stale ? ` <span class="badge">${t("quota.stale")}</span>` : ""}
           <div class="muted" style="font-size:12px">${r.rate == null ? t("pr.no_rate") : t("pr.rate_set", { date: fmtDate(r.set_at), by: bdi(r.set_by || "?") })}</div></span>
@@ -1034,7 +1056,7 @@ async function renderPricing(main) {
         <div class="error" id="rates-err"></div>
         </form>
       </div>
-      <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
+      <div class="card" data-sub="prices" data-sub-label="${esc(t("sub.prices"))}" style="margin-top:16px"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
         <form id="f-prices">
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
@@ -1043,8 +1065,7 @@ async function renderPricing(main) {
         <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
         <div class="error" id="prices-err"></div>
         </form></div>
-    </div>
-    <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
+    <div class="card" data-sub="shares" data-sub-label="${esc(t("sub.shares"))}" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
       <form id="f-shares">
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
@@ -1054,7 +1075,7 @@ async function renderPricing(main) {
       <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
       <div class="error" id="shares-err"></div>
       </form></div>
-    <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
+    <div class="card" data-sub="discounts" data-sub-label="${esc(t("sub.discounts"))}" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
         <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))}</option>`).join("")}</select></label>
         <label>${t("tk.length")}<select name="length">${Object.keys(p.lengths).map((l) => `<option value="${esc(l)}">${lengthName(l)}</option>`).join("")}</select></label>
@@ -1135,19 +1156,19 @@ async function renderApi(main) {
           `<tr><td>${fmtDate(g.at)}</td><td class="r num">${fmtSigned(g.usd)}</td><td>${bdi(g.note)}</td></tr>`).join("")}</tbody></table></details>` : ""}</div>
       <div class="card"><h3>${t("api.setup")}</h3><p class="sub">${t("api.setup_sub")}</p><code dir="ltr" class="key" style="white-space:pre;overflow-x:auto">${esc(env)}</code></div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>${t("api.keys")}</h3>
+    <div class="card" data-sub="keys" data-sub-label="${esc(t("sub.keys"))}" style="margin-top:16px"><h3>${t("api.keys")}</h3>
       <form id="f-akey" class="form-grid"><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
         <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
       ${me.keys.map((k) => `<tr><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
         <td><button class="btn small danger" data-krevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">${t("api.no_keys")}</td></tr>`}
       </tbody></table></div></div>
-    <div class="card" style="margin-top:16px"><h3>${t("api.usage")}</h3>
+    <div class="card" data-sub="usage" data-sub-label="${esc(t("sub.usage"))}" style="margin-top:16px"><h3>${t("api.usage")}</h3>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.day")}</th><th>${t("api.key_label")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cost")}</th></tr></thead><tbody>
       ${foldRows(me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
         <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`)) || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
       </tbody></table>${moreButton(me.usage.length)}</div></div>
-    ${isAdmin() ? "" : `<div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
+    ${isAdmin() ? "" : `<div class="card" data-sub="rates" data-sub-label="${esc(t("sub.rates"))}" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
       <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}
   </section>`;
 
@@ -1167,13 +1188,13 @@ async function renderApi(main) {
 async function renderApiAdmin(main) {
   const adm = await api("/api/admin/api");
   main.innerHTML = `<section class="view"><h2>${t("tab.apiadmin")}</h2>
-    <div class="card" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
+    <div class="card" data-sub="rates" data-sub-label="${esc(t("sub.rates"))}" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
       <form id="f-arates"><div class="table-wrap"><table class="data">${rateHead(true)}<tbody>${adm.rates.map((r) => rateRow(r, true)).join("")}</tbody></table></div>
         <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div><div class="error" id="arates-err"></div></form>
       <form id="f-arate-add" class="form-grid" style="margin-top:12px"><label>${t("api.model")}<input name="pattern" dir="ltr" required placeholder="claude-sonnet-5*"></label>
         <label>${t("api.in")}<input name="input" inputmode="decimal" dir="ltr" required></label><label>${t("api.out")}<input name="output" inputmode="decimal" dir="ltr" required></label>
         <button class="btn" type="submit">${t("api.add_rate")}</button></form><div class="error" id="arate-add-err"></div></div>
-    <div class="card" style="margin-top:16px"><h3>${t("api.accounts")}</h3>
+    <div class="card" data-sub="credit" data-sub-label="${esc(t("sub.credit"))}" style="margin-top:16px"><h3>${t("api.accounts")}</h3>
       <form id="f-acredit" class="form-grid"><label>${t("app.user")}<select name="user" required><option value=""></option>${adm.users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label><label>${t("api.amount")}<input name="usd" inputmode="decimal" dir="ltr" required></label>
         <label>${t("tk.note")}<input name="note" maxlength="200" required></label><button class="btn primary" type="submit">${t("api.add_credit")}</button></form><div class="error" id="acredit-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th class="r">${t("api.balance")}</th><th class="r">${t("api.spent_30d")}</th><th class="r">${t("api.keys")}</th><th class="r">${t("api.max_inflight")}</th><th class="r">${t("api.rpm")}</th><th></th></tr></thead><tbody>
@@ -1182,7 +1203,7 @@ async function renderApiAdmin(main) {
         <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.own_rpm ?? ""}" placeholder="${a.rpm}" style="width:60px"></td>
         <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button> <button class="btn small" data-acredit="${a.user_id}">${t("api.add_credit")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
       </tbody></table></div></div>
-    <div class="card" style="margin-top:16px"><h3>${t("api.all_keys")}</h3><p class="sub">${t("api.all_keys_sub")}</p>
+    <div class="card" data-sub="keys" data-sub-label="${esc(t("sub.keys"))}" style="margin-top:16px"><h3>${t("api.all_keys")}</h3><p class="sub">${t("api.all_keys_sub")}</p>
       <form id="f-akey-admin" class="form-grid"><label>${t("app.user")}<select name="user" required><option value=""></option>${adm.users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
         <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-admin-err"></div>
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
@@ -2062,6 +2083,8 @@ function route() {
   if (h === "pricing" && !isAdmin()) { S.tab = "overview"; S.toPrices = true; history.replaceState(null, "", "#overview"); return true; }
   const pm = /^payment\/(\d+)$/.exec(h);
   if (pm) { S.tab = "overview"; S.paymentId = +pm[1]; history.replaceState(null, "", "#overview"); return true; }
+  const sm = /^([a-z]+)\/([a-z]+)$/.exec(h);   // a sub-tab: #apiadmin/credit
+  if (sm && VIEWS[sm[1]] && !VIEWS[sm[1]].hidden) { S.tab = sm[1]; S.sub[sm[1]] = sm[2]; return true; }
   if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
   return false;
 }
