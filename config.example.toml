@@ -69,16 +69,20 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # are seeded from here on first start and edited in the dashboard afterwards; existing tickets keep what they were sold with.
 # [tickets]
 # how_to_buy = "Send the amount by bank transfer to … and email the admin."
+# how_to_buy_fa = "…"            # the same in Persian, for buyers on the Persian page; else how_to_buy
 # max_sold_pct = 80            # tickets and bonuses together may reserve at most this; the rest is headroom
 # [tickets.tiers.lite]
 # label = "Lite"
-# share_pct = 5
+# share_pct = 5                # weekly share of the account; also what max_sold_pct counts
+# share_5h_pct = 5             # 5-hour share; leave out to use share_pct
 # compare = "Claude Pro"
+# compare_ratio = 6            # compare plans the shared account equals per week (Max 20x ≈ 6 Pro); 0 hides the line
 # default_usd = { day = 3, week = 8, month = 20 }
 # [tickets.tiers.standard]
 # label = "Standard"
 # share_pct = 25
 # compare = "Claude Max 5x"
+# compare_ratio = 1.7          # Max 20x ≈ 1.7 Max 5x per week
 # default_usd = { day = 12, week = 35, month = 100 }
 # [tickets.currencies.EUR]     # USD is built in; add a daily rate on the Pricing tab for each currency here
 # round_to = 0.50

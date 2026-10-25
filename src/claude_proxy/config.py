@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import fnmatch
 import logging
+import math
 import os
 import re
 import tomllib
@@ -113,20 +114,31 @@ ESTIMATE_DAYS = 30   # how far back the daily usage estimates read; retention mu
 
 @dataclass
 class Tier:
-    """A size of slice sold as tickets: its share of the account and its default USD prices per length."""
+    """A size of slice sold as tickets: its share of the account and its default USD prices per length.
+
+    `share_pct` is the weekly share (and what capacity counts); `share_5h_pct` caps Anthropic's 5-hour window,
+    None meaning the same as `share_pct`."""
     label: str
     share_pct: float
     compare: str = ""
     default_usd: dict[str, float] = field(default_factory=dict)
+    compare_ratio: float = 0
+    share_5h_pct: float | None = None
 
     def __post_init__(self):
         if isinstance(self.share_pct, bool) or not isinstance(self.share_pct, (int, float)) or not 0 < self.share_pct <= 100:
             raise TypeError("share_pct must be a number above 0 and at most 100")
+        if self.share_5h_pct is not None and (isinstance(self.share_5h_pct, bool) or not isinstance(self.share_5h_pct, (int, float))
+                                              or not 0 < self.share_5h_pct <= 100):
+            raise TypeError("share_5h_pct must be a number above 0 and at most 100")
         if set(self.default_usd) != set(LENGTHS):
             raise TypeError(f"default_usd needs exactly the keys {', '.join(LENGTHS)}")
         for k, v in self.default_usd.items():
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
                 raise TypeError(f"default_usd.{k} must be a price above 0")
+        if isinstance(self.compare_ratio, bool) or not isinstance(self.compare_ratio, (int, float)) \
+                or not math.isfinite(self.compare_ratio) or self.compare_ratio < 0:
+            raise TypeError("compare_ratio must be a number, 0 or above")
 
 
 @dataclass
@@ -140,8 +152,8 @@ class Currency:
 
 def _default_tiers() -> dict[str, Tier]:
     return {
-        "lite": Tier("Lite", 5, "Claude Pro", {"day": 3, "week": 8, "month": 20}),
-        "standard": Tier("Standard", 25, "Claude Max 5x", {"day": 12, "week": 35, "month": 100}),
+        "lite": Tier("Lite", 5, "Claude Pro", {"day": 3, "week": 8, "month": 20}, 6, share_5h_pct=5),
+        "standard": Tier("Standard", 25, "Claude Max 5x", {"day": 12, "week": 35, "month": 100}, 1.7, share_5h_pct=25),
     }
 
 

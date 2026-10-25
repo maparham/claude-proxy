@@ -504,6 +504,46 @@ def test_a_young_account_with_fresh_snapshots_does_not_lock_out_its_first_ticket
     assert (st.current, st.skipped, st.no_live_data) == (0, None, False)
 
 
+def test_set_share_5h_changes_only_the_5h_share(db):
+    conn, cfg, ids = seeded(db)
+    assert tickets.effective_share(conn, cfg, "lite") == 5
+    assert tickets.effective_share_5h(conn, cfg, "lite") == 5
+    tickets.set_share_5h(conn, cfg, "lite", 8, ids["admin"])
+    assert tickets.effective_share_5h(conn, cfg, "lite") == 8
+    assert tickets.effective_share(conn, cfg, "lite") == 5
+
+
+def test_granted_ticket_stores_split_shares_for_5h_and_7d(db):
+    conn, cfg, ids = seeded(db)
+    tickets.set_share_5h(conn, cfg, "lite", 9, ids["admin"])
+    fresh(conn, NOW - 600)
+    t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
+    row = conn.execute("SELECT share_pct, share_5h_pct FROM tickets WHERE id=?", (t["id"],)).fetchone()
+    assert (row["share_pct"], row["share_5h_pct"]) == (5, 9)
+    st = by_kind(conn, cfg, ids["alice"])
+    assert st["share_5h"].limit == 9
+    assert st["share_7d"].limit == pytest.approx(piece(5, 3 * DAY + 300))
+
+
+def test_null_share_5h_pct_falls_back_to_share_pct(db):
+    conn, cfg, ids = seeded(db)
+    tickets.set_share_5h(conn, cfg, "lite", 9, ids["admin"])
+    fresh(conn, NOW - 600)
+    t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
+    conn.execute("UPDATE tickets SET share_5h_pct=NULL WHERE id=?", (t["id"],))
+    assert by_kind(conn, cfg, ids["alice"])["share_5h"].limit == 5
+
+
+def test_set_share_5h_rejects_bad_values(db):
+    conn, cfg, ids = seeded(db)
+    with pytest.raises(tickets.TicketError):
+        tickets.set_share_5h(conn, cfg, "lite", 0, ids["admin"])
+    with pytest.raises(tickets.TicketError):
+        tickets.set_share_5h(conn, cfg, "lite", 101, ids["admin"])
+    with pytest.raises(tickets.TicketError):
+        tickets.set_share_5h(conn, cfg, "nope", 5, ids["admin"])
+
+
 def test_order_split_gives_each_week_its_fraction_of_the_ticket(db):
     """The order terms: a week ticket starting a day into Anthropic's week holds 1/7 there and 6/7 in the next."""
     conn, cfg, ids = seeded(db)

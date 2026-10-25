@@ -48,13 +48,17 @@ turnstile_site_key = "0x4AAAAAAFNrHze8wsEPTc8r"
 [tickets.tiers.lite]
 label = "Lite"
 share_pct = 5
+share_5h_pct = 5             # 5-hour share; same as Claude Pro (Max 20x ≈ 20 Pro per 5 hours)
 compare = "Claude Pro"
+compare_ratio = 6            # Pro plans the shared Max 20x account equals per week
 default_usd = { day = 3, week = 8, month = 20 }
 
 [tickets.tiers.standard]
 label = "Standard"
 share_pct = 25
+share_5h_pct = 25            # 5-hour share; same as Claude Max 5x (Max 20x ≈ 4 Max 5x per 5 hours)
 compare = "Claude Max 5x"
+compare_ratio = 1.7          # Max 5x plans the shared Max 20x account equals per week
 default_usd = { day = 12, week = 35, month = 100 }
 
 # The first currency is the one the home page shows.

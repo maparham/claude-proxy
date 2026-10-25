@@ -300,7 +300,8 @@ def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | No
     if t is None:
         return []
     label = cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]
-    share_5h = t["share_pct"] + tickets.bonus_share(conn, t["id"], now)
+    # The ticket's own 5-hour share; one sold before the split has none and keeps its single share for both.
+    share_5h = (t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) + tickets.bonus_share(conn, t["id"], now)
     return [_ticket_5h(conn, cfg, user_id, share_5h, label, now), _ticket_7d(conn, cfg, user_id, t, label, now)]
 
 

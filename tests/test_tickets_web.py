@@ -59,7 +59,7 @@ async def test_prices_grid_and_discounts(env):
     now = int(time.time())
     async with admin_client(gw) as c:
         p = (await c.get("/api/admin/prices")).json()
-        assert p["tiers"]["lite"] == {"label": "Lite", "share_pct": 5, "compare": "Claude Pro"} and p["lengths"] == {"day": 1, "week": 7, "month": 30}
+        assert p["tiers"]["lite"] == {"label": "Lite", "share_pct": 5, "share_5h_pct": 5, "compare": "Claude Pro", "compare_ratio": 6} and p["lengths"] == {"day": 1, "week": 7, "month": 30}
         assert {(x["tier"], x["length"]): x["usd"] for x in p["prices"]}[("standard", "month")] == 100
         assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9})).status_code == 200
         assert last_audit(conn) == ("price_set", "lite:week")
@@ -93,7 +93,7 @@ async def test_session_carries_the_ticket_settings_for_admins_only(env):
     async with admin_client(gw) as c:
         t = (await c.get("/api/session")).json()["tickets"]
     assert t["enabled"] and t["max_sold_pct"] == 80 and t["currencies"] == ["USD", "EUR"] and t["lengths"] == {"day": 1, "week": 7, "month": 30}
-    assert t["tiers"]["standard"] == {"label": "Standard", "share_pct": 25, "compare": "Claude Max 5x"} and t["how_to_buy"].startswith("Send")
+    assert t["tiers"]["standard"] == {"label": "Standard", "share_pct": 25, "share_5h_pct": 25, "compare": "Claude Max 5x", "compare_ratio": 1.7} and t["how_to_buy"].startswith("Send")
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/session", headers=bearer(keys["alice"]))).json()["tickets"] == {"enabled": True}
 

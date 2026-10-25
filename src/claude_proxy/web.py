@@ -1133,9 +1133,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        share = ticket_call(tickets.set_share, conn, cfg, str(body.get("tier", "")), _number(body.get("share_pct"), "The share"),
-                            actor["id"])
-        return {"ok": True, "tier": str(body.get("tier", "")), "share_pct": share, "per_day": share / 7}
+        tier = str(body.get("tier", ""))
+        if "share_5h_pct" in body:   # one share per call, like a price: the form posts each changed cell
+            share = ticket_call(tickets.set_share_5h, conn, cfg, tier, _number(body.get("share_5h_pct"), "The 5-hour share"), actor["id"])
+            return {"ok": True, "tier": tier, "share_5h_pct": share}
+        share = ticket_call(tickets.set_share, conn, cfg, tier, _number(body.get("share_pct"), "The share"), actor["id"])
+        return {"ok": True, "tier": tier, "share_pct": share, "per_day": share / 7}
 
     @app.post("/api/admin/discounts")
     async def create_discount(request: Request):
@@ -1281,6 +1284,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                     b["share_pct"] * max(0.0, min(week[1], b["ends_at"]) - max(week[0], b["starts_at"])) / tickets.DAY / 7
                     for b in active)
             out["current"] = {"tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
+                              "share_5h_pct": cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"],
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
                               "week_piece": week_piece,

@@ -595,7 +595,7 @@ function userLimitsCard(me, tk) {
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_piece != null ? t("ov.week_ends", { date: fmtDate(c.week_end), share: fmtShare(c.week_piece) }) : t("ov.week_unknown")}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: fmtShare(b.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
-      ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_pct + c.bonus_share) })}</p>` : ""}
+      ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_5h_pct + c.bonus_share) })}</p>` : ""}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${tk.how_to_buy ? bdi(tk.how_to_buy) : t("ov.ask_admin")}</div>`;
@@ -609,6 +609,11 @@ function pickedLine(prices, pick) {
   const len = tier && ["day", "week", "month"].includes(pick.length) && t(`price.a_${pick.length}`);
   return len ? t("price.picked", { tier: esc(tierNameText(tier.tier, tier.label)), len }) : "";
 }
+// "Up to 60% of Claude Pro's weekly usage": the weekly share × compare plans per account week. The same for every
+// length, since a ticket's weekly piece pro-rates by day just as the plan's week does.
+function shareOfPlan(tier, len) {
+  return t("home.share_of", { pct: nf0.format(Math.round(tier.share_pct * tier.compare_ratio)), what: bdi(tier.compare), period: t(`home.usage_${len}`) });
+}
 function priceListCard(tk, order) {
   const p = tk.prices;
   const pick = takePick();
@@ -620,11 +625,10 @@ function priceListCard(tk, order) {
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]];
   // The home page's pick is the highlighted Order button; a sold-out price has none.
   const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
-  // A length's share of a month, expressed against the plan it's compared to: a day is 1/30 of Claude Pro, a month is 100%.
-  // Single line via home.share_of, so the tier cell carries no separate compare line.
-  const planShare = (tier, l) => tier.compare ? `<div class="muted">${t("home.share_of", { pct: nf0.format(Math.round((l.days / 30) * 100)), what: bdi(tier.compare) })}</div>` : "";
+  // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_ratio.
+  const planShare = (tier, k) => tier.compare && tier.compare_ratio ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
   const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
-    ${planShare(tier, l)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
+    ${planShare(tier, k)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
@@ -874,7 +878,7 @@ function grantDialog(users, pre = null) {
       <label>${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
       <div id="grant-preview" class="hint" aria-live="polite">…</div>
       <div id="grant-limits"></div>
-      ${pre ? "" : `<div class="terms"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
+      ${pre ? "" : `<div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("tk.terms_accept")}</label></div>`}
       <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
       <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button>
@@ -1086,10 +1090,11 @@ async function renderPricing(main) {
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
       <form id="f-shares">
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th></tr></thead><tbody>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th><th class="r">${t("pr.share_5h")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
         <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share" data-tier="${esc(k)}" data-init="${x.share_pct}" value="${x.share_pct}" required style="width:80px"> <span class="muted">%</span></td>
-        <td class="r muted" data-perday="${esc(k)}">${fmtShare(x.share_pct / 7)}</td></tr>`).join("")}
+        <td class="r muted" data-perday="${esc(k)}">${fmtShare(x.share_pct / 7)}</td>
+        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share5h" data-tier="${esc(k)}" data-init="${x.share_5h_pct}" value="${x.share_5h_pct}" required style="width:80px"> <span class="muted">%</span></td></tr>`).join("")}
       </tbody></table></div>
       <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
       <div class="error" id="shares-err"></div>
@@ -1135,7 +1140,18 @@ async function renderPricing(main) {
         if (cell) cell.textContent = Number.isFinite(n) ? fmtShare(n / 7) : "—";
       });
     });
-    sharesForm.onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "share", (input) => ({ tier: input.dataset.tier, share_pct: num(input.value) }), "/api/admin/shares", $("#shares-err")); };
+    // Weekly shares first, then 5-hour ones; saveChanged re-renders only once nothing failed, so run them in turn.
+    sharesForm.onsubmit = async (e) => {
+      e.preventDefault();
+      const err = $("#shares-err");
+      const changed = [...e.target.querySelectorAll('input[name="share"], input[name="share5h"]')].filter(inputChanged);
+      err.textContent = "";
+      for (const input of changed) {
+        const body = input.name === "share" ? { tier: input.dataset.tier, share_pct: num(input.value) } : { tier: input.dataset.tier, share_5h_pct: num(input.value) };
+        try { await api("/api/admin/shares", { method: "POST", body }); } catch (x) { err.textContent = x.message; return; }
+      }
+      if (changed.length) render();
+    };
   }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));

@@ -162,9 +162,10 @@ SCHEMA = [
     )""",
     """CREATE TABLE IF NOT EXISTS ticket_tier_shares (
         tier TEXT PRIMARY KEY,
-        share_pct REAL NOT NULL,
+        share_pct REAL NOT NULL,             -- weekly share; also what capacity counts
         updated_at INTEGER NOT NULL,
-        updated_by INTEGER
+        updated_by INTEGER,
+        share_5h_pct REAL                    -- 5-hour share; NULL: the config's, else share_pct
     )""",
     """CREATE TABLE IF NOT EXISTS ticket_discounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -210,7 +211,8 @@ SCHEMA = [
         cancelled_at INTEGER,
         cancelled_by INTEGER,
         note TEXT,
-        ungated_at INTEGER                  -- set by the Ungate action: this row no longer makes its user ticket-gated
+        ungated_at INTEGER,                 -- set by the Ungate action: this row no longer makes its user ticket-gated
+        share_5h_pct REAL                   -- copied at grant like share_pct; NULL (sold before the split): share_pct
     )""",
     "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, starts_at)",
     "CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id, starts_at)",
@@ -399,6 +401,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN terms_version TEXT NOT NULL DEFAULT 'v1'")
     if "lang" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
+    for table in ("ticket_tier_shares", "tickets"):
+        if "share_5h_pct" not in _columns(conn, table):
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN share_5h_pct REAL")
     if "api_key_id" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")

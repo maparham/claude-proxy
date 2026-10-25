@@ -52,6 +52,10 @@ function savePct(t_, len) {
 function priceIn(l, currency) {
   return currency === "USD" ? { amount: l.usd, list_amount: l.list_usd } : { amount: l.amount, list_amount: l.list_amount };
 }
+// "Up to 60% of Claude Pro's weekly usage": the weekly share × compare plans per account week, the same for every length.
+function shareOfPlan(t_, len) {
+  return t("home.share_of", { pct: nf0.format(Math.round(t_.share_pct * t_.compare_ratio)), what: bdi(t_.compare), period: t(`home.usage_${len}`) });
+}
 function card(t_, i, len, currency, ordering) {
   const l = t_.lengths[len];
   const p = priceIn(l, currency);
@@ -60,7 +64,7 @@ function card(t_, i, len, currency, ordering) {
   return `<article class="tier${i === 1 ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
     ${off > 0 ? `<span class="ribbon">${t("home.off_pct", { n: nf0.format(off) })}</span>` : ""}
     <h3>${tierName(t_)}</h3>
-    ${t_.compare ? `<p class="share">${t("home.share_of", { pct: nf0.format(Math.round((l.days / 30) * 100)), what: bdi(t_.compare) })}</p>` : ""}
+    ${t_.compare && t_.compare_ratio ? `<p class="share">${shareOfPlan(t_, len)}</p>` : ""}
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
     <p class="per">${t(LENGTHS[len][0])}</p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}

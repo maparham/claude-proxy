@@ -30,7 +30,6 @@ TERMS_VERSION = "v1"
 TERMS_LINES = (
     "Ticket terms (v1):",
     "- Your weekly share refills at Anthropic's weekly reset; what you do not use by then is gone.",
-    "- Spend it at your own pace: the week's share may be used up in fewer days.",
     "- A 5-hour share applies on top, against Anthropic's 5-hour window.",
     "- Claude models only; anything else needs a separate cost limit.",
 )
@@ -297,7 +296,8 @@ def seed_prices(conn: sqlite3.Connection, cfg: Config, now: float | None = None)
 
 
 def seed_shares(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> int:
-    """Insert each tier's config share_pct that has no DB row yet. Returns the rows added."""
+    """Insert each tier's config share_pct that has no DB row yet. Returns the rows added. The 5-hour share is left NULL,
+    so the config's keeps applying until the dashboard sets one."""
     now = int(time.time() if now is None else now)
     n = 0
     for tier, t in cfg.tickets.tiers.items():
@@ -319,11 +319,21 @@ def effective_share(conn: sqlite3.Connection, cfg: Config, tier: str) -> float:
     return float(cfg.tickets.tiers[tier].share_pct)
 
 
+def effective_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str) -> float:
+    """The 5-hour share new tickets of this tier are sold with: the dashboard value, else the config's, else the weekly share."""
+    row = conn.execute("SELECT share_5h_pct FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
+    if row is not None and row[0] is not None:
+        return float(row[0])
+    t = cfg.tickets.tiers[tier]
+    return float(t.share_5h_pct) if t.share_5h_pct is not None else effective_share(conn, cfg, tier)
+
+
 def effective_tiers(conn: sqlite3.Connection, cfg: Config) -> dict[str, dict]:
-    """{tier: {label, share_pct, compare}} with dashboard shares applied, for new grants and display."""
+    """{tier: {label, share_pct, share_5h_pct, compare, compare_ratio}} with dashboard shares applied, for new grants and display."""
     out = {}
     for tid, t in cfg.tickets.tiers.items():
-        out[tid] = {"label": t.label, "share_pct": effective_share(conn, cfg, tid), "compare": t.compare}
+        out[tid] = {"label": t.label, "share_pct": effective_share(conn, cfg, tid), "share_5h_pct": effective_share_5h(conn, cfg, tid),
+                    "compare": t.compare, "compare_ratio": t.compare_ratio}
     return out
 
 
@@ -343,6 +353,24 @@ def set_share(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor
                  "ON CONFLICT(tier) DO UPDATE SET share_pct=excluded.share_pct, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
                  (tier, share_pct, now, actor))
     db.audit(conn, actor, "share_set", tier, {"share_pct": share_pct})
+    return share_pct
+
+
+def set_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor: int | None, now: float | None = None) -> float:
+    """Change a tier's 5-hour share for future tickets. Capacity counts the weekly share only, so no max_sold_pct check:
+    the 5-hour share caps a buyer's bursts, and buyers rarely burst together."""
+    if tier not in cfg.tickets.tiers:
+        raise TicketError(f"Unknown tier {tier!r}.")
+    if isinstance(share_pct, bool) or not isinstance(share_pct, (int, float)) or not math.isfinite(share_pct):
+        raise TicketError("The 5-hour share must be a number.")
+    share_pct = float(share_pct)
+    if not 0 < share_pct <= 100:
+        raise TicketError("The 5-hour share must be above 0 and at most 100.")
+    now = _now(now)
+    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, share_5h_pct) VALUES(?,?,?,?,?) "
+                 "ON CONFLICT(tier) DO UPDATE SET share_5h_pct=excluded.share_5h_pct, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                 (tier, effective_share(conn, cfg, tier), now, actor, share_pct))
+    db.audit(conn, actor, "share_5h_set", tier, {"share_5h_pct": share_pct})
     return share_pct
 
 
@@ -493,6 +521,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
         raise TicketError(f"No exchange rate for {currency}; set one on the Rates panel first.")
     p = price_now(conn, tier, length, now)
     share = effective_share(conn, cfg, tier)
+    share_5h = effective_share_5h(conn, cfg, tier)
     starts_at = max(now, last_end(conn, user["id"]) or 0)
     ends_at = starts_at + LENGTHS[length] * DAY
     try:
@@ -503,7 +532,8 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
                                           (user["id"],))]
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None
-    return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "length": length, "days": LENGTHS[length], "share_pct": share, **p,
+    return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "length": length, "days": LENGTHS[length], "share_pct": share,
+            "share_5h_pct": share_5h, **p,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
             "amount": round_local(p["usd"], rate["rate"], steps[currency]),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
@@ -561,9 +591,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
                                   "anyway, or set today's rate first.")
         check_capacity(conn, cfg, ACCOUNT_ID, p["share_pct"], p["starts_at"], p["ends_at"])
         cur = conn.execute(
-            "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, length, days, starts_at, ends_at, list_usd, usd, "
-            "discount_id, currency, rate, amount, granted_by, granted_at, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
+            "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
+            "discount_id, currency, rate, amount, granted_by, granted_at, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], p["share_5h_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
              p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, note))
         tid = cur.lastrowid
         if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
@@ -790,6 +820,7 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
-        tiers.append({"tier": tid, "label": t.label, "share_pct": eff[tid]["share_pct"], "compare": t.compare, "lengths": lengths})
+        tiers.append({"tier": tid, "label": t.label, "share_pct": eff[tid]["share_pct"], "share_5h_pct": eff[tid]["share_5h_pct"], "compare": t.compare,
+                      "compare_ratio": t.compare_ratio, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}
