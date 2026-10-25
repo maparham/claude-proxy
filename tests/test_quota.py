@@ -283,6 +283,23 @@ def test_observed_rate_is_the_median_tokens_per_point(db):
     assert quota.observed_rate(conn, Pricing(), "5h", now + 8 * 86400) == 2000
 
 
+def test_rate_history_lists_each_rise_with_the_trailing_median(db):
+    conn = db[1]
+    a, _ = create_user(conn, "a")
+    now = 1_000_000
+    _snap(conn, now - 9 * 86400, 0)
+    _req(conn, a, now - 9 * 86400 + 10, 900)
+    _snap(conn, now - 9 * 86400 + 20, 1)       # 900 per point, before `since` and outside the later 7-day windows
+    _snap(conn, now - 5000, 1)                 # the window's first snapshot: only a baseline
+    _req(conn, a, now - 4500, 1000)
+    _snap(conn, now - 4000, 3)                 # 500 per point
+    _req(conn, a, now - 3500, 3000)
+    _snap(conn, now - 3000, 4)                 # 3000 per point
+    h = quota.rate_history(conn, Pricing(), "5h", now - 86400, now)
+    assert [(p["t"], p["ratio"], p["median"]) for p in h] == [(now - 4000, 500, 500), (now - 3000, 3000, 1750)]
+    assert h[-1]["median"] == quota.observed_rate(conn, Pricing(), "5h", now)
+
+
 def test_observed_rate_falls_back_to_the_whole_history_when_quiet_for_7_days(db):
     conn = db[1]
     a, _ = create_user(conn, "a")

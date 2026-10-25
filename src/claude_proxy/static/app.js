@@ -115,7 +115,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -1744,7 +1744,8 @@ async function renderQuota(main) {
     <div class="grid cols-2">
       <div class="card"><h3>${t("quota.reported")}${tipI("reported")}</h3><p class="sub">${t("quota.reported_sub")}</p><div class="chart" id="q-line"></div></div>
       <div class="card"><h3>${t("quota.share_title")}${tipI("share")}</h3><p class="sub">${t("quota.share_sub", { unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p><div class="chart" id="q-share"></div><div id="q-table"></div></div>
-    </div></section>`;
+    </div>
+    <div class="card" style="margin-top:16px"><h3>${t("quota.rate_title", { bucket: bname(p.bucket) })}${tipI("rate")}</h3><p class="sub">${t("quota.rate_sub")}</p><div class="chart" id="q-rate"></div></div></section>`;
   wireSegs(main, render);
   const o = baseOption();
   const pctAxis = (v) => fmtPct(v);
@@ -1757,6 +1758,18 @@ async function renderQuota(main) {
       dataZoom: [{ type: "inside" }],
       series: [{ name: t("quota.utilization", { bucket: bname(p.bucket) }), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s1") }, itemStyle: { color: css("--s1") },
                  data: d.snapshots.map((s) => [s.observed_at * 1000, s.utilization_pct]) }],
+    });
+  }
+  if (!d.rate.length) { $("#q-rate").outerHTML = `<p class="muted">${t("quota.no_rate")}</p>`; }
+  else {
+    chart($("#q-rate")).setOption({
+      ...o, tooltip: { ...o.tooltip, valueFormatter: (v) => fmtNum(v) },
+      xAxis: { ...o.xAxis, type: "time", axisLabel: { ...o.xAxis.axisLabel, formatter: timeAxis } }, yAxis: { ...o.yAxis, type: "value", scale: true, axisLabel: { ...o.yAxis.axisLabel, formatter: (v) => fmtNum(v) } },
+      dataZoom: [{ type: "inside" }],
+      series: [
+        { name: t("quota.rate_rise"), type: "scatter", symbolSize: 5, itemStyle: { color: css("--s1"), opacity: 0.45 }, data: d.rate.map((r) => [r.t * 1000, r.ratio]) },
+        { name: t("quota.rate_median"), type: "line", step: "end", showSymbol: false, lineStyle: { width: 2, color: css("--s2") }, itemStyle: { color: css("--s2") }, data: d.rate.map((r) => [r.t * 1000, r.median]) },
+      ],
     });
   }
   const h = d.window_history;

@@ -519,7 +519,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         for h in att["history"]:
             shares = {n.get(uid, f"#{uid}"): v for uid, v in h["shares"].items()}
             history.append({"t": h["t"], "utilization_pct": h["utilization_pct"], "shares": shares})
-        return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history,
+        rate = quota.rate_history(conn, cfg.pricing, bucket, now - RANGES.get(range, RANGES["7d"]), now)
+        return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history, "rate": rate,
                 "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
 
     @app.get("/api/requests")

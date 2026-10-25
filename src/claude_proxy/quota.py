@@ -314,9 +314,15 @@ def clear_rate_cache() -> None:
 
 
 def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> float | None:
-    """Utilization moves in whole-percent steps, so most pairs show no rise and the tokens in them belong to the next
-    step. Tokens are carried across pairs until utilization rises above its high-water mark; each rise yields carried
-    tokens ÷ rise and starts the carry again. A reset drops the carry; when its time is known, the new window starts
+    ratios = [r for _, r in _ratios(conn, pricing, bucket, lo, now)]
+    return statistics.median(ratios) if ratios else None
+
+
+def _ratios(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> list[tuple[float, float]]:
+    """(observed_at, weighted tokens per point) for each rise from `lo` to `now`. Utilization moves in whole-percent
+    steps, so most pairs show no rise and the tokens in them belong to the next step. Tokens are carried across pairs
+    until utilization rises above its high-water mark; each rise yields carried tokens ÷ rise and starts the carry
+    again. A reset drops the carry; when its time is known, the new window starts
     from 0 with the tokens of the requests after it, otherwise it restarts at the newer snapshot with nothing."""
     ratios, carry, high = [], 0.0, None
     for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
@@ -333,9 +339,23 @@ def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: f
         rise = cur["utilization_pct"] - high
         if rise > 0:
             if carry > 0:
-                ratios.append(carry / rise)
+                ratios.append((cur["observed_at"], carry / rise))
             carry, high = 0.0, cur["utilization_pct"]
-    return statistics.median(ratios) if ratios else None
+    return ratios
+
+
+def rate_history(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float,
+                 days: int = 7) -> list[dict]:
+    """The observed rate over time, for the dashboard: each rise since `since` as {t, ratio, median}, where median is
+    the trailing `days` median observed_rate() would have returned at t (without its whole-history fallback)."""
+    pts = _ratios(conn, pricing, bucket, since - days * 86400, now)
+    out, j = [], 0
+    for i, (t, r) in enumerate(pts):
+        while pts[j][0] < t - days * 86400:
+            j += 1
+        if t >= since:
+            out.append({"t": t, "ratio": r, "median": statistics.median(x for _, x in pts[j:i + 1])})
+    return out
 
 
 def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7) -> float | None:
