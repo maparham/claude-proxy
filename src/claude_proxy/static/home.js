@@ -140,12 +140,10 @@ function orderFormHtml(d, t_, len) {
   const l = t_.lengths[len];
   const price = (c) => money(c === "USD" ? l.usd : l.amount, c);
   return `<h3 id="order-h">${t("ord.title", { what: t("ord.what", { label: tierName(t_), len: lengthName(len) }) })}</h3>
-    <p class="order-price"><b id="order-price">${esc(price(d.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
+    <p class="order-price"><b id="order-price">${esc(price(currency || d.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form class="form-grid order-form" novalidate>
       <label>${t("name.name")}<input type="text" name="name" required maxlength="100" autocomplete="name"></label>
       <label>${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email"></label>
-      <label>${t("ord.currency")}<select name="currency">${[...new Set([d.currency, "USD"])].map((c) =>
-        `<option value="${esc(c)}"${c === d.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3"></textarea></label>
       <div class="turnstile wide"></div>
       <div class="terms wide"><ul class="muted"><li>${splitTerms(d.week_split, len, l.days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
@@ -169,7 +167,6 @@ function openOrder(tierId, len) {
   dlg.showModal();
   const f = dlg.querySelector("form"), err = dlg.querySelector(".error"), go = f.querySelector('button[type="submit"]');
   dlg.querySelector("[data-close]").onclick = () => dlg.close();
-  f.currency.onchange = () => { dlg.querySelector("#order-price").textContent = f.currency.selectedOptions[0].dataset.price; };
   let token = "";
   loadTurnstile().then((ts) => {
     if (!dlg.open || !dlg.contains(f)) return;
@@ -190,7 +187,7 @@ function openOrder(tierId, len) {
       let r;
       try {
         r = await fetch("/api/orders", { method: "POST", credentials: "omit", headers: { "content-type": "application/json" },
-          body: JSON.stringify({ tier: t_.tier, length: len, currency: f.currency.value, name: f.name.value, email: f.email.value,
+          body: JSON.stringify({ tier: t_.tier, length: len, currency: currency || data.currency, name: f.name.value, email: f.email.value,
                                  message: f.message.value, turnstile_token: token, terms_version: data.terms_version }) });
       } catch { throw new Error(t("home.order_not_sent")); }
       let body = null;

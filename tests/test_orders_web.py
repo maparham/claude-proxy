@@ -515,9 +515,9 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     from tests.test_tickets_web import _app_fn
     p = {"currency": "EUR", "tiers": [_tier(label=BAD)]}
     script = APP_STUBS + f"var p = {json.dumps(p)}; var out = [orderFormHtml(p, p.tiers[0], 'week', null), orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd')];"
-    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderCurrencies", "tierName"], script)
+    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "tierName"], script)
     assert 'name="email"' in without and 'name="email"' not in with_
-    assert "<img" not in without and '<option value="EUR" selected' in with_ and '<option value="USD"' in with_
+    assert "<img" not in without and 'name="currency"' not in with_ and "EUR 8" in with_   # the price list's currency, no picker
 
 
 # ---------- the home page's order dialog ----------
@@ -608,9 +608,9 @@ def test_the_visitor_dialog_offers_signing_in_and_escapes(tmp_path):
     data = _prices(_tier(label=BAD)) | {"turnstile_site_key": "0xSITE", "currency": "EUR"}
     form = _run_home_order(tmp_path, data)["form"]
     assert '<a href="/dashboard?tier=lite&amp;length=week">Or sign in to order</a>' in form
-    for field in ('name="name"', 'name="email"', 'name="currency"', 'name="message"', 'class="turnstile'):
+    for field in ('name="name"', 'name="email"', 'name="message"', 'class="turnstile'):
         assert field in form
-    assert '<option value="EUR" selected' in form and '<option value="USD"' in form
+    assert 'name="currency"' not in form
     assert "<img" not in form
 
 

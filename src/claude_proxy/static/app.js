@@ -598,7 +598,6 @@ function myOrderCard(o) {
     <button class="btn small" data-my-order="dismiss" data-id="${o.id}">${t("ord.dismiss")}</button></div>` : "";
 }
 // What a buyer can order in: the price list's currency and USD, which always has a rate.
-function orderCurrencies(p) { return [...new Set([p.currency, "USD"])]; }
 function orderFormHtml(p, tier, len, email, payL, pay) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
@@ -607,8 +606,7 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
   return `<h3>${t("ord.title", { what: t("ord.what", { label: tierName(tier.tier, tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
     <form id="f-order" class="form-grid order-form">
-      <label>${t("ord.currency")}<select name="currency">${orderCurrencies(p).map((c) => `<option value="${esc(c)}"${c === p.currency ? " selected" : ""} data-price="${esc(price(c))}">${esc(c === "IRT" ? t("cur.IRT") : c)}</option>`).join("")}</select></label>
-      ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"><span class="muted">${t("ord.email_note")}</span></label>`}
+      ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <div class="terms wide"><ul class="muted"><li>${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
@@ -620,14 +618,13 @@ function orderDialog(p, tier, len, pay, termsVersion) {
   const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
   const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay));
   const f = $("#f-order", d);
-  f.currency.onchange = () => { $("#order-price", d).textContent = f.currency.selectedOptions[0].dataset.price; };
   f.onsubmit = async (e) => {
     e.preventDefault();
     if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
     try {
-      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: f.currency.value, message: f.message.value, terms_version: termsVersion, ...(f.email ? { email: f.email.value } : {}) } });
+      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: p.currency, message: f.message.value, terms_version: termsVersion, ...(f.email ? { email: f.email.value } : {}) } });
       d.close(); render();
     } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
   };

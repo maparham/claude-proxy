@@ -627,7 +627,6 @@ const I18N = {
     "ord.todays_rate": "at today's rate",
     "ord.currency": "Currency",
     "ord.email": "Your email",
-    "ord.email_note": "The admin replies here. It is kept with this order only.",
     "ord.message": "Message (optional)",
     "ord.message_ph": "Anything the admin should know",
     "ord.terms_l1": "Your allowance is split across Anthropic's weekly windows by the days each one covers; each piece is spendable at your own pace and expires at its window's reset.",
@@ -638,7 +637,7 @@ const I18N = {
     "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
     "ord.terms_l2": "Spend it at your own pace: the week's share may be used up in fewer days.",
     "ord.terms_l3": "Anthropic also applies its own 5-hour limit.",
-    "ord.terms_accept": "I accept the ticket terms",
+    "ord.terms_accept": "I accept the terms",
     "ord.terms_needed": "Please accept the ticket terms to order.",
     "ord.send": "Send order",
     "ord.confirm_withdraw": "Withdraw your order? The admin will no longer act on it.",
@@ -1493,7 +1492,6 @@ const I18N = {
     "ord.todays_rate": "با نرخ امروز",
     "ord.currency": "ارز",
     "ord.email": "ایمیل شما",
-    "ord.email_note": "مدیر به همین نشانی پاسخ می‌دهد. فقط همراه همین سفارش نگه داشته می‌شود.",
     "ord.message": "پیام (اختیاری)",
     "ord.message_ph": "هر چه مدیر باید بداند",
     "ord.terms_l1": "سهم شما به نسبت روزهایی که هر بازهٔ هفتگی آنتروپیک پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
@@ -1503,8 +1501,8 @@ const I18N = {
     "ord.split_and": " و ",
     "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
     "ord.terms_l2": "با سرعت خودتان مصرف کنید: سهم هفته را می‌توان در چند روز تمام کرد.",
-    "ord.terms_l3": "به علاوه، محدودیت ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.",
-    "ord.terms_accept": "شرایط تیکت را می‌پذیرم",
+    "ord.terms_l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.",
+    "ord.terms_accept": "شرایط را می‌پذیرم",
     "ord.terms_needed": "برای سفارش، شرایط تیکت را بپذیرید.",
     "ord.send": "ارسال سفارش",
     "ord.confirm_withdraw": "سفارش‌تان را پس می‌گیرید؟ مدیر دیگر روی آن کاری نمی‌کند.",
@@ -1770,7 +1768,7 @@ function splitTerms(ws, len, days) {
   if (!parts || !parts.length || !days) return "";
   const pct = (v) => (v > 0 && v < 0.01 ? `<${new Intl.NumberFormat(LOC, { style: "percent" }).format(0.01)}`
     : new Intl.NumberFormat(LOC, { style: "percent", maximumFractionDigits: 0 }).format(v));
-  const when = (ts) => new Date(ts * 1000).toLocaleDateString(LOC, { weekday: "long", month: "long", day: "numeric" });
+  const when = (ts) => new Date(ts * 1000).toLocaleString(LOC, { weekday: "long", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const end = ws.starts_at + days * 86400;
   const until = (i) => Math.min(ws.first_reset + i * 7 * 86400, end);
   if (parts.length === 1) return t("ord.split_one", { date: when(end) });
