@@ -335,7 +335,7 @@ async def _maintenance(conn, cfg: Config):
     while True:
         # Each task on its own, so one failing does not skip the other.
         try:
-            removed = await asyncio.to_thread(db.cleanup, conn, cfg.retention_days)
+            removed = await asyncio.to_thread(db.cleanup, conn, cfg.retention_days, cfg.keep_usage)
             if any(removed.values()):
                 logger.info("retention cleanup: %s", removed)
         except Exception:

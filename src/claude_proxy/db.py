@@ -654,10 +654,10 @@ def delete_session(conn: sqlite3.Connection, raw_token: str) -> None:
     conn.execute("DELETE FROM sessions WHERE token_hash=?", (hash_key(raw_token),))
 
 
-def cleanup(conn: sqlite3.Connection, retention_days: int) -> dict[str, int]:
-    """Delete expired sessions and events older than the retention period."""
+def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = False) -> dict[str, int]:
+    """Delete expired sessions and events older than the retention period; with `keep_usage`, only the expired."""
     now = time.time()
-    cutoff = now - retention_days * 86400
+    cutoff = float("-inf") if keep_usage else now - retention_days * 86400
     out = {
         "sessions": conn.execute("DELETE FROM sessions WHERE expires_at<?", (int(now),)).rowcount,
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,

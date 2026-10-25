@@ -2,6 +2,7 @@
 # Point the gateway at it with --config or CLAUDE_PROXY_CONFIG.
 
 retention_days = 180        # requests and quota snapshots older than this are deleted
+keep_usage = false          # true: never delete them (cost analysis over the gateway's whole life)
 
 [listener]
 host = "127.0.0.1"          # proxy: what users put in ANTHROPIC_BASE_URL

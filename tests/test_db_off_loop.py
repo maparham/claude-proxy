@@ -148,3 +148,20 @@ async def test_the_dashboard_view_has_its_own_connection_and_client(cfg, db, ant
     assert gw.conn is db[1]   # the proxy's own is untouched
     gw.backend.last_error = "boom"
     assert v.backend.describe().detail == gw.backend.describe().detail
+
+
+def test_keep_usage_deletes_only_what_expires(db, tmp_path):
+    from claude_proxy import db as dbm
+    from claude_proxy.config import Config
+    conn = db[1]
+    uid, _ = create_user(conn, "alice")
+    old = time.time() - 1000 * 86400
+    conn.execute("INSERT INTO requests(user_id, started_at, method, path) VALUES(?,?,'POST','/v1/messages')", (uid, old))
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct) VALUES(?,'header','5h',1)", (old,))
+    dbm.create_session(conn, uid, ttl_s=-10)
+    out = dbm.cleanup(conn, 30, keep_usage=True)
+    assert (out["requests"], out["quota_snapshots"], out["sessions"]) == (0, 0, 1)
+    assert dbm.cleanup(conn, 30)["requests"] == 1
+    p = tmp_path / "c.toml"
+    p.write_text("keep_usage = true\n")
+    assert Config.load(str(p)).keep_usage and not Config().keep_usage

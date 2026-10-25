@@ -387,6 +387,7 @@ class Config:
     pricing: Pricing = field(default_factory=Pricing)
     routes: list[Route] = field(default_factory=_default_routes)
     retention_days: int = 180
+    keep_usage: bool = False   # never delete requests, quota snapshots or session titles, whatever retention_days says
     config_file: str | None = None
 
     def route_for(self, model: str | None) -> Route | None:
@@ -418,6 +419,8 @@ class Config:
                 setattr(target, k, v)
         if "retention_days" in data:
             cfg.retention_days = int(data["retention_days"])
+        if "keep_usage" in data:
+            cfg.keep_usage = bool(data["keep_usage"])
         if "pricing" in data:
             p = data["pricing"]
             if "reference_model" in p:

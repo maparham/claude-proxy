@@ -1,4 +1,5 @@
 retention_days = 365        # requests and quota snapshots older than this are deleted
+keep_usage = true           # ... but never: usage is kept for cost analysis
 
 [listener]
 host = "127.0.0.1"
