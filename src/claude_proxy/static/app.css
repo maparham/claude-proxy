@@ -198,6 +198,7 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .signin-intro { grid-area: intro; max-width: 34rem; }
 .signin-intro h1 { font-size: clamp(30px, 3.6vw, 44px); line-height: 1.08; letter-spacing: -0.028em; font-weight: 680;
                    margin: 0 0 14px; text-wrap: balance; }
+h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 500; letter-spacing: 0; color: var(--ink-2); }
 .signin-lede { margin: 0; font-size: 16px; line-height: 1.5; color: var(--ink-2); max-width: 30rem; }
 .signin-code { font: 650 clamp(34px, 4.4vw, 52px)/1 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.06em;
                margin: 28px 0 0; font-variant-numeric: tabular-nums; }
