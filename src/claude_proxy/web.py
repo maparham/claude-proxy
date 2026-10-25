@@ -4,6 +4,9 @@ Access (spec 10.1):
 - admin: username + password (argon2id) -> session cookie (HttpOnly, SameSite=Strict, Secure behind TLS);
 - user: their virtual key, either exchanged for a session cookie or sent as a Bearer token (statusline), or a Clerk
   sign-in (Google, GitHub, email code) exchanged for a session cookie, which can also create the account (sign-up design);
+  there is deliberately no password sign-up form: Clerk's email code already covers users without Google or GitHub, and
+  a password form would mean owning reset flows, breach checks and rate limiting ourselves. Revisit only if the gateway
+  must run without Clerk at all (self-hosted installs);
 - cookie sessions must send the session's CSRF token in `x-csrf-token` on every state change;
 - no loopback or IP-based exemptions; failed logins are rate limited per client address.
 Non-admins only ever see their own usage, their own limits and their own estimated share.
