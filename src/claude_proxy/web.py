@@ -417,8 +417,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                            None if split == "none" else split, where, params, tz_offset_s=tz_offset)
         if split == "user":
             n = names()
-            for p in pts:
-                p["key"] = n.get(p["key"], f"#{p['key']}")
+            for p in pts:   # NULL: deleted users' anonymized requests
+                p["key"] = "(deleted users)" if p["key"] is None else n.get(p["key"], f"#{p['key']}")
         return {"range": range, "granularity": granularity, "split": split, "points": pts}
 
     @app.get("/api/models")
@@ -958,7 +958,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             if str((await _json(request)).get("confirm", "")) != u["name"]:
                 fail(400, "Type the user's name to confirm.")
             try:
-                return {"ok": True, "deleted_requests": db.delete_user(conn, u["id"], actor["id"])}
+                return {"ok": True, "anonymized_requests": db.delete_user(conn, u["id"], actor["id"])}
             except ValueError as e:
                 fail(400, str(e))
         if action == "ungate":   # also while tickets are off: the way out of "Tickets are paused"

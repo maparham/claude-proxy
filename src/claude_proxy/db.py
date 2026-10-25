@@ -581,7 +581,8 @@ def revoke(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> 
 
 
 def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None, now: float | None = None) -> int:
-    """Remove a revoked user and their usage history. Returns the number of requests deleted. Tickets stay as sales
+    """Remove a revoked user. Their requests stay, anonymized, for gateway-wide cost analysis: no user, session or
+    client version, but the time, model, tokens and cost. Returns how many were anonymized. Tickets stay as sales
     records with user_id NULL (the FK's ON DELETE SET NULL); a user with an active or queued ticket is not deleted."""
     now = time.time() if now is None else now
     u = conn.execute("SELECT name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
@@ -590,9 +591,10 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
     if conn.execute(f"SELECT 1 FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {TICKET_EFFECTIVE_END}>? LIMIT 1",
                     (user_id, now)).fetchone():
         raise ValueError("Cancel the user's active or queued ticket first.")
-    n = conn.execute("DELETE FROM requests WHERE user_id=?", (user_id,)).rowcount
-    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits and sessions cascade; tickets keep user_name
-    audit(conn, actor, "delete_user", u["name"], {"deleted_requests": n})
+    n = conn.execute("UPDATE requests SET user_id=NULL, session_id=NULL, client_version=NULL WHERE user_id=?",
+                     (user_id,)).rowcount
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits, sessions and titles cascade; tickets keep user_name
+    audit(conn, actor, "delete_user", u["name"], {"anonymized_requests": n})
     return n
 
 

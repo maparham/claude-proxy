@@ -219,20 +219,23 @@ async def test_status_line_says_when_each_limit_resets(env):
     assert re.fullmatch(r"bob · daily 1/5 req \(resets in 24\.0 h\) · 5h \d+% \(resets in (59|60) min\) · weekly .*\n", r.text), r.text
 
 
-async def test_delete_only_revoked_users_and_their_history(env):
+async def test_delete_only_revoked_users_and_anonymize_their_history(env):
     gw, conn, ids, keys = env
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "requests_daily", "*", "5", "count"))
     async with admin_client(gw) as c:
         assert (await c.post(f"/api/admin/users/{ids['bob']}/delete", json={"confirm": "bob"})).status_code == 400   # not revoked yet
         assert (await c.post(f"/api/admin/users/{ids['bob']}/revoke")).status_code == 200
         r = await c.post(f"/api/admin/users/{ids['bob']}/delete", json={"confirm": "bob"})
-        assert r.status_code == 200 and r.json()["deleted_requests"] == 1
+        assert r.status_code == 200 and r.json()["anonymized_requests"] == 1
         names = [u["name"] for u in (await c.get("/api/users")).json()["users"]]
     assert "bob" not in names
     for table in ("users", "requests", "limits", "sessions"):
         col = "id" if table == "users" else "user_id"
         assert conn.execute(f"SELECT COUNT(*) FROM {table} WHERE {col}=?", (ids["bob"],)).fetchone()[0] == 0
     assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC").fetchone()[:] == ("delete_user", "bob")
+    # the usage stays for cost analysis, linked to no one
+    assert conn.execute("SELECT COUNT(*) FROM requests WHERE user_id IS NULL AND session_id IS NULL AND client_version IS NULL "
+                        "AND input_tokens>0").fetchone()[0] == 1
 
 
 async def test_session_reports_settings_the_dashboard_quotes(env, cfg):

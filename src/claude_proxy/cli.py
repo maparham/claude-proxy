@@ -223,7 +223,7 @@ def cmd_user_delete(args, cfg):
         n = db.delete_user(conn, u["id"])
     except ValueError as e:
         sys.exit(str(e))
-    print(f"Deleted {u['name']} and {n} recorded requests.")
+    print(f"Deleted {u['name']}; their {n} recorded requests are kept, anonymized.")
 
 
 def cmd_user_rename(args, cfg):
