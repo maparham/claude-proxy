@@ -16,7 +16,7 @@ from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request, set_session_title
 from .forwarder import (COUNT_TOKENS_PATH, filter_request_headers, filter_response_headers, merge_beta, session_id,
-                        should_forward, strip_account_headers)
+                        should_forward, strip_account_headers, with_claude_code_identity)
 from .gateway import Gateway
 from .meter import BodyMeter, SSEMeter
 
@@ -335,6 +335,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 for f in dropped:
                     del data[f]
                 body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+        elif request.method == "POST" and path == "/v1/messages" and with_claude_code_identity(data):
+            # Requests from outside Claude Code (API keys, scripts): the subscription refuses them without this.
+            body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
 
         client_headers = dict(request.headers)
         query = request.url.query
@@ -367,7 +370,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             return api_error(502, "api_error", f"The gateway could not reach {upstream.provider}.")
 
         if route is None:
-            gw.db.run(_record_quota, resp.headers)   # not awaited: a cancel here would leave the request unrecorded
+            # Awaited, so the next request's checks see these figures; shielded, so a cancel never drops them.
+            await asyncio.shield(gw.db.run(_record_quota, resp.headers))
 
         status = client_status(request.headers, resp.status_code)
         resp_headers = filter_response_headers(dict(resp.headers))
@@ -382,6 +386,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                        error_type=error_type or f"upstream_{resp.status_code}")
                 if resp.status_code != 429:
                     return api_error(503, "api_error", UNAVAILABLE)
+                if error_type == "upstream_request_scoped":
+                    # No rate-limit headers: Anthropic refused this request itself, not the account's usage.
+                    return api_error(429, "rate_limit_error", "Claude refused this request (not a usage limit).")
                 retry = resp.headers.get("retry-after")
                 wait = f" Try again in {limits.human(int(retry))}." if retry and retry.isdigit() else " Try again later."
                 return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers={"retry-after": retry} if retry else None)
