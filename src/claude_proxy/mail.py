@@ -29,7 +29,7 @@ def rtl(text: str) -> bool:
 
 def message(email: EmailConfig, to: str, subject: str, body: str, html_body: str | None = None) -> EmailMessage:
     msg = EmailMessage()
-    msg["From"] = email.from_
+    msg["From"] = email.from_fa if email.from_fa and rtl(body) else email.from_
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content(body)

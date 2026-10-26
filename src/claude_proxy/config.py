@@ -184,6 +184,7 @@ class EmailConfig:
     admin_to: str
     smtp_port: int = 587          # 587: STARTTLS; 465: implicit TLS
     smtp_user: str = ""           # empty: no AUTH
+    from_fa: str = ""             # the sender of Persian (right-to-left) emails; empty: `from`
 
     def password(self) -> str | None:
         return os.environ.get("SMTP_PASSWORD") or None
@@ -366,7 +367,7 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
 
 
 def _load_email(toml_path: str, data: dict) -> EmailConfig:
-    keys = {"smtp_host": str, "from": str, "admin_to": str, "smtp_port": int, "smtp_user": str}
+    keys = {"smtp_host": str, "from": str, "admin_to": str, "smtp_port": int, "smtp_user": str, "from_fa": str}
     for k in data:
         if k not in keys:
             raise ConfigError(f"{toml_path}: unknown key [email].{k}; [email] takes {', '.join(keys)}")

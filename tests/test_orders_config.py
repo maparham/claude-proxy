@@ -121,6 +121,15 @@ def test_send_uses_starttls_and_no_login_without_a_user(smtp):
     assert msg.get_content() == "Body\n"
 
 
+def test_a_persian_mail_goes_out_from_the_persian_sender(smtp):
+    e = EmailConfig("h", "Rahkar AI <s@x.y>", "a@x.y", from_fa="اشتراک راهکار <s@x.y>")
+    mail.send(e, "b@x.y", "S", "سلام\n")
+    mail.send(e, "b@x.y", "S", "Hello\n")
+    first, second = (s.calls[1][1] for s in smtp)
+    assert (str(first["From"]), str(second["From"])) == ("اشتراک راهکار <s@x.y>", "Rahkar AI <s@x.y>")
+    assert b"From: =?utf-8?" in first.as_bytes()   # the Persian name goes out encoded
+
+
 def test_send_logs_in_with_the_user_and_env_password(smtp, monkeypatch):
     monkeypatch.setenv("SMTP_PASSWORD", "pw")
     mail.send(EmailConfig("h", "f@x.y", "a@x.y", smtp_user="gw"), "b@x.y", "S", "B")

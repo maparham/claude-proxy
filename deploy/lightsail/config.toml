@@ -30,7 +30,8 @@ clerk_publishable_key = "pk_live_Y2xlcmsuZGFzaC5yYWhrYXIucHJvJA"
 smtp_host = "smtp.gmail.com"
 smtp_port = 587
 smtp_user = "maparham40@gmail.com"
-from = "Claude Gateway <support@chartkar.app>"
+from = "Rahkar AI <support@chartkar.app>"
+from_fa = "اشتراک راهکار <support@chartkar.app>"
 admin_to = "support@chartkar.app"
 
 # Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). The tiers are written out so the

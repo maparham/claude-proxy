@@ -98,6 +98,7 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # smtp_port = 587                                # default 587 with STARTTLS; 465 means implicit TLS
 # smtp_user = "gateway@example.com"              # optional; without it no AUTH is attempted
 # from = "Claude Gateway <gateway@example.com>"  # required
+# from_fa = "..."                                # optional: the sender of Persian emails; default `from`
 # admin_to = "admin@example.com"                 # required
 # # password: SMTP_PASSWORD in the environment (required when smtp_user is set)
 
