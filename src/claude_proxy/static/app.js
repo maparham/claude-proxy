@@ -630,7 +630,7 @@ function pickedLine(prices, pick) {
   const len = tier && ["day", "week", "month"].includes(pick.length) && t(`price.a_${pick.length}`);
   return len ? t("price.picked", { tier: esc(tierNameText(tier.tier, tier.label)), len }) : "";
 }
-// "Up to 60% of Claude Pro's weekly usage": compare_pct, worked out by the server. The same for every
+// "60% of Claude Pro's weekly usage": compare_pct, worked out by the server. The same for every
 // length, since a ticket's weekly piece pro-rates by day just as the plan's week does.
 function shareOfPlan(tier, len) {
   const what = bdi(tier.compare), n = tier.compare_pct / 100;

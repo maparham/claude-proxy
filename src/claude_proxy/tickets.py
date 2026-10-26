@@ -490,7 +490,7 @@ def set_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, ac
 
 def set_compare(conn: sqlite3.Connection, cfg: Config, tier: str, plan, ratio, actor: int | None, now: float | None = None) -> dict:
     """Set the plan the pages compare this tier with and how many of that plan's weekly usage the shared account equals
-    ("Up to share × ratio % of <plan>'s usage"). An empty plan clears the comparison; display only, no limit changes."""
+    ("share × ratio % of <plan>'s usage"). An empty plan clears the comparison; display only, no limit changes."""
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
     plan = plan.strip() if isinstance(plan, str) else plan

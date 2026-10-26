@@ -52,7 +52,7 @@ function savePct(t_, len) {
 function priceIn(l, currency) {
   return currency === "USD" ? { amount: l.usd, list_amount: l.list_usd } : { amount: l.amount, list_amount: l.list_amount };
 }
-// "Up to 60% of Claude Pro's weekly usage": compare_pct, worked out by the server, the same for every length.
+// "60% of Claude Pro's weekly usage": compare_pct, worked out by the server, the same for every length.
 function shareOfPlan(t_, len) {
   const what = bdi(t_.compare), n = t_.compare_pct / 100;
   // A whole number of plans reads as plans: "One week of Claude Pro", "One week of two Claude Pro plans".
