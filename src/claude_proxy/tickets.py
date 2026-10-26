@@ -603,7 +603,8 @@ def active_bonuses(conn: sqlite3.Connection, ticket_id: int, now: float) -> list
 
 
 def bonus_share(conn: sqlite3.Connection, ticket_id: int, now: float) -> float:
-    return sum(b["share_pct"] for b in active_bonuses(conn, ticket_id, now))
+    """The 5-hour share the active bonuses and upgrades add."""
+    return sum(b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"] for b in active_bonuses(conn, ticket_id, now))
 
 
 # ---------- granting ----------
@@ -869,6 +870,113 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         raise
     return {"bonus": dict(conn.execute("SELECT * FROM ticket_bonuses WHERE id=?", (cur.lastrowid,)).fetchone()),
             "ticket": get(conn, ticket_id), "moved": moved}
+
+
+# ---------- upgrades (2026-10-26 spec) ----------
+
+UPGRADE_MIN_S = 3600   # less time left than this: no upgrade is offered or sold
+
+
+def _upgrades(conn, ticket_id: int) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT * FROM ticket_bonuses WHERE ticket_id=? AND tier IS NOT NULL AND cancelled_at IS NULL "
+                                          "ORDER BY starts_at, id", (ticket_id,))]
+
+
+def tier_now(conn: sqlite3.Connection, ticket: dict) -> str:
+    """The tier a ticket runs at: its last upgrade's, else the one it was sold as."""
+    ups = _upgrades(conn, ticket["id"])
+    return ups[-1]["tier"] if ups else ticket["tier"]
+
+
+def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str, currency: str, now: float) -> dict:
+    """What raising a running ticket to `tier` for the rest of it costs: the two tiers' prices for the ticket's length
+    today, the difference prorated over the time left. The upgrade adds the share difference (weekly and 5-hour) from
+    now to the ticket's end, as a bonus would, so what the ticket already spent stays spent.
+    Raises TicketError for a tier that is not higher, a ticket not running or with under an hour left, or no rate;
+    capacity trouble is reported in `sold_out`, not raised."""
+    now = _now(now)
+    if tier not in cfg.tickets.tiers:
+        raise TicketError(f"Unknown tier {tier!r}.")
+    if ticket["cancelled_at"] is not None or not ticket["starts_at"] <= now < ticket["effective_end"]:
+        raise TicketError("Only a running ticket can be upgraded.")
+    left = ticket["effective_end"] - now
+    if left < UPGRADE_MIN_S:
+        raise TicketError("Less than an hour of this ticket is left; buy a new one instead.")
+    steps = currencies(cfg)
+    if currency not in steps:
+        raise TicketError(f"Unknown currency {currency!r}.")
+    rate = current_rate(conn, currency)
+    if rate is None:
+        raise TicketError(f"No exchange rate for {currency}.")
+    frm = tier_now(conn, ticket)
+    # The shares the ticket runs at now: its own plus its upgrades' (bonuses are gifts and do not count).
+    ups = _upgrades(conn, ticket["id"])
+    has = ticket["share_pct"] + sum(u["share_pct"] for u in ups)
+    has_5h = (ticket["share_5h_pct"] if ticket["share_5h_pct"] is not None else ticket["share_pct"]) + sum(
+        u["share_5h_pct"] if u["share_5h_pct"] is not None else u["share_pct"] for u in ups)
+    share, share_5h = effective_share(conn, cfg, tier) - has, effective_share_5h(conn, cfg, tier) - has_5h
+    whole = LENGTHS[ticket["length"]] * DAY
+    usd = round((price_now(conn, tier, ticket["length"], now)["usd"] - price_now(conn, frm, ticket["length"], now)["usd"]) * left / whole, 2)
+    if share <= 0 or usd <= 0:
+        raise TicketError(f"{cfg.tickets.tiers[tier].label} is not above this ticket's tier.")
+    try:
+        check_capacity(conn, cfg, ticket["account_id"], share, now, ticket["effective_end"])
+        sold = False
+    except CapacityError:
+        sold = True
+    return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "from_tier": frm, "length": ticket["length"], "share_pct": share,
+            "share_5h_pct": max(0.0, share_5h), "starts_at": now, "ends_at": ticket["effective_end"], "usd": usd, "currency": currency,
+            "rate": rate["rate"], "amount": round_local(usd, rate["rate"], steps[currency]), "sold_out": sold}
+
+
+def upgrade_options(conn: sqlite3.Connection, cfg: Config, user_id: int, currency: str, now: float) -> list[dict]:
+    """The quotes for every tier above the user's running ticket; none without one or with under an hour left."""
+    t = covering(conn, user_id, now)
+    out = []
+    for tier in (cfg.tickets.tiers if t else ()):
+        try:
+            out.append(upgrade_quote(conn, cfg, t, tier, currency, now))
+        except TicketError:
+            pass
+    return out
+
+
+def upgrade(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, ticket_id: int, tier: str, currency: str, note: str = "",
+            order_id: int | None = None, paid: bool = False, after=None, now: float | None = None) -> dict:
+    """Sell an upgrade: one BEGIN IMMEDIATE transaction re-quotes it, checks capacity, writes the upgrade row and closes
+    the order. `paid`: charged at the order's quote, whatever the price and rate are now. `after(ticket_id)`: called
+    inside the transaction, last."""
+    now = _now(now)
+    note = _note(note)
+    if user["revoked_at"] is not None or not user["enabled"]:
+        raise TicketError(f"{user['name']} is revoked or disabled.")
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        t = get(conn, ticket_id)
+        if t["user_id"] != user["id"]:
+            raise TicketError("That ticket is not this user's.")
+        q = upgrade_quote(conn, cfg, t, tier, currency, now)
+        if paid:
+            o = conn.execute("SELECT quoted_usd, quoted_rate, quoted_amount FROM orders WHERE id=?", (order_id,)).fetchone()
+            if o is None:
+                raise TicketError(f"Order #{order_id} does not exist.")
+            q |= {"usd": o["quoted_usd"], "rate": o["quoted_rate"], "amount": o["quoted_amount"]}
+        check_capacity(conn, cfg, t["account_id"], q["share_pct"], now, t["effective_end"])
+        cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, share_5h_pct, extra_days, starts_at, ends_at, note, granted_by, "
+                           "granted_at, tier) VALUES(?,?,?,0,?,?,?,?,?,?)",
+                           (ticket_id, q["share_pct"], q["share_5h_pct"], now, t["effective_end"], note, actor, now, tier))
+        db.audit(conn, actor, "ticket_upgrade", t["user_name"], {"ticket_id": ticket_id, "bonus_id": cur.lastrowid, "from": q["from_tier"],
+                                                                 "to": tier, "usd": q["usd"], "currency": currency, "amount": q["amount"]})
+        if order_id is not None:
+            from . import orders   # here, not at the top: orders imports tickets
+            orders.close_for_grant(conn, order_id, user["id"], ticket_id, now, actor=actor)
+        if after is not None:
+            after(ticket_id)
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return get(conn, ticket_id)
 
 
 def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float | None = None, end_live: bool = False) -> int:

@@ -549,10 +549,10 @@ async function renderOverview(main) {
           <div id="quota-bars"></div>
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">${t("ov.rising", { v: nfFix(1).format(ex.pct_per_hour) })}${ex.eta_s ? t("ov.fills_in", { d: fmtDur(ex.eta_s) }) + (ex.before_reset ? t("ov.before_reset") : t("ov.after_reset")) : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>` : ""}
-        ${isAdmin() ? usersCard() : userLimitsCard(me, tk)}
+        ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order)}
       </div>
       ${machinesCard(keys.keys, S.install)}
-      ${tk ? myOrderCard(order) + priceListCard(tk, order) : ""}
+      ${tk ? myOrderCard(order) + (tk.current ? "" : priceListCard(tk, order)) : ""}
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
@@ -597,11 +597,14 @@ function paymentNoticeMsg(p) {
 function usersCard() {
   return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;
 }
-function userLimitsCard(me, tk) {
+function userLimitsCard(me, tk, order) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
+  // Anthropic's way: a ticket that can go higher offers it here, and the price list stays out of the way until it ends.
+  const open = !!order && (order.status === "new" || order.status === "contacted");
+  const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small primary" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}</div>
+      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div>${up}</div>
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
@@ -651,7 +654,7 @@ const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1
 // The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
 function myOrderCard(o) {
   if (!o) return "";
-  const what = t("ord.what", { label: tierName(o.tier, o.label), len: lengthName(o.length) });
+  const what = o.upgrade ? t("up.what", { label: tierName(o.tier, o.label) }) : t("ord.what", { label: tierName(o.tier, o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
     return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
       <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div></div>
@@ -704,6 +707,8 @@ function orderDialog(p, tier, len, pay, termsVersion) {
   };
 }
 function wireOrdering(root, tk, order) {
+  const ub = root.querySelector("#upgrade-btn");
+  if (ub) ub.onclick = () => ticketUpgradeDialog(tk);
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
@@ -721,6 +726,55 @@ function wireOrdering(root, tk, order) {
     if (act === "withdraw" && !confirmInline(t("ord.confirm_withdraw"))) return;
     try { await api(`/api/me/orders/${+b.dataset.id}/${act}`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
+}
+
+// ---------- upgrades (2026-10-26 spec): the tiers above a running ticket, priced for the time it has left ----------
+
+function ticketUpgradeDialog(tk) {
+  const c = tk.current;
+  const tierOf = (id) => tk.prices.tiers.find((x) => x.tier === id);
+  const rows = tk.upgrades.map((u) => {
+    const tier = tierOf(u.tier);
+    return `<tr><td><b>${tierName(u.tier, u.label)}</b>${tier && tier.compare && tier.compare_ratio ? `<div class="muted">${shareOfPlan(tier, u.length)}</div>` : ""}</td>
+      <td class="r"><b>${esc(money(u.amount, u.currency))}</b><div class="muted">${t("up.until", { date: fmtDate(u.ends_at) })}</div>
+      ${u.sold_out ? `<span class="badge">${t("price.sold_out")}</span>` : `<button class="btn small primary" data-up="${esc(u.tier)}">${t("up.pick")}</button>`}</td></tr>`;
+  }).join("");
+  const d = openDialog(`<h3>${t("up.title")}</h3><p class="sub">${t("up.sub", { label: tierName(c.tier, c.label) })}</p>
+    <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
+    <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+  d.querySelectorAll("[data-up]").forEach((b) => (b.onclick = () => ticketUpgradeOrderDialog(tk, tk.upgrades.find((u) => u.tier === b.dataset.up))));
+}
+function ticketUpgradeOrderDialog(tk, u) {
+  const payU = tk.pay && (tk.pay.upgrades || []).find((x) => x.tier === u.tier && !x.sold_out);
+  const email = S.user.email;
+  const d = openDialog(`<h3>${t("up.order_title", { label: tierName(u.tier, u.label) })}</h3>
+    <p class="order-price"><b>${esc(money(u.amount, u.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
+    <form id="f-order" class="form-grid order-form">
+      ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
+      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
+      <div class="terms wide"><ul class="muted"><li>${t("up.terms", { label: tierName(u.tier, u.label), date: fmtDate(u.ends_at) })}</li><li>${t("ord.terms_l3")}</li></ul>
+        <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
+      <button class="btn primary" type="submit">${t("ord.send")}</button>
+      ${payU ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : ""}
+    </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+  const f = $("#f-order", d);
+  const body = () => ({ tier: u.tier, upgrade: true, terms_version: tk.terms_version, lang: LANG, ...(f.email ? { email: f.email.value } : {}) });
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
+    const go = f.querySelector('button[type="submit"]');
+    go.disabled = true;
+    try { await api("/api/me/orders", { method: "POST", body: { ...body(), currency: u.currency, message: f.message.value } }); d.close(); render(); }
+    catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
+  };
+  const pb = $("#order-pay", d);
+  if (pb) pb.onclick = async () => {
+    if (f.email && !f.email.reportValidity()) return;
+    if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
+    pb.disabled = true; pb.textContent = t("pay.going");
+    try { location.href = (await api("/api/orders/pay", { method: "POST", body: body() })).url; }
+    catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) }); $("#order-err", d).textContent = err.message; }
+  };
 }
 
 function quotaBar(q) {
@@ -1005,7 +1059,7 @@ function orderRow(o) {
     : `<div class="muted">${t("ord.visitor")}</div>`;
   return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
     <td><b>${bdi(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${bdi(o.email)}</a></div>${account}</td>
-    <td class="nowrap">${tierName(o.tier, o.label)} · ${lengthName(o.length)}</td>
+    <td class="nowrap">${o.upgrade_of ? `${t("up.what", { label: tierName(o.tier, o.label) })}<div class="muted">${t("ord.ticket_n", { id: esc(o.upgrade_of) })}</div>` : `${tierName(o.tier, o.label)} · ${lengthName(o.length)}`}</td>
     <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
     <td class="order-msg">${o.message ? bdi(o.message) : `<span class="muted">—</span>`}</td>
     <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">${t("ord.ticket_n", { id: esc(o.ticket_id) })}</div>` : ""}</td>
@@ -1028,13 +1082,18 @@ function stateBadge2(s) {
 function orderActions(o) {
   const b = (act, label, cls = "") => `<button class="btn small${cls}" data-oact="${act}" data-id="${o.id}">${label}</button>`;
   const open = o.status === "new" || o.status === "contacted";
-  return `<div class="row-actions">${o.status === "new" ? b("contacted", t("ord.act_contacted")) : ""}${open ? b("decline", t("ord.act_decline"), " danger") : ""}${b("note", t("tk.note"))}${open ? b("grant", t("ord.act_grant"), " primary") : ""}</div>`;
+  return `<div class="row-actions">${o.status === "new" ? b("contacted", t("ord.act_contacted")) : ""}${open ? b("decline", t("ord.act_decline"), " danger") : ""}${b("note", t("tk.note"))}${open ? (o.upgrade_of ? b("upgrade", t("up.act"), " primary") : b("grant", t("ord.act_grant"), " primary")) : ""}</div>`;
 }
 async function orderAction(act, o, users) {
   if (!o) return;
   const post = (body) => api(`/api/admin/orders/${o.id}`, { method: "POST", body });
   if (act === "contacted") { try { await post({ action: "contacted" }); render(); } catch (e) { alertInline(e.message); } return; }
   if (act === "decline" || act === "note") return orderNoteDialog(o, act, post);
+  if (act === "upgrade") {   // the price was quoted with the order; re-checked and sold in one step
+    if (!confirmInline(t("up.confirm", { name: o.user_name || o.name, label: tierNameText(o.tier, o.label), amount: money(o.quoted_amount, o.currency) }))) return;
+    try { await post({ action: "upgrade" }); render(); } catch (e) { alertInline(e.message); }
+    return;
+  }
   if (act !== "grant") return;
   if (o.user_id == null) return linkDialog(o, users);
   grantDialog(users, { order_id: o.id, user: o.user_id, tier: o.tier, length: o.length, currency: o.currency });

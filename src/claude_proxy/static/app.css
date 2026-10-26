@@ -355,7 +355,8 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .good { color: var(--good-text); } .critical { color: var(--critical-text); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .form-grid .hint { grid-column: 1 / -1; }
-.ticket { padding: 10px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px; } .badge.bonus { display: inline-block; margin: 4px 4px 0 0; border-color: var(--s4); }
+.ticket { padding: 10px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
+.ticket-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; } .badge.bonus { display: inline-block; margin: 4px 4px 0 0; border-color: var(--s4); }
 
 /* Order requests: the buyer's order line, the Order buttons, the admin's Orders tab and the order dialogs. */
 .order-note { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin: 16px 0; }
@@ -376,13 +377,15 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; }
 .split-bar b { font-size: 12px; line-height: 16px; margin-bottom: 2px; color: var(--ink); white-space: nowrap; text-align: center; }
 .split-bar i { display: block; height: 10px; border-radius: 2px; }
-/* Each weekly reset between segments: a tick through the bar and its date under it, centred on the tick (start- or
+/* The ticket's start, each weekly reset and its end: a tick through the bar and its date under it, centred on the tick (start- or
    end-aligned near an edge so it stays inside). Zero-wide, so the alignment holds in RTL too. */
 .split-bar em { position: absolute; top: 16px; width: 0; display: flex; justify-content: center; font-style: normal; }
 .split-bar em.edge-start { justify-content: flex-start; } .split-bar em.edge-end { justify-content: flex-end; }
 .split-bar em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 18px; background: var(--ink); }
 .split-bar em small { margin-top: 20px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .split-bar em.edge-start small { text-align: start; } .split-bar em.edge-end small { text-align: end; }
+.split-bar.has-low { padding-bottom: 68px; }
+.split-bar em.low::before { height: 50px; } .split-bar em.low small { margin-top: 52px; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
 /* The grant dialog: the amount as a headline over the period's facts, the stale-rate confirm, and the Cancel / Grant footer. */
 .grant-sum { background: var(--wash); border-radius: 10px; padding: 12px 14px; margin-top: 6px; font-size: 13px; color: var(--ink-2); }

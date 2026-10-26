@@ -234,7 +234,9 @@ SCHEMA = [
         granted_by INTEGER,
         granted_at INTEGER NOT NULL,
         cancelled_at INTEGER,
-        cancelled_by INTEGER
+        cancelled_by INTEGER,
+        tier TEXT,                           -- set: a paid upgrade to this tier (2026-10-26 spec), its share the difference
+        share_5h_pct REAL                    -- the 5-hour share it adds; NULL: share_pct
     )""",
     "CREATE INDEX IF NOT EXISTS idx_ticket_bonuses_ticket ON ticket_bonuses(ticket_id)",
     # Written by the daily maintenance task (estimates.py), read by /pricing, which never computes anything itself.
@@ -270,7 +272,8 @@ SCHEMA = [
         buyer_mail TEXT NOT NULL CHECK(buyer_mail IN ('pending','sent','failed','off','skipped')),
         terms_version TEXT NOT NULL DEFAULT 'v1',   -- ticket terms the buyer accepted (2026-10-13 spec, §3)
         lang TEXT NOT NULL DEFAULT 'en',    -- the page's language at order time: the buyer's emails use it ('en' or 'fa')
-        seen_at INTEGER                     -- the buyer dismissed this closed order
+        seen_at INTEGER,                    -- the buyer dismissed this closed order
+        upgrade_of INTEGER REFERENCES tickets(id)   -- set: an upgrade of this ticket to `tier` for its time left
     )""",
     "CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_orders_created ON orders(created_at)",
@@ -408,9 +411,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN terms_version TEXT NOT NULL DEFAULT 'v1'")
     if "lang" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
-    for table in ("ticket_tier_shares", "tickets"):
+    for table in ("ticket_tier_shares", "tickets", "ticket_bonuses"):
         if "share_5h_pct" not in _columns(conn, table):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN share_5h_pct REAL")
+    if "tier" not in _columns(conn, "ticket_bonuses"):
+        conn.execute("ALTER TABLE ticket_bonuses ADD COLUMN tier TEXT")
+    if "upgrade_of" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN upgrade_of INTEGER REFERENCES tickets(id)")
     if "api_key_id" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")

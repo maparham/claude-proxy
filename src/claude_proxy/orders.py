@@ -103,17 +103,26 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
-           terms_version: str | None = None, lang: str = "en") -> dict:
+           terms_version: str | None = None, lang: str = "en", upgrade_of: int | None = None) -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
     Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
     `terms_version`: the ticket terms the buyer ticked; equality-checked against tickets.TERMS_VERSION, missing or
     stale → 400 (2026-10-13 spec, §3). `notify=False`: no new-order emails (an order paid online).
-    `lang`: the page's language; the buyer's emails use it (anything but "fa" is English)."""
+    `lang`: the page's language; the buyer's emails use it (anything but "fa" is English).
+    `upgrade_of`: the user's running ticket, raised to `tier` for its time left (2026-10-26 spec); the length is the
+    ticket's and the quote tickets.upgrade_quote's."""
     now = _now(now)
     if terms_version != tickets.TERMS_VERSION:
         raise OrderError(400, tickets.TERMS_CHANGED)
     if tier not in cfg.tickets.tiers:
         raise OrderError(400, f"Unknown tier {tier!r}.")
+    if upgrade_of is not None:
+        if user_id is None:
+            raise OrderError(400, "Sign in to upgrade a ticket.")
+        t = conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.id=? AND t.user_id=?", (upgrade_of, user_id)).fetchone()
+        if t is None:
+            raise OrderError(404, "No such ticket.")
+        length = t["length"]
     if length not in LENGTHS:
         raise OrderError(400, f"Unknown length {length!r}; one of {', '.join(LENGTHS)}.")
     steps = tickets.currencies(cfg)
@@ -142,14 +151,23 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
                 raise OrderError(429, TOO_MANY)
             if _count(conn, f"{VISITOR} AND created_at>?", (since,)) >= VISITOR_GLOBAL:
                 raise OrderError(429, BUSY)
-        # Judged as the price list judges it: for a ticket starting now (spec section 2, Sold out).
-        if tickets.sold_out(conn, cfg, tier, length, now):
-            raise OrderError(409, "That ticket is sold out.")
         rate = tickets.current_rate(conn, currency)
-        if rate is None:
-            raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
-        usd = tickets.price_now(conn, tier, length, now)["usd"]
-        amount = tickets.round_local(usd, rate["rate"], steps[currency])
+        if upgrade_of is not None:
+            try:
+                q = tickets.upgrade_quote(conn, cfg, dict(t), tier, currency, now)
+            except tickets.TicketError as e:
+                raise OrderError(409, str(e)) from e
+            if q["sold_out"]:
+                raise OrderError(409, "That upgrade is sold out.")
+            usd, amount = q["usd"], q["amount"]
+        else:
+            # Judged as the price list judges it: for a ticket starting now (spec section 2, Sold out).
+            if tickets.sold_out(conn, cfg, tier, length, now):
+                raise OrderError(409, "That ticket is sold out.")
+            if rate is None:
+                raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
+            usd = tickets.price_now(conn, tier, length, now)["usd"]
+            amount = tickets.round_local(usd, rate["rate"], steps[currency])
         if cfg.email is None or not notify:   # notify=False: a payment order, mailed when paid instead (payments design, section 5)
             admin_mail = buyer_mail = "off"
         else:
@@ -158,12 +176,13 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             admin_mail, buyer_mail = "pending", "skipped" if sent >= BUYER_MAILS else "pending"
         cur = conn.execute(
             "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, quoted_amount, "
-            "message, status, ip, admin_mail, buyer_mail, terms_version, lang) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?)",
+            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, upgrade_of) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, upgrade_of))
         oid = cur.lastrowid
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
-                                                              "visitor": user_id is None, "terms_version": terms_version})
+                                                              "visitor": user_id is None, "terms_version": terms_version,
+                                                              **({"upgrade_of": upgrade_of} if upgrade_of is not None else {})})
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -251,13 +270,16 @@ def _amount(order: dict) -> str:
 def admin_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
     """(subject, body) for the admin, the only recipient of what the buyer typed. `order` may carry `user_name`."""
     label = _label(cfg, order)
-    lines = [f"New order #{order['id']}: {label}, {order['length']} ({LENGTHS.get(order['length'], '?')} days)", "",
+    up = order.get("upgrade_of")
+    head = (f"New order #{order['id']}: upgrade of ticket #{up} to {label} for its time left" if up else
+            f"New order #{order['id']}: {label}, {order['length']} ({LENGTHS.get(order['length'], '?')} days)")
+    lines = [head, "",
              f"Name: {order['name']}", f"Email: {order['email']}", f"Account: {order.get('user_name') or 'none'}",
              f"Quoted: {_amount(order)} (${order['quoted_usd']:g} at {order['quoted_rate']:g})", "",
              "Message:", order["message"] or "(none)"]
     if cfg.listener.dashboard_url:
         lines += ["", f"Orders: {cfg.listener.dashboard_url.rstrip('/')}/dashboard#orders"]
-    return f"New order: {label} {order['length']}", "\n".join(lines) + "\n"
+    return f"New order: {label} {'upgrade' if up else order['length']}", "\n".join(lines) + "\n"
 
 
 # Persian for the buyer's emails: the dashboard's own words (i18n.js tier.*, price.1_*, cur.toman).
@@ -285,27 +307,37 @@ def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple
     if order.get("lang") == "fa":
         return _buyer_mail_fa(conn, cfg, order)
     label = _label(cfg, order)
-    lines = [f"Your order: a {label} ticket for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
+    up = order.get("upgrade_of")
+    lines = [f"Your order: an upgrade of your ticket to {label} for the rest of it." if up else
+             f"Your order: a {label} ticket for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
              f"Price at today's rate: {_amount(order)}.", ""]
     if cfg.tickets.how_to_buy:
         lines += ["How to pay:", cfg.tickets.how_to_buy, ""]
-    lines += [tickets.terms_text(conn, cfg, "en", order["length"], order["created_at"]), "This is a request; the admin will contact you."]
-    return f"Your order: {label} {order['length']}", "\n".join(lines) + "\n"
+    if not up:   # an upgrade keeps its ticket's weeks: the terms the buyer got with it still hold
+        lines.append(tickets.terms_text(conn, cfg, "en", order["length"], order["created_at"]))
+    lines.append("This is a request; the admin will contact you.")
+    return f"Your order: {label} {'upgrade' if up else order['length']}", "\n".join(lines) + "\n"
 
 
 def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[str, str]:
     label, length = fa_label(cfg, order["tier"]), FA_LENGTHS.get(order["length"], order["length"])
-    lines = [f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
+    up = order.get("upgrade_of")
+    lines = [f"سفارش شما: ارتقای تیکت شما به {label} برای باقی‌ماندهٔ آن." if up else
+             f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
              f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
     how = cfg.tickets.how_to_buy_fa or cfg.tickets.how_to_buy
     if how:
         lines += ["روش پرداخت:", how, ""]
-    lines += [tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]), "این یک درخواست است؛ مدیر با شما تماس می‌گیرد."]
-    return f"سفارش شما: {label}، ۱ {length}", "\n".join(lines) + "\n"
+    if not up:
+        lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]))
+    lines.append("این یک درخواست است؛ مدیر با شما تماس می‌گیرد.")
+    return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
 
 def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket: dict) -> tuple[str, str]:
     """(subject, body) for the buyer once the admin grants their order: the ticket's dates and its terms."""
+    if order.get("upgrade_of"):
+        return upgraded_mail_text(cfg, order, ticket)
     terms = tickets.terms_text(conn, cfg, "fa" if order.get("lang") == "fa" else "en", order["length"], ticket["starts_at"])
     if order.get("lang") == "fa":
         what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
@@ -317,12 +349,24 @@ def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket
             f"Your order is done.\n\nTicket: {what}, {span}.\n\n{terms}")
 
 
+def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -> tuple[str, str]:
+    """(subject, body) for the buyer once their upgrade is in: the tier and when the ticket ends. `paid`: a line about
+    the payment, put first."""
+    end = ticket.get("effective_end") or ticket["ends_at"]
+    if order.get("lang") == "fa":
+        label = fa_label(cfg, order["tier"])
+        return (f"تیکت شما ارتقا یافت: {label}",
+                f"{paid}سفارش شما انجام شد.\n\nتیکت شما از حالا تا {tickets.terms_date(end, 'fa')} با سطح {label} کار می‌کند.\n")
+    label = _label(cfg, order)
+    return f"Your ticket is upgraded: {label}", f"{paid}Your order is done.\n\nYour ticket now runs at {label} until {tickets._date(end)}.\n"
+
+
 async def send_granted(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:
     """After the grant's response: tell the buyer their ticket is in. A failure is logged and never touches the order."""
     if cfg.email is None:
         return
     o = get(conn, order_id)
-    t = conn.execute("SELECT * FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
+    t = conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
     if t is None:
         return
     subject, body = granted_mail_text(conn, cfg, o, dict(t))
@@ -430,7 +474,7 @@ def mine(conn: sqlite3.Connection, user_id: int) -> dict | None:
         row = conn.execute("SELECT * FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user_id,)).fetchone()
         if row is None or row["status"] not in ("done", "declined") or row["seen_at"] is not None:
             return None
-    return {k: row[k] for k in BUYER_FIELDS}
+    return {k: row[k] for k in BUYER_FIELDS} | {"upgrade": row["upgrade_of"] is not None}   # no ticket ids: they number every sale
 
 
 def withdraw(conn: sqlite3.Connection, user_id: int, order_id: int, now: float | None = None) -> dict:

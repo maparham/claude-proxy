@@ -78,8 +78,9 @@ def _label(cfg: Config, tier: str) -> str:
 
 
 async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, email: str, now: float | None = None,
-              terms_version: str | None = None, lang: str = "en") -> dict:
+              terms_version: str | None = None, lang: str = "en", upgrade_of: int | None = None) -> dict:
     """Create the order (the usual order rules, terms tick included) and open a ZarinPal payment for its quote.
+    `upgrade_of`: the user's running ticket, upgraded to `tier` (orders.create).
     Returns the payment id and the StartPay address the browser goes to."""
     now = _now(now)
     if not on(cfg):
@@ -87,11 +88,12 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
     if not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
-                      user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang)
+                      user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang,
+                      upgrade_of=upgrade_of)
     amount = int(round(o["quoted_amount"]))
     try:
         authority = await zarinpal.request(cfg.zarinpal.merchant_id(), amount,
-                                           f"Claude Gateway: {_label(cfg, tier)}, {length}, order #{o['id']}",
+                                           f"Claude Gateway: {_label(cfg, tier)}, {'upgrade' if upgrade_of else length}, order #{o['id']}",
                                            f"{cfg.listener.home_url.rstrip('/')}/pay/callback", o["email"], o["id"],
                                            cfg.zarinpal.sandbox)
     except (zarinpal.ZarinpalUnavailable, zarinpal.ZarinpalRefused) as e:
@@ -184,8 +186,12 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
     try:
         if buyer is None:
             raise tickets.TicketError("the account no longer exists")
-        tickets.grant(conn, cfg, None, buyer, o["tier"], o["length"], CURRENCY, note=f"ZarinPal {ref_id}",
-                      order_id=o["id"], paid=True, after=mark, now=now)
+        if o["upgrade_of"] is not None:
+            tickets.upgrade(conn, cfg, None, buyer, o["upgrade_of"], o["tier"], CURRENCY, note=f"ZarinPal {ref_id}",
+                            order_id=o["id"], paid=True, after=mark, now=now)
+        else:
+            tickets.grant(conn, cfg, None, buyer, o["tier"], o["length"], CURRENCY, note=f"ZarinPal {ref_id}",
+                          order_id=o["id"], paid=True, after=mark, now=now)
     except Exception as e:
         try:
             committed = get(conn, p["id"])["status"] == "paid"
@@ -267,13 +273,19 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
     """(to, subject, body) for a payment that just became paid or paid_unfulfilled (section 5)."""
     if cfg.email is None:
         return []
-    what = f"{_label(cfg, o['tier'])}, {o['length']} ({LENGTHS.get(o['length'], '?')} days)"
+    up = o.get("upgrade_of")
+    what = f"upgrade of ticket #{up} to {_label(cfg, o['tier'])}" if up else f"{_label(cfg, o['tier'])}, {o['length']} ({LENGTHS.get(o['length'], '?')} days)"
     head = f"Paid: {what}, {_toman(p['amount'])}, ZarinPal reference {p['ref_id']}, by {o['name']} <{o['email']}>."
     link = f"\n\nOrders: {cfg.listener.dashboard_url.rstrip('/')}/dashboard#orders" if cfg.listener.dashboard_url else ""
     if p["status"] == "paid_unfulfilled":
         return [(cfg.email.admin_to, f"Paid, ticket NOT granted: order #{o['id']}",
                  f"{head}\n\nThe ticket was NOT granted: {reason}. Grant it from the order or refund the payment.{link}\n")]
-    out = [(cfg.email.admin_to, f"Paid: {_label(cfg, o['tier'])} {o['length']}", f"{head}\nThe ticket is live.{link}\n")]
+    out = [(cfg.email.admin_to, f"Paid: {_label(cfg, o['tier'])} {'upgrade' if up else o['length']}",
+            f"{head}\nThe {'upgrade' if up else 'ticket'} is live.{link}\n")]
+    if ticket is not None and up:
+        paid = (f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد. کد پیگیری زرین‌پال: {p['ref_id']}\n\n"
+                if o.get("lang") == "fa" else f"Thank you. Your payment of {_toman(p['amount'])} went through. ZarinPal reference: {p['ref_id']}\n\n")
+        return out + [(o["email"], *orders.upgraded_mail_text(cfg, o, ticket, paid))]
     if ticket is not None and o.get("lang") == "fa":   # the buyer's mail in the language of the page they paid from
         what_fa = f"{orders.fa_label(cfg, o['tier'])}، ۱ {orders.FA_LENGTHS.get(o['length'], o['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
@@ -294,7 +306,7 @@ async def send_mails(conn: sqlite3.Connection, cfg: Config, pid: int) -> None:
     if p["status"] not in ("paid", "paid_unfulfilled"):
         return
     o = orders.get(conn, p["order_id"])
-    t = conn.execute("SELECT * FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
+    t = conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
     for i, (to, subject, body) in enumerate(mails(conn, cfg, p, o, dict(t) if t else None, p["error"])):
         buyer = i == 1   # after the admin's: the buyer's, which carries the ticket's terms
         rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body) if buyer else None

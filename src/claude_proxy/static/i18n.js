@@ -641,6 +641,17 @@ const I18N = {
     "app.arrow": "→",
     "app.cancel_ticket": "Cancel",
     "ord.what": "{label}, {len}",
+    "up.button": "Upgrade",
+    "up.from": "upgraded from {label}",
+    "up.what": "upgrade to {label}",
+    "up.act": "Upgrade ticket",
+    "up.confirm": "Upgrade {name}'s ticket to {label} for {amount}?",
+    "up.title": "Upgrade your ticket",
+    "up.sub": "You're on {label}. A higher tier runs from now until your ticket ends; you pay only the difference for the time left.",
+    "up.until": "until {date}",
+    "up.pick": "Upgrade",
+    "up.order_title": "Upgrade to {label}",
+    "up.terms": "Your ticket runs at {label} from now until {date}. What it has used so far stays used.",
     "ord.received": "Order received: {what}. The admin will contact you.",
     "ord.quoted": "Quoted {amount}",
     "ord.in_touch": "the admin has been in touch",
@@ -1530,6 +1541,17 @@ const I18N = {
     "app.arrow": "←",
     "app.cancel_ticket": "لغو",
     "ord.what": "{label}، {len}",
+    "up.button": "ارتقا",
+    "up.from": "ارتقا یافته از {label}",
+    "up.what": "ارتقا به {label}",
+    "up.act": "ارتقای تیکت",
+    "up.confirm": "تیکت {name} به {label} با مبلغ {amount} ارتقا یابد؟",
+    "up.title": "ارتقای تیکت",
+    "up.sub": "سطح فعلی شما {label} است. سطح بالاتر از همین حالا تا پایان تیکت فعال می‌شود و فقط مابه‌التفاوتِ زمان باقی‌مانده را می‌پردازید.",
+    "up.until": "تا {date}",
+    "up.pick": "ارتقا",
+    "up.order_title": "ارتقا به {label}",
+    "up.terms": "تیکت شما از حالا تا {date} با سطح {label} کار می‌کند. مصرف تا این لحظه سر جایش می‌ماند.",
     "ord.received": "سفارش دریافت شد: {what}. مدیر با شما تماس می‌گیرد.",
     "ord.quoted": "تعرفهٔ اعلام‌شده {amount}",
     "ord.in_touch": "مدیر تماس گرفته است",
@@ -1812,7 +1834,8 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 // week_split (fractions of the ticket per week): each piece with the date it runs until, a weekly reset or the
 // ticket's end. Whole percents: "rough" is the promise. "" without quota data. Several pieces are also drawn as a bar,
 // each segment as long as its share, labelled with its week and percent (a narrow one with the percent only, a
-// sliver with neither: the sentence has them all), and each weekly reset between them marked with its date and time.
+// sliver with neither: the sentence has them all), with the ticket's start, each weekly reset and its end marked
+// with their date and time.
 function splitTerms(ws, len, days) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
@@ -1830,13 +1853,17 @@ function splitTerms(ws, len, days) {
     const d = new Date(ts * 1000);
     return `${d.toLocaleDateString(LOC, { weekday: "short", month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`;
   };
-  let at = 0;
+  // The ticket's start and end sit at the bar's ends; a reset close enough to one to collide drops to a second row.
+  const mark = (at, ts, cls) => `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${short(ts)}</small></em>`;
+  let at = 0, low = false;
   const resets = parts.slice(0, -1).map((v, i) => {
     at += v;
-    const edge = at < 0.15 ? "edge-start" : at > 0.85 ? "edge-end" : "";
-    return `<em class="${edge}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${short(until(i))}</small></em>`;
+    const near = at < 0.22 || at > 0.78;
+    low ||= near;
+    return mark(at, until(i), [at < 0.12 ? "edge-start" : at > 0.88 ? "edge-end" : "", near ? "low" : ""].join(" ").trim());
   }).join("");
-  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar" aria-hidden="true">${bar}${resets}</span>`;
+  const ends = mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end");
+  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${low ? " has-low" : ""}" aria-hidden="true">${bar}${ends}${resets}</span>`;
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"
@@ -1872,6 +1899,8 @@ const ERR_FA = {
   "No such limit.": "چنین سقفی نیست.",
   "No such machine.": "چنین کامپیوتری نیست.",
   "No such payment.": "چنین پرداختی نیست.",
+  "This order is not an upgrade.": "این سفارش ارتقا نیست.",
+  "You have no running ticket to upgrade.": "تیکت فعالی برای ارتقا ندارید.",
   "No such request waiting: it may have expired (after 10 minutes) or been answered already. Run gclaude again for a new code (the first time, the install command).": "چنین درخواستی در انتظار نیست: شاید منقضی شده (پس از ۱۰ دقیقه) یا قبلاً پاسخ گرفته باشد. برای کد تازه دوباره gclaude را اجرا کنید (بار اول، دستور نصب را).",
   "No such user.": "چنین کاربری نیست.",
   "Not found.": "پیدا نشد.",
