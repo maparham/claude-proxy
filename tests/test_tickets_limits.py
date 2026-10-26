@@ -407,6 +407,38 @@ def test_user_view_and_status_line_name_the_week_limit(env):
     assert line.startswith("alice · 5h 0% (resets in") and " · week 0% (resets in 3.0 days)" in line
 
 
+def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
+    """A week ticket bought 3 days before Anthropic's reset spans two weeks: the line gives each week's use and the
+    ticket's, not the reset time."""
+    from claude_proxy.web import _status_line
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 500, i=1000)
+    fresh(conn, NOW - 400, util5=1, util7=1)   # 1000 weighted tokens per point
+    sts = limits.states(conn, cfg, ids["alice"], now=NOW)
+    weekly = next(s for s in sts if s.kind == "share_7d")
+    weeks = limits.ticket_weeks(conn, cfg, ids["alice"], NOW, weekly)
+    assert [w["state"] for w in weeks["weeks"]] == ["current", "future"]
+    assert weeks["weeks"][0]["pct"] == pytest.approx(weekly.pct) and weeks["weeks"][1]["pct"] == 0
+    assert weeks["ticket_pct"] == pytest.approx(weekly.pct * (3 * DAY + 300) / (7 * DAY))   # this week holds 3d + 300s of 7d
+    line = _status_line(user(conn, ids["alice"]), sts, None, weeks)
+    assert line.endswith(f" · {weekly.pct:.0f}% of week 1 · 0% of week 2 · {weeks['ticket_pct']:.0f}% of ticket "
+                         "(6d:23h left)")   # granted 300 s ago
+    assert "week 1 ended" not in line and line.count("resets in") == 1   # only the 5-hour limit's
+    later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)   # into the second week: the first is over
+    assert [w["state"] for w in later["weeks"]] == ["past", "current"]
+    assert "week 1 ended · " in limits_line(conn, cfg, ids, later)
+
+
+def test_days_and_hours():
+    from claude_proxy.web import _days_hours
+    assert [_days_hours(s) for s in (3 * DAY + 5 * 3600 + 59, DAY, 2 * 3600, 2400)] == ["3d:5h", "1d:0h", "0d:2h", "0d:0h"]
+
+
+def limits_line(conn, cfg, ids, weeks):
+    from claude_proxy.web import _ticket_weeks_text
+    return _ticket_weeks_text(weeks, "")
+
+
 def test_status_line_marks_shares_estimated_without_live_data(env):
     from claude_proxy.web import _status_line
     conn, cfg, ids, t = env

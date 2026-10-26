@@ -645,7 +645,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                               "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
         if format == "account":   # gclaude's /account (statusline.sh --warn)
             return PlainTextResponse(_account_line(conn, user) + "\n")
-        line = _status_line(user, states, account)
+        weekly = next((s for s in states if s.kind == "share_7d" and s.tier is not None), None)
+        weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly) if weekly is not None and account is None else None
+        line = _status_line(user, states, account, weeks)
         if format == "text":
             return PlainTextResponse(line + "\n")
         out = {"user": _public_user(user), "limits": limit_views(user, states), "line": line,
@@ -1643,10 +1645,28 @@ def _account_line(conn, user) -> str:
     return " · ".join(parts)
 
 
-def _status_line(user, states, account) -> str:
+def _days_hours(s: int) -> str:
+    """`3d:5h`, whole hours rounded down."""
+    return f"{s // 86400}d:{s % 86400 // 3600}h"
+
+
+def _ticket_weeks_text(weeks: dict, est: str) -> str:
+    """`57% of week 1 · 0% of week 2 · 30% of ticket (3d:5h left)`; a week that is over reads
+    `week 1 ended`, since gclaude warns on the highest percentage on the line and a used-up past week would read as a
+    limit reached. A ticket within one week: the ticket's part only."""
+    ticket = f"{weeks['ticket_pct']:.0f}%{est} of ticket ({_days_hours(weeks['ends_in'])} left)"
+    if len(weeks["weeks"]) == 1:
+        return ticket
+    parts = [f"week {i} ended" if w["state"] == "past" else f"{w['pct']:.0f}%{est} of week {i}"
+             for i, w in enumerate(weeks["weeks"], 1)]
+    return " · ".join(parts + [ticket])
+
+
+def _status_line(user, states, account, weeks: dict | None = None) -> str:
     """e.g. `maya · daily $61/$100 (resets in 3.2 h) · plan 5h 8% (yours 6%) · week 10%`: the user's limits as
     used/limit, each with when its window resets, then, for an admin (`account` given), the shared subscription's quota
-    and the estimated part their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`."""
+    and the estimated part their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`;
+    with a ticket's `weeks` (limits.ticket_weeks), its weekly limit reads as each week's use and the whole ticket's."""
     parts = [user["name"]]
     for s in states:
         if s.kind == "allowed_models":
@@ -1655,7 +1675,12 @@ def _status_line(user, states, account) -> str:
         if base == "share" and account is None:
             label = _SHARE_PERIOD.get(period, period)
             est = " est." if s.no_live_data else ""
-            parts.append(f"{label} n/a" if s.skipped or s.current is None else f"{label} {s.pct:.0f}%{est}{_resets(s)}")
+            if s.skipped or s.current is None:
+                parts.append(f"{label} n/a")
+            elif period == "7d" and s.tier is not None and weeks:   # a ticket's weekly piece
+                parts.append(_ticket_weeks_text(weeks, est))
+            else:
+                parts.append(f"{label} {s.pct:.0f}%{est}{_resets(s)}")
             continue
         if base == "share":
             label = f"{_SHARE_PERIOD.get(period, period)} share"

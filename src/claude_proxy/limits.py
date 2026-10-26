@@ -292,6 +292,45 @@ def _ticket_7d(conn, cfg, user_id, ticket, label, now) -> LimitState:
     return _finish(st)
 
 
+def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None) -> dict | None:
+    """For the statusline: the covering ticket's use of each Anthropic week it spans and of the whole ticket, e.g.
+    {"weeks": [{"pct": 57.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 30.0, "ends_in": 3600}
+    (seconds until the ticket ends). Each week's
+    piece is measured as share_7d measures the current one (`current`, that state, is reused for it), at today's rate
+    and capacity. None without a ticket, a known week or a rate."""
+    t = tickets.covering(conn, user_id, now)
+    week = tickets.week_bounds(conn, cfg, now)
+    if t is None or week is None:
+        return None
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    capacity = _capacity(quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s), now)
+    bonuses = tickets.active_bonuses(conn, t["id"], now)
+    t_start, t_end = t["starts_at"], t["effective_end"]
+    start = week[0]
+    while start > t_start:
+        start -= 7 * DAY
+    weeks, used_all, limit_all = [], 0.0, 0.0
+    while start < t_end:
+        end = start + 7 * DAY
+        ps, pe = max(start, t_start), min(end, t_end)
+        cap = t["share_pct"] * (pe - ps) / DAY / 7 + sum(
+            b["share_pct"] * max(0.0, min(pe, b["ends_at"]) - max(ps, b["starts_at"])) / DAY / 7 for b in bonuses)
+        limit = cap * capacity / 100
+        state = "past" if end <= now else "future" if start > now else "current"
+        if state == "future":
+            used = 0.0
+        elif state == "current" and current is not None and current.current is not None:
+            used = current.current
+        elif rate:
+            used = _weighted_since(conn, cfg, user_id, ps, min(pe, now)) / rate
+        else:
+            return None
+        weeks.append({"pct": 100.0 * used / limit if limit else 100.0, "state": state})
+        used_all, limit_all = used_all + used, limit_all + limit
+        start = end
+    return {"weeks": weeks, "ticket_pct": 100.0 * used_all / limit_all if limit_all else 100.0, "ends_in": max(0, int(t_end - now))}
+
+
 def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | None = None) -> list[LimitState]:
     """The two share limits a ticket builds (2026-10-13 spec, §1): share_5h against Anthropic's 5-hour window, and
     share_7d, the ticket's prorated piece of Anthropic's current weekly window, against the user's weighted tokens
