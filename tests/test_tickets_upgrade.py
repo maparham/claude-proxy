@@ -85,7 +85,7 @@ async def test_buyer_orders_an_upgrade_and_the_admin_sells_it(env):
         assert (await grant(c, {"user": ids["alice"], "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
     async with client(gw) as c:
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
-        assert [u["tier"] for u in me["upgrades"]] == ["standard"] and me["current"]["upgraded_from"] is None
+        assert [u["tier"] for u in me["upgrades"]] == ["standard"] and "share_pct" not in str(me) and me["current"]["upgraded_from"] is None
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]),
                          json={"tier": "standard", "upgrade": True, "currency": "EUR", "terms_version": "v1", "email": "a@example.com"})
         assert r.status_code == 200, r.text

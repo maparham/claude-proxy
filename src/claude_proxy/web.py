@@ -1344,15 +1344,18 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if st["queued"]:
             q = st["queued"]
             out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+        # The upgrade quotes without their shares: the user never learns the subscription's percents.
+        user_upgrades = lambda c: [{k: v for k, v in q.items() if k not in ("share_pct", "share_5h_pct")}  # noqa: E731
+                                   for q in tickets.upgrade_options(conn, cfg, user["id"], c, now)]
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.last_end(conn, user["id"]))   # a new ticket queues after the last
         # Tiers above the running ticket, each priced for the time it has left (2026-10-26 spec).
-        out["upgrades"] = tickets.upgrade_options(conn, cfg, user["id"], out["prices"]["currency"], now) if cur else []
+        out["upgrades"] = user_upgrades(out["prices"]["currency"]) if cur else []
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
         out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY),
-                       "upgrades": tickets.upgrade_options(conn, cfg, user["id"], payments.CURRENCY, now) if cur else []}
+                       "upgrades": user_upgrades(payments.CURRENCY) if cur else []}
                       if payments.on(cfg) and payments.rate_ok(conn, now) else None)
         return out
 

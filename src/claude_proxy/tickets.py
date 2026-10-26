@@ -1018,7 +1018,8 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str, starts_at: float | None = None) -> dict:
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
     amounts and a sold-out flag, and how a ticket starting at `starts_at` (default now) splits across Anthropic's
-    weeks. Nothing about who holds what. Falls back to USD without a rate."""
+    weeks. Nothing about who holds what, and no subscription share: `compare_pct` is the tier's weekly share as a
+    percent of its compare plan's weekly usage (share × compare_ratio), None without one. Falls back to USD without a rate."""
     now = _now(now)
     rate = current_rate(conn, currency)
     if rate is None:
@@ -1033,7 +1034,7 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
-        tiers.append({"tier": tid, "label": t.label, "share_pct": eff[tid]["share_pct"], "share_5h_pct": eff[tid]["share_5h_pct"], "compare": t.compare,
-                      "compare_ratio": t.compare_ratio, "lengths": lengths})
+        compare_pct = round(eff[tid]["share_pct"] * t.compare_ratio) if t.compare and t.compare_ratio else None
+        tiers.append({"tier": tid, "label": t.label, "compare": t.compare, "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}

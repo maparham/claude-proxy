@@ -622,10 +622,10 @@ function pickedLine(prices, pick) {
   const len = tier && ["day", "week", "month"].includes(pick.length) && t(`price.a_${pick.length}`);
   return len ? t("price.picked", { tier: esc(tierNameText(tier.tier, tier.label)), len }) : "";
 }
-// "Up to 60% of Claude Pro's weekly usage": the weekly share × compare plans per account week. The same for every
+// "Up to 60% of Claude Pro's weekly usage": compare_pct, worked out by the server. The same for every
 // length, since a ticket's weekly piece pro-rates by day just as the plan's week does.
 function shareOfPlan(tier, len) {
-  return t("home.share_of", { pct: nf0.format(Math.round(tier.share_pct * tier.compare_ratio)), what: bdi(tier.compare), period: t(`home.usage_${len}`) });
+  return t("home.share_of", { pct: nf0.format(tier.compare_pct), what: bdi(tier.compare), period: t(`home.usage_${len}`) });
 }
 function priceListCard(tk, order) {
   const p = tk.prices;
@@ -638,8 +638,8 @@ function priceListCard(tk, order) {
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]];
   // The home page's pick is the highlighted Order button; a sold-out price has none.
   const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
-  // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_ratio.
-  const planShare = (tier, k) => tier.compare && tier.compare_ratio ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
+  // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
+  const planShare = (tier, k) => tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
   const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
     ${planShare(tier, k)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
   return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
@@ -735,7 +735,7 @@ function ticketUpgradeDialog(tk) {
   const tierOf = (id) => tk.prices.tiers.find((x) => x.tier === id);
   const rows = tk.upgrades.map((u) => {
     const tier = tierOf(u.tier);
-    return `<tr><td><b>${tierName(u.tier, u.label)}</b>${tier && tier.compare && tier.compare_ratio ? `<div class="muted">${shareOfPlan(tier, u.length)}</div>` : ""}</td>
+    return `<tr><td><b>${tierName(u.tier, u.label)}</b>${tier && tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, u.length)}</div>` : ""}</td>
       <td class="r"><b>${esc(money(u.amount, u.currency))}</b><div class="muted">${t("up.until", { date: fmtDate(u.ends_at) })}</div>
       ${u.sold_out ? `<span class="badge">${t("price.sold_out")}</span>` : `<button class="btn small primary" data-up="${esc(u.tier)}">${t("up.pick")}</button>`}</td></tr>`;
   }).join("");

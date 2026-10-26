@@ -177,12 +177,12 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
         p = r.json()
     assert p["currency"] == "EUR" and p["rate_set_at"] is not None and p["how_to_buy"].startswith("Send")
     lite = next(t for t in p["tiers"] if t["tier"] == "lite")
-    assert lite["compare"] == "Claude Pro" and lite["lengths"]["month"] == {
+    assert (lite["compare"], lite["compare_pct"]) == ("Claude Pro", 30) and lite["lengths"]["month"] == {
         "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5, "sold_out": True}   # 25 sold: nothing fits today
     assert lite["lengths"]["week"]["sold_out"] is True and lite["lengths"]["week"]["discount_ends_at"] is None
     assert p["week_split"] is None   # no quota data: the terms keep their general line
     text = r.text
-    for leaked in ("utilization", "alice", "sold_now", "shares"):
+    for leaked in ("utilization", "alice", "sold_now", "shares", "share_pct", "share_5h_pct", "compare_ratio"):
         assert leaked not in text
 
 
