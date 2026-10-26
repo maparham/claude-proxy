@@ -1818,6 +1818,21 @@ def test_on_sets_up_gclaude_by_default(stub, home):
     assert gc_paths(home)[2].exists() and settings.read_bytes() == before
 
 
+@pytest.mark.parametrize("status", [403, 429])
+def test_on_goes_ahead_for_an_account_with_no_credit_or_ticket(stub, home, status):
+    stub.models_status = status   # the key is good; the gateway just won't serve it yet
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, r.stderr
+    assert f"not serving this account yet (HTTP {status})" in r.stderr and gc_paths(home)[2].exists()
+
+
+def test_on_still_stops_on_a_rejected_key(stub, home):
+    stub.models_status = 401
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-bad")
+    assert r.returncode == 1 and "did not accept the key (HTTP 401)" in r.stderr
+    assert not gc_paths(home)[2].exists()
+
+
 def test_bare_on_keeps_refreshing_global_mode_where_it_is_on(stub, home):
     assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     r = cg(home, "on")
