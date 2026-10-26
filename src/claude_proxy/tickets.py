@@ -856,6 +856,9 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
                 check_capacity(conn, cfg, t["account_id"], share_pct, max(s, now), e)
         else:
             s, e = old_end, new_end
+        if extra_days:   # an upgrade runs to the ticket's end, so it reaches into the extra days too (2026-10-26 spec)
+            conn.execute("UPDATE ticket_bonuses SET ends_at=? WHERE ticket_id=? AND tier IS NOT NULL AND cancelled_at IS NULL AND ends_at=?",
+                         (new_end, ticket_id, old_end))
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
                            "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, note, actor, now))
         # The share was checked before the extra days existed: where it reaches into them, both count.

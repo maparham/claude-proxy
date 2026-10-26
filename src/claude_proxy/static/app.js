@@ -562,24 +562,26 @@ async function renderOverview(main) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
     stackedTime($("#ov-users"), s.points, "weighted", "user", "day");
   }
-  if (tk) {
-    const p2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2 });
-    const tick = () => {
-      let ended = false;
-      main.querySelectorAll(".countdown").forEach((el) => {
-        const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000 - S.tkSkew));
-        if (!s && !S.discountsEnded.has(el.dataset.ends)) { S.discountsEnded.add(el.dataset.ends); ended = true; }
-        el.textContent = s ? t("price.offer_ends", { d: nf0.format(Math.floor(s / 86400)), h: p2.format(Math.floor((s % 86400) / 3600)), m: p2.format(Math.floor((s % 3600) / 60)), s: p2.format(s % 60) }) : t("price.offer_ended");
-      });
-      if (ended) { clearInterval(S.countdown); render(); }   // once per end: the regular price returns
-    };
-    tick();
-    clearInterval(S.countdown); S.countdown = setInterval(() => (document.contains(main.querySelector(".countdown")) ? tick() : clearInterval(S.countdown)), 1000);
-  }
+  if (tk) startCountdowns(main);
   if (S.paymentId) {
     const id = S.paymentId; S.paymentId = null;
     api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
+}
+// Discount countdowns in `root` (the overview, or the Renew dialog), on the server's clock; one ticker at a time.
+function startCountdowns(root) {
+  const p2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2 });
+  const tick = () => {
+    let ended = false;
+    root.querySelectorAll(".countdown").forEach((el) => {
+      const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000 - S.tkSkew));
+      if (!s && !S.discountsEnded.has(el.dataset.ends)) { S.discountsEnded.add(el.dataset.ends); ended = true; }
+      el.textContent = s ? t("price.offer_ends", { d: nf0.format(Math.floor(s / 86400)), h: p2.format(Math.floor((s % 86400) / 3600)), m: p2.format(Math.floor((s % 3600) / 60)), s: p2.format(s % 60) }) : t("price.offer_ended");
+    });
+    if (ended) { clearInterval(S.countdown); if (root.open) root.close(); render(); }   // once per end: the regular price returns
+  };
+  tick();
+  clearInterval(S.countdown); S.countdown = setInterval(() => (document.contains(root.querySelector(".countdown")) && (!root.showModal || root.open) ? tick() : clearInterval(S.countdown)), 1000);
 }
 function showPaymentNotice(p) {
   const msg = paymentNoticeMsg(p);
@@ -588,7 +590,7 @@ function showPaymentNotice(p) {
 // The #payment/<id> result notice. infoInline() escapes the message it's handed, so this passes every
 // server value (ref_id, label, error_shown) in raw: escaping it here too would double-escape ' and & etc.
 function paymentNoticeMsg(p) {
-  const what = t("ord.what", { label: tierNameText(p.tier, p.label), len: lengthName(p.length) });
+  const what = p.upgrade ? t("up.what", { label: tierNameText(p.tier, p.label) }) : t("ord.what", { label: tierNameText(p.tier, p.label), len: lengthName(p.length) });
   return { paid: t("pay.paid", { ref: p.ref_id, what }), paid_unfulfilled: t("pay.unfulfilled", { ref: p.ref_id }),
     cancelled: t("pay.cancelled"), failed: t("pay.failed", { msg: p.error_shown || "" }), expired: t("pay.expired"),
     started: t("pay.pending") }[p.status];
@@ -718,6 +720,7 @@ function wireOrdering(root, tk, order) {
     const d = openDialog(`${priceListCard(tk, order, t("renew.sub", { date: fmtDate(tk.queued ? tk.queued.effective_end : tk.current.effective_end) }))}
       <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
     wireOrdering(d, tk, order);
+    startCountdowns(d);
   };
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");

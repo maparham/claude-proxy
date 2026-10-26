@@ -99,3 +99,14 @@ async def test_buyer_orders_an_upgrade_and_the_admin_sells_it(env):
     assert (me["current"]["tier"], me["current"]["upgraded_from"]["tier"], me["current"]["bonus_pct"]) == ("standard", "lite", 0)
     assert me["current"]["bonuses"] == [] and me["upgrades"] == []
     assert time.time() < me["current"]["effective_end"]
+
+
+def test_bonus_days_after_an_upgrade_run_at_the_upgraded_tier(core):
+    conn, cfg, ids, t = core
+    at = NOW + 3.5 * DAY
+    tickets.upgrade(conn, cfg, ids["admin"], user(conn, ids["alice"]), t["id"], "standard", "EUR", now=at)
+    tickets.add_bonus(conn, cfg, ids["admin"], t["id"], extra_days=2, now=at + 60)
+    end = tickets.get(conn, t["id"])["effective_end"]
+    assert end == t["effective_end"] + 2 * DAY
+    assert tickets.bonus_share(conn, t["id"], end - 60) == 20      # the extra days still carry the upgrade
+    assert tickets.sold_at(conn, 1, end - 60) == 25

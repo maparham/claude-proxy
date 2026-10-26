@@ -1461,13 +1461,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/me/payments/{pid}")
     async def my_payment(request: Request, pid: int):
         user = principal(request)
-        row = conn.execute("SELECT p.*, o.tier, o.length FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=? AND p.user_id=?",
+        row = conn.execute("SELECT p.*, o.tier, o.length, o.upgrade_of FROM payments p JOIN orders o ON o.id=p.order_id WHERE p.id=? AND p.user_id=?",
                            (pid, user["id"])).fetchone()
         if row is None:
             fail(404, "No such payment.")
         # The buyer sees ZarinPal's message for a failed payment; never the card, the authority or an internal reason.
         return {"id": row["id"], "status": row["status"], "amount": row["amount"], "ref_id": row["ref_id"], "tier": row["tier"],
-                "label": tier_label(row["tier"]), "length": row["length"],
+                "label": tier_label(row["tier"]), "length": row["length"], "upgrade": row["upgrade_of"] is not None,
                 "error_shown": row["error"] if row["status"] == "failed" else None}
 
     @app.post("/api/me/orders/{oid}/{action}")
