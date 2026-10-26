@@ -394,7 +394,7 @@ function weeksValue(w) {
   const nth = (i) => t(`ord.nth.${i}`);
   const ticket = t("lim.ticket_used", { pct: pct(w.ticket_pct), left: fmtDur(w.ends_in) });
   if (w.weeks.length === 1) return ticket;
-  return [...w.weeks.map((x, i) => (x.state === "past" ? t("lim.week_ended", { n: nth(i + 1) }) : t("lim.week_used", { pct: pct(x.pct), n: nth(i + 1) }))), ticket]
+  return [...w.weeks.map((x, i) => (x.state === "past" ? t("lim.week_ended", { n: nth(i + 1) }) : t("lim.week_used", { pct: pct(x.pct), n: nth(i + 1).toLowerCase() }))), ticket]
     .join(t("lim.sep"));
 }
 function limitValueTip(l) {

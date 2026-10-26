@@ -34,8 +34,8 @@ TERMS_VERSION = "v1"
 TERMS = {
     "en": {"head": "Ticket terms:", "split": "Your use of the ticket will be limited in {n} parts: {pieces}.",
            "split_one": "Your whole ticket is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
-           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "Week {n}: {pct}",
-           "nth": ("1", "2", "3", "4", "5"),
+           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "{n} week: {pct}",
+           "nth": ("First", "Second", "Third", "Fourth", "Fifth"),
            "l1": "Your allowance is split across Anthropic's weekly windows by the days each one covers; each piece is "
                  "spendable at your own pace and expires at its window's reset.",
            "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
