@@ -613,7 +613,7 @@ def test_buyer_mail_html_draws_the_split(db):
     h = tickets.mail_html(conn, cfg, "fa", "week", RESET7 - DAY, body)
     assert h.startswith('<div dir="rtl"') and "&lt;b&gt;" in h and "پایان" in h
     assert h.count('width="14.3%"') == 2 and h.count('width="85.7%"') == 2   # a label cell and a bar cell per part
-    assert ">۱۴٪</td>" in h and ">هفته دوم ۸۶٪</td>" in h   # 14% is too narrow for its week
+    assert ">۱۴٪</td>" in h and ">هفته دوم: ۸۶٪</td>" in h   # 14% is too narrow for its week
     assert "border-radius:2px\">&nbsp;</td>" in h
     assert tickets.mail_html(conn, cfg, "en", "week", RESET7 - DAY, "Hi\n").startswith('<div dir="ltr"')
 
