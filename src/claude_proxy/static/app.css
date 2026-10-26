@@ -377,8 +377,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; }
 .split-bar b { font-size: 12px; line-height: 16px; margin-bottom: 2px; color: var(--ink); white-space: nowrap; text-align: center; }
 .split-bar i { display: block; height: 10px; border-radius: 2px; }
-/* The ticket's start, each weekly reset and its end: a tick through the bar and its date under it, centred on the tick (start- or
-   end-aligned near an edge so it stays inside). Zero-wide, so the alignment holds in RTL too. */
+/* The ticket's start, each weekly reset and its end: a tick through the bar and its date under it, centred on the
+   tick (start- or end-aligned near an edge so it stays inside; a reset near an end drops to a second row). Zero-wide, so the alignment holds in RTL too. */
 .split-bar em { position: absolute; top: 16px; width: 0; display: flex; justify-content: center; font-style: normal; }
 .split-bar em.edge-start { justify-content: flex-start; } .split-bar em.edge-end { justify-content: flex-end; }
 .split-bar em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 18px; background: var(--ink); }
