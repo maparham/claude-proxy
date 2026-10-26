@@ -1210,7 +1210,7 @@ async function renderPricing(main) {
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3>
       <form id="f-shares">
-      <div class="table-wrap"><table class="data"><thead><tr><th>${tipT(t("price.tier"), "pr_tier")}</th><th class="r">${tipT(t("pr.share_pct"), "pr_share")}</th><th class="r">${tipT(t("pr.per_day"), "pr_per_day")}</th><th class="r">${tipT(t("pr.share_5h"), "pr_share_5h")}</th><th>${tipT(t("pr.compare"), "pr_compare")}</th><th class="r">${tipT(t("pr.compare_ratio"), "pr_ratio")}</th></tr></thead><tbody>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}${tipI("pr_tier")}</th><th class="r">${t("pr.share_pct")}${tipI("pr_share")}</th><th class="r">${t("pr.per_day")}${tipI("pr_per_day")}</th><th class="r">${t("pr.share_5h")}${tipI("pr_share_5h")}</th><th>${t("pr.compare")}${tipI("pr_compare")}</th><th class="r">${t("pr.compare_ratio")}${tipI("pr_ratio")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
         <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share" data-tier="${esc(k)}" data-init="${x.share_pct}" value="${x.share_pct}" required style="width:80px"> <span class="muted">%</span></td>
         <td class="r muted" data-perday="${esc(k)}">${fmtShare(x.share_pct / 7)}</td>
