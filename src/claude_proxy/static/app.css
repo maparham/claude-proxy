@@ -371,6 +371,11 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .form-grid .wide { grid-column: 1 / -1; }
 .terms ul { margin: 4px 0 10px; padding-inline-start: 18px; font-size: 13px; line-height: 1.6; }
 .terms li + li { margin-top: 4px; }
+/* The ticket's split across Anthropic's weeks: one segment per week, as long as its share, 2px apart. */
+.split-bar { display: flex; gap: 2px; max-width: 420px; margin: 8px 0 4px; }
+.split-bar span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; }
+.split-bar b { font-size: 12px; line-height: 16px; margin-bottom: 2px; color: var(--ink); white-space: nowrap; text-align: center; }
+.split-bar i { display: block; height: 10px; border-radius: 2px; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
 .order-price { margin: 0 0 12px; font-size: 18px; font-variant-numeric: tabular-nums; }
 dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;

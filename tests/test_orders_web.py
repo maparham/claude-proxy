@@ -44,7 +44,7 @@ def sent(env, monkeypatch):
     gw, conn, cfg, ids, keys = env
     cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
     out = []
-    monkeypatch.setattr(mail, "send", lambda email, to, subject, body: out.append((to, subject)))
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: out.append((to, subject)))
     return out
 
 
@@ -129,7 +129,7 @@ async def test_the_response_does_not_wait_for_the_mail(env, ts, monkeypatch):
     cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
     release, sent = threading.Event(), []
 
-    def slow_send(email, to, subject, body):
+    def slow_send(email, to, subject, body, html=None):
         assert release.wait(10)
         sent.append(to)
     monkeypatch.setattr(mail, "send", slow_send)

@@ -152,7 +152,7 @@ async def test_mail_once_per_payment(env, monkeypatch):
     import asyncio
     cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
     sent = []
-    monkeypatch.setattr(mail, "send", lambda email, to, subject, body: sent.append(to))
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: sent.append(to))
     async with client(gw) as c:
         r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         auth = r.json()["url"].rsplit("/", 1)[1]

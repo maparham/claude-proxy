@@ -6,6 +6,7 @@ transaction, so two admins acting at once cannot oversell.
 """
 from __future__ import annotations
 
+import html
 import math
 import sqlite3
 import time
@@ -33,13 +34,15 @@ TERMS_VERSION = "v1"
 TERMS = {
     "en": {"head": "Ticket terms:", "split": "Your use of the ticket will be limited in {n} parts: {pieces}.",
            "split_one": "Your whole ticket is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
-           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"},
+           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "Week {n} {pct}",
+           "nth": ("1", "2", "3", "4", "5"),
            "l1": "Your allowance is split across Anthropic's weekly windows by the days each one covers; each piece is "
                  "spendable at your own pace and expires at its window's reset.",
            "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
     "fa": {"head": "شرایط تیکت:", "split": "استفاده شما از تیکت در {n} قسمت محدود خواهد بود: {pieces}.",
            "split_one": "کل تیکت شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
-           "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"},
+           "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "هفته {n} {pct}",
+           "nth": ("اول", "دوم", "سوم", "چهارم", "پنجم"),
            "l1": "سهم شما به نسبت روزهایی که هر بازهٔ هفتگی آنتروپیک پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت "
                  "خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
            "l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.", "tz": "ساعت‌ها به وقت تهران است."},
@@ -81,32 +84,71 @@ def terms_date(ts: float, lang: str) -> str:
     return t.strftime("%A, %B ") + str(t.day) + t.strftime(" at %I:%M %p")
 
 
-def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
-    """The order dialog's terms for a `length` ticket starting at `starts_at`, as one block for the buyer's emails:
-    how it splits across Anthropic's weeks (each piece with the date it runs until), else the general line without
-    quota data; then the 5-hour line."""
+SPLIT_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")   # app.css --s1..--s5, light: a month spans up to 5 weeks
+
+
+def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None, rich: bool) -> str:
     w = TERMS["fa" if lang == "fa" else "en"]
     ws = order_split(conn, cfg, starts_at, now)
     parts, days = (ws or {}).get(length) or [], LENGTHS[length]
+    esc = html.escape if rich else str
 
     def pct(v):
         s = "<1%" if 0 < v < 0.01 else f"{round(v * 100)}%"
         return fa_num(s).replace("%", "٪") if lang == "fa" else s
 
+    bar = ""
     if not parts:
-        split = w["l1"]
+        split = esc(w["l1"])
     elif len(parts) == 1:
-        split = w["split_one"].format(date=terms_date(starts_at + days * DAY, lang))
+        split = esc(w["split_one"].format(date=terms_date(starts_at + days * DAY, lang)))
     else:
         end = starts_at + days * DAY
-        pieces = [w["piece"].format(pct=pct(v), date=terms_date(min(ws["first_reset"] + i * 7 * DAY, end), lang))
+        pieces = [esc(w["piece"].format(pct=pct(v), date=terms_date(min(ws["first_reset"] + i * 7 * DAY, end), lang)))
                   for i, v in enumerate(parts)]
         n = w["nums"].get(len(parts)) or (fa_num(len(parts)) if lang == "fa" else str(len(parts)))
-        split = w["split"].format(n=n, pieces=w["sep"].join(pieces[:-1]) + w["and"] + pieces[-1])
-    lines = [w["head"], f"- {split}", f"- {w['l3']}"]
-    if parts:
-        lines.append(w["tz"])
-    return "\n".join(lines) + "\n"
+        split = esc(w["split"]).replace("{n}", esc(n)).replace(
+            "{pieces}", esc(w["sep"]).join(pieces[:-1]) + esc(w["and"]) + pieces[-1])
+        def label(v, i):   # as the dialog's: week and percent, a narrow part's percent only, a sliver's nothing
+            if v >= 0.2:
+                return esc(w["week"].format(n=w["nth"][i] if i < len(w["nth"]) else i + 1, pct=pct(v)))
+            return esc(pct(v)) if v >= 0.1 else "&nbsp;"
+
+        if rich:   # a table, which mail clients lay out: each part as wide as its share, 2px apart, its label above it
+            gap = '<td width="2" style="font-size:0;line-height:0">&nbsp;</td>'
+            widths = [f"{max(v * 100, 1):.1f}%" for v in parts]
+            labels = gap.join(f'<td width="{wd}" style="font-size:12px;font-weight:bold;line-height:16px;padding-bottom:2px;text-align:center;'
+                              f'white-space:nowrap">{label(v, i)}</td>'
+                              for i, (wd, v) in enumerate(zip(widths, parts)))
+            cells = gap.join(f'<td width="{wd}" style="height:10px;font-size:0;line-height:0;background:'
+                             f'{SPLIT_COLORS[i % len(SPLIT_COLORS)]};border-radius:2px">&nbsp;</td>' for i, wd in enumerate(widths))
+            bar = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+                   f'style="max-width:420px;margin:8px 0 4px;border-collapse:collapse"><tr>{labels}</tr><tr>{cells}</tr></table>')
+    lines = [esc(w["head"]), f"- {split}" + bar, f"- {esc(w['l3'])}"] + ([esc(w["tz"])] if parts else [])
+    return "\n".join(lines).replace("</table>\n", "</table>") + "\n"   # the table already breaks the line
+
+
+def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
+    """The order dialog's terms for a `length` ticket starting at `starts_at`, as one block for the buyer's emails:
+    how it splits across Anthropic's weeks (each piece with the date it runs until), else the general line without
+    quota data; then the 5-hour line."""
+    return _terms(conn, cfg, lang, length, starts_at, now, rich=False)
+
+
+def terms_html(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
+    """terms_text as HTML for the email's HTML copy, with the split drawn under its sentence: a bar, each part's
+    percent on it."""
+    return _terms(conn, cfg, lang, length, starts_at, now, rich=True)
+
+
+def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float, body: str) -> str:
+    """A buyer email's HTML copy: the plain `body`, its terms block (for that ticket) swapped for the drawn one, right
+    to left for Persian."""
+    lang = "fa" if lang == "fa" else "en"
+    d = "rtl" if lang == "fa" else "ltr"
+    terms, rich = terms_text(conn, cfg, lang, length, starts_at), terms_html(conn, cfg, lang, length, starts_at)
+    inner = html.escape(body).replace(html.escape(terms), rich, 1)
+    return f'<div dir="{d}" style="text-align:{"right" if d == "rtl" else "left"};white-space:pre-wrap">{inner}</div>\n'
 
 
 TERMS_CHANGED = "Ticket terms have changed; reload and accept the current terms."

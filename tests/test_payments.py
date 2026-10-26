@@ -345,7 +345,7 @@ async def test_reconcile_grants_a_payment_whose_verify_was_unreachable(env, monk
     from claude_proxy.config import EmailConfig
     cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
     sent = []
-    monkeypatch.setattr(mail, "send", lambda email, to, subject, body: sent.append(to))
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: sent.append(to))
     zp.verify_answer = zarinpal.ZarinpalUnavailable("down")
     p0, p = await paid_flow(conn, cfg, ids)
     assert p["status"] == "started"
@@ -487,7 +487,7 @@ async def test_cli_reconcile_mails_each_changed_payment_once(env, monkeypatch):
     from claude_proxy import cli, mail
     from claude_proxy.config import EmailConfig
     sent = []
-    monkeypatch.setattr(mail, "send", lambda email, to, subject, body: sent.append(to))
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: sent.append(to))
     r = await start(conn, cfg, ids)
     conn.execute("UPDATE payments SET created_at=created_at-?", (payments.EXPIRE_S + 1,))
     await cli._reconcile_once(conn, cfg)   # no [email]: granted, no mail

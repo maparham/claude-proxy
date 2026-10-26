@@ -318,8 +318,9 @@ async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None
     if o["buyer_mail"] == "pending":
         jobs.append(("buyer_mail", o["email"], *buyer_mail_text(conn, cfg, o)))
     for which, to, subject, body in jobs:
+        rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], o["created_at"], body) if which == "buyer_mail" else None
         try:
-            await asyncio.to_thread(mail.send, cfg.email, to, subject, body)
+            await asyncio.to_thread(mail.send, cfg.email, to, subject, body, rich)
             state = "sent"
         except Exception as e:
             logger.warning("order #%d: %s to %s failed: %s", order_id, which.replace("_", " "), to, e)

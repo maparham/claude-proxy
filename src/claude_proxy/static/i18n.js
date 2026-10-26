@@ -652,6 +652,8 @@ const I18N = {
     "ord.split_one": "Your whole ticket is usable until {date}.",
     "ord.split_piece": "{pct} until {date}",
     "ord.split_and": " and ",
+    "ord.split_week": "Week {n} {pct}",
+    "ord.nth.1": "1", "ord.nth.2": "2", "ord.nth.3": "3", "ord.nth.4": "4", "ord.nth.5": "5",
     "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
     "ord.terms_l3": "Anthropic also applies its own 5-hour limit.",
     "ord.terms_accept": "I accept the terms",
@@ -1538,6 +1540,8 @@ const I18N = {
     "ord.split_one": "کل تیکت شما تا {date} قابل استفاده است.",
     "ord.split_piece": "{pct} تا {date}",
     "ord.split_and": " و ",
+    "ord.split_week": "هفته {n} {pct}",
+    "ord.nth.1": "اول", "ord.nth.2": "دوم", "ord.nth.3": "سوم", "ord.nth.4": "چهارم", "ord.nth.5": "پنجم",
     "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
     "ord.terms_l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.",
     "ord.terms_accept": "شرایط را می‌پذیرم",
@@ -1804,7 +1808,9 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 
 // The order terms' line on how a `days`-long ticket of `len` splits across Anthropic's weeks, from the price list's
 // week_split (fractions of the ticket per week): each piece with the date it runs until, a weekly reset or the
-// ticket's end. Whole percents: "rough" is the promise. "" without quota data.
+// ticket's end. Whole percents: "rough" is the promise. "" without quota data. Several pieces are also drawn as a bar,
+// each segment as long as its share, labelled with its week and percent (a narrow one with the percent only, a
+// sliver with neither: the sentence has them all).
 function splitTerms(ws, len, days) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
@@ -1816,7 +1822,9 @@ function splitTerms(ws, len, days) {
   if (parts.length === 1) return t("ord.split_one", { date: when(end) });
   const pieces = parts.map((v, i) => t("ord.split_piece", { pct: pct(v), date: when(until(i)) }));
   const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
-  return t("ord.split", { n: t(`num.${parts.length}`), pieces: list });
+  const label = (v, i) => (v >= 0.2 ? t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) }) : v >= 0.1 ? pct(v) : "&nbsp;");
+  const bar = parts.map((v, i) => `<span style="flex-grow:${v}"><b>${label(v, i)}</b><i style="background:var(--s${i % 5 + 1})"></i></span>`).join("");
+  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar" aria-hidden="true">${bar}</span>`;
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"

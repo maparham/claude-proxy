@@ -541,7 +541,7 @@ def test_persian_amounts_in_toman():
 def fake_send(monkeypatch, fail=False):
     sent = []
 
-    def send(email, to, subject, body):
+    def send(email, to, subject, body, html=None):
         if fail:
             raise OSError("smtp down")
         sent.append((to, subject))

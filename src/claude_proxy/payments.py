@@ -295,8 +295,10 @@ async def send_mails(conn: sqlite3.Connection, cfg: Config, pid: int) -> None:
         return
     o = orders.get(conn, p["order_id"])
     t = conn.execute("SELECT * FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
-    for to, subject, body in mails(conn, cfg, p, o, dict(t) if t else None, p["error"]):
+    for i, (to, subject, body) in enumerate(mails(conn, cfg, p, o, dict(t) if t else None, p["error"])):
+        buyer = i == 1   # after the admin's: the buyer's, which carries the ticket's terms
+        rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body) if buyer else None
         try:
-            await asyncio.to_thread(mail.send, cfg.email, to, subject, body)
+            await asyncio.to_thread(mail.send, cfg.email, to, subject, body, rich)
         except Exception as e:
             logger.warning("payment #%d: mail to %s failed: %s", pid, to, e)
