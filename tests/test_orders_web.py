@@ -537,11 +537,11 @@ async def test_home_csp_allows_turnstile_only_when_it_is_on(env, monkeypatch):
     assert 'id="order-dialog"' in r.text
 
 
-async def test_home_js_orders_through_the_public_endpoint(env):
+async def test_home_js_places_no_order_itself(env):
     gw, conn, cfg, ids, keys = env
     async with client(gw) as c:
         js = (await c.get("/static/home.js")).text
-    assert '"/api/orders"' in js and "turnstile/v0/api.js?render=explicit" in js and "turnstile_token" in js
+    assert '"/api/orders"' not in js and "turnstile" not in js   # the buyer signs in and orders from the dashboard
     _node_check(STATIC / "home.js")
 
 
@@ -567,8 +567,6 @@ setTimeout(() => {
   const out = { atLoad: created.length };
   out.cards = Object.fromEntries(["day", "week", "month"].map((k) => [k, ctx.cardsHtml(data, k)]));
   out.form = ctx.orderFormHtml(data, data.tiers[0], "week");
-  out.received = [ctx.receivedHtml("v@x.yz", true), ctx.receivedHtml("<v>@x.yz", false)];
-  ctx.loadTurnstile(); ctx.loadTurnstile();
   out.scripts = created;
   console.log(JSON.stringify(out));
 }, 10);
@@ -587,30 +585,20 @@ def _run_home_order(tmp_path, data):
     return json.loads(out)
 
 
-def test_with_turnstile_get_it_opens_the_order_dialog(tmp_path):
+def test_get_it_opens_the_order_dialog(tmp_path):
     from tests.test_tickets_web import _prices, _tier
-    data = _prices(_tier(week={"sold_out": True})) | {"turnstile_site_key": "0xSITE"}
-    r = _run_home_order(tmp_path, data)
-    assert 'data-order="lite:month"' in r["cards"]["month"] and 'href="/dashboard?tier=' not in r["cards"]["month"]
+    r = _run_home_order(tmp_path, _prices(_tier(week={"sold_out": True})))
+    assert 'data-order="lite:month"' in r["cards"]["month"] and "href=" not in r["cards"]["month"]
     assert "Sold out" in r["cards"]["week"] and "data-order" not in r["cards"]["week"]          # sold out still can't be ordered
-    assert r["atLoad"] == 0                                                                      # the script waits for the dialog
-    assert r["scripts"] == ["https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"]   # and loads once
+    assert r["scripts"] == []                                                                    # no Turnstile
 
 
-def test_without_turnstile_get_it_stays_a_link(tmp_path):
-    from tests.test_tickets_web import _prices
-    r = _run_home_order(tmp_path, _prices())
-    assert 'href="/dashboard?tier=lite&length=week"' in r["cards"]["week"] and "data-order" not in r["cards"]["week"]
-
-
-def test_the_visitor_dialog_offers_signing_in_and_escapes(tmp_path):
+def test_the_order_dialog_goes_on_to_signing_in_and_escapes(tmp_path):
     from tests.test_tickets_web import _prices, _tier
-    data = _prices(_tier(label=BAD)) | {"turnstile_site_key": "0xSITE", "currency": "EUR"}
-    form = _run_home_order(tmp_path, data)["form"]
-    assert '<a href="/dashboard?tier=lite&amp;length=week">Or sign in to order</a>' in form
-    for field in ('name="name"', 'name="email"', 'name="message"', 'class="turnstile'):
-        assert field in form
-    assert 'name="currency"' not in form
+    form = _run_home_order(tmp_path, _prices(_tier(label=BAD)) | {"currency": "EUR"})["form"]
+    assert 'href="/dashboard?tier=lite&amp;length=week&amp;order=1">Continue: sign in</a>' in form
+    for field in ('name="name"', 'name="email"', "<form", 'class="turnstile'):
+        assert field not in form
     assert "<img" not in form
 
 
@@ -679,14 +667,6 @@ async def test_the_public_response_says_whether_a_confirmation_was_queued(env, t
         await drain()
 
 
-def test_the_received_message_promises_an_email_only_when_one_was_queued(tmp_path):
-    from tests.test_tickets_web import _prices
-    queued, not_queued = _run_home_order(tmp_path, _prices() | {"turnstile_site_key": "0xSITE"})["received"]
-    assert "The admin will contact you at <b><bdi>v@x.yz</bdi></b>." in queued and "A confirmation email is on its way." in queued
-    assert "<bdi>&lt;v&gt;@x.yz</bdi>" in not_queued and "confirmation" not in not_queued
-    assert "Check your email" not in queued + not_queued
-
-
 HOME_TICK_HARNESS = r"""
 const fs = require("fs"), vm = require("vm"), path = require("path");
 const src = fs.readFileSync(process.argv[2], "utf8");
@@ -694,10 +674,9 @@ const i18n = fs.readFileSync(path.join(path.dirname(process.argv[2]), "i18n.js")
 const data = JSON.parse(process.argv[3]);
 let reloads = 0, tickFn = null; const closeFns = [];
 const countdownEl = { dataset: { ends: "1000" }, textContent: "" };
-const price = { textContent: "" }, hint = { textContent: "" }, option = { value: "USD", dataset: { price: "" } };
+const price = { textContent: "" };
 const dialog = { id: "order-dialog", open: true, innerHTML: "", addEventListener: (ev, fn) => { if (ev === "close") closeFns.push(fn); },
-  querySelector: (s) => s === "#order-price" ? price : s === ".hint" ? hint : s.startsWith("select") ? { value: "USD" } : null,
-  querySelectorAll: (s) => s.startsWith("option") ? [option] : [] };
+  querySelector: (s) => s === "#order-price" ? price : null };
 const els = { "order-dialog": dialog };
 const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventListener: () => {} });
 const ctx = {
@@ -711,9 +690,9 @@ ctx.window = ctx;
 const context = vm.createContext(ctx);
 vm.runInContext(i18n + "\n" + src, context);
 setTimeout(() => {
-  vm.runInContext('ordering = { t: data.tiers[0], len: "week" }', context);   // as openOrder() would have set it
+  vm.runInContext('ordering = { t: data.tiers[0], len: "week", currency: "USD" }', context);   // as openOrder() would have set it
   tickFn(); tickFn();
-  const out = { whileOpen: reloads, text: countdownEl.textContent, price: price.textContent, option: option.dataset.price, hint: hint.textContent };
+  const out = { whileOpen: reloads, text: countdownEl.textContent, price: price.textContent };
   dialog.open = false; closeFns.forEach((f) => f());
   out.afterClose = reloads;
   console.log(JSON.stringify(out));
@@ -730,10 +709,9 @@ def test_a_discount_ending_waits_for_the_order_dialog_to_close(tmp_path):
         pytest.skip("no node here")
     harness = tmp_path / "home_tick.js"
     harness.write_text(HOME_TICK_HARNESS)
-    data = _prices(_tier(week={"usd": 6, "amount": 6, "discount_ends_at": 1000})) | {"turnstile_site_key": "0xSITE", "now": 2000}
+    data = _prices(_tier(week={"usd": 6, "amount": 6, "discount_ends_at": 1000})) | {"now": 2000}
     out = subprocess.run(["node", str(harness), str(STATIC / "home.js"), json.dumps(data)], capture_output=True, text=True, timeout=30, check=True).stdout
     r = json.loads(out)
-    assert r["whileOpen"] == 0 and r["text"] == "Offer ended"           # the visitor keeps what they typed
-    assert r["price"] == "$8.00" and r["option"] == "$8.00"              # at the regular price, which the server now charges
-    assert r["hint"].startswith("The offer ended while you were ordering; this is the regular price.")
+    assert r["whileOpen"] == 0 and r["text"] == "Offer ended"           # the dialog stays open
+    assert r["price"] == "$8.00"                                         # at the regular price, which the server now charges
     assert r["afterClose"] == 1                                          # the regular price returns on the cards afterwards

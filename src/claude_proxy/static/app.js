@@ -709,6 +709,13 @@ function wireOrdering(root, tk, order) {
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
     if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version);
   }));
+  // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).
+  const pick = takePick();
+  if (pick && pick.open) {
+    pick.open = false;
+    const b = root.querySelector(`[data-order="${CSS.escape(`${pick.tier}:${pick.length}`)}"]:not([disabled])`);
+    if (b) b.click();
+  }
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
     if (act === "withdraw" && !confirmInline(t("ord.confirm_withdraw"))) return;
@@ -2094,8 +2101,9 @@ const PICK_KEY = "cp-picked";
 function rememberPick() {
   const q = new URLSearchParams(location.search);
   if (!q.has("tier")) return;
-  try { sessionStorage.setItem(PICK_KEY, JSON.stringify({ tier: q.get("tier"), length: q.get("length") })); } catch { /* no storage: the pick is lost */ }
-  q.delete("tier"); q.delete("length");
+  // open: the buyer went on from the home page's order dialog, so the order dialog opens here once they are in.
+  try { sessionStorage.setItem(PICK_KEY, JSON.stringify({ tier: q.get("tier"), length: q.get("length"), open: q.get("order") === "1" })); } catch { /* no storage: the pick is lost */ }
+  q.delete("tier"); q.delete("length"); q.delete("order");
   const rest = q.toString();   // not q.size: older Safari and Chrome lack it
   history.replaceState(null, "", location.pathname + (rest ? `?${rest}` : "") + location.hash);
 }

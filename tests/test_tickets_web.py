@@ -537,7 +537,7 @@ def test_home_shows_week_first_and_the_toggle_switches_length(tmp_path):
 def test_home_sold_out_is_per_length(tmp_path):
     r = _run_home(tmp_path, _prices(_tier(week={"sold_out": True})))
     assert "sold-out" in r["cards"]["week"] and "Sold out" in r["cards"]["week"] and "Get it" not in r["cards"]["week"]
-    assert "sold-out" not in r["cards"]["month"] and 'href="/dashboard?tier=lite&length=month"' in r["cards"]["month"]
+    assert "sold-out" not in r["cards"]["month"] and 'data-order="lite:month"' in r["cards"]["month"]
 
 
 def test_home_saving_is_against_the_charged_day_price(tmp_path):
@@ -669,7 +669,9 @@ var sessionStorage = { setItem: (k, v) => { store[k] = v; } };
 var location = { search: "?tier=lite&length=week&ref=mail", pathname: "/dashboard", hash: "" };
 var history = { replaceState: (a, b, u) => { replaced = u; } };"""
     out = _app_fn(tmp_path, ["rememberPick"], stubs + "rememberPick(); var out = [replaced, JSON.parse(store['cp-picked'])];")
-    assert out == ["/dashboard?ref=mail", {"tier": "lite", "length": "week"}]
+    assert out == ["/dashboard?ref=mail", {"tier": "lite", "length": "week", "open": False}]
+    out = _app_fn(tmp_path, ["rememberPick"], stubs.replace("&ref=mail", "&order=1&ref=mail") + "rememberPick(); var out = [replaced, JSON.parse(store['cp-picked'])];")
+    assert out == ["/dashboard?ref=mail", {"tier": "lite", "length": "week", "open": True}]   # from the home page's dialog
 
 
 def test_payment_notice_escapes_apostrophes_and_ampersands_only_once(tmp_path):
