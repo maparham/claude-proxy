@@ -311,11 +311,9 @@ def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple
     lines = [f"Your order: an upgrade of your ticket to {label} for the rest of it." if up else
              f"Your order: a {label} ticket for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
              f"Price at today's rate: {_amount(order)}.", ""]
-    if cfg.tickets.how_to_buy:
-        lines += ["How to pay:", cfg.tickets.how_to_buy, ""]
     if not up:   # an upgrade keeps its ticket's weeks: the terms the buyer got with it still hold
         lines.append(tickets.terms_text(conn, cfg, "en", order["length"], order["created_at"]))
-    lines.append("This is a request; the admin will contact you.")
+    lines.append("Your order is not paid yet. The admin will contact you about the next step.")
     return f"Your order: {label} {'upgrade' if up else order['length']}", "\n".join(lines) + "\n"
 
 
@@ -325,12 +323,9 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
     lines = [f"سفارش شما: ارتقای تیکت شما به {label} برای باقی‌ماندهٔ آن." if up else
              f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
              f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
-    how = cfg.tickets.how_to_buy_fa or cfg.tickets.how_to_buy
-    if how:
-        lines += ["روش پرداخت:", how, ""]
     if not up:
         lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]))
-    lines.append("این یک درخواست است؛ مدیر با شما تماس می‌گیرد.")
+    lines.append("سفارش شما هنوز پرداخت نشده است. مدیر برای مرحلهٔ بعد با شما تماس می‌گیرد.")
     return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
 

@@ -510,7 +510,8 @@ def test_buyer_mail_carries_nothing_the_buyer_typed(mailing):
     subject, body = orders.buyer_mail_text(conn, cfg, o)
     assert subject == "Your order: Lite week"
     assert "Mallory" not in body and "Buy now" not in body and "spam" not in body and "<script>" not in body
-    assert "7.50 EUR" in body and cfg.tickets.how_to_buy in body and "This is a request; the admin will contact you." in body
+    assert "7.50 EUR" in body and cfg.tickets.how_to_buy not in body   # no bank transfer: online payment, else the admin
+    assert "Your order is not paid yet. The admin will contact you about the next step." in body
     assert tickets.terms_text(conn, cfg, "en", "week", o["created_at"]) in body
 
 
@@ -522,16 +523,13 @@ def test_order_keeps_the_pages_language(env, lang, stored):
 
 def test_buyer_mail_in_persian_for_an_order_from_the_persian_page(mailing):
     conn, cfg, ids = mailing
-    cfg.tickets.how_to_buy_fa = "مبلغ را به مدیر بفرستید."
     o = visitor(conn, cfg, lang="fa")
     subject, body = orders.buyer_mail_text(conn, cfg, o)
     assert subject == "سفارش شما: اقتصادی، ۱ هفته"
     assert "تیکت اقتصادی برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
-    assert cfg.tickets.how_to_buy_fa in body and cfg.tickets.how_to_buy not in body
+    assert "مدیر برای مرحلهٔ بعد با شما تماس می‌گیرد" in body and cfg.tickets.how_to_buy not in body
     assert tickets.terms_text(conn, cfg, "fa", "week", o["created_at"]) in body and "شرایط تیکت:" in body
     assert "Ticket terms" not in body
-    cfg.tickets.how_to_buy_fa = ""   # no Persian text configured: the English one rather than none
-    assert cfg.tickets.how_to_buy in orders.buyer_mail_text(conn, cfg, o)[1]
 
 
 def test_persian_amounts_in_toman():

@@ -295,9 +295,11 @@ def test_no_active_ticket_is_a_403_with_the_right_message(env):
     conn, cfg, ids, t = env
     after = t["ends_at"] + 100
     fresh(conn, after - 50)
+    assert check(conn, cfg, ids["alice"], now=after).body["error"]["message"] == f"Your ticket ended on {limits._date(t['ends_at'])}."
+    cfg.listener.dashboard_url = "https://dash.example/"   # with a dashboard: where to buy the next one
     d = check(conn, cfg, ids["alice"], now=after)
     assert (d.status, d.kind, d.body["error"]["type"]) == (403, "ticket", "permission_error")
-    assert d.body["error"]["message"] == f"Your ticket ended on {limits._date(t['ends_at'])}. Send the amount by bank transfer and email the admin."
+    assert d.body["error"]["message"] == f"Your ticket ended on {limits._date(t['ends_at'])}. Buy one at https://dash.example/dashboard"
     assert check(conn, cfg, ids["alice"], now=after, model=None, path="/v1/models").status == 403   # every request
     nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=after, terms_version="v1")
     conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (after + DAY, after + 2 * DAY, nxt["id"]))
@@ -500,7 +502,7 @@ def test_a_ticket_cancelled_before_it_started_is_like_having_no_ticket(db):
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 10)
     d = check(conn, cfg, ids["alice"], now=NOW + 20)
     assert d.status == 403
-    assert d.body["error"]["message"] == "You have no ticket. Send the amount by bank transfer and email the admin."
+    assert d.body["error"]["message"] == "You have no ticket."
 
 
 def test_retry_after_and_reset_in_round_up(env):

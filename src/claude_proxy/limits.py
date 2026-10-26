@@ -350,9 +350,10 @@ def _no_ticket_message(conn, cfg, user_id, now) -> str:
     if nxt:
         return f"Your next ticket starts on {_date(nxt['starts_at'])}."
     last = tickets.last_ended(conn, user_id, now)
+    buy = f" Buy one at {cfg.listener.dashboard_url.rstrip('/')}/dashboard" if cfg.listener.dashboard_url else ""
     if last is None:   # e.g. their only ticket was cancelled before it started
-        return f"You have no ticket. {cfg.tickets.how_to_buy}".strip()
-    return f"Your ticket ended on {_date(last['ended_at'])}. {cfg.tickets.how_to_buy}".strip()
+        return f"You have no ticket.{buy}"
+    return f"Your ticket ended on {_date(last['ended_at'])}.{buy}"
 
 
 def _perm(message: str) -> dict:

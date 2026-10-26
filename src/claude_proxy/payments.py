@@ -60,6 +60,26 @@ def rate_ok(conn: sqlite3.Connection, now: float | None = None) -> bool:
     return rate is not None and not tickets.rate_is_stale(rate, _now(now))
 
 
+MANUAL_KEY = "manual_orders"   # settings row: "1" while the admin's Manual orders switch is on
+
+
+def manual_switch(conn: sqlite3.Connection) -> bool:
+    """The admin's switch on the Orders tab: orders paid outside ZarinPal, for while it is down. Off by default."""
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (MANUAL_KEY,)).fetchone()
+    return row is not None and row[0] == "1"
+
+
+def set_manual_switch(conn: sqlite3.Connection, actor: int, value: bool) -> None:
+    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (MANUAL_KEY, "1" if value else "0"))
+    db.audit(conn, actor, "manual_orders", "on" if value else "off")
+
+
+def manual_orders(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
+    """Whether a buyer may order without paying online: the admin's switch, or online payment unavailable (not set up,
+    or a stale Toman rate), when an unpaid order is the only way to buy."""
+    return manual_switch(conn) or not (on(cfg) and rate_ok(conn, now))
+
+
 def get(conn: sqlite3.Connection, pid: int) -> dict:
     row = conn.execute("SELECT * FROM payments WHERE id=?", (pid,)).fetchone()
     if row is None:

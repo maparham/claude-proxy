@@ -252,7 +252,7 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
     assert cur["bonuses"] == [{"pct": 40, "note": "welcome", "ends_at": t["ends_at"] + DAY}] and not cur["week_known"]
     assert cur["day_bonuses"] == [] and abs(me["now"] - time.time()) < 5   # that bonus's days show with its share
     assert (me["queued"]["label"], me["queued"]["starts_at"]) == ("Lite", t["ends_at"] + DAY)
-    assert me["prices"]["currency"] == "EUR" and me["how_to_buy"].startswith("Send")
+    assert me["prices"]["currency"] == "EUR" and me["manual"] is True and "how_to_buy" not in me   # no ZarinPal here: unpaid orders open
     for leaked in ("utilization", "sold_now", "shares", "granted_by"):
         assert leaked not in str(me)
     for leaked in ("share_pct", "share_5h_pct", "week_piece", "bonus_share"):   # the subscription's percents

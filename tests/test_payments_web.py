@@ -160,3 +160,26 @@ async def test_mail_once_per_payment(env, monkeypatch):
             await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
         await asyncio.gather(*list(web._mail_tasks))
     assert sorted(sent) == ["admin@example.com", "alice@example.com"]
+
+
+async def test_unpaid_orders_only_with_the_admin_switch_or_zarinpal_unavailable(env):
+    gw, conn, cfg, ids, keys, zp = env
+    order = {"tier": "lite", "length": "week", "currency": "EUR", "terms_version": "v1"}
+    async with client(gw) as c:
+        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["manual"] is False
+        r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)
+        assert r.status_code == 409 and "ZarinPal" in r.json()["error"]
+    async with admin_client(gw) as c:
+        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "manual": False, "manual_forced": False}
+        assert (await c.post("/api/admin/orders/manual", json={"on": "yes"})).status_code == 400
+        assert (await c.post("/api/admin/orders/manual", json={"on": True})).json() == {"ok": True, "manual": True}
+    async with client(gw) as c:
+        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["manual"] is True
+        assert (await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)).status_code == 200
+    assert conn.execute("SELECT action, target FROM audit_log WHERE action='manual_orders'").fetchall()[0][1] == "on"
+    payments.set_manual_switch(conn, ids["admin"], False)
+    conn.execute("UPDATE fx_rates SET set_at=? WHERE currency='IRT'", (int(time.time()) - 40 * 3600,))   # ZarinPal can't quote
+    assert payments.manual_orders(conn, cfg) is True
+    async with admin_client(gw) as c:
+        r = (await c.get("/api/admin/orders")).json()
+        assert (r["manual"], r["manual_forced"]) == (False, True)

@@ -1317,7 +1317,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         st = tickets.user_state(conn, user["id"], now)
         label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
         # No ticket ids: they number every sale on the account.
-        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "how_to_buy": cfg.tickets.how_to_buy}
+        # `manual`: whether the order dialog offers an unpaid order beside ZarinPal.
+        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(conn, cfg, now)}
         cur = st["current"]
         if cur:
             ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
@@ -1380,6 +1381,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return t["id"]
 
     def place_order(body: dict, **kw) -> dict:
+        # An unpaid order only while the admin's switch is on or ZarinPal cannot take the payment.
+        if not payments.manual_orders(conn, cfg):
+            fail(409, "Ordering without paying online is off; pay with ZarinPal.")
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
                         currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""),
                         terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""), **kw)
@@ -1494,7 +1498,19 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             pay = conn.execute("SELECT status, amount, ref_id, card_pan FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1",
                                (o["id"],)).fetchone()
             o["payment"] = dict(pay) if pay else None
-        return {"orders": rows, "new": orders.new_count(conn)}
+        # `manual`: the switch itself; `manual_forced`: unpaid orders are open anyway, ZarinPal being unavailable.
+        return {"orders": rows, "new": orders.new_count(conn), "manual": payments.manual_switch(conn),
+                "manual_forced": not (payments.on(cfg) and payments.rate_ok(conn))}
+
+    @app.post("/api/admin/orders/manual")
+    async def orders_manual(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        if not isinstance(body.get("on"), bool):
+            fail(400, "on must be true or false.")
+        payments.set_manual_switch(conn, actor["id"], body["on"])
+        return {"ok": True, "manual": body["on"]}
 
     @app.post("/api/admin/orders/{oid}")
     async def order_action(request: Request, oid: int):

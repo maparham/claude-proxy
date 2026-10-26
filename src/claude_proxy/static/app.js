@@ -121,7 +121,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api", "manual_orders"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -528,13 +528,17 @@ async function renderOverview(main) {
     else if (incidents) banners.push(`<div class="banner"><span class="icon">i</span><span>${incidents}</span></div>`);
   }
   const unpriced = tot.unpriced_models || [];
+  // A buyer with no ticket and no use yet: no zero tiles or empty limit bars, just the order and the price list.
+  const idle = !!tk && !tk.current && !tk.queued && !(ov.totals["30d"] || tot).requests;
+  const open = !!order && (order.status === "new" || order.status === "contacted");
   const ex = ov.exhaustion;
   main.innerHTML = `
     <section class="view">
       <h2>${isAdmin() ? t("ov.title_admin") : t("ov.title_user", { name: bdi(S.user.name) })}</h2>
       <p class="lede">${isAdmin() ? t("ov.lede_admin") : t("ov.lede_user")}</p>
       ${banners.join("")}
-      <div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
+      ${tk ? myOrderCard(order) : ""}
+      ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `<div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
       <div class="tiles">
         <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
         <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
@@ -550,9 +554,9 @@ async function renderOverview(main) {
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">${t("ov.rising", { v: nfFix(1).format(ex.pct_per_hour) })}${ex.eta_s ? t("ov.fills_in", { d: fmtDur(ex.eta_s) }) + (ex.before_reset ? t("ov.before_reset") : t("ov.after_reset")) : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>` : ""}
         ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order)}
-      </div>
+      </div>`}
       ${machinesCard(keys.keys, S.install)}
-      ${tk ? myOrderCard(order) + (tk.current ? "" : priceListCard(tk, order)) : ""}
+      ${tk && !tk.current ? priceListCard(tk, order) : ""}
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
@@ -615,7 +619,7 @@ function userLimitsCard(me, tk, order) {
       ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
-    : `<div class="ticket">${t("ov.ticket_ended")} ${tk.how_to_buy ? bdi(tk.how_to_buy) : t("ov.ask_admin")}</div>`;
+    : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? t("ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
     ${ticket}${limitsBlock(me.limits)}</div>`;
@@ -650,7 +654,7 @@ function priceListCard(tk, order, renew) {
   return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t("renew.title") : t("tab.tickets")}</h3><p class="sub">${renew ? `${renew} ` : ""}${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${t("price.terms_note")}</p><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
+    </tbody></table></div><p class="sub">${t("price.terms_note")}</p>${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
 }
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
@@ -661,8 +665,12 @@ function myOrderCard(o) {
   if (!o) return "";
   const what = o.upgrade ? t("up.what", { label: tierName(o.tier, o.label) }) : t("ord.what", { label: tierName(o.tier, o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
+    // Submitted, the admin in touch about paying, the ticket live: where the order stands, as steps.
+    const at = o.status === "contacted" ? 2 : 1;
+    const steps = ["ord.step_sent", "ord.step_contact", "ord.step_live"].map((k, i) => `<li class="${i < at ? "done" : i === at ? "now" : ""}">${t(k)}</li>`).join("");
     return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
-      <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div></div>
+      <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div>
+      <ol class="order-steps">${steps}</ol></div>
       <button class="btn small" data-my-order="withdraw" data-id="${o.id}">${t("ord.withdraw")}</button></div>`;
   }
   const text = o.status === "done" ? t("ord.done") : o.status === "declined" ? t("ord.declined") : "";
@@ -670,11 +678,11 @@ function myOrderCard(o) {
     <button class="btn small" data-my-order="dismiss" data-id="${o.id}">${t("ord.dismiss")}</button></div>` : "";
 }
 // What a buyer can order in: the price list's currency and USD, which always has a rate.
-function orderFormHtml(p, tier, len, email, payL, pay) {
+function orderFormHtml(p, tier, len, email, payL, pay, manual) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
   const payBtn = payL && !payL.sold_out
-    ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payL.amount, pay.currency)) })}</button>` : "";
+    ? `<button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payL.amount, pay.currency)) })}</button>` : "";
   return `<h3>${t("ord.title", { what: t("ord.what", { label: tierName(tier.tier, tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
@@ -684,15 +692,21 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <div class="error wide" id="order-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
-        <button class="btn primary" type="submit">${t("ord.send")}</button>${payBtn}</div>
+        ${orderButtons(manual, payBtn)}</div>
     </form>`;
 }
-function orderDialog(p, tier, len, pay, termsVersion) {
+// An unpaid order (Submit) only while the server allows one: the admin's switch, or ZarinPal unavailable.
+function orderButtons(manual, payBtn) {
+  const send = manual || !payBtn ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
+  return `${send}${send && payBtn ? `<p class="pay-or muted">${t("pay.or")}</p>` : ""}${payBtn}`;
+}
+function orderDialog(p, tier, len, pay, termsVersion, manual) {
   const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
-  const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay));
+  const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay, manual));
   const f = $("#f-order", d);
   f.onsubmit = async (e) => {
     e.preventDefault();
+    if (!f.querySelector('button[type="submit"]')) return $("#order-pay", d).click();   // Enter, with only Pay offered
     if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
@@ -725,7 +739,7 @@ function wireOrdering(root, tk, order) {
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
-    if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version);
+    if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version, tk.manual);
   }));
   // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).
   const pick = takePick();
@@ -769,12 +783,13 @@ function ticketUpgradeOrderDialog(tk, u) {
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <div class="error wide" id="order-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
-        <button class="btn primary" type="submit">${t("ord.send")}</button>${payU ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : ""}</div>
+        ${orderButtons(tk.manual, payU ? `<button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : "")}</div>
     </form>`);
   const f = $("#f-order", d);
   const body = () => ({ tier: u.tier, upgrade: true, terms_version: tk.terms_version, lang: LANG, ...(f.email ? { email: f.email.value } : {}) });
   f.onsubmit = async (e) => {
     e.preventDefault();
+    if (!f.querySelector('button[type="submit"]')) return $("#order-pay", d).click();
     if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
@@ -1056,15 +1071,21 @@ const isOpenOrder = (o) => o.status === "new" || o.status === "contacted";
 
 async function renderOrders(main) {
   const status = ORDER_STATUSES.includes(S.prefs.orderStatus) ? S.prefs.orderStatus : "open";
-  const [{ orders, new: fresh }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
+  const [{ orders, new: fresh, manual, manual_forced: forced }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
   if (S.tickets && S.tickets.orders_new !== fresh) { S.tickets.orders_new = fresh; renderTabs(); }
   main.innerHTML = `<section class="view"><h2>${t("tab.orders")}</h2>
     <p class="lede">${t("ord.lede")}</p>
-    <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select></div>
+    <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select>
+      <span class="spacer"></span><label class="check"><input type="checkbox" id="manual-orders"${manual ? " checked" : ""}> ${t("ord.manual")}</label>${tipI("manual_orders")}</div>
+    ${forced ? `<p class="sub">${t("ord.manual_forced")}</p>` : ""}
     <div class="card table-wrap"><table class="data orders"><thead><tr><th>${t("ord.age")}</th><th>${t("ord.buyer")}</th><th>${t("ord.ticket")}</th><th class="r">${t("ord.quoted_col")}</th><th>${t("ord.message_col")}</th><th>${t("errs.status")}</th><th>${t("pay.col")}</th><th>${t("ord.email_col")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
       <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="10" class="muted">${t(`ord.none_${status}`)}</td></tr>`}</tbody></table></div>
   </section>`;
   $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
+  $("#manual-orders").onchange = async (e) => {
+    try { await api("/api/admin/orders/manual", { method: "POST", body: { on: e.target.checked } }); }
+    catch (err) { e.target.checked = !e.target.checked; alertInline(err.message); }
+  };
   main.querySelectorAll("[data-oact]").forEach((b) => b.addEventListener("click", () => orderAction(b.dataset.oact, orders.find((o) => o.id === +b.dataset.id), users)));
 }
 // Every field a buyer typed (name, email, message) and the admin note go through esc().

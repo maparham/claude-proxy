@@ -284,7 +284,7 @@ async def test_admin_list_actions_and_audit(env, ts):
         assert r.json()["order"]["status"] == "declined" and r.json()["order"]["ip"] is None
         assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "bogus"})).status_code == 400
         assert (await c.post("/api/admin/orders/999", json={"action": "contacted"})).status_code == 404
-        assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0}
+        assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0, "manual": False, "manual_forced": True}
         assert len((await c.get("/api/admin/orders?status=all")).json()["orders"]) == 1
         assert len((await c.get("/api/admin/orders?status=declined")).json()["orders"]) == 1
         assert (await c.get("/api/admin/orders?status=nope")).status_code == 400
@@ -500,7 +500,7 @@ def test_the_buyer_sees_their_order_and_never_the_admin_note(tmp_path):
     mine = {"id": 4, "label": "<b>Lite</b>", "tier": "lite", "length": "week", "currency": "EUR", "quoted_amount": 7.5}
     orders_ = [mine | {"status": "new"}, mine | {"status": "contacted"}, mine | {"status": "done"}, mine | {"status": "declined"}, None]
     out = _app_fn(tmp_path, ["myOrderCard", "tierName"], APP_STUBS + f"var out = {json.dumps(orders_)}.map(myOrderCard);")
-    assert "Order received: <bdi>&lt;b&gt;Lite&lt;/b&gt;</bdi>, 1 week. The admin will contact you." in out[0] and 'data-my-order="withdraw"' in out[0]
+    assert "Order received: <bdi>&lt;b&gt;Lite&lt;/b&gt;</bdi>, 1 week. It is not paid yet; the admin will contact you about the next step." in out[0] and 'data-my-order="withdraw"' in out[0]
     assert 'data-my-order="withdraw"' in out[1]
     assert "Your order is done." in out[2] and 'data-my-order="dismiss"' in out[2] and "withdraw" not in out[2]
     assert "Your order was declined." in out[3] and 'data-my-order="dismiss"' in out[3]
@@ -542,7 +542,7 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     from tests.test_tickets_web import _app_fn
     p = {"currency": "EUR", "tiers": [_tier(label=BAD)]}
     script = APP_STUBS + f"var p = {json.dumps(p)}; var out = [orderFormHtml(p, p.tiers[0], 'week', null), orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd')];"
-    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "tierName"], script)
+    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "tierName"], script)
     assert 'name="email"' in without and 'name="email"' not in with_
     assert "<img" not in without and 'name="currency"' not in with_ and "EUR 8" in with_   # the price list's currency, no picker
 
