@@ -9,8 +9,9 @@ dashboard_port = 18481
 secure_cookies = true
 # Where people reach the two listeners, for sign-up and `claude-gateway on` authorizing in the browser.
 public_url = "https://claude.rahkar.pro"
-dashboard_url = "https://claude-dash.rahkar.pro"
+dashboard_url = "https://dash.rahkar.pro"
 home_url = "https://rahkar.pro"                 # the home page; sign-in links go on to dashboard_url
+old_dashboard_urls = ["https://claude-dash.rahkar.pro"]   # pages go on to dashboard_url; installed computers' API calls stay
 
 [db]
 path = "/data/claude_proxy.db"
@@ -20,7 +21,7 @@ path = "/data/claude_proxy.db"
 enabled = true
 credit_usd = 5.0
 free_daily_cap_usd = 20.0   # all accounts still on their credit, together, in any 24 h
-clerk_publishable_key = "pk_live_Y2xlcmsuY2xhdWRlLWRhc2gucmFoa2FyLnBybyQ"
+clerk_publishable_key = "pk_live_Y2xlcmsuZGFzaC5yYWhrYXIucHJvJA"
 
 # Order emails (docs/superpowers/specs/2026-10-04-order-requests-design.md). support@chartkar.app only forwards to
 # maparham40@gmail.com, so mail goes out through that Gmail account (app password "Claude Gateway" as SMTP_PASSWORD in

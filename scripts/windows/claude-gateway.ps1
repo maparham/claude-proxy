@@ -17,7 +17,7 @@
 # the next gclaude then signs this computer in again in the browser (as `on --login` does) before it starts, as it
 # does when the dashboard answers 401 to the saved key (the computer was removed there).
 # Without --key (and none saved for that URL), `on` opens the dashboard (--dashboard, else the URL with claude.
-# replaced by claude-dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
+# replaced by dash.) at a code; once you click Authorize there, the dashboard hands this computer a key of
 # its own. Over SSH it only prints the link and the code. The URL and key are kept in
 # %USERPROFILE%\.config\claude-gateway\client.json, readable by you alone. Start a new gclaude session after `on`.
 # Global mode and OpenCode are not on Windows yet: https://github.com/maparham/claude-proxy/issues/22
@@ -523,7 +523,7 @@ switch -Exact ($cmd) {
     if (-not $url) { Fail 'No gateway yet: claude-gateway on --url https://claude.example.com' }
     $url = $url.TrimEnd('/')
     if (-not $dash) {
-      if ($savedUrl -eq $url -and $savedDash) { $dash = $savedDash } else { $dash = ([regex]'://claude\.').Replace($url, '://claude-dash.', 1) }
+      if ($savedUrl -eq $url -and $savedDash) { $dash = $savedDash } else { $dash = ([regex]'://claude\.').Replace($url, '://dash.', 1) }
     }
     $dash = $dash.TrimEnd('/')
     if (-not $key -and -not $login -and -not $savedKey -and $savedUrl -eq $url -and (Launcher-Ours)) {

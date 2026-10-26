@@ -14,13 +14,14 @@ Tunnels → aws-vps → Routes → Add route → Published application:
 | Hostname | Service URL |
 |---|---|
 | `claude.rahkar.pro` | `http://127.0.0.1:18480` |
-| `claude-dash.rahkar.pro` | `http://127.0.0.1:18481` |
+| `dash.rahkar.pro` | `http://127.0.0.1:18481` |
+| `claude-dash.rahkar.pro` | `http://127.0.0.1:18481` (the old dashboard host, `[listener] old_dashboard_urls`) |
 | `rahkar.pro` | `http://127.0.0.1:18481` (the home page, `[listener] home_url`) |
 
 (`apply-tunnel.sh` is for a tunnel run from a local config file.)
 
 Live since 2026-09-23: `ANTHROPIC_BASE_URL=https://claude.rahkar.pro`, dashboard at
-`https://claude-dash.rahkar.pro/dashboard`. Streams of over 90 s pass through Cloudflare intact, and the
+`https://dash.rahkar.pro/dashboard` (until 2026-10-26 `claude-dash.rahkar.pro`, which now sends pages there). Streams of over 90 s pass through Cloudflare intact, and the
 dashboard sees real client IPs.
 
 ## Automatic deploys
@@ -99,7 +100,7 @@ Details:
   ```yaml
   - hostname: claude.<domain>
     service: http://127.0.0.1:18480
-  - hostname: claude-dash.<domain>
+  - hostname: dash.<domain>
     service: http://127.0.0.1:18481
   ```
   plus a proxied CNAME for each hostname to `<tunnel-id>.cfargotunnel.com`.

@@ -144,6 +144,21 @@ class HomeHost(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class OldDashboardHost(BaseHTTPMiddleware):
+    """On [listener] old_dashboard_urls' hosts pages move on to dashboard_url; the API stays for installed computers."""
+
+    def __init__(self, app, old_hosts: set[str], dashboard: str):
+        super().__init__(app)
+        self.old_hosts, self.dashboard = old_hosts, dashboard
+
+    async def dispatch(self, request, call_next):
+        path = request.url.path
+        if request.url.hostname in self.old_hosts and request.method in ("GET", "HEAD") and not path.startswith("/api/"):
+            query = f"?{request.url.query}" if request.url.query else ""
+            return RedirectResponse(f"{self.dashboard}{path}{query}", status_code=301)
+        return await call_next(request)
+
+
 def who(names: dict, user_id: int | None) -> str:
     """A user's name for a chart; NULL is deleted users' anonymized requests."""
     return "(deleted users)" if user_id is None else names.get(user_id, f"#{user_id}")
@@ -162,6 +177,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                        turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
     if cfg.listener.home_url and cfg.listener.dashboard_url:
         app.add_middleware(HomeHost, home_host=urlsplit(cfg.listener.home_url).hostname,
+                           dashboard=cfg.listener.dashboard_url.rstrip("/"))
+    if cfg.listener.old_dashboard_urls and cfg.listener.dashboard_url:
+        app.add_middleware(OldDashboardHost, old_hosts={urlsplit(u).hostname for u in cfg.listener.old_dashboard_urls},
                            dashboard=cfg.listener.dashboard_url.rstrip("/"))
     app.state.gw = gw
     app.state.clerk = verifier

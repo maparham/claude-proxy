@@ -43,7 +43,7 @@ def env(db, monkeypatch):
     tickets.set_rate(conn, cfg, "IRT", 156250, ids["admin"], now=now - 3600)   # $8 -> 1,250,000 T
     cfg.zarinpal = ZarinpalConfig()
     cfg.listener.home_url = "https://rahkar.pro"
-    cfg.listener.dashboard_url = "https://claude-dash.rahkar.pro"
+    cfg.listener.dashboard_url = "https://dash.rahkar.pro"
     monkeypatch.setenv("ZARINPAL_MERCHANT_ID", MID)
     zp = FakeZP()
     monkeypatch.setattr(zarinpal, "request", zp.request)

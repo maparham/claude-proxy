@@ -12,7 +12,7 @@ def client(app, host: str) -> httpx.AsyncClient:
 
 async def test_home_host_serves_the_home_page_and_sends_sign_in_to_the_dashboard(env):
     gw, conn, cfg, ids, keys = env
-    cfg.listener.dashboard_url = "https://claude-dash.example.com/"
+    cfg.listener.dashboard_url = "https://dash.example.com/"
     cfg.listener.home_url = "https://example.com"
     app = create_dashboard_app(gw)
     async with client(app, "example.com") as c:
@@ -23,13 +23,29 @@ async def test_home_host_serves_the_home_page_and_sends_sign_in_to_the_dashboard
         for path in ("/dashboard?tier=lite&length=week", "/admin", "/install", "/install.ps1", "/d/ABCDEFGH"):
             r = await c.get(path)
             assert r.status_code == 302, path
-            assert r.headers["location"] == "https://claude-dash.example.com" + path, path
-    async with client(app, "claude-dash.example.com") as c:
+            assert r.headers["location"] == "https://dash.example.com" + path, path
+    async with client(app, "dash.example.com") as c:
         assert (await c.get("/dashboard")).status_code == 200
 
 
 async def test_without_home_url_nothing_is_redirected(env):
     gw, conn, cfg, ids, keys = env
-    cfg.listener.dashboard_url = "https://claude-dash.example.com"
+    cfg.listener.dashboard_url = "https://dash.example.com"
     async with client(create_dashboard_app(gw), "example.com") as c:
+        assert (await c.get("/dashboard")).status_code == 200
+
+
+async def test_an_old_dashboard_host_sends_pages_on_and_still_answers_the_api(env):
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.dashboard_url = "https://dash.example.com"
+    cfg.listener.public_url = "https://claude.example.com"
+    cfg.listener.old_dashboard_urls = ["https://claude-dash.example.com"]
+    app = create_dashboard_app(gw)
+    async with client(app, "claude-dash.example.com") as c:
+        for path in ("/dashboard?tier=lite", "/d/ABCDEFGH", "/install"):
+            r = await c.get(path)
+            assert r.status_code == 301 and r.headers["location"] == "https://dash.example.com" + path, path
+        assert (await c.get("/api/pricing")).status_code == 200
+        assert (await c.post("/api/device/start", json={"label": "pc"})).status_code == 200
+    async with client(app, "dash.example.com") as c:
         assert (await c.get("/dashboard")).status_code == 200

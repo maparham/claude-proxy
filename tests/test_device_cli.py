@@ -176,7 +176,7 @@ def test_the_dashboard_url_follows_the_gateway_naming(home):
     # eval, not `source <(...)`: bash 3.2, a Mac's own, reads nothing from a process substitution there.
     r = run(["bash", "-c", f'eval "$(sed -n "/^dashboard_for()/,/^}}/p;/^field()/p" {GATEWAY})"; CLIENT=/nonexistent; '
                            'dashboard_for https://claude.example.com'], {"PATH": os.environ["PATH"], "HOME": str(home)})
-    assert r.stdout.strip() == "https://claude-dash.example.com", r.stderr
+    assert r.stdout.strip() == "https://dash.example.com", r.stderr
 
 
 def test_the_dashboards_one_liner_installs_and_authorizes(dash, home, tmp_path, tarball):

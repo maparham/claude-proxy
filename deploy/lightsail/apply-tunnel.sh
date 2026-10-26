@@ -16,7 +16,7 @@ s = open(p).read()
 old = "  - service: http_status:404"
 assert s.count(old) == 1, "catch-all rule not found"
 new = ("  - hostname: claude.$DOMAIN\n    service: http://127.0.0.1:18480\n"
-       "  - hostname: claude-dash.$DOMAIN\n    service: http://127.0.0.1:18481\n" + old)
+       "  - hostname: dash.$DOMAIN\n    service: http://127.0.0.1:18481\n" + old)
 open(p, "w").write(s.replace(old, new))
 PY
 fi
@@ -26,4 +26,4 @@ sudo systemctl restart "\$UNIT"
 sleep 5
 systemctl is-active "\$UNIT"
 REMOTE_SCRIPT
-echo "Tunnel updated. DNS: proxied CNAMEs claude and claude-dash -> <tunnel-id>.cfargotunnel.com"
+echo "Tunnel updated. DNS: proxied CNAMEs claude and dash -> <tunnel-id>.cfargotunnel.com"

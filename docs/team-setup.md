@@ -21,12 +21,12 @@ the gateway refuses Claude requests from OpenCode.
 
 ## Setting up
 
-1. Sign up at [claude-dash.rahkar.pro](https://claude-dash.rahkar.pro/dashboard) with Google, GitHub or your
+1. Sign up at [dash.rahkar.pro](https://dash.rahkar.pro/dashboard) with Google, GitHub or your
    email. A new account starts with a one-time $5 credit; ask the admin when you need more.
 2. Run this in your terminal. You need [Claude Code](https://code.claude.com), `curl` and `python3`.
 
    ```sh
-   curl -fsSL https://claude-dash.rahkar.pro/install | sh
+   curl -fsSL https://dash.rahkar.pro/install | sh
    ```
 
    It opens the dashboard at a code: check that it matches the one in your terminal and click **Authorize**. The
@@ -39,7 +39,7 @@ the gateway refuses Claude requests from OpenCode.
    **On Windows**, run this in PowerShell instead (no Python, Git or admin rights needed):
 
    ```powershell
-   irm https://claude-dash.rahkar.pro/install.ps1 | iex
+   irm https://dash.rahkar.pro/install.ps1 | iex
    ```
 
    Then open a new terminal so `gclaude` is on your PATH. On Windows there is gclaude only: no global mode or
@@ -72,13 +72,13 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 - **`/logout_gclaude`** in `gclaude` signs this computer out (Claude Code's own `/logout` doesn't): it revokes this computer's key, removes it and closes the session. Run `gclaude`
   again to sign in: it shows the link and code, as the first setup did, then starts.
 - **`gclaude update`** updates the gateway client and gclaude's setup, then Claude Code itself.
-- **Dashboard**: `https://claude-dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
+- **Dashboard**: `https://dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.
 - **Terminal**: `gclaude status` shows the gateway, your account and your limits.
 
 ## Updating and removing
 
 ```sh
-curl -fsSL https://claude-dash.rahkar.pro/install | sh   # update (it keeps this computer's key); Windows: irm …/install.ps1 | iex
+curl -fsSL https://dash.rahkar.pro/install | sh   # update (it keeps this computer's key); Windows: irm …/install.ps1 | iex
 gclaude update                    # or this, from any terminal: the same update, then Claude Code's own
 gclaude uninstall                 # remove gclaude (keeps its history)
 claude-gateway off --opencode     # remove the gateway from OpenCode

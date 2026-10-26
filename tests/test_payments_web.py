@@ -19,7 +19,7 @@ def env(tickets_env, monkeypatch):
     tickets.set_rate(conn, cfg, "IRT", 156250, ids["admin"], now=int(time.time()) - 3600)
     cfg.zarinpal = ZarinpalConfig()
     cfg.listener.home_url = "https://rahkar.pro"
-    cfg.listener.dashboard_url = "https://claude-dash.rahkar.pro"
+    cfg.listener.dashboard_url = "https://dash.rahkar.pro"
     monkeypatch.setenv("ZARINPAL_MERCHANT_ID", MID)
     zp = FakeZP()
     monkeypatch.setattr(zarinpal, "request", zp.request)
@@ -41,7 +41,7 @@ async def test_pay_redirect_callback_and_result(env):
         assert url.startswith("https://payment.zarinpal.com/pg/StartPay/")
         auth = url.rsplit("/", 1)[1]
         r = await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
-        assert r.status_code == 302 and r.headers["location"] == f"https://claude-dash.rahkar.pro/dashboard#payment/{pid}"
+        assert r.status_code == 302 and r.headers["location"] == f"https://dash.rahkar.pro/dashboard#payment/{pid}"
         me = (await c.get(f"/api/me/payments/{pid}", headers=bearer(keys["alice"]))).json()
         assert (me["status"], me["amount"], me["ref_id"], me["label"]) == ("paid", 1250000, "201", "Lite")
         assert "card_pan" not in me and "authority" not in me

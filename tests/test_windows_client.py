@@ -817,7 +817,7 @@ def test_an_unreachable_or_wrong_dashboard_says_so(installed, stub):
     r = win.cg("on", "--url", stub.url, "--dashboard", f"{stub.url}/nope")
     assert r.returncode != 0 and "Give it with --dashboard" in r.out, r.out
     r = win.cg("on", "--url", "https://claude.invalid")   # the dashboard follows the gateway's naming
-    assert r.returncode != 0 and "https://claude-dash.invalid" in r.out, r.out
+    assert r.returncode != 0 and "https://dash.invalid" in r.out, r.out
     assert not (win.config / "client.json").exists()
 
 

@@ -1,7 +1,7 @@
 # Install or update claude-gateway, the client side of claude-proxy, for this Windows user (PowerShell 5.1 or later):
 #
 #   irm https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1 | iex
-#   irm https://claude-dash.example.com/install.ps1 | iex    # a gateway's own: this, then `on` authorizing in the browser
+#   irm https://dash.example.com/install.ps1 | iex    # a gateway's own: this, then `on` authorizing in the browser
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1))) on --url https://claude.example.com --key sk-proxy-...
 #
 # It puts scripts\windows from the repository in %USERPROFILE%\.local\share\claude-gateway, replacing an earlier copy,
