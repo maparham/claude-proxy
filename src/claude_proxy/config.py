@@ -147,8 +147,8 @@ class Currency:
 
 def _default_tiers() -> dict[str, Tier]:
     return {
-        "lite": Tier("Lite", 5, {"day": 3, "week": 8, "month": 20}, share_5h_pct=5),
-        "standard": Tier("Standard", 25, {"day": 12, "week": 35, "month": 100}, share_5h_pct=25),
+        "lite": Tier("Lite", 5, {"day": 3, "week": 8, "month": 20}),
+        "standard": Tier("Standard", 25, {"day": 12, "week": 35, "month": 100}),
     }
 
 

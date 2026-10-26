@@ -75,7 +75,7 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # [tickets.tiers.lite]
 # label = "Lite"
 # share_pct = 5                # weekly share of the account; also what max_sold_pct counts
-# share_5h_pct = 5             # 5-hour share; leave out to use share_pct
+# share_5h_pct = 5             # 5-hour share; leave out to use share_pct (the dashboard can set it later)
 # default_usd = { day = 3, week = 8, month = 20 }
 # [tickets.tiers.standard]
 # label = "Standard"

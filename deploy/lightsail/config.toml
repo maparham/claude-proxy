@@ -62,13 +62,11 @@ max_sold_pct = 80
 [tickets.tiers.lite]
 label = "Lite"
 share_pct = 5
-share_5h_pct = 5             # 5-hour share; leave out to use share_pct
 default_usd = { day = 3, week = 8, month = 20 }
 
 [tickets.tiers.standard]
 label = "Standard"
 share_pct = 25
-share_5h_pct = 25
 default_usd = { day = 12, week = 35, month = 100 }
 
 # The first currency is the one the home page shows.
