@@ -743,10 +743,10 @@ function wireOrdering(root, tk, order) {
   }));
   // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).
   const pick = takePick();
+  // With a running ticket the price list is in the Renew dialog: open that, and its own wiring opens the pick.
   if (pick && pick.open) {
-    pick.open = false;
     const b = root.querySelector(`[data-order="${CSS.escape(`${pick.tier}:${pick.length}`)}"]:not([disabled])`);
-    if (b) b.click();
+    if (b) { pick.open = false; b.click(); } else if (rb && !rb.disabled) rb.click(); else pick.open = false;
   }
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
