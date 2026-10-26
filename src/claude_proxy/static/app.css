@@ -399,8 +399,9 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .dialog-actions .btn { min-width: 96px; }
 .form-grid .error:empty { display: none; }
 .order-price { margin: 0 0 12px; font-size: 18px; font-variant-numeric: tabular-nums; }
-/* The order form's footer: Cancel and the order buttons in one row at the lower right, in Persian too. */
+/* The order form's footer: Cancel at the lower left, the order buttons at the lower right, in Persian too. */
 .order-form .dialog-actions { align-items: center; }
+.order-form .dialog-actions [data-close] { margin-right: auto; }
 .order-form .pay-or { margin: 0; }
 [dir="rtl"] .order-form .dialog-actions { flex-direction: row-reverse; }
 dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;
