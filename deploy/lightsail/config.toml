@@ -11,7 +11,6 @@ secure_cookies = true
 public_url = "https://claude.rahkar.pro"
 dashboard_url = "https://dash.rahkar.pro"
 home_url = "https://rahkar.pro"                 # the home page; sign-in links go on to dashboard_url
-old_dashboard_urls = ["https://claude-dash.rahkar.pro"]   # pages go on to dashboard_url; installed computers' API calls stay
 
 [db]
 path = "/data/claude_proxy.db"

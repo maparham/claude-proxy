@@ -46,9 +46,6 @@ class ListenerConfig:
     # Optional: another host (e.g. the apex domain) that serves the public home page; its sign-in links and install
     # commands go on to dashboard_url, since Clerk's tokens are made for that origin only.
     home_url: str = ""
-    # Optional: hosts the dashboard used to be on. Their pages go on to dashboard_url; /api/ is still answered there,
-    # since installed computers keep calling the dashboard they were set up with.
-    old_dashboard_urls: list[str] = field(default_factory=list)
 
 
 @dataclass

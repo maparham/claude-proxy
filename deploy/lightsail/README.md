@@ -15,14 +15,13 @@ Tunnels → aws-vps → Routes → Add route → Published application:
 |---|---|
 | `claude.rahkar.pro` | `http://127.0.0.1:18480` |
 | `dash.rahkar.pro` | `http://127.0.0.1:18481` |
-| `claude-dash.rahkar.pro` | `http://127.0.0.1:18481` (the old dashboard host, `[listener] old_dashboard_urls`) |
 | `rahkar.pro` | `http://127.0.0.1:18481` (the home page, `[listener] home_url`) |
 
 (`apply-tunnel.sh` is for a tunnel run from a local config file.)
 
 Live since 2026-09-23: `ANTHROPIC_BASE_URL=https://claude.rahkar.pro`, dashboard at
-`https://dash.rahkar.pro/dashboard` (until 2026-10-26 `claude-dash.rahkar.pro`, which now sends pages there). Streams of over 90 s pass through Cloudflare intact, and the
-dashboard sees real client IPs.
+`https://dash.rahkar.pro/dashboard`. Streams of over 90 s pass through Cloudflare intact, and the dashboard
+sees real client IPs.
 
 ## Automatic deploys
 
