@@ -1178,7 +1178,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         tier = str(body.get("tier", ""))
         if "compare" in body:   # the plan comparison: name and ratio together; an empty name clears it
             plan = body.get("compare")
-            ratio = _number(body.get("compare_ratio"), "The compare ratio") if isinstance(plan, str) and plan.strip() else None
+            ratio = _number(body.get("compare_ratio"), "The actual/base ratio") if isinstance(plan, str) and plan.strip() else None
             return {"ok": True, "tier": tier, **ticket_call(tickets.set_compare, conn, cfg, tier, plan, ratio, actor["id"])}
         if "share_5h_pct" in body:   # one share per call, like a price: the form posts each changed cell
             share = ticket_call(tickets.set_share_5h, conn, cfg, tier, _number(body.get("share_5h_pct"), "The 5-hour share"), actor["id"])
