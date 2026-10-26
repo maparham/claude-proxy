@@ -1210,11 +1210,13 @@ async function renderPricing(main) {
     </div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3><p class="sub">${t("pr.shares_sub")}</p>
       <form id="f-shares">
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th><th class="r">${t("pr.share_5h")}</th></tr></thead><tbody>
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th><th class="r">${t("pr.share_pct")}</th><th class="r">${t("pr.per_day")}</th><th class="r">${t("pr.share_5h")}</th><th>${t("pr.compare")}</th><th class="r">${t("pr.compare_ratio")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
         <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share" data-tier="${esc(k)}" data-init="${x.share_pct}" value="${x.share_pct}" required style="width:80px"> <span class="muted">%</span></td>
         <td class="r muted" data-perday="${esc(k)}">${fmtShare(x.share_pct / 7)}</td>
-        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share5h" data-tier="${esc(k)}" data-init="${x.share_5h_pct}" value="${x.share_5h_pct}" required style="width:80px"> <span class="muted">%</span></td></tr>`).join("")}
+        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share5h" data-tier="${esc(k)}" data-init="${x.share_5h_pct}" value="${x.share_5h_pct}" required style="width:80px"> <span class="muted">%</span></td>
+        <td><input type="text" dir="auto" name="compare" data-tier="${esc(k)}" data-init="${esc(x.compare)}" value="${esc(x.compare)}" maxlength="40" placeholder="${esc(t("pr.compare_none"))}" aria-label="${esc(t("pr.compare"))}" style="width:130px"></td>
+        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="ratio" data-tier="${esc(k)}" data-init="${x.compare_ratio || ""}" value="${x.compare_ratio || ""}" aria-label="${esc(t("pr.compare_ratio"))}" style="width:60px"> <span class="muted">×</span></td></tr>`).join("")}
       </tbody></table></div>
       <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
       <div class="error" id="shares-err"></div>
@@ -1270,7 +1272,17 @@ async function renderPricing(main) {
         const body = input.name === "share" ? { tier: input.dataset.tier, share_pct: num(input.value) } : { tier: input.dataset.tier, share_5h_pct: num(input.value) };
         try { await api("/api/admin/shares", { method: "POST", body }); } catch (x) { err.textContent = x.message; return; }
       }
-      if (changed.length) render();
+      // The plan comparison goes as a pair per tier: a name with its ratio, or an empty name to hide the line.
+      const compares = [...e.target.querySelectorAll('input[name="compare"]')].filter((plan) => {
+        const ratio = e.target.querySelector(`input[name="ratio"][data-tier="${plan.dataset.tier}"]`);
+        return plan.value.trim() !== plan.dataset.init || (plan.value.trim() !== "" && inputChanged(ratio));
+      });
+      for (const plan of compares) {
+        const ratio = e.target.querySelector(`input[name="ratio"][data-tier="${plan.dataset.tier}"]`);
+        const body = { tier: plan.dataset.tier, compare: plan.value.trim(), compare_ratio: num(ratio.value) };
+        try { await api("/api/admin/shares", { method: "POST", body }); } catch (x) { err.textContent = x.message; return; }
+      }
+      if (changed.length || compares.length) render();
     };
   }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };

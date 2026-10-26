@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import fnmatch
 import logging
-import math
 import os
 import re
 import tomllib
@@ -121,9 +120,7 @@ class Tier:
     None meaning the same as `share_pct`."""
     label: str
     share_pct: float
-    compare: str = ""
     default_usd: dict[str, float] = field(default_factory=dict)
-    compare_ratio: float = 0
     share_5h_pct: float | None = None
 
     def __post_init__(self):
@@ -137,9 +134,6 @@ class Tier:
         for k, v in self.default_usd.items():
             if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
                 raise TypeError(f"default_usd.{k} must be a price above 0")
-        if isinstance(self.compare_ratio, bool) or not isinstance(self.compare_ratio, (int, float)) \
-                or not math.isfinite(self.compare_ratio) or self.compare_ratio < 0:
-            raise TypeError("compare_ratio must be a number, 0 or above")
 
 
 @dataclass
@@ -153,8 +147,8 @@ class Currency:
 
 def _default_tiers() -> dict[str, Tier]:
     return {
-        "lite": Tier("Lite", 5, "Claude Pro", {"day": 3, "week": 8, "month": 20}, 6, share_5h_pct=5),
-        "standard": Tier("Standard", 25, "Claude Max 5x", {"day": 12, "week": 35, "month": 100}, 1.7, share_5h_pct=25),
+        "lite": Tier("Lite", 5, {"day": 3, "week": 8, "month": 20}, share_5h_pct=5),
+        "standard": Tier("Standard", 25, {"day": 12, "week": 35, "month": 100}, share_5h_pct=25),
     }
 
 
@@ -341,6 +335,9 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
             for tier_id in tiers:
                 if not _TIER_ID.match(tier_id):
                     raise ConfigError(f"{toml_path}: tier id {tier_id!r} must be lowercase letters, digits and underscores")
+                for k in ("compare", "compare_ratio"):   # the shared plan can change any time, so the admin keeps these current
+                    if k in tiers[tier_id]:
+                        raise ConfigError(f"{toml_path}: [tickets.tiers.{tier_id}].{k} is set on the dashboard's Pricing tab now; remove it")
             t.tiers = {k: Tier(**v) for k, v in tiers.items()}
         t.currencies = {k.upper(): Currency(**v) for k, v in data.pop("currencies", {}).items()}
     except (TypeError, AttributeError) as e:   # AttributeError: a key that should be a table, e.g. `currencies = 5`

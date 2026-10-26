@@ -49,7 +49,8 @@ password_env = "SES_SMTP_PASSWORD"
 # Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). The tiers are written out so the
 # capacity sold is visible here: each share_pct is the slice of the subscription one ticket reserves. Changing
 # a share changes capacity; existing tickets keep the share they were sold with. default_usd only seeds prices
-# on first start; after that they are edited on the dashboard's Pricing tab.
+# on first start; after that they are edited on the dashboard's Pricing tab. The plan comparison is set there only:
+# the shared account's plan can change any time, so nothing here assumes its size.
 [tickets]
 how_to_buy = "Send the amount by bank transfer to the admin and email them with the ticket you want."
 how_to_buy_fa = "مبلغ را با انتقال بانکی برای مدیر بفرستید و تیکتی را که می‌خواهید به او ایمیل کنید."
@@ -61,17 +62,13 @@ max_sold_pct = 80
 [tickets.tiers.lite]
 label = "Lite"
 share_pct = 5
-share_5h_pct = 5             # 5-hour share; same as Claude Pro (Max 20x ≈ 20 Pro per 5 hours)
-compare = "Claude Pro"
-compare_ratio = 6            # Pro plans the shared Max 20x account equals per week
+share_5h_pct = 5             # 5-hour share; leave out to use share_pct
 default_usd = { day = 3, week = 8, month = 20 }
 
 [tickets.tiers.standard]
 label = "Standard"
 share_pct = 25
-share_5h_pct = 25            # 5-hour share; same as Claude Max 5x (Max 20x ≈ 4 Max 5x per 5 hours)
-compare = "Claude Max 5x"
-compare_ratio = 1.7          # Max 5x plans the shared Max 20x account equals per week
+share_5h_pct = 25
 default_usd = { day = 12, week = 35, month = 100 }
 
 # The first currency is the one the home page shows.

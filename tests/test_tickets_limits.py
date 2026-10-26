@@ -623,3 +623,25 @@ def test_buyer_mail_html_draws_the_split(db):
 def test_jalali_dates():
     assert tickets.jalali(2026, 10, 25) == (1405, 8, 3)
     assert tickets.jalali(2025, 3, 20) == (1403, 12, 30) and tickets.jalali(2025, 3, 21) == (1404, 1, 1)
+
+
+def test_set_compare_sets_and_clears_the_plan_comparison(db):
+    conn, cfg, ids = seeded(db)
+    assert (tickets.effective_tiers(conn, cfg)["lite"]["compare"], tickets.effective_tiers(conn, cfg)["lite"]["compare_ratio"]) == ("", 0)
+    assert tickets.set_compare(conn, cfg, "lite", " Claude Pro ", 10, ids["admin"]) == {"compare": "Claude Pro", "compare_ratio": 10}
+    eff = tickets.effective_tiers(conn, cfg)["lite"]
+    assert (eff["compare"], eff["compare_ratio"], eff["share_pct"]) == ("Claude Pro", 10, 5)   # the share is untouched
+    tickets.set_share(conn, cfg, "lite", 6, ids["admin"])
+    assert tickets.compare_plan(conn, "lite") == ("Claude Pro", 10)   # and a share change keeps the comparison
+    assert tickets.set_compare(conn, cfg, "lite", "", None, ids["admin"]) == {"compare": "", "compare_ratio": 0}
+    assert tickets.compare_plan(conn, "lite") is None
+    assert [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE action='compare_set'")] == ["compare_set", "compare_set"]
+
+
+def test_set_compare_rejects_bad_values(db):
+    conn, cfg, ids = seeded(db)
+    for plan, ratio in (("Claude Pro", 0), ("Claude Pro", None), ("Claude Pro", float("nan")), ("x" * 41, 2), (5, 2)):
+        with pytest.raises(tickets.TicketError):
+            tickets.set_compare(conn, cfg, "lite", plan, ratio, ids["admin"])
+    with pytest.raises(tickets.TicketError):
+        tickets.set_compare(conn, cfg, "nope", "Claude Pro", 2, ids["admin"])

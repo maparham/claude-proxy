@@ -433,12 +433,21 @@ def effective_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str) -> floa
     return float(t.share_5h_pct) if t.share_5h_pct is not None else effective_share(conn, cfg, tier)
 
 
+def compare_plan(conn: sqlite3.Connection, tier: str) -> tuple[str, float] | None:
+    """(plan, ratio) the pages compare this tier with, as the dashboard set it; None when unset. Nothing about the shared
+    plan's size is assumed: it can change any time, so the admin keeps this current."""
+    row = conn.execute("SELECT compare, compare_ratio FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
+    return (row[0], float(row[1])) if row is not None and row[0] and row[1] else None
+
+
 def effective_tiers(conn: sqlite3.Connection, cfg: Config) -> dict[str, dict]:
-    """{tier: {label, share_pct, share_5h_pct, compare, compare_ratio}} with dashboard shares applied, for new grants and display."""
+    """{tier: {label, share_pct, share_5h_pct, compare, compare_ratio}} with dashboard shares applied, for new grants and display.
+    compare is "" and compare_ratio 0 while the dashboard has set no plan comparison."""
     out = {}
     for tid, t in cfg.tickets.tiers.items():
+        plan, ratio = compare_plan(conn, tid) or ("", 0)
         out[tid] = {"label": t.label, "share_pct": effective_share(conn, cfg, tid), "share_5h_pct": effective_share_5h(conn, cfg, tid),
-                    "compare": t.compare, "compare_ratio": t.compare_ratio}
+                    "compare": plan, "compare_ratio": ratio}
     return out
 
 
@@ -477,6 +486,29 @@ def set_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, ac
                  (tier, effective_share(conn, cfg, tier), now, actor, share_pct))
     db.audit(conn, actor, "share_5h_set", tier, {"share_5h_pct": share_pct})
     return share_pct
+
+
+def set_compare(conn: sqlite3.Connection, cfg: Config, tier: str, plan, ratio, actor: int | None, now: float | None = None) -> dict:
+    """Set the plan the pages compare this tier with and how many of that plan's weekly usage the shared account equals
+    ("Up to share × ratio % of <plan>'s usage"). An empty plan clears the comparison; display only, no limit changes."""
+    if tier not in cfg.tickets.tiers:
+        raise TicketError(f"Unknown tier {tier!r}.")
+    plan = plan.strip() if isinstance(plan, str) else plan
+    if plan in ("", None):
+        plan, ratio = None, None
+    else:
+        if not isinstance(plan, str) or len(plan) > 40:
+            raise TicketError("The compare plan must be a name of at most 40 characters.")
+        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not math.isfinite(ratio) or ratio <= 0:
+            raise TicketError("The compare ratio must be a number above 0.")
+        ratio = float(ratio)
+    now = _now(now)
+    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, compare, compare_ratio) VALUES(?,?,?,?,?,?) "
+                 "ON CONFLICT(tier) DO UPDATE SET compare=excluded.compare, compare_ratio=excluded.compare_ratio, "
+                 "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                 (tier, effective_share(conn, cfg, tier), now, actor, plan, ratio))
+    db.audit(conn, actor, "compare_set", tier, {"compare": plan, "compare_ratio": ratio})
+    return {"compare": plan or "", "compare_ratio": ratio or 0}
 
 
 # ---------- capacity (spec section 5) ----------
@@ -1037,7 +1069,7 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
-        compare_pct = round(eff[tid]["share_pct"] * t.compare_ratio) if t.compare and t.compare_ratio else None
-        tiers.append({"tier": tid, "label": t.label, "compare": t.compare, "compare_pct": compare_pct, "lengths": lengths})
+        compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
+        tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}

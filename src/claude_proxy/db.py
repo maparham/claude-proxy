@@ -172,7 +172,9 @@ SCHEMA = [
         share_pct REAL NOT NULL,             -- weekly share; also what capacity counts
         updated_at INTEGER NOT NULL,
         updated_by INTEGER,
-        share_5h_pct REAL                    -- 5-hour share; NULL: the config's, else share_pct
+        share_5h_pct REAL,                   -- 5-hour share; NULL: the config's, else share_pct
+        compare TEXT,                        -- plan the pages compare a ticket with, e.g. "Claude Pro"; NULL: none
+        compare_ratio REAL                   -- that plan's weekly usage the shared account equals; set with compare
     )""",
     """CREATE TABLE IF NOT EXISTS ticket_discounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -414,6 +416,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for table in ("ticket_tier_shares", "tickets", "ticket_bonuses"):
         if "share_5h_pct" not in _columns(conn, table):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN share_5h_pct REAL")
+    for col in ("compare TEXT", "compare_ratio REAL"):
+        if col.split()[0] not in _columns(conn, "ticket_tier_shares"):
+            conn.execute(f"ALTER TABLE ticket_tier_shares ADD COLUMN {col}")
     if "tier" not in _columns(conn, "ticket_bonuses"):
         conn.execute("ALTER TABLE ticket_bonuses ADD COLUMN tier TEXT")
     if "upgrade_of" not in _columns(conn, "orders"):

@@ -13,7 +13,7 @@ def test_defaults_are_the_spec_tiers_and_disabled():
     t = TicketsConfig()
     assert t.enabled is False and t.max_sold_pct == 80 and t.currencies == {}
     assert t.tiers["lite"].share_pct == 5 and t.tiers["lite"].default_usd == {"day": 3, "week": 8, "month": 20}
-    assert t.tiers["standard"].share_pct == 25 and t.tiers["standard"].compare == "Claude Max 5x"
+    assert t.tiers["standard"].share_pct == 25 and not hasattr(t.tiers["standard"], "compare")   # no plan size assumed
     assert LENGTHS == {"day": 1, "week": 7, "month": 30}
 
 
@@ -25,7 +25,6 @@ max_sold_pct = 60
 [tickets.tiers.mini]
 label = "Mini"
 share_pct = 2.5
-compare = "a trial"
 default_usd = { day = 1, week = 4, month = 10 }
 [tickets.currencies.eur]
 round_to = 0.5
@@ -34,6 +33,13 @@ round_to = 0.5
     assert cfg.tickets.max_sold_pct == 60
     assert list(cfg.tickets.tiers) == ["mini"] and cfg.tickets.tiers["mini"].share_pct == 2.5
     assert cfg.tickets.currencies["EUR"].round_to == 0.5   # codes are upper-cased
+
+
+@pytest.mark.parametrize("key", ["compare = 'Claude Pro'", "compare_ratio = 6"])
+def test_plan_comparison_in_the_config_is_refused(tmp_path, key):
+    with pytest.raises(ConfigError, match="Pricing tab"):
+        load(tmp_path, f"[tickets]\n[tickets.tiers.lite]\nlabel = 'Lite'\nshare_pct = 5\n{key}\n"
+                       "default_usd = { day = 3, week = 8, month = 20 }\n")
 
 
 def test_empty_tickets_section_keeps_default_tiers(tmp_path):
