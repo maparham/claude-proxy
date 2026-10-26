@@ -377,6 +377,17 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar b { font-size: 12px; line-height: 16px; margin-bottom: 2px; color: var(--ink); white-space: nowrap; text-align: center; }
 .split-bar i { display: block; height: 10px; border-radius: 2px; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
+/* The grant dialog: the amount as a headline over the period's facts, the stale-rate confirm, and the Cancel / Grant footer. */
+.grant-sum { background: var(--wash); border-radius: 10px; padding: 12px 14px; margin-top: 6px; font-size: 13px; color: var(--ink-2); }
+.grant-sum p { margin: 0; }
+.grant-amount { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin-bottom: 8px; }
+.grant-amount > b { font-size: 20px; color: var(--ink); font-variant-numeric: tabular-nums; }
+.grant-sum ul { margin: 0; padding-inline-start: 18px; line-height: 1.6; }
+.badge.stale { border-color: var(--warning); color: var(--ink); background: color-mix(in srgb, var(--warning) 18%, transparent); }
+.grant-stale { border: 1px solid var(--warning); border-radius: 8px; padding: 8px 10px; color: var(--ink); }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
+.dialog-actions .btn { min-width: 96px; }
+.form-grid .error:empty { display: none; }
 .order-price { margin: 0 0 12px; font-size: 18px; font-variant-numeric: tabular-nums; }
 dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;
                                              min-width: 0; width: 100%; font: inherit; color: inherit; }

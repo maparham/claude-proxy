@@ -600,12 +600,14 @@ function usersCard() {
 function userLimitsCard(me, tk) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
+  // A bonus as a share of the ticket's own allowance: the user never sees the subscription's percent.
+  const rel = (v, of) => `${nf0.format(Math.round(v / of * 100))}${PCT}`;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div>${t("ov.ticket_line", { label: tierName(c.tier, c.label), share: fmtShare(c.share_pct) })}</div>
-      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_piece != null ? t("ov.week_ends", { date: fmtDate(c.week_end), share: fmtShare(c.week_piece) }) : t("ov.week_unknown")}</div>
-      ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: fmtShare(b.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
+      <div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}</div>
+      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_piece != null ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}</div>
+      ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: rel(b.share_pct, c.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
-      ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: fmtShare(c.share_5h_pct + c.bonus_share) })}</p>` : ""}
+      ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: rel(c.bonus_share, c.share_5h_pct) })}</p>` : ""}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${tk.how_to_buy ? bdi(tk.how_to_buy) : t("ov.ask_admin")}</div>`;
@@ -892,14 +894,16 @@ function grantDialog(users, pre = null) {
       <label>${t("price.tier")}<select name="tier">${Object.entries(T.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))} · ${fmtShare(x.share_pct)}</option>`).join("")}</select></label>
       <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
       <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
-      <label>${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
-      <div id="grant-preview" class="hint" aria-live="polite">…</div>
-      <div id="grant-limits"></div>
+      <label class="wide">${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
+      <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
+      <div id="grant-limits" class="wide"></div>
       ${pre ? "" : `<div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("tk.terms_accept")}</label></div>`}
-      <label id="grant-stale" class="hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
-      <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button>
-    </form><div class="error" id="grant-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+      <label id="grant-stale" class="check grant-stale wide hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
+      <div class="error wide" id="grant-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button></div>
+    </form>`);
   const f = $("#f-grant", d);
   if (pre) {
     ["tier", "length", "currency"].forEach((k) => { if ([...f[k].options].some((o) => o.value === pre[k])) f[k].value = pre[k]; });
@@ -910,17 +914,19 @@ function grantDialog(users, pre = null) {
     $("#grant-err", d).textContent = "";
     try {
       preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value } });
-    } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<span class="muted">${esc(e.message)}</span>`; $("#grant-limits", d).innerHTML = ""; return; }
+    } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
     const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${t("tk.discount")})` : `<b>${fmtPrice(p.usd)}</b>`;
     const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : t("tk.starts_now");
-    const fit = p.available ? `<span class="good">${t("tk.available")}</span>` : `<span class="critical">${bdi(p.reason)}</span>`;
-    const soldOut = p.sold_out_now && p.available ? `<br><span class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</span>` : "";
-    const weeks = !p.week_split ? `<br><span class="muted">${t("tk.week_split_none")}</span>`
-      : `<br><span class="muted">${plural("tk.week_split", p.week_split.length, { n: nf0.format(p.week_split.length), pieces: p.week_split.map(fmtShare).join(" + ") })}</span>`;
-    $("#grant-preview", d).innerHTML = `${price} ${t("app.arrow")} <b>${esc(money(p.amount, p.currency))}</b> ${t("tk.at_rate", { rate: nfFull.format(p.rate) })} ${p.rate_set_at ? `(${t("tk.rate_of", { date: fmtDate(p.rate_set_at) })}${p.stale_rate ? `${t("app.list_sep")}<b>${t("quota.stale")}</b>` : ""})` : ""}<br>
-      ${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}<br>${fit}${soldOut}${weeks}
-      ${p.credit ? `<br><span class="muted">${t("tk.credit_removed")}</span>` : ""}`;
+    const fit = p.available ? `<li class="good">${t("tk.available")}</li>` : `<li class="critical">${bdi(p.reason)}</li>`;
+    const soldOut = p.sold_out_now && p.available ? `<li class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</li>` : "";
+    const weeks = !p.week_split ? `<li class="muted">${t("tk.week_split_none")}</li>`
+      : `<li class="muted">${plural("tk.week_split", p.week_split.length, { n: nf0.format(p.week_split.length), pieces: p.week_split.map(fmtShare).join(" + ") })}</li>`;
+    $("#grant-preview", d).innerHTML = `<div class="grant-amount"><b>${esc(money(p.amount, p.currency))}</b>
+        <span class="muted">${price} ${t("tk.at_rate", { rate: nfFull.format(p.rate) })}${p.rate_set_at ? ` · ${t("tk.rate_of", { date: fmtDate(p.rate_set_at) })}` : ""}</span>
+        ${p.stale_rate ? `<span class="badge stale">${t("quota.stale")}</span>` : ""}</div>
+      <ul><li>${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}</li>${fit}${soldOut}${weeks}
+      ${p.credit ? `<li class="muted">${t("tk.credit_removed")}</li>` : ""}</ul>`;
     $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
     $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">${t("tk.remove_limits")}</p>` +
       p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(labelOf("unitname.", r.unit))}</label>`).join("") : "";
