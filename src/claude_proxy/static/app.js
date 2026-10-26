@@ -680,9 +680,10 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <div class="terms wide"><ul class="muted"><li>${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
-      <button class="btn primary" type="submit">${t("ord.send")}</button>
-      ${payBtn}
-    </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`;
+      <div class="error wide" id="order-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="submit">${t("ord.send")}</button>${payBtn}</div>
+    </form>`;
 }
 function orderDialog(p, tier, len, pay, termsVersion) {
   const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
@@ -763,9 +764,10 @@ function ticketUpgradeOrderDialog(tk, u) {
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <div class="terms wide"><ul class="muted"><li>${t("up.terms", { label: tierName(u.tier, u.label), date: fmtDate(u.ends_at) })}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
-      <button class="btn primary" type="submit">${t("ord.send")}</button>
-      ${payU ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : ""}
-    </form><div class="error" id="order-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+      <div class="error wide" id="order-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="submit">${t("ord.send")}</button>${payU ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : ""}</div>
+    </form>`);
   const f = $("#f-order", d);
   const body = () => ({ tier: u.tier, upgrade: true, terms_version: tk.terms_version, lang: LANG, ...(f.email ? { email: f.email.value } : {}) });
   f.onsubmit = async (e) => {
