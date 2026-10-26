@@ -900,7 +900,7 @@ const I18N = {
     "privacy.account": "<b>Your account:</b> your email address, and the ID of the sign-in you used (Google, GitHub or an emailed code, through Clerk).",
     "privacy.computers": "<b>Your computers:</b> a name for each computer you connect and when its key was last used. Keys are stored only as fingerprints.",
     "privacy.usage": "<b>Your usage:</b> for each request, its time, model, token counts, status and Claude Code's session id and title, so you and the admin can see usage and limits. The content of your prompts and of the answers is not stored.",
-    "privacy.retention": "Usage records are deleted after {days} days. Nothing is sold or shared; requests go to the model's provider (Anthropic for Claude) to be answered. You can delete your account from the dashboard: click your name at the top. Your usage then stays only anonymized.",
+    "privacy.retention": "Usage records are deleted after {days} days. Nothing is sold or shared; requests go to the model's provider to be answered. You can delete your account from the dashboard: click your name at the top. Your usage then stays only anonymized.",
     "privacy.back": "Back to the dashboard",
     "privacy.title": "Privacy · Claude Gateway",
     // en:end
@@ -1802,7 +1802,7 @@ const I18N = {
     "privacy.account": "<b>حساب شما:</b> نشانی ایمیل‌تان، و شناسهٔ روشی که با آن وارد شده‌اید (Google، GitHub یا کدی که به ایمیل‌تان فرستاده می‌شود، از طریق Clerk).",
     "privacy.computers": "<b>کامپیوترهای شما:</b> نامی برای هر کامپیوتری که وصل می‌کنید و زمان آخرین استفاده از کلیدش. کلیدها فقط به‌صورت اثرانگشت ذخیره می‌شوند.",
     "privacy.usage": "<b>مصرف شما:</b> برای هر درخواست، زمان، مدل، تعداد توکن‌ها، وضعیت و شناسه و عنوان نشست کلاد، تا شما و مدیر بتوانید مصرف و سقف‌ها را ببینید. محتوای پرامپت‌ها و پاسخ‌ها ذخیره نمی‌شود.",
-    "privacy.retention": "رکوردهای مصرف پس از {days} روز حذف می‌شوند. چیزی فروخته یا به اشتراک گذاشته نمی‌شود؛ درخواست‌ها برای پاسخ به ارائه‌دهندهٔ مدل (برای Claude، Anthropic) فرستاده می‌شوند. می‌توانید حساب‌تان را از داشبورد حذف کنید: روی نام‌تان در بالای صفحه کلیک کنید. پس از آن مصرف‌تان فقط بی‌نام می‌ماند.",
+    "privacy.retention": "رکوردهای مصرف پس از {days} روز حذف می‌شوند. چیزی فروخته یا به اشتراک گذاشته نمی‌شود؛ درخواست‌ها برای پاسخ به ارائه‌دهندهٔ مدل فرستاده می‌شوند. می‌توانید حساب‌تان را از داشبورد حذف کنید: روی نام‌تان در بالای صفحه کلیک کنید. پس از آن مصرف‌تان فقط بی‌نام می‌ماند.",
     "privacy.back": "بازگشت به داشبورد",
     "privacy.title": "حریم خصوصی · کلاد",
     // fa:end
