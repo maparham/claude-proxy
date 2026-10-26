@@ -1812,7 +1812,7 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 // week_split (fractions of the ticket per week): each piece with the date it runs until, a weekly reset or the
 // ticket's end. Whole percents: "rough" is the promise. "" without quota data. Several pieces are also drawn as a bar,
 // each segment as long as its share, labelled with its week and percent (a narrow one with the percent only, a
-// sliver with neither: the sentence has them all).
+// sliver with neither: the sentence has them all), and each weekly reset between them marked with its date and time.
 function splitTerms(ws, len, days) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
@@ -1826,7 +1826,17 @@ function splitTerms(ws, len, days) {
   const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
   const label = (v, i) => (v >= 0.2 ? t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) }) : v >= 0.1 ? pct(v) : "&nbsp;");
   const bar = parts.map((v, i) => `<span style="flex-grow:${v}"><b>${label(v, i)}</b><i style="background:var(--s${i % 5 + 1})"></i></span>`).join("");
-  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar" aria-hidden="true">${bar}</span>`;
+  const short = (ts) => {   // date over time, narrow enough for a month's four resets to sit side by side
+    const d = new Date(ts * 1000);
+    return `${d.toLocaleDateString(LOC, { weekday: "short", month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`;
+  };
+  let at = 0;
+  const resets = parts.slice(0, -1).map((v, i) => {
+    at += v;
+    const edge = at < 0.15 ? "edge-start" : at > 0.85 ? "edge-end" : "";
+    return `<em class="${edge}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${short(until(i))}</small></em>`;
+  }).join("");
+  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar" aria-hidden="true">${bar}${resets}</span>`;
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"
