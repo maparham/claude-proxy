@@ -633,7 +633,13 @@ function pickedLine(prices, pick) {
 // "Up to 60% of Claude Pro's weekly usage": compare_pct, worked out by the server. The same for every
 // length, since a ticket's weekly piece pro-rates by day just as the plan's week does.
 function shareOfPlan(tier, len) {
-  return t("home.share_of", { pct: nf0.format(tier.compare_pct), what: bdi(tier.compare), period: t(`home.usage_${len}`) });
+  const what = bdi(tier.compare), n = tier.compare_pct / 100;
+  // A whole number of plans reads as plans: "One week of Claude Pro", "One week of two Claude Pro plans".
+  if (n >= 1 && Number.isInteger(n)) {
+    const period = t(`home.len_${len}`);
+    return n === 1 ? t("home.plan_one", { period, what }) : t("home.plan_n", { period, what, n: t("home.num_words").split(",")[n] || nf0.format(n) });
+  }
+  return t("home.share_of", { pct: nf0.format(tier.compare_pct), what, period: t(`home.usage_${len}`) });
 }
 // `renew`: in the Renew dialog, the line saying when the next ticket starts; no card around it there.
 function priceListCard(tk, order, renew) {
