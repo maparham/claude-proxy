@@ -6,7 +6,7 @@ import math
 import os
 import re
 import tomllib
-from dataclasses import dataclass, field, fields
+from dataclasses import dataclass, field, fields, replace
 
 logger = logging.getLogger("claude_proxy")
 
@@ -185,9 +185,15 @@ class EmailConfig:
     smtp_port: int = 587          # 587: STARTTLS; 465: implicit TLS
     smtp_user: str = ""           # empty: no AUTH
     from_fa: str = ""             # the sender of Persian (right-to-left) emails; empty: `from`
+    label: str = ""               # the server's name on the Orders tab; empty: smtp_host
+    password_env: str = "SMTP_PASSWORD"
+    alt: EmailConfig | None = None   # [email.alt]: a second SMTP server, same senders; the admin picks which goes first
 
     def password(self) -> str | None:
-        return os.environ.get("SMTP_PASSWORD") or None
+        return os.environ.get(self.password_env) or None
+
+    def name(self) -> str:
+        return self.label or self.smtp_host
 
 
 @dataclass
@@ -366,23 +372,37 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
     return t
 
 
-def _load_email(toml_path: str, data: dict) -> EmailConfig:
-    keys = {"smtp_host": str, "from": str, "admin_to": str, "smtp_port": int, "smtp_user": str, "from_fa": str}
+def _email_server(toml_path: str, section: str, data: dict, keys: dict, required: tuple) -> dict:
+    """One SMTP server's keys, checked: unknown, missing and mistyped keys are refused."""
     for k in data:
         if k not in keys:
-            raise ConfigError(f"{toml_path}: unknown key [email].{k}; [email] takes {', '.join(keys)}")
-    for k in ("smtp_host", "from", "admin_to"):
+            raise ConfigError(f"{toml_path}: unknown key [{section}].{k}; [{section}] takes {', '.join(keys)}")
+    for k in required:
         if not data.get(k):
-            raise ConfigError(f"{toml_path}: [email].{k} is required")
+            raise ConfigError(f"{toml_path}: [{section}].{k} is required")
     for k, kind in keys.items():
         v = data.get(k)
         if v is not None and (isinstance(v, bool) or not isinstance(v, kind)):
-            raise ConfigError(f"{toml_path}: [email].{k} must be a {'whole number' if kind is int else 'string'}")
+            raise ConfigError(f"{toml_path}: [{section}].{k} must be a {'whole number' if kind is int else 'string'}")
     if "smtp_port" in data and not 0 < data["smtp_port"] < 65536:
-        raise ConfigError(f"{toml_path}: [email].smtp_port must be a port number")
-    e = EmailConfig(**{("from_" if k == "from" else k): v for k, v in data.items()})
-    if e.smtp_user and not e.password():
-        logger.warning("[email].smtp_user is set but SMTP_PASSWORD is not in the environment; every order email will fail")
+        raise ConfigError(f"{toml_path}: [{section}].smtp_port must be a port number")
+    return {("from_" if k == "from" else k): v for k, v in data.items()}
+
+
+def _load_email(toml_path: str, data: dict) -> EmailConfig:
+    server = {"smtp_host": str, "smtp_port": int, "smtp_user": str, "label": str, "password_env": str}
+    data = dict(data)
+    alt = data.pop("alt", None)
+    if alt is not None and not isinstance(alt, dict):
+        raise ConfigError(f"{toml_path}: [email].alt must be a table, [email.alt]")
+    e = EmailConfig(**_email_server(toml_path, "email", data, server | {"from": str, "admin_to": str, "from_fa": str},
+                                    ("smtp_host", "from", "admin_to")))
+    if alt is not None:   # the same senders and admin address, through another server
+        a = _email_server(toml_path, "email.alt", alt, server, ("smtp_host",))
+        e.alt = replace(e, **{"smtp_port": 587, "smtp_user": "", "label": "", "password_env": "SMTP_PASSWORD"} | a)
+    for s in (e, e.alt):
+        if s is not None and s.smtp_user and not s.password():
+            logger.warning("[email] %s: smtp_user is set but %s is not in the environment; its emails will fail", s.name(), s.password_env)
     return e
 
 

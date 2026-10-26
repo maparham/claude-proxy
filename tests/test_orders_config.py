@@ -1,4 +1,5 @@
 import logging
+import smtplib
 
 import httpx
 import pytest
@@ -150,6 +151,59 @@ def test_send_raises_on_failure(monkeypatch):
     monkeypatch.setattr(mail.smtplib, "SMTP", Down)
     with pytest.raises(OSError):
         mail.send(EmailConfig("h", "f@x.y", "a@x.y"), "b@x.y", "S", "B")
+
+
+ALT = '[email.alt]\nlabel = "SES"\nsmtp_host = "ses.example.com"\nsmtp_user = "AKIA"\npassword_env = "SES_PW"\n'
+
+
+def test_email_alt_is_a_second_server_with_the_same_senders(tmp_path, monkeypatch):
+    monkeypatch.setenv("SES_PW", "sespw")
+    e = load(tmp_path, EMAIL + 'from_fa = "فا <gw@example.com>"\nlabel = "Gmail"\n' + ALT).email
+    a = e.alt
+    assert (a.smtp_host, a.smtp_port, a.smtp_user, a.password(), a.name()) == ("ses.example.com", 587, "AKIA", "sespw", "SES")
+    assert (a.from_, a.from_fa, a.admin_to, a.alt) == (e.from_, e.from_fa, e.admin_to, None)
+    assert e.name() == "Gmail" and load(tmp_path, EMAIL).email.alt is None
+
+
+@pytest.mark.parametrize("body,needle", [
+    (EMAIL + '[email.alt]\nsmtp_port = 25\n', "[email.alt].smtp_host"),
+    (EMAIL + ALT + 'from = "x@y.z"\n', "[email.alt].from"),
+    (EMAIL + 'alt = 1\n', "[email.alt]"),
+])
+def test_bad_email_alt_is_refused(tmp_path, body, needle):
+    with pytest.raises(ConfigError) as e:
+        load(tmp_path, body)
+    assert needle in str(e.value)
+
+
+def test_the_admins_pick_goes_first_and_the_other_is_the_fallback(tmp_path):
+    from claude_proxy import db
+    conn = db.init_db(tmp_path / "db.sqlite")
+    e = load(tmp_path, EMAIL + ALT).email
+    assert mail.servers(conn, e) == [e, e.alt]
+    mail.set_alt_first(conn, None, True)
+    assert mail.servers(conn, e) == [e.alt, e]
+    mail.set_alt_first(conn, None, False)
+    assert mail.servers(conn, e) == [e, e.alt] and mail.servers(conn, load(tmp_path, EMAIL).email)[0].alt is None
+
+
+def test_a_refused_mail_goes_out_through_the_other_server(monkeypatch, caplog):
+    tried = []
+
+    class Picky(FakeSMTP):
+        def send_message(self, msg, to_addrs=None):
+            tried.append(self.host)
+            if self.host == "ses":
+                raise smtplib.SMTPRecipientsRefused({"b@x.y": (554, b"not verified")})
+    monkeypatch.setattr(mail.smtplib, "SMTP", Picky)
+    main = EmailConfig("gmail", "f@x.y", "a@x.y")
+    alt = EmailConfig("ses", "f@x.y", "a@x.y", label="SES")
+    with caplog.at_level(logging.INFO):
+        mail.send([alt, main], "b@x.y", "S", "B")
+    assert tried == ["ses", "gmail"] and "trying gmail" in caplog.text and "sent through gmail" in caplog.text
+    tried.clear()
+    with pytest.raises(smtplib.SMTPRecipientsRefused):   # every server refused: the last failure is raised
+        mail.send([alt], "b@x.y", "S", "B")
 
 
 # ---------- turnstile.verify ----------

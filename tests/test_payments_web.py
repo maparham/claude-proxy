@@ -170,7 +170,7 @@ async def test_unpaid_orders_only_with_the_admin_switch_or_zarinpal_unavailable(
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)
         assert r.status_code == 409 and "ZarinPal" in r.json()["error"]
     async with admin_client(gw) as c:
-        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "manual": False, "manual_forced": False}
+        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "manual": False, "manual_forced": False, "mail_servers": None}
         assert (await c.post("/api/admin/orders/manual", json={"on": "yes"})).status_code == 400
         assert (await c.post("/api/admin/orders/manual", json={"on": True})).json() == {"ok": True, "manual": True}
     async with client(gw) as c:

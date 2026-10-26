@@ -331,6 +331,6 @@ async def send_mails(conn: sqlite3.Connection, cfg: Config, pid: int) -> None:
         buyer = i == 1   # after the admin's: the buyer's, which carries the ticket's terms
         rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body) if buyer else None
         try:
-            await asyncio.to_thread(mail.send, cfg.email, to, subject, body, rich)
+            await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), to, subject, body, rich)
         except Exception as e:
             logger.warning("payment #%d: mail to %s failed: %s", pid, to, e)

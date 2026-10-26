@@ -284,7 +284,7 @@ async def test_admin_list_actions_and_audit(env, ts):
         assert r.json()["order"]["status"] == "declined" and r.json()["order"]["ip"] is None
         assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "bogus"})).status_code == 400
         assert (await c.post("/api/admin/orders/999", json={"action": "contacted"})).status_code == 404
-        assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0, "manual": False, "manual_forced": True}
+        assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0, "manual": False, "manual_forced": True, "mail_servers": None}
         assert len((await c.get("/api/admin/orders?status=all")).json()["orders"]) == 1
         assert len((await c.get("/api/admin/orders?status=declined")).json()["orders"]) == 1
         assert (await c.get("/api/admin/orders?status=nope")).status_code == 400
@@ -340,6 +340,21 @@ def test_the_granted_mail_carries_the_dates_and_terms_in_the_order_language(env)
     assert tickets._date(t["starts_at"]) in body and tickets.terms_text(conn, cfg, "en", "week", t["starts_at"]) in body
     subject, body = orders.granted_mail_text(conn, cfg, o | {"lang": "fa"}, t)
     assert subject.startswith("تیکت شما فعال شد") and tickets.terms_date(t["ends_at"], "fa") in body
+
+
+async def test_the_admin_picks_which_mail_server_goes_first(env, sent):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await c.get("/api/admin/orders")).json()["mail_servers"] is None   # one server: nothing to pick
+        assert (await c.post("/api/admin/orders/mail_server", json={"server": "alt"})).status_code == 404
+        cfg.email.label, cfg.email.alt = "Gmail", EmailConfig("ses.example.com", "gw@example.com", "admin@example.com", label="SES")
+        assert (await c.get("/api/admin/orders")).json()["mail_servers"] == [
+            {"id": "main", "label": "Gmail", "first": True}, {"id": "alt", "label": "SES", "first": False}]
+        assert (await c.post("/api/admin/orders/mail_server", json={"server": "nope"})).status_code == 400
+        assert (await c.post("/api/admin/orders/mail_server", json={"server": "alt"})).json() == {"ok": True, "server": "alt"}
+        assert [m["first"] for m in (await c.get("/api/admin/orders")).json()["mail_servers"]] == [False, True]
+    assert mail.servers(conn, cfg.email) == [cfg.email.alt, cfg.email]
+    assert conn.execute("SELECT target FROM audit_log WHERE action='mail_server'").fetchone()[0] == "alt"
 
 
 async def test_link_409_carries_the_existing_user(env, ts):

@@ -33,6 +33,18 @@ smtp_user = "maparham40@gmail.com"
 from = "Rahkar AI <support@chartkar.app>"
 from_fa = "اشتراک راهکار <support@chartkar.app>"
 admin_to = "support@chartkar.app"
+label = "Gmail"
+
+# The second server, picked on the Orders tab; whichever goes first, the other sends what it refuses. Amazon SES in
+# eu-central-1 signs as chartkar.app (DKIM, MAIL FROM mail.chartkar.app), so Gmail shows no "via gmail.com". IAM user
+# rahkar-ses-smtp (ses:SendRawEmail on chartkar.app only); its SMTP password is SES_SMTP_PASSWORD in gateway.env.
+# Until AWS grants production access (case 179301808100024) SES only reaches chartkar.app addresses.
+[email.alt]
+label = "Amazon SES"
+smtp_host = "email-smtp.eu-central-1.amazonaws.com"
+smtp_port = 587
+smtp_user = "AKIARA3PD4NIFRWUFSRT"
+password_env = "SES_SMTP_PASSWORD"
 
 # Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). The tiers are written out so the
 # capacity sold is visible here: each share_pct is the slice of the subscription one ticket reserves. Changing

@@ -101,6 +101,12 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # from_fa = "..."                                # optional: the sender of Persian emails; default `from`
 # admin_to = "admin@example.com"                 # required
 # # password: SMTP_PASSWORD in the environment (required when smtp_user is set)
+# label = "Gmail"                                # optional: its name on the Orders tab; default smtp_host
+# password_env = "SMTP_PASSWORD"                 # optional: the environment variable holding the password
+# # Optional second server, same senders; the Orders tab picks which goes first, the other sends what it refuses:
+# [email.alt]
+# smtp_host = "email-smtp.eu-central-1.amazonaws.com"   # required; smtp_port, smtp_user, label, password_env as above
+# password_env = "SES_SMTP_PASSWORD"
 
 # Online payment through ZarinPal (docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md): signed-in users pay
 # in Toman and get their ticket at once. Needs ZARINPAL_MERCHANT_ID in the environment, [tickets.currencies.IRT]

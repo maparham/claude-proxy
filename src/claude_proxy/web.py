@@ -35,7 +35,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, clerk, db, limits, orders, payments, quota, tickets, turnstile, upstream, usage
+from . import api_credit, clerk, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
@@ -1499,8 +1499,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                (o["id"],)).fetchone()
             o["payment"] = dict(pay) if pay else None
         # `manual`: the switch itself; `manual_forced`: unpaid orders are open anyway, ZarinPal being unavailable.
+        # `mail_servers`: with [email.alt], the two SMTP servers, the one tried first marked.
+        e = cfg.email
+        servers = None if e is None or e.alt is None else [
+            {"id": k, "label": s.name(), "first": (k == "alt") == mail.alt_first(conn)} for k, s in (("main", e), ("alt", e.alt))]
         return {"orders": rows, "new": orders.new_count(conn), "manual": payments.manual_switch(conn),
-                "manual_forced": not (payments.on(cfg) and payments.rate_ok(conn))}
+                "manual_forced": not (payments.on(cfg) and payments.rate_ok(conn)), "mail_servers": servers}
+
+    @app.post("/api/admin/orders/mail_server")
+    async def orders_mail_server(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        if cfg.email is None or cfg.email.alt is None:
+            fail(404, "Only one mail server is set up ([email.alt] is not in the config).")
+        if body.get("server") not in ("main", "alt"):
+            fail(400, "server must be main or alt.")
+        mail.set_alt_first(conn, actor["id"], body["server"] == "alt")
+        return {"ok": True, "server": body["server"]}
 
     @app.post("/api/admin/orders/manual")
     async def orders_manual(request: Request):
