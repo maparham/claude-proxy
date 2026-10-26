@@ -450,7 +450,12 @@ async def test_a_user_deletes_their_own_account(env):
         assert "cp_session=\"\"" in r.headers["set-cookie"]
         assert (await c.get("/api/session")).status_code == 401
     assert not conn.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone()
-    assert conn.execute("SELECT 1 FROM audit_log WHERE action='delete_self' AND target='new@example.com'").fetchone()
+    assert conn.execute("SELECT actor_user_id FROM audit_log WHERE action='delete_self' AND target='new@example.com'").fetchone()[0] == uid
+    async with app(gw) as c:   # the audit page shows the deleted user as no one, not as the CLI
+        r = await c.post("/api/login", json={"username": "admin", "password": PW})
+        c.headers["x-csrf-token"] = r.json()["csrf"]
+        e = next(e for e in (await c.get("/api/audit")).json()["entries"] if e["action"] == "delete_self")
+    assert e["actor"] is None
     assert fake.deleted == ["user_1"]
 
 

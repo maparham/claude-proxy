@@ -705,13 +705,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             db.delete_user(conn, user["id"], user["id"])
         except ValueError as e:
             fail(400, str(e))
-        db.audit(conn, None, "delete_self", user["email"] or user["name"])
+        db.audit(conn, user["id"], "delete_self", user["email"] or user["name"])
         if user["clerk_id"] and verifier is not None:
             try:
                 await verifier.delete_user(user["clerk_id"])
             except (clerk.ClerkError, httpx.HTTPError) as e:
                 logger.warning("Clerk user %s not deleted: %s", user["clerk_id"], e)
-                db.audit(conn, None, "clerk_delete_failed", user["email"] or user["name"], {"clerk_id": user["clerk_id"], "error": str(e)})
+                db.audit(conn, user["id"], "clerk_delete_failed", user["email"] or user["name"], {"clerk_id": user["clerk_id"], "error": str(e)})
         resp = JSONResponse({"ok": True})
         resp.delete_cookie(COOKIE, path="/")
         return resp
