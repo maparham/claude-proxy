@@ -147,7 +147,7 @@ def test_one_open_order_per_user(env):
 
 def test_visitor_limit_per_ip(env):
     conn, cfg, ids = env
-    for n in range(3):
+    for n in range(orders.VISITOR_PER_IP):
         visitor(conn, cfg, n, ip="1.2.3.4")
     with refused(429) as e:
         visitor(conn, cfg, 9, ip="1.2.3.4")
@@ -157,7 +157,7 @@ def test_visitor_limit_per_ip(env):
 
 def test_visitor_limit_per_email_ignores_case(env):
     conn, cfg, ids = env
-    for n in range(3):
+    for n in range(orders.VISITOR_PER_EMAIL):
         visitor(conn, cfg, n, email="Bob@Example.com")
     with refused(429) as e:
         visitor(conn, cfg, 9, email="bob@example.COM")
@@ -660,12 +660,12 @@ def test_an_email_that_would_name_several_recipients_is_400(env, email):
 
 def test_visitor_limited_checks_ip_and_global_without_writing(env):
     conn, cfg, ids = env
-    for n in range(3):
+    for n in range(orders.VISITOR_PER_IP):
         visitor(conn, cfg, n, ip="10.9.9.9")
     with refused(429, "Too many orders today"):
         orders.visitor_limited(conn, "10.9.9.9", now=NOW)
     orders.visitor_limited(conn, "10.9.9.8", now=NOW)   # another address: fine
-    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 3
+    assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == orders.VISITOR_PER_IP
 
 
 def test_link_refuses_a_revoked_user(env):

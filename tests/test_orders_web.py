@@ -119,8 +119,8 @@ async def test_public_order_input_errors(env, ts):
 async def test_double_submit_never_500(env, ts):
     gw, conn, cfg, ids, keys = env
     async with client(gw) as c:
-        rs = await asyncio.gather(*[c.post("/api/orders", json=VISITOR) for _ in range(5)])
-    assert {r.status_code for r in rs} <= {200, 429} and [r.status_code for r in rs].count(200) == 3
+        rs = await asyncio.gather(*[c.post("/api/orders", json=VISITOR) for _ in range(orders.VISITOR_PER_IP + 2)])
+    assert {r.status_code for r in rs} <= {200, 429} and [r.status_code for r in rs].count(200) == orders.VISITOR_PER_IP
     assert all(r.json()["error"] == "Too many orders today; try again tomorrow or sign in." for r in rs if r.status_code == 429)
 
 
@@ -617,7 +617,7 @@ def test_the_visitor_dialog_offers_signing_in_and_escapes(tmp_path):
 async def test_over_the_ip_limit_no_cloudflare_call_is_made(env, ts):
     gw, conn, cfg, ids, keys = env
     async with client(gw) as c:
-        for n in range(3):
+        for n in range(orders.VISITOR_PER_IP):
             assert (await c.post("/api/orders", json=VISITOR | {"email": f"v{n}@example.com"})).status_code == 200
         calls = len(ts.calls)
         r = await c.post("/api/orders", json=VISITOR | {"email": "v9@example.com"})
