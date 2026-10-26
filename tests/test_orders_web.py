@@ -315,6 +315,33 @@ async def test_link_and_grant_from_a_visitor_order(env, ts):
         assert (await c.post("/api/admin/tickets", json=ORDER | {"user": uid, "usd": 8, "rate": 0.92, "order_id": "x"})).status_code == 400
 
 
+async def test_granting_an_order_emails_the_buyer(env, ts, sent):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        await c.post("/api/orders", json=VISITOR)
+        await drain()
+    oid = only_order(conn)["id"]
+    sent.clear()
+    async with admin_client(gw) as c:
+        uid = (await c.post(f"/api/admin/orders/{oid}", json={"action": "link", "create": True})).json()["order"]["user_id"]
+        assert (await grant(c, ORDER | {"user": uid})).status_code == 200   # a direct grant: no order, no mail
+        await drain()
+        assert sent == []
+        assert (await grant(c, ORDER | {"user": uid, "order_id": oid})).status_code == 200
+        await drain()
+    assert sent == [("vera@example.com", "Your ticket is granted: Lite week")]
+
+
+def test_the_granted_mail_carries_the_dates_and_terms_in_the_order_language(env):
+    gw, conn, cfg, ids, keys = env
+    o = {"tier": "lite", "length": "week", "lang": "en"}
+    t = {"starts_at": 1_800_000_000, "ends_at": 1_800_000_000 + 7 * 86400}
+    subject, body = orders.granted_mail_text(conn, cfg, o, t)
+    assert tickets._date(t["starts_at"]) in body and tickets.terms_text(conn, cfg, "en", "week", t["starts_at"]) in body
+    subject, body = orders.granted_mail_text(conn, cfg, o | {"lang": "fa"}, t)
+    assert subject.startswith("تیکت شما فعال شد") and tickets.terms_date(t["ends_at"], "fa") in body
+
+
 async def test_link_409_carries_the_existing_user(env, ts):
     gw, conn, cfg, ids, keys = env
     conn.execute("UPDATE users SET email='vera@example.com' WHERE id=?", (ids["alice"],))

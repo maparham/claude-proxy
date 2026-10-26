@@ -304,6 +304,35 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
     return f"سفارش شما: {label}، ۱ {length}", "\n".join(lines) + "\n"
 
 
+def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket: dict) -> tuple[str, str]:
+    """(subject, body) for the buyer once the admin grants their order: the ticket's dates and its terms."""
+    terms = tickets.terms_text(conn, cfg, "fa" if order.get("lang") == "fa" else "en", order["length"], ticket["starts_at"])
+    if order.get("lang") == "fa":
+        what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
+        span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
+        return f"تیکت شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nتیکت: {what}، {span}.\n\n{terms}"
+    what = f"{_label(cfg, order)}, {order['length']} ({LENGTHS.get(order['length'], '?')} days)"
+    span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
+    return (f"Your ticket is granted: {_label(cfg, order)} {order['length']}",
+            f"Your order is done.\n\nTicket: {what}, {span}.\n\n{terms}")
+
+
+async def send_granted(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:
+    """After the grant's response: tell the buyer their ticket is in. A failure is logged and never touches the order."""
+    if cfg.email is None:
+        return
+    o = get(conn, order_id)
+    t = conn.execute("SELECT * FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
+    if t is None:
+        return
+    subject, body = granted_mail_text(conn, cfg, o, dict(t))
+    rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body)
+    try:
+        await asyncio.to_thread(mail.send, cfg.email, o["email"], subject, body, rich)
+    except Exception as e:
+        logger.warning("order #%d: granted mail to %s failed: %s", order_id, o["email"], e)
+
+
 async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:
     """Send the order's pending emails, after the response. Each send runs in a thread (a slow mail server never
     blocks the loop); its result is written back here, on the loop, the only place the shared connection is used."""

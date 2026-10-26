@@ -1252,6 +1252,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
                         expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version)
+        if order_id is not None and cfg.email is not None:   # the buyer hears their order is done, after the response
+            task = asyncio.create_task(orders.send_granted(conn, cfg, order_id))
+            _mail_tasks.add(task)
+            task.add_done_callback(_mail_done)
         return {"ok": True, "ticket": t}
 
     @app.post("/api/admin/tickets/{tid}/cancel")
