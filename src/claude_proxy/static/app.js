@@ -600,14 +600,12 @@ function usersCard() {
 function userLimitsCard(me, tk) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
-  // A bonus as a share of the ticket's own allowance: the user never sees the subscription's percent.
-  const rel = (v, of) => `${nf0.format(Math.round(v / of * 100))}${PCT}`;
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
       <div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}</div>
-      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_piece != null ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}</div>
-      ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: rel(b.share_pct, c.share_pct), date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
+      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}</div>
+      ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
-      ${c.bonus_share ? `<p class="sub">${t("ov.bonus_measured", { share: rel(c.bonus_share, c.share_5h_pct) })}</p>` : ""}
+      ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${tk.how_to_buy ? bdi(tk.how_to_buy) : t("ov.ask_admin")}</div>`;

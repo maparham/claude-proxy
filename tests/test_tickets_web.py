@@ -246,15 +246,17 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["enabled"] and me["gated"]
     cur = me["current"]
-    assert (cur["label"], cur["share_pct"], cur["bonus_days"], cur["bonus_share"]) == ("Lite", 5, 1, 2)
+    assert (cur["label"], cur["bonus_days"], cur["bonus_pct"]) == ("Lite", 1, 40)   # +2 points on a 5% ticket
     assert "id" not in cur and "id" not in me["queued"]          # a ticket id counts the account's sales
     assert cur["effective_end"] == t["ends_at"] + DAY and cur["week_end"] == t["starts_at"] + DAY   # no quota data: display-only fallback to the ticket-day end
-    assert cur["bonuses"] == [{"share_pct": 2, "note": "welcome", "ends_at": t["ends_at"] + DAY}]
+    assert cur["bonuses"] == [{"pct": 40, "note": "welcome", "ends_at": t["ends_at"] + DAY}] and not cur["week_known"]
     assert cur["day_bonuses"] == [] and abs(me["now"] - time.time()) < 5   # that bonus's days show with its share
     assert (me["queued"]["label"], me["queued"]["starts_at"]) == ("Lite", t["ends_at"] + DAY)
     assert me["prices"]["currency"] == "EUR" and me["how_to_buy"].startswith("Send")
     for leaked in ("utilization", "sold_now", "shares", "granted_by"):
         assert leaked not in str(me)
+    for leaked in ("share_pct", "share_5h_pct", "week_piece", "bonus_share"):   # the subscription's percents
+        assert leaked not in str(me["current"])
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/me/tickets")).status_code == 401
 

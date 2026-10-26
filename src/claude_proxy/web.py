@@ -1323,19 +1323,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             active = tickets.active_bonuses(conn, cur["id"], now)
             week = tickets.week_bounds(conn, cfg, now)
             week_end = week[1] if week is not None else tickets.current_day(cur, now)[1]   # display-only fallback; enforcement is 503 then
-            week_piece = None
-            if week is not None:
-                overlap = max(0.0, min(week[1], cur["effective_end"]) - max(week[0], cur["starts_at"]))
-                week_piece = cur["share_pct"] * overlap / tickets.DAY / 7 + sum(
-                    b["share_pct"] * max(0.0, min(week[1], b["ends_at"]) - max(week[0], b["starts_at"])) / tickets.DAY / 7
-                    for b in active)
-            out["current"] = {"tier": cur["tier"], "label": label(cur), "share_pct": cur["share_pct"], "starts_at": cur["starts_at"],
-                              "share_5h_pct": cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"],
+            # No subscription percents: the user never learns about the account behind the gateway, so a bonus reads
+            # as a percent of the ticket's own allowance (+2 points on a 5% ticket: +40%).
+            share_5h = cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"]
+            out["current"] = {"tier": cur["tier"], "label": label(cur), "starts_at": cur["starts_at"],
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
-                              "week_piece": week_piece,
-                              "bonus_share": tickets.bonus_share(conn, cur["id"], now),
-                              "bonuses": [{"share_pct": b["share_pct"], "note": b["note"], "ends_at": b["ends_at"]} for b in active]}
+                              "week_known": week is not None,
+                              "bonus_pct": tickets.bonus_share(conn, cur["id"], now) / share_5h * 100,
+                              "bonuses": [{"pct": b["share_pct"] / cur["share_pct"] * 100, "note": b["note"], "ends_at": b["ends_at"]}
+                                          for b in active]}
             # Extra days with their note; a bonus that also adds a share running now is shown with that share instead.
             shown = {b["id"] for b in active}
             out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])

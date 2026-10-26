@@ -592,15 +592,15 @@ def test_terms_text_is_the_order_dialogs_terms(db):
     """The buyer's emails repeat the dialog's terms: the weekly split with dates (Tehran time), then the 5-hour line."""
     conn, cfg, ids = seeded(db)
     assert tickets.terms_text(conn, cfg, "en", "week", NOW, now=NOW) == (   # no weekly reset known: the general line
-        "Ticket terms:\n- " + tickets.TERMS["en"]["l1"] + "\n- Anthropic also applies its own 5-hour limit.\n")
+        "Ticket terms:\n- " + tickets.TERMS["en"]["l1"] + "\n- A 5-hour limit also applies.\n")
     fresh(conn, NOW - 600)
     # RESET7 - DAY is 2027-01-17 11:30 Tehran; the reset a day later, the ticket's end a week after its start
     assert tickets.terms_text(conn, cfg, "en", "week", RESET7 - DAY, now=NOW) == (
         "Ticket terms:\n- Your use of the ticket will be limited in two parts: 14% until Monday, January 18 at 11:30 AM "
-        "and 86% until Sunday, January 24 at 11:30 AM.\n- Anthropic also applies its own 5-hour limit.\nTimes are Tehran time.\n")
+        "and 86% until Sunday, January 24 at 11:30 AM.\n- A 5-hour limit also applies.\nTimes are Tehran time.\n")
     assert tickets.terms_text(conn, cfg, "fa", "week", RESET7 - DAY, now=NOW) == (
         "شرایط تیکت:\n- استفاده شما از تیکت در دو قسمت محدود خواهد بود: ۱۴٪ تا دوشنبه ۲۸ دی، ساعت ۱۱:۳۰ و ۸۶٪ تا یکشنبه ۴ بهمن، "
-        "ساعت ۱۱:۳۰.\n- به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.\nساعت‌ها به وقت تهران است.\n")
+        "ساعت ۱۱:۳۰.\n- به علاوه، محدودیت ۵ ساعته هم اعمال می‌شود.\nساعت‌ها به وقت تهران است.\n")
     assert "کل تیکت شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY, now=NOW)
 
 
