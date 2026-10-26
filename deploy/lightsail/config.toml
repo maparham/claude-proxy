@@ -54,7 +54,7 @@ password_env = "SES_SMTP_PASSWORD"
 [tickets]
 how_to_buy = "Send the amount by bank transfer to the admin and email them with the ticket you want."
 how_to_buy_fa = "مبلغ را با انتقال بانکی برای مدیر بفرستید و تیکتی را که می‌خواهید به او ایمیل کنید."
-max_sold_pct = 80
+max_sold_pct = 100
 # Visitor orders on the home page are off: buyers sign in before ordering, so "Get it" links to the dashboard.
 # To bring them back, uncomment (Turnstile widget "Claude Gateway orders"; the secret is TURNSTILE_SECRET in gateway.env).
 # turnstile_site_key = "0x4AAAAAAFNrHze8wsEPTc8r"
