@@ -11,6 +11,7 @@ dependencies = [
     "cryptography>=42",
     "pydantic>=2",
     "segno>=1.6.6",
+    "tzdata",   # zoneinfo's fallback: the slim image may ship no system time zones (Tehran for buyer emails)
 ]
 
 [project.scripts]

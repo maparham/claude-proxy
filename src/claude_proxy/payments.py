@@ -263,7 +263,7 @@ def _toman(n) -> str:
     return f"{int(round(n)):,} Toman"
 
 
-def mails(cfg: Config, p: dict, o: dict, ticket: dict | None, reason: str | None) -> list[tuple[str, str, str]]:
+def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict | None, reason: str | None) -> list[tuple[str, str, str]]:
     """(to, subject, body) for a payment that just became paid or paid_unfulfilled (section 5)."""
     if cfg.email is None:
         return []
@@ -276,15 +276,15 @@ def mails(cfg: Config, p: dict, o: dict, ticket: dict | None, reason: str | None
     out = [(cfg.email.admin_to, f"Paid: {_label(cfg, o['tier'])} {o['length']}", f"{head}\nThe ticket is live.{link}\n")]
     if ticket is not None and o.get("lang") == "fa":   # the buyer's mail in the language of the page they paid from
         what_fa = f"{orders.fa_label(cfg, o['tier'])}، ۱ {orders.FA_LENGTHS.get(o['length'], o['length'])}"
-        span = f"از {orders.fa_num(tickets._date(ticket['starts_at']))} تا {orders.fa_num(tickets._date(ticket['ends_at']))}"
+        span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
         out.append((o["email"], f"پرداخت شما: {what_fa}",
                     f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n\nتیکت: {what_fa}، {span}.\n"
-                    f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text('fa')}"))
+                    f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'fa', o['length'], ticket['starts_at'])}"))
     elif ticket is not None:
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
                     f"Thank you. Your payment of {_toman(p['amount'])} went through.\n\nTicket: {what}, {span}.\n"
-                    f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text()}"))
+                    f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'en', o['length'], ticket['starts_at'])}"))
     return out
 
 
@@ -295,7 +295,7 @@ async def send_mails(conn: sqlite3.Connection, cfg: Config, pid: int) -> None:
         return
     o = orders.get(conn, p["order_id"])
     t = conn.execute("SELECT * FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
-    for to, subject, body in mails(cfg, p, o, dict(t) if t else None, p["error"]):
+    for to, subject, body in mails(conn, cfg, p, o, dict(t) if t else None, p["error"]):
         try:
             await asyncio.to_thread(mail.send, cfg.email, to, subject, body)
         except Exception as e:

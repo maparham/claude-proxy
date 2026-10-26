@@ -10,6 +10,7 @@ import math
 import sqlite3
 import time
 from decimal import ROUND_HALF_UP, Decimal
+from zoneinfo import ZoneInfo
 
 from . import db, quota
 from .config import LENGTHS, Config
@@ -27,23 +28,85 @@ TERMS_VERSION = "v1"
 # Ticket terms, accepted at order time and repeated in the buyer's emails (order requests design, section 5).
 # Plain text: it goes into emails as is. Names no weekday: Anthropic's reset comes from live quota data, so the
 # refill moment is formatted from resets_at at display time (2026-10-13 spec, §1).
-TERMS_LINES = (
-    "Ticket terms (v1):",
-    "- Your weekly share refills at Anthropic's weekly reset; what you do not use by then is gone.",
-    "- A 5-hour share applies on top, against Anthropic's 5-hour window.",
-    "- Claude models only; anything else needs a separate cost limit.",
-)
-TERMS_LINES_FA = (   # the same terms, for a buyer who ordered from the Persian page
-    "شرایط تیکت (v1):",
-    "- سهم هفتگی شما با ریست هفتگی آنتروپیک دوباره پر می‌شود؛ هر چه تا آن موقع مصرف نکنید از بین می‌رود.",
-    "- سهم ۵ ساعته هم جداگانه، در بازهٔ ۵ ساعتهٔ آنتروپیک اعمال می‌شود.",
-    "- فقط مدل‌های کلاد؛ بقیه سقف هزینهٔ جداگانه لازم دارند.",
-)
+# The order dialog's terms (i18n.js ord.split*, ord.terms_l1, ord.terms_l3), repeated in the buyer's emails in the
+# language of the page they ordered from. Dates in Tehran time: the dialog shows the buyer's own clock.
+TERMS = {
+    "en": {"head": "Ticket terms:", "split": "Your use of the ticket will be limited in {n} parts: {pieces}.",
+           "split_one": "Your whole ticket is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
+           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"},
+           "l1": "Your allowance is split across Anthropic's weekly windows by the days each one covers; each piece is "
+                 "spendable at your own pace and expires at its window's reset.",
+           "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
+    "fa": {"head": "شرایط تیکت:", "split": "استفاده شما از تیکت در {n} قسمت محدود خواهد بود: {pieces}.",
+           "split_one": "کل تیکت شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
+           "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"},
+           "l1": "سهم شما به نسبت روزهایی که هر بازهٔ هفتگی آنتروپیک پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت "
+                 "خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
+           "l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.", "tz": "ساعت‌ها به وقت تهران است."},
+}
+TEHRAN = ZoneInfo("Asia/Tehran")
+FA_DIGITS = str.maketrans("0123456789,.", "۰۱۲۳۴۵۶۷۸۹٬٫")
+FA_MONTHS = ("فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند")
+FA_WEEKDAYS = ("دوشنبه", "سه‌شنبه", "چهارشنبه", "پنجشنبه", "جمعه", "شنبه", "یکشنبه")   # from Monday, as date.weekday()
 
 
-def terms_text(lang: str = "en") -> str:
-    """The ticket terms as one block, for order mails and the buyer mails after payment, in the buyer's language."""
-    return "\n".join(TERMS_LINES_FA if lang == "fa" else TERMS_LINES) + "\n"
+def fa_num(s) -> str:
+    return str(s).translate(FA_DIGITS)
+
+
+def jalali(gy: int, gm: int, gd: int) -> tuple[int, int, int]:
+    """Gregorian to the Solar Hijri calendar, what fa-IR dates use (jdf.scr.ir's conversion)."""
+    gy2 = gy + 1 if gm > 2 else gy
+    days = (355666 + 365 * gy + (gy2 + 3) // 4 - (gy2 + 99) // 100 + (gy2 + 399) // 400 + gd
+            + (0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334)[gm - 1])
+    jy = -1595 + 33 * (days // 12053)
+    days %= 12053
+    jy += 4 * (days // 1461)
+    days %= 1461
+    if days > 365:
+        jy += (days - 1) // 365
+        days = (days - 1) % 365
+    if days < 186:
+        return jy, 1 + days // 31, 1 + days % 31
+    return jy, 7 + (days - 186) // 30, 1 + (days - 186) % 30
+
+
+def terms_date(ts: float, lang: str) -> str:
+    """As the dialog shows a date (weekday, month, day, hour:minute), in Tehran time."""
+    from datetime import datetime
+    t = datetime.fromtimestamp(ts, TEHRAN)
+    if lang == "fa":
+        _, jm, jd = jalali(t.year, t.month, t.day)
+        return f"{FA_WEEKDAYS[t.weekday()]} {fa_num(jd)} {FA_MONTHS[jm - 1]}، ساعت {fa_num(t.strftime('%H:%M'))}"
+    return t.strftime("%A, %B ") + str(t.day) + t.strftime(" at %I:%M %p")
+
+
+def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
+    """The order dialog's terms for a `length` ticket starting at `starts_at`, as one block for the buyer's emails:
+    how it splits across Anthropic's weeks (each piece with the date it runs until), else the general line without
+    quota data; then the 5-hour line."""
+    w = TERMS["fa" if lang == "fa" else "en"]
+    ws = order_split(conn, cfg, starts_at, now)
+    parts, days = (ws or {}).get(length) or [], LENGTHS[length]
+
+    def pct(v):
+        s = "<1%" if 0 < v < 0.01 else f"{round(v * 100)}%"
+        return fa_num(s).replace("%", "٪") if lang == "fa" else s
+
+    if not parts:
+        split = w["l1"]
+    elif len(parts) == 1:
+        split = w["split_one"].format(date=terms_date(starts_at + days * DAY, lang))
+    else:
+        end = starts_at + days * DAY
+        pieces = [w["piece"].format(pct=pct(v), date=terms_date(min(ws["first_reset"] + i * 7 * DAY, end), lang))
+                  for i, v in enumerate(parts)]
+        n = w["nums"].get(len(parts)) or (fa_num(len(parts)) if lang == "fa" else str(len(parts)))
+        split = w["split"].format(n=n, pieces=w["sep"].join(pieces[:-1]) + w["and"] + pieces[-1])
+    lines = [w["head"], f"- {split}", f"- {w['l3']}"]
+    if parts:
+        lines.append(w["tz"])
+    return "\n".join(lines) + "\n"
 
 
 TERMS_CHANGED = "Ticket terms have changed; reload and accept the current terms."

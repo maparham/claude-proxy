@@ -263,11 +263,7 @@ def admin_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
 # Persian for the buyer's emails: the dashboard's own words (i18n.js tier.*, price.1_*, cur.toman).
 FA_TIERS = {"lite": ("Lite", "لایت"), "standard": ("Standard", "استاندارد")}   # translated only while the label is the default
 FA_LENGTHS = {"day": "روز", "week": "هفته", "month": "ماه"}
-FA_DIGITS = str.maketrans("0123456789,.", "۰۱۲۳۴۵۶۷۸۹٬٫")
-
-
-def fa_num(s) -> str:
-    return str(s).translate(FA_DIGITS)
+fa_num = tickets.fa_num
 
 
 def fa_label(cfg: Config, tier: str) -> str:
@@ -283,28 +279,28 @@ def fa_amount(amount: float, currency: str) -> str:
     return f"{fa_num(f'{amount:,.2f}')} {currency}"
 
 
-def buyer_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
+def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[str, str]:
     """(subject, body) for the buyer, in the language of the page they ordered from. Nothing the buyer typed goes in
     (no name, no message), so the form cannot carry content to a stranger's inbox."""
     if order.get("lang") == "fa":
-        return _buyer_mail_fa(cfg, order)
+        return _buyer_mail_fa(conn, cfg, order)
     label = _label(cfg, order)
     lines = [f"Your order: a {label} ticket for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
              f"Price at today's rate: {_amount(order)}.", ""]
     if cfg.tickets.how_to_buy:
         lines += ["How to pay:", cfg.tickets.how_to_buy, ""]
-    lines += [tickets.terms_text(), "This is a request; the admin will contact you."]
+    lines += [tickets.terms_text(conn, cfg, "en", order["length"], order["created_at"]), "This is a request; the admin will contact you."]
     return f"Your order: {label} {order['length']}", "\n".join(lines) + "\n"
 
 
-def _buyer_mail_fa(cfg: Config, order: dict) -> tuple[str, str]:
+def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[str, str]:
     label, length = fa_label(cfg, order["tier"]), FA_LENGTHS.get(order["length"], order["length"])
     lines = [f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
              f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
     how = cfg.tickets.how_to_buy_fa or cfg.tickets.how_to_buy
     if how:
         lines += ["روش پرداخت:", how, ""]
-    lines += [tickets.terms_text("fa"), "این یک درخواست است؛ مدیر با شما تماس می‌گیرد."]
+    lines += [tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]), "این یک درخواست است؛ مدیر با شما تماس می‌گیرد."]
     return f"سفارش شما: {label}، ۱ {length}", "\n".join(lines) + "\n"
 
 
@@ -320,7 +316,7 @@ async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None
     if o["admin_mail"] == "pending":
         jobs.append(("admin_mail", cfg.email.admin_to, *admin_mail_text(cfg, o)))
     if o["buyer_mail"] == "pending":
-        jobs.append(("buyer_mail", o["email"], *buyer_mail_text(cfg, o)))
+        jobs.append(("buyer_mail", o["email"], *buyer_mail_text(conn, cfg, o)))
     for which, to, subject, body in jobs:
         try:
             await asyncio.to_thread(mail.send, cfg.email, to, subject, body)
