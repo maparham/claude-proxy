@@ -422,6 +422,21 @@ async def test_with_tickets_off_a_paused_user_is_shown_and_can_be_ungated(env):
     assert last_audit(conn) == ("ungate", "alice")
 
 
+async def test_my_status_gives_the_weekly_limits_week_breakdown(env):
+    """The dashboard shows a ticket's weekly limit as the statusline does: each Anthropic week's use and the ticket's."""
+    gw, conn, cfg, ids, keys = env
+    now = time.time()
+    for bucket in ("5h", "7d"):
+        conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                     (now - 60, "header", bucket, 0, now + (3600 if bucket == "5h" else 3 * 86400)))
+    async with admin_client(gw) as c:
+        assert (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).status_code == 200
+        me = (await c.get("/api/me/status", headers=bearer(keys["alice"]))).json()
+    weekly = next(v for v in me["limits"] if v["kind"] == "weekly_limit")
+    assert [w["state"] for w in weekly["weeks"]["weeks"]] == ["current", "future"] and weekly["weeks"]["ticket_pct"] == 0
+    assert "0% of week 1 · 0% of week 2 · 0% of ticket (6d:23h left)" in me["line"]
+
+
 async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
     gw, conn, cfg, ids, keys = env
     async with admin_client(gw) as c:

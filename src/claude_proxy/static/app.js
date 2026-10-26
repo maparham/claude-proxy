@@ -381,11 +381,21 @@ function limitValue(l) {
   const reset = l.reset_in ? t("lim.resets_in", { d: fmtDur(l.reset_in) }) : "";
   if (USER_LIMIT_KINDS.includes(l.kind)) {
     if (l.skipped || l.current == null) return t("lim.not_measured");
+    if (l.weeks) return weeksValue(l.weeks) + (l.no_live_data ? t("lim.est_no_live") : "");
     return `${t("lim.used_pct", { v: nf0.format(l.current) })}${l.no_live_data ? t("lim.est_no_live") : ""}${reset}`;
   }
   if (l.skipped) return t("lim.skipped", { why: iso(l.skipped) });
   const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => t("lim.pts", { v: nfFix(1).format(v) }) : fmtNum;
   return `${l.no_live_data ? t("lim.est_nolive_prefix") : l.estimated ? t("lim.est_prefix") : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
+}
+// A ticket's weekly limit, as the statusline gives it: each Anthropic week's use, then the whole ticket's and its time left.
+function weeksValue(w) {
+  const pct = (v) => t("lim.pct", { v: nf0.format(Math.floor(v)) });
+  const nth = (i) => t(`ord.nth.${i}`);
+  const ticket = t("lim.ticket_used", { pct: pct(w.ticket_pct), left: fmtDur(w.ends_in) });
+  if (w.weeks.length === 1) return ticket;
+  return [...w.weeks.map((x, i) => (x.state === "past" ? t("lim.week_ended", { n: nth(i + 1) }) : t("lim.week_used", { pct: pct(x.pct), n: nth(i + 1) }))), ticket]
+    .join(t("lim.sep"));
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";

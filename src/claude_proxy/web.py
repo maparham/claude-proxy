@@ -650,7 +650,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         line = _status_line(user, states, account, weeks)
         if format == "text":
             return PlainTextResponse(line + "\n")
-        out = {"user": _public_user(user), "limits": limit_views(user, states), "line": line,
+        views = [v | {"weeks": weeks} if weeks and v["kind"] == "weekly_limit" else v for v in limit_views(user, states)]
+        out = {"user": _public_user(user), "limits": views, "line": line,
                "paused": not cfg.tickets.enabled and tickets.is_gated(conn, user["id"])}
         if account is not None:
             out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
