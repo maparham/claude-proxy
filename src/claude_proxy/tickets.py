@@ -38,14 +38,14 @@ TERMS = {
            "nth": ("First", "Second", "Third", "Fourth", "Fifth"),
            "l1": "Your allowance is split across weekly windows by the days each one covers; each piece is "
                  "spendable at your own pace and expires at its window's reset.",
-           "l3": "A 5-hour limit also applies.", "tz": "Times are Tehran time."},
+           "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
     "fa": {"head": "شرایط تیکت:", "split": "استفاده شما از تیکت در {n} قسمت محدود خواهد بود: {pieces}.",
            "split_one": "کل تیکت شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
            "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "هفته {n}: {pct}",
            "nth": ("اول", "دوم", "سوم", "چهارم", "پنجم"),
            "l1": "سهم شما به نسبت روزهایی که هر بازهٔ هفتگی پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت "
                  "خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
-           "l3": "به علاوه، محدودیت ۵ ساعته هم اعمال می‌شود.", "tz": "ساعت‌ها به وقت تهران است."},
+           "l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.", "tz": "ساعت‌ها به وقت تهران است."},
 }
 TEHRAN = ZoneInfo("Asia/Tehran")
 FA_DIGITS = str.maketrans("0123456789,.", "۰۱۲۳۴۵۶۷۸۹٬٫")
