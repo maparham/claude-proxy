@@ -158,12 +158,13 @@ const seriesLabel = (k) => (k === OTHER ? t("chart.other") : k === NO_MODEL ? t(
 // Tip text quotes config through placeholders: {ref} the weighting reference model, {stale} the staleness cutoff.
 const fillTip = (html) => html.replace(/\{ref\}/g, esc(refModel())).replace(/\{stale\}/g, fmtDur(S.settings.stale_after_s));
 
-// Info dot, dotted term, or an attribute for any element. Unknown keys render nothing extra.
+// Info dot after a label or term, or an attribute for any element. Unknown keys render nothing extra.
 const tipI = (key, label = t("app.what_is_this")) => (TIPS[key]
   ? `<span class="tip-i" tabindex="0" role="button" aria-label="${esc(label)}" data-tip="${esc(key)}">?</span>` : "");
-const tipT = (html, key) => (TIPS[key] ? `<span class="tip-t" tabindex="0" data-tip="${esc(key)}">${html}</span>` : html);
+// Tooltips always sit on the ? icon: a term with a tip is the term followed by its icon.
+const tipT = (html, key) => `${html}${tipI(key)}`;
 const tipAttr = (html) => (html ? ` data-tip-html="${esc(html)}"` : "");
-const tipH = (html, tip) => (tip ? `<span class="tip-t" tabindex="0"${tipAttr(tip)}>${html}</span>` : html);
+const tipH = (html, tip) => (tip ? `${html}<span class="tip-i" tabindex="0" role="button" aria-label="${esc(t("app.what_is_this"))}"${tipAttr(tip)}>?</span>` : html);
 
 // One shared #tip. It is a manual popover so it enters the top layer above the modal dialog.
 const TIP = { for: null, pinned: false, timer: 0 };
