@@ -603,8 +603,10 @@ function userLimitsCard(me, tk, order) {
   // Anthropic's way: a ticket that can go higher offers it here, and the price list stays out of the way until it ends.
   const open = !!order && (order.status === "new" || order.status === "contacted");
   const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small primary" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
+  // Renew: the next ticket, queued after the last one the user holds.
+  const renew = c ? `<button class="btn small" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("renew.button")}</button>` : "";
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div>${up}</div>
+      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}${up}</div></div>
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
@@ -627,7 +629,8 @@ function pickedLine(prices, pick) {
 function shareOfPlan(tier, len) {
   return t("home.share_of", { pct: nf0.format(tier.compare_pct), what: bdi(tier.compare), period: t(`home.usage_${len}`) });
 }
-function priceListCard(tk, order) {
+// `renew`: in the Renew dialog, the line saying when the next ticket starts; no card around it there.
+function priceListCard(tk, order, renew) {
   const p = tk.prices;
   const pick = takePick();
   const picked = pickedLine(p, pick);
@@ -642,7 +645,7 @@ function priceListCard(tk, order) {
   const planShare = (tier, k) => tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
   const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
     ${planShare(tier, k)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
-  return `<div class="card" id="prices"><h3>${t("tab.tickets")}</h3><p class="sub">${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
+  return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t("renew.title") : t("tab.tickets")}</h3><p class="sub">${renew ? `${renew} ` : ""}${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${t("price.terms_note")}</p><p class="sub">${picked}${tk.how_to_buy ? bdi(tk.how_to_buy) : picked ? t("ov.ask_admin") : ""}</p></div>`;
@@ -709,6 +712,12 @@ function orderDialog(p, tier, len, pay, termsVersion) {
 function wireOrdering(root, tk, order) {
   const ub = root.querySelector("#upgrade-btn");
   if (ub) ub.onclick = () => ticketUpgradeDialog(tk);
+  const rb = root.querySelector("#renew-btn");
+  if (rb) rb.onclick = () => {
+    const d = openDialog(`${priceListCard(tk, order, t("renew.sub", { date: fmtDate(tk.queued ? tk.queued.effective_end : tk.current.effective_end) }))}
+      <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+    wireOrdering(d, tk, order);
+  };
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
