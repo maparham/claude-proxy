@@ -674,7 +674,7 @@ function orderFormHtml(p, tier, len, email, payL, pay) {
   const payBtn = payL && !payL.sold_out
     ? `<p class="pay-or muted">${t("pay.or")}</p><button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payL.amount, pay.currency)) })}</button>` : "";
   return `<h3>${t("ord.title", { what: t("ord.what", { label: tierName(tier.tier, tier.label), len: lengthName(len) }) })}</h3>
-    <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
+    <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
@@ -757,7 +757,7 @@ function ticketUpgradeOrderDialog(tk, u) {
   const payU = tk.pay && (tk.pay.upgrades || []).find((x) => x.tier === u.tier && !x.sold_out);
   const email = S.user.email;
   const d = openDialog(`<h3>${t("up.order_title", { label: tierName(u.tier, u.label) })}</h3>
-    <p class="order-price"><b>${esc(money(u.amount, u.currency))}</b> <span class="muted">${t("ord.todays_rate")}</span></p>
+    <p class="order-price"><b>${esc(money(u.amount, u.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>

@@ -399,6 +399,9 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .dialog-actions .btn { min-width: 96px; }
 .form-grid .error:empty { display: none; }
 .order-price { margin: 0 0 12px; font-size: 18px; font-variant-numeric: tabular-nums; }
+/* The order form's close: the terms checkbox and the order buttons, centred under the terms. */
+.order-form .terms .check { justify-content: center; }
+.order-form > .btn, .order-form > .pay-or { grid-column: 1 / -1; justify-self: center; }
 dialog :where(input[type=email], textarea) { border: 1px solid var(--border); background: var(--surface); padding: 6px 8px; border-radius: 8px;
                                              min-width: 0; width: 100%; font: inherit; color: inherit; }
 dialog textarea { resize: vertical; }
