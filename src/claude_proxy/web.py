@@ -297,9 +297,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         if not cfg.signup.enabled:
             fail(403, "Sign-ups are closed. Ask the gateway admin for an account.")
-        # A deleted account's email stays in the audit log: signing up again never brings a new credit.
-        if conn.execute("SELECT 1 FROM audit_log WHERE action='signup' AND lower(target)=?", (email,)).fetchone():
+        # A deleted account's email stays in the audit log: signing up again never brings a new credit. Someone who
+        # deleted their own account (their latest entry) may come back with none; one the admin removed may not.
+        last = conn.execute("SELECT action FROM audit_log WHERE action IN ('signup', 'delete_self') AND lower(target)=? "
+                            "ORDER BY id DESC LIMIT 1", (email,)).fetchone()
+        if last is not None and last["action"] == "signup":
             fail(403, "This account was removed. Ask the gateway admin.")
+        credit = 0 if last is not None else cfg.signup.credit_usd
         if conn.execute("SELECT 1 FROM users WHERE lower(name)=?", (email,)).fetchone():
             fail(409, f"The name {email} is taken. Ask the gateway admin.")
         conn.execute("BEGIN IMMEDIATE")
@@ -307,8 +311,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             uid, _ = db.create_user(conn, email)   # its own key is never shown; machines get theirs in the browser
             conn.execute("UPDATE users SET clerk_id=?, email=? WHERE id=?", (clerk_id, email, uid))
             conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)",
-                         (uid, "cost_total", "*", f"{cfg.signup.credit_usd:g}", "usd", int(time.time())))
-            db.audit(conn, uid, "signup", email, {"credit_usd": cfg.signup.credit_usd})
+                         (uid, "cost_total", "*", f"{credit:g}", "usd", int(time.time())))
+            db.audit(conn, uid, "signup", email, {"credit_usd": credit})
             conn.execute("COMMIT")
         except BaseException as e:
             conn.execute("ROLLBACK")
@@ -680,6 +684,37 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = principal(request)
         revoked = bool(user.get("machine_key_id")) and db.remove_machine_key(conn, user["id"], user["machine_key_id"], user["id"])
         return {"ok": True, "revoked": revoked}
+
+    @app.post("/api/me/delete")
+    async def me_delete(request: Request):
+        """A user deletes their own account: what's left of their tickets is forfeited, then it goes as an admin's
+        delete would, and so does their Clerk sign-in. The email may sign up again, without the one-time credit."""
+        # The account's own row: a session made with an admin's computer key acts as a user, and is still the admin.
+        user = conn.execute("SELECT * FROM users WHERE id=?", (principal(request, write=True)["id"],)).fetchone()
+        if user["role"] != "user":
+            fail(403, "An admin account cannot delete itself.")
+        if str((await _json(request)).get("confirm", "")) != user["name"]:
+            fail(400, "Type your name to confirm.")
+        now = time.time()
+        # Latest first, so cancelling one never moves another forward.
+        for (tid,) in conn.execute(f"SELECT t.id FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {db.TICKET_EFFECTIVE_END}>? "
+                                   "ORDER BY t.starts_at DESC", (user["id"], now)).fetchall():
+            ticket_call(tickets.cancel, conn, cfg, user["id"], tid)
+        db.revoke(conn, user["id"], user["id"])
+        try:
+            db.delete_user(conn, user["id"], user["id"])
+        except ValueError as e:
+            fail(400, str(e))
+        db.audit(conn, None, "delete_self", user["email"] or user["name"])
+        if user["clerk_id"] and verifier is not None:
+            try:
+                await verifier.delete_user(user["clerk_id"])
+            except (clerk.ClerkError, httpx.HTTPError) as e:
+                logger.warning("Clerk user %s not deleted: %s", user["clerk_id"], e)
+                db.audit(conn, None, "clerk_delete_failed", user["email"] or user["name"], {"clerk_id": user["clerk_id"], "error": str(e)})
+        resp = JSONResponse({"ok": True})
+        resp.delete_cookie(COOKIE, path="/")
+        return resp
 
     # ---------- browser authorization for `claude-gateway on` (sign-up design section 4) ----------
 

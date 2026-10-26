@@ -1331,8 +1331,9 @@ function nameDialog(u) {
   const d = openDialog(`<h3>${self ? t("name.your") : t("name.rename", { name: bdi(name) })}</h3><p>${self ? t("name.shown_self") : t("name.shown_other")}${admin ? ` ${self ? t("name.admin_self") : t("name.admin_other")}` : ""}</p>
     <form id="f-name" class="form-grid"><label>${t("name.name")}<input type="text" name="name" required maxlength="64" value="${esc(name)}"></label>
     <button class="btn primary" type="submit">${t("app.save")}</button></form><div class="error" id="name-err"></div>
-    <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+    <p><button class="btn" data-close>${t("app.cancel")}</button>${self && !admin ? ` <button class="btn danger" type="button" id="delete-me">${t("me.delete")}</button>` : ""}</p>`);
   $("#f-name input", d).select();
+  if ($("#delete-me", d)) $("#delete-me", d).onclick = () => { d.close(); deleteMeDialog(); };
   $("#f-name", d).onsubmit = async (e) => {
     e.preventDefault();
     try {
@@ -1387,6 +1388,19 @@ function deleteDialog(u) {
     e.preventDefault();
     try { await api(`/api/admin/users/${u.id}/delete`, { method: "POST", body: { confirm: new FormData(e.target).get("confirm") } }); d.close(); render(); }
     catch (err) { $("#del-err", d).textContent = err.message; }
+  };
+}
+function deleteMeDialog() {
+  const d = openDialog(`<h3>${t("me.delete_title")}</h3>
+    <p>${t("me.delete_body")}</p>
+    <form id="f-delme" class="form-grid"><label>${t("users.delete_type", { name: `<b>${bdi(S.user.name)}</b>` })}<input type="text" name="confirm" autocomplete="off" required></label>
+    <button class="btn danger" type="submit">${t("me.delete")}</button></form><div class="error" id="delme-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+  $("#f-delme", d).onsubmit = async (e) => {
+    e.preventDefault();
+    try { await api("/api/me/delete", { method: "POST", body: { confirm: new FormData(e.target).get("confirm") } }); }
+    catch (err) { $("#delme-err", d).textContent = err.message; return; }
+    if (window.Clerk?.session) await window.Clerk.signOut().catch(() => {});   // or the sign-in page would sign them up again
+    location.href = "/";
   };
 }
 function upgradeDialog(u) {

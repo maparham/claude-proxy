@@ -48,9 +48,15 @@ class Clerk:
                                "n": b64(n.n.to_bytes(256, "big")), "e": b64(n.e.to_bytes(3, "big"))}]}
         self.users = {"user_1": ("new@example.com", "verified")}
         self.calls = []
+        self.deleted = []
+        self.delete_status = 200
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(str(request.url))
+        if request.method == "DELETE" and request.url.host == "api.clerk.com":
+            assert request.headers["authorization"] == "Bearer sk_test_secret"
+            self.deleted.append(request.url.path.rsplit("/", 1)[1])
+            return httpx.Response(self.delete_status, json={"deleted": True})
         if request.url.host == FAPI and request.url.path == "/.well-known/jwks.json":
             return httpx.Response(200, json=self.jwks)
         if request.url.host == "api.clerk.com" and request.url.path.startswith("/v1/users/"):
@@ -431,6 +437,61 @@ async def test_a_deleted_account_gets_no_new_credit(env):
         r = await c.post("/api/login/clerk", json={"token": jwt(claims())})
     assert r.status_code == 403 and "removed" in r.json()["error"]
     assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 1
+
+
+async def test_a_user_deletes_their_own_account(env):
+    gw, conn, fake = env
+    async with app(gw) as c:
+        uid = (await signed_in(c))["id"]
+        r = await c.post("/api/me/delete", json={"confirm": "wrong"})
+        assert r.status_code == 400 and "Type your name" in r.json()["error"]
+        r = await c.post("/api/me/delete", json={"confirm": "new@example.com"})
+        assert r.status_code == 200, r.text
+        assert "cp_session=\"\"" in r.headers["set-cookie"]
+        assert (await c.get("/api/session")).status_code == 401
+    assert not conn.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone()
+    assert conn.execute("SELECT 1 FROM audit_log WHERE action='delete_self' AND target='new@example.com'").fetchone()
+    assert fake.deleted == ["user_1"]
+
+
+async def test_a_failed_clerk_delete_still_deletes_the_account(env):
+    gw, conn, fake = env
+    fake.delete_status = 500
+    async with app(gw) as c:
+        uid = (await signed_in(c))["id"]
+        r = await c.post("/api/me/delete", json={"confirm": "new@example.com"})
+    assert r.status_code == 200 and not conn.execute("SELECT 1 FROM users WHERE id=?", (uid,)).fetchone()
+    assert conn.execute("SELECT 1 FROM audit_log WHERE action='clerk_delete_failed'").fetchone()
+
+
+async def test_an_admin_cannot_delete_themselves(env):
+    gw, conn, _ = env
+    async with app(gw) as c:
+        r = await c.post("/api/login", json={"username": "admin", "password": PW})
+        c.headers["x-csrf-token"] = r.json()["csrf"]
+        r = await c.post("/api/me/delete", json={"confirm": "admin"})
+    assert r.status_code == 403
+    assert conn.execute("SELECT 1 FROM users WHERE name='admin'").fetchone()
+
+
+async def test_a_self_deleted_email_signs_up_again_without_the_credit(env):
+    gw, conn, fake = env
+    async with app(gw) as c:
+        await signed_in(c)
+        assert (await c.post("/api/me/delete", json={"confirm": "new@example.com"})).status_code == 200
+    fake.users["user_9"] = ("new@example.com", "verified")   # Clerk gives the new sign-in a new id
+    async with app(gw) as c:
+        uid = (await signed_in(c, "user_9"))["id"]
+    row = conn.execute("SELECT kind, value FROM limits WHERE user_id=?", (uid,)).fetchone()
+    assert tuple(row) == ("cost_total", "0")
+    # removed by the admin this time: blocked, as any admin-removed account
+    from claude_proxy.db import delete_user, revoke
+    revoke(conn, uid)
+    delete_user(conn, uid)
+    fake.users["user_10"] = ("new@example.com", "verified")
+    async with app(gw) as c:
+        r = await c.post("/api/login/clerk", json={"token": jwt(claims("user_10"))})
+    assert r.status_code == 403 and "removed" in r.json()["error"]
 
 
 async def test_the_authorize_page_shows_where_the_request_came_from(env):

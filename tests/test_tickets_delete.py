@@ -66,3 +66,20 @@ def test_cli_delete_asks_for_the_name_unless_yes(db, monkeypatch, capsys):
     with pytest.raises(SystemExit, match="No confirmation"):
         cli.main(["user", "delete", "carol"])
     assert conn.execute("SELECT 1 FROM users WHERE name='carol'").fetchone()
+
+
+async def test_self_delete_forfeits_live_tickets(db, cfg):
+    conn, tcfg_, ids = seeded(db)
+    cfg.tickets = tcfg_.tickets
+    gw = make_gateway(cfg, conn)
+    bob, key = dbm.create_user(conn, "bob")
+    now = int(time.time())
+    active = tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "day", "USD", now=now - 3600, terms_version="v1")
+    queued = tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "day", "USD", now=now - 3600, terms_version="v1")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.post("/api/me/delete", json={"confirm": "bob"}, headers={"authorization": f"Bearer {key}"})
+    assert r.status_code == 200, r.text
+    assert not conn.execute("SELECT 1 FROM users WHERE id=?", (bob,)).fetchone()
+    rows = conn.execute("SELECT user_id, user_name, cancelled_at IS NOT NULL FROM tickets WHERE id IN (?,?)",
+                        (active["id"], queued["id"])).fetchall()
+    assert [tuple(r) for r in rows] == [(None, "bob", 1), (None, "bob", 1)]

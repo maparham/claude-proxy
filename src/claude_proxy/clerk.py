@@ -112,3 +112,11 @@ class Verifier:
             if e.get("id") == primary and (e.get("verification") or {}).get("status") == "verified":
                 return str(e["email_address"]).strip().lower()
         raise ClerkError("the account has no verified email address")
+
+    async def delete_user(self, user_id: str) -> None:
+        """Delete the Clerk user, which also ends their Clerk sessions."""
+        if not self.secret:
+            raise ClerkError("CLERK_SECRET_KEY is not set")
+        r = await self.http.delete(f"{BACKEND_API}/users/{user_id}", headers={"Authorization": f"Bearer {self.secret}"}, timeout=10)
+        if r.status_code not in (200, 404):   # 404: already gone
+            raise ClerkError(f"Clerk answered {r.status_code} for the deletion")
