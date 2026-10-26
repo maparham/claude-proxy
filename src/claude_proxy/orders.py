@@ -26,7 +26,7 @@ EMAIL_MAX = 254
 # No separators or address syntax (, ; : < > ( ) [ ] " \): a mail header would read them as several recipients.
 EMAIL = re.compile(r'^[^@\s,;:<>()\[\]"\\]+@[^@\s,;:<>()\[\]"\\]+\.[^@\s,;:<>()\[\]"\\]+$')
 VISITOR_PER_IP = VISITOR_PER_EMAIL = 10  # per 24 hours
-VISITOR_GLOBAL = 50                      # all visitor orders together, per 24 hours
+VISITOR_GLOBAL = 200                     # all visitor orders together, per 24 hours
 USER_PER_DAY = 3                         # a signed-in user's orders per 24 hours, withdrawn ones included: each mails the admin
 BUYER_MAILS = 3                          # confirmations to one address per 24 hours
 IP_KEEP_S = 30 * DAY

@@ -174,7 +174,7 @@ def test_signed_in_orders_do_not_count_toward_the_visitor_limits(env):
 
 def test_global_visitor_limit(env):
     conn, cfg, ids = env
-    for n in range(50):
+    for n in range(orders.VISITOR_GLOBAL):
         visitor(conn, cfg, n, ip=f"10.1.{n}.1")
     with refused(429) as e:
         visitor(conn, cfg, 77, ip="10.9.9.9")

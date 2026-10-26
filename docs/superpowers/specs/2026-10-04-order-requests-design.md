@@ -79,7 +79,7 @@ days (in the existing maintenance task). Messages are kept with the order.
   open). Over it: 429, "Too many orders today; try again tomorrow."
 - A visitor: at most 10 orders per day per IP address, and 10 per day per email address (case-insensitive). Over either:
   429, "Too many orders today; try again tomorrow or sign in."
-- All visitor orders together: at most 50 per day. Over it: 429, "Orders are busy today; please sign in to order."
+- All visitor orders together: at most 200 per day. Over it: 429, "Orders are busy today; please sign in to order."
 - Name at most 100 characters, message at most 1000. Email must look like an address (`something@something.something`,
   no whitespace).
 - Turnstile: the server verifies the token with Cloudflare's `siteverify` endpoint before anything is stored. Failure:
