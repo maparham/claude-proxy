@@ -261,7 +261,7 @@ def admin_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
 
 
 # Persian for the buyer's emails: the dashboard's own words (i18n.js tier.*, price.1_*, cur.toman).
-FA_TIERS = {"lite": ("Lite", "لایت"), "standard": ("Standard", "استاندارد")}   # translated only while the label is the default
+FA_TIERS = {"lite": ("Lite", "اقتصادی"), "standard": ("Standard", "استاندارد")}   # translated only while the label is the default
 FA_LENGTHS = {"day": "روز", "week": "هفته", "month": "ماه"}
 fa_num = tickets.fa_num
 
