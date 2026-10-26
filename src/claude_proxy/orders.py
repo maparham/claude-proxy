@@ -300,7 +300,7 @@ def buyer_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
 def _buyer_mail_fa(cfg: Config, order: dict) -> tuple[str, str]:
     label, length = fa_label(cfg, order["tier"]), FA_LENGTHS.get(order["length"], order["length"])
     lines = [f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
-             f"قیمت با نرخ امروز: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
+             f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
     how = cfg.tickets.how_to_buy_fa or cfg.tickets.how_to_buy
     if how:
         lines += ["روش پرداخت:", how, ""]
