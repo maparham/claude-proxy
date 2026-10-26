@@ -666,7 +666,7 @@ const I18N = {
     "ord.terms_l3": "A 5-hour limit also applies.",
     "ord.terms_accept": "I accept the terms",
     "ord.terms_needed": "Please accept the ticket terms to order.",
-    "ord.send": "Send order",
+    "ord.send": "Submit order",
     "ord.confirm_withdraw": "Withdraw your order? The admin will no longer act on it.",
     "pay.button": "Pay {amount} with ZarinPal",
     "pay.or": "or",
