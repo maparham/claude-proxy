@@ -628,7 +628,7 @@ function userLimitsCard(me, tk, order) {
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
 function pickedLine(prices, pick) {
   const tier = pick && typeof pick === "object" ? prices.tiers.find((x) => x.tier === pick.tier) : null;
-  const len = tier && ["day", "week", "month"].includes(pick.length) && t(`price.a_${pick.length}`);
+  const len = tier && ["day", "week", "month"].includes(pick.length) && tier.lengths[pick.length] && t(`price.a_${pick.length}`);
   return len ? t("price.picked", { tier: esc(tierNameText(tier.tier, tier.label)), len }) : "";
 }
 // "60% of Claude Pro's weekly usage": compare_pct, worked out by the server. The same for every
@@ -656,7 +656,7 @@ function priceListCard(tk, order, renew) {
   const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
   // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
   const planShare = (tier, k) => tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
-  const cell = (tier, k) => { const l = tier.lengths[k]; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
+  const cell = (tier, k) => { const l = tier.lengths[k]; if (!l) return `<td class="r muted">${t("price.off_sale")}</td>`; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
     ${planShare(tier, k)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
   return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t("renew.title") : t("tab.tickets")}</h3><p class="sub">${renew ? `${renew} ` : ""}${t("price.sub")}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
@@ -1210,7 +1210,7 @@ async function renderPricing(main) {
         <form id="f-prices">
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
-          `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="usd" data-tier="${esc(k)}" data-length="${esc(l)}" data-init="${price(k, l)}" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"></td>`).join("")}</tr>`).join("")}
+          `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="usd" data-tier="${esc(k)}" data-length="${esc(l)}" data-init="${price(k, l)}" step="0.01" min="0.01" value="${price(k, l)}" placeholder="${esc(t("pr.off_sale"))}" style="width:80px"></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
         <label style="display:block;margin-top:8px">${t("pr.recommended")}${tipI("pr_recommended")}
           <select name="recommended" data-init="${esc(recKey)}">${[["", t("pr.recommended_none")], ...Object.entries(p.tiers).flatMap(([k, x]) => Object.keys(p.lengths).map((l) => [`${k}:${l}`, `${tierNameText(k, x.label)} · ${lengthName(l)}`]))]
@@ -1254,10 +1254,10 @@ async function renderPricing(main) {
     if (input.dataset.init === "" || input.dataset.init == null) return v !== "";
     return n !== Number(input.dataset.init);
   };
-  const saveChanged = async (form, name, bodyOf, path, errEl) => {
+  const saveChanged = async (form, name, bodyOf, path, errEl, changed = inputChanged) => {
     errEl.textContent = "";
     const bodies = [];
-    form.querySelectorAll(`input[name="${name}"]`).forEach((input) => { if (inputChanged(input)) bodies.push(bodyOf(input)); });
+    form.querySelectorAll(`input[name="${name}"]`).forEach((input) => { if (changed(input)) bodies.push(bodyOf(input)); });
     if (!bodies.length) return;
     for (const body of bodies) { try { await api(path, { method: "POST", body }); } catch (e) { errEl.textContent = e.message; return; } }
     render();
@@ -1272,8 +1272,11 @@ async function renderPricing(main) {
       try { await api("/api/admin/recommended", { method: "POST", body: { tier: tier || "", length: length || "" } }); } catch (x) { $("#prices-err").textContent = x.message; return; }
       rec.dataset.init = rec.value;
     }
-    const pricesChanged = [...e.target.querySelectorAll('input[name="usd"]')].some(inputChanged);
-    await saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: num(input.value) }), "/api/admin/prices", $("#prices-err"));
+    // An emptied price takes that plan off sale; num("") would read it as 0.
+    const changedPrice = (input) => (input.value.trim() === "" ? input.dataset.init !== "" : inputChanged(input));
+    const pricesChanged = [...e.target.querySelectorAll('input[name="usd"]')].some(changedPrice);
+    const usdOf = (input) => (input.value.trim() === "" ? null : num(input.value));
+    await saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: usdOf(input) }), "/api/admin/prices", $("#prices-err"), changedPrice);
     if (recChanged && !pricesChanged) render();
   };
   const sharesForm = $("#f-shares");

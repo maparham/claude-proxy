@@ -1166,8 +1166,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), _number(body.get("usd"), "The price"),
-                    actor["id"])
+        usd = body.get("usd")   # empty: off sale
+        ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")),
+                    None if usd in (None, "") else _number(usd, "The price"), actor["id"])
         return {"ok": True}
 
     @app.post("/api/admin/recommended")

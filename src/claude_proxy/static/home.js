@@ -45,8 +45,8 @@ function countdown(endsAt) {
 }
 // What a week or a month saves against buying the day ticket every day, on the charged prices (discounts count).
 function savePct(t_, len) {
-  const daily = t_.lengths.day.usd * LENGTHS[len][1];
-  return len === "day" || !(daily > 0) ? 0 : Math.max(0, Math.floor((1 - t_.lengths[len].usd / daily) * 100));
+  const daily = t_.lengths.day ? t_.lengths.day.usd * LENGTHS[len][1] : 0;
+  return len === "day" || !(daily > 0) || !t_.lengths[len] ? 0 : Math.max(0, Math.floor((1 - t_.lengths[len].usd / daily) * 100));
 }
 // A tier's price in the chosen currency: USD's own fields, or the page currency's converted ones.
 function priceIn(l, currency) {
@@ -86,7 +86,10 @@ function card(t_, i, len, currency) {
 }
 // order=1: the buyer went on from the dialog, so the dashboard opens the order once they are in.
 function signInHref(t_, len) { return `/dashboard?tier=${encodeURIComponent(t_.tier)}&length=${len}&order=1`; }
-function cardsHtml(d, len, currency = d.currency) { return d.tiers.map((t_, i) => card(t_, i, len, currency)).join(""); }
+// A tier without a price for this length is not on sale: no card for it.
+function cardsHtml(d, len, currency = d.currency) { return d.tiers.map((t_, i) => (t_.lengths[len] ? card(t_, i, len, currency) : "")).join(""); }
+// Lengths no tier sells lose their tab; the page falls back to the first length that is on sale.
+const onSale = (d, len) => d.tiers.some((t_) => t_.lengths[len]);
 // "Toman" for IRT (shared i18n key with the order dialog), "USD" otherwise translated, else the bare code.
 function currencyLabel(c) { return c === "IRT" ? t("cur.IRT") : c === "USD" ? t("home.cur_usd") : c; }
 // Built once the page's own currency is known: that currency and USD, deduplicated (same idiom as the order form's select).
@@ -168,6 +171,8 @@ fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw ne
   data = d;
   currency = d.currency;   // default: the page's own currency (IRT today)
   if (d.recommended) length = d.recommended.length;   // open on the recommended plan's length
+  if (!onSale(d, length)) length = Object.keys(LENGTHS).find((k) => onSale(d, k)) || length;
+  document.querySelectorAll("#length-toggle button").forEach((b) => { b.hidden = !onSale(d, b.dataset.length); });
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
   initCurrencySelect(d);
   render(); setInterval(tick, 1000);

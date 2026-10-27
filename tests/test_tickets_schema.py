@@ -52,6 +52,16 @@ def test_seed_prices_fills_only_missing_rows(db):
     assert conn.execute("SELECT usd FROM ticket_prices WHERE tier='lite' AND length='day'").fetchone()[0] == 4
 
 
+def test_a_cleared_price_stays_cleared_across_restarts(db):
+    conn = db[1]
+    cfg = Config()
+    cfg.tickets.enabled = True
+    tickets.seed_prices(conn, cfg, now=100)
+    tickets.set_price(conn, cfg, "lite", "month", None, None)
+    assert tickets.seed_prices(conn, cfg, now=200) == 0
+    assert conn.execute("SELECT 1 FROM ticket_prices WHERE tier='lite' AND length='month'").fetchone() is None
+
+
 def test_gateway_seeds_prices_when_tickets_are_enabled(cfg, db):
     conn = db[1]
     make_gateway(cfg, conn)

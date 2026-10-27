@@ -317,12 +317,17 @@ def _check_tier_length(cfg: Config, tier: str, length: str) -> None:
 def regular_price(conn: sqlite3.Connection, tier: str, length: str) -> float:
     row = conn.execute("SELECT usd FROM ticket_prices WHERE tier=? AND length=?", (tier, length)).fetchone()
     if row is None:
-        raise TicketError(f"No price for {tier} {length}; the gateway seeds prices at start.")
+        raise TicketError(f"{tier} {length} has no price, so it is not on sale.")
     return row[0]
 
 
 def set_price(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, usd, actor: int | None, now: float | None = None) -> None:
+    """Set a regular price; None takes the tier and length off sale (the pages leave it out, orders are refused)."""
     _check_tier_length(cfg, tier, length)
+    if usd is None:
+        conn.execute("DELETE FROM ticket_prices WHERE tier=? AND length=?", (tier, length))
+        db.audit(conn, actor, "price_cleared", f"{tier}:{length}")
+        return
     usd = _usd(usd, "The price")
     conn.execute("INSERT OR REPLACE INTO ticket_prices(tier, length, usd, updated_at, updated_by) VALUES(?,?,?,?,?)",
                  (tier, length, usd, _now(now), actor))
@@ -390,13 +395,18 @@ def price_now(conn: sqlite3.Connection, tier: str, length: str, now: float) -> d
 
 
 def seed_prices(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> int:
-    """Insert each tier's default_usd for every length that has no price yet. Returns the rows added."""
+    """Insert each tier's default_usd for every length that has no price yet, once per tier: a price the dashboard
+    cleared later stays cleared. Returns the rows added."""
     now = int(time.time() if now is None else now)
     n = 0
     for tier, t in cfg.tickets.tiers.items():
+        key = f"ticket_prices_seeded:{tier}"
+        if conn.execute("SELECT 1 FROM settings WHERE key=?", (key,)).fetchone():
+            continue
         for length in LENGTHS:
             n += conn.execute("INSERT OR IGNORE INTO ticket_prices(tier, length, usd, updated_at, updated_by) VALUES(?,?,?,?,NULL)",
                               (tier, length, float(t.default_usd[length]), now)).rowcount
+        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (key, str(now)))
     return n
 
 
@@ -1075,7 +1085,7 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str, starts_at: float | None = None) -> dict:
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
     amounts and a sold-out flag, and how a ticket starting at `starts_at` (default now) splits across Anthropic's
-    weeks, and the {tier, length} the page recommends (None when unset). Nothing about who holds what, and no subscription share: `compare_pct` is the tier's weekly share as a
+    weeks, and the {tier, length} the page recommends (None when unset or off sale). A length without a price is None. Nothing about who holds what, and no subscription share: `compare_pct` is the tier's weekly share as a
     percent of its compare plan's weekly usage (share × compare_ratio), None without one. Falls back to USD without a rate."""
     now = _now(now)
     rate = current_rate(conn, currency)
@@ -1087,12 +1097,16 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
     for tid, t in cfg.tickets.tiers.items():
         lengths = {}
         for length in LENGTHS:
-            p = price_now(conn, tid, length, now)
+            try:
+                p = price_now(conn, tid, length, now)
+            except TicketError:   # no price: not on sale, the pages leave it out
+                lengths[length] = None
+                continue
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step), "list_amount": round_local(p["list_usd"], rate["rate"], step),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
         compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
         tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
-            "recommended": recommended(conn, cfg),
+            "recommended": rec if (rec := recommended(conn, cfg)) and next(x for x in tiers if x["tier"] == rec["tier"])["lengths"][rec["length"]] else None,
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}

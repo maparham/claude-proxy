@@ -86,6 +86,22 @@ async def test_recommended_plan_is_set_shown_and_cleared(env):
         assert (await c.get("/api/pricing")).json()["recommended"] is None
 
 
+async def test_an_empty_price_takes_the_plan_off_sale(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await c.post("/api/admin/recommended", json={"tier": "lite", "length": "month"})).status_code == 200
+        assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "month", "usd": ""})).status_code == 200
+        assert last_audit(conn) == ("price_cleared", "lite:month")
+        assert not any(x["tier"] == "lite" and x["length"] == "month" for x in (await c.get("/api/admin/prices")).json()["prices"])
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        p = (await c.get("/api/pricing")).json()
+    lite = next(t for t in p["tiers"] if t["tier"] == "lite")
+    assert lite["lengths"]["month"] is None and lite["lengths"]["week"] is not None
+    assert p["recommended"] is None   # recommended but off sale: nothing put forward
+    with pytest.raises(tickets.TicketError, match="not on sale"):
+        tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "month", "USD", time.time())
+
+
 async def test_prices_grid_and_discounts(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
@@ -529,7 +545,7 @@ def _tier(tier="lite", label="Lite", compare="Claude Pro", **lengths):
     base = {k: {"days": d, "usd": u, "list_usd": u, "amount": u, "list_amount": u, "discount_ends_at": None, "sold_out": False}
             for k, d, u in (("day", 1, 3), ("week", 7, 8), ("month", 30, 20))}
     for k, v in lengths.items():
-        base[k].update(v)
+        base[k] = None if v is None else {**base[k], **v}   # None: no price, off sale
     return {"tier": tier, "label": label, "share_pct": 5, "compare": compare, "lengths": base}
 
 
@@ -611,6 +627,12 @@ def test_home_opens_on_and_marks_the_recommended_plan(tmp_path):
     assert "featured" not in r["cards"]["week"] and "Recommended" not in r["cards"]["week"]   # other lengths: nothing marked
 
 
+def test_home_leaves_out_plans_without_a_price(tmp_path):
+    r = _run_home(tmp_path, _prices(_tier(month=None), _tier(tier="standard", label="Standard")))
+    assert r["cards"]["month"].count("<article") == 1 and "Standard" in r["cards"]["month"]
+    assert r["cards"]["week"].count("<article") == 2
+
+
 def test_home_escapes_tier_text(tmp_path):
     r = _run_home(tmp_path, _prices(_tier(label="<b>Lite</b>", compare="<i>Pro</i>")))
     assert "&lt;b&gt;Lite&lt;/b&gt;" in r["cards"]["week"] and "<i>" not in r["cards"]["week"]
@@ -628,7 +650,8 @@ const grab = (re) => { const m = re.exec(src); if (!m) throw new Error("not foun
 const code = grab(/^const esc = .*$/m) + "\n" + grab(/^function tierNameText\([\s\S]*?^}/m) + "\n" + grab(/^function pickedLine\([\s\S]*?^}/m);
 const ctx = { String, console, localStorage: { getItem: () => "en" } };
 vm.runInNewContext(i18n + "\n" + code, ctx);
-const prices = { tiers: [{ tier: "lite", label: "Lite" }, { tier: "pro", label: "<Pro>" }] };
+const L = { day: {}, week: {}, month: {} };
+const prices = { tiers: [{ tier: "lite", label: "Lite", lengths: L }, { tier: "pro", label: "<Pro>", lengths: L }] };
 console.log(JSON.stringify(JSON.parse(process.argv[3]).map((pick) => ctx.pickedLine(prices, pick))));
 """
 
