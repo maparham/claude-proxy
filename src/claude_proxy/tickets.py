@@ -498,7 +498,7 @@ def set_compare(conn: sqlite3.Connection, cfg: Config, tier: str, plan, ratio, a
         plan, ratio = None, None
     else:
         if not isinstance(plan, str) or len(plan) > 40:
-            raise TicketError("The base plan must be a name of at most 40 characters.")
+            raise TicketError("The comparison plan must be a name of at most 40 characters.")
         if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not math.isfinite(ratio) or ratio <= 0:
             raise TicketError("The actual/base ratio must be a number above 0.")
         ratio = float(ratio)
