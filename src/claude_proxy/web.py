@@ -1158,7 +1158,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         admin(request)
         need_tickets()
         return {"tiers": tickets.effective_tiers(conn, cfg),
-                "shares": tickets.tier_shares(conn),
+                "shares": tickets.tier_shares(conn), "recommended": tickets.recommended(conn, cfg),
                 "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True)}
 
     @app.post("/api/admin/prices")
@@ -1169,6 +1169,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         ticket_call(tickets.set_price, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")), _number(body.get("usd"), "The price"),
                     actor["id"])
         return {"ok": True}
+
+    @app.post("/api/admin/recommended")
+    async def set_recommended(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        tier, length = body.get("tier") or "", str(body.get("length") or "")
+        return {"ok": True, "recommended": ticket_call(tickets.set_recommended, conn, cfg, str(tier), length, actor["id"])}
 
     @app.post("/api/admin/shares")
     async def set_share(request: Request):

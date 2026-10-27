@@ -121,7 +121,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api", "manual_orders", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api", "manual_orders", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -1192,6 +1192,7 @@ async function renderPricing(main) {
   const [{ rates }, p] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices")]);
   const price = (tier, length) => p.prices.find((x) => x.tier === tier && x.length === length)?.usd ?? "";
   const now = Date.now() / 1000;
+  const recKey = p.recommended ? `${p.recommended.tier}:${p.recommended.length}` : "";
   const dstate = (x) => (x.cancelled_at ? "cancelled" : x.ends_at <= now ? "ended" : x.starts_at > now ? "upcoming" : "active");
   main.innerHTML = `<section class="view"><h2>${t("tab.pricing")}</h2>
     <p class="lede">${t("pr.lede")}</p>
@@ -1211,6 +1212,9 @@ async function renderPricing(main) {
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
           `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="usd" data-tier="${esc(k)}" data-length="${esc(l)}" data-init="${price(k, l)}" step="0.01" min="0.01" value="${price(k, l)}" required style="width:80px"></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
+        <label style="display:block;margin-top:8px">${t("pr.recommended")}${tipI("pr_recommended")}
+          <select name="recommended" data-init="${esc(recKey)}">${[["", t("pr.recommended_none")], ...Object.entries(p.tiers).flatMap(([k, x]) => Object.keys(p.lengths).map((l) => [`${k}:${l}`, `${tierNameText(k, x.label)} · ${lengthName(l)}`]))]
+            .map(([v, n]) => `<option value="${esc(v)}"${v === recKey ? " selected" : ""}>${esc(n)}</option>`).join("")}</select></label>
         <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
         <div class="error" id="prices-err"></div>
         </form></div>
@@ -1259,7 +1263,19 @@ async function renderPricing(main) {
     render();
   };
   $("#f-rates").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "rate", (input) => ({ currency: input.dataset.cur, rate: num(input.value) }), "/api/admin/rates", $("#rates-err")); };
-  $("#f-prices").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: num(input.value) }), "/api/admin/prices", $("#prices-err")); };
+  // The recommended plan first, then the changed prices; a recommendation alone re-renders here.
+  $("#f-prices").onsubmit = async (e) => {
+    e.preventDefault();
+    const rec = e.target.recommended, recChanged = rec.value !== rec.dataset.init;
+    if (recChanged) {
+      const [tier, length] = rec.value.split(":");
+      try { await api("/api/admin/recommended", { method: "POST", body: { tier: tier || "", length: length || "" } }); } catch (x) { $("#prices-err").textContent = x.message; return; }
+      rec.dataset.init = rec.value;
+    }
+    const pricesChanged = [...e.target.querySelectorAll('input[name="usd"]')].some(inputChanged);
+    await saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: num(input.value) }), "/api/admin/prices", $("#prices-err"));
+    if (recChanged && !pricesChanged) render();
+  };
   const sharesForm = $("#f-shares");
   if (sharesForm) {
     sharesForm.querySelectorAll('input[name="share"]').forEach((input) => {

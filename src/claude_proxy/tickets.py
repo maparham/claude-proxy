@@ -511,6 +511,28 @@ def set_compare(conn: sqlite3.Connection, cfg: Config, tier: str, plan, ratio, a
     return {"compare": plan or "", "compare_ratio": ratio or 0}
 
 
+RECOMMENDED_KEY = "pricing_recommended"
+
+
+def recommended(conn: sqlite3.Connection, cfg: Config) -> dict | None:
+    """{tier, length} the pricing page puts forward, as the dashboard set it; None when unset or no longer offered."""
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (RECOMMENDED_KEY,)).fetchone()
+    tier, _, length = (row[0] if row else "").partition(":")
+    return {"tier": tier, "length": length} if tier in cfg.tickets.tiers and length in LENGTHS else None
+
+
+def set_recommended(conn: sqlite3.Connection, cfg: Config, tier, length, actor: int | None) -> dict | None:
+    """Put one tier and length forward on the pricing page; an empty tier clears it. Display only."""
+    if tier in ("", None):
+        conn.execute("DELETE FROM settings WHERE key=?", (RECOMMENDED_KEY,))
+        db.audit(conn, actor, "recommended_set", "", {"tier": None, "length": None})
+        return None
+    _check_tier_length(cfg, tier, length)
+    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (RECOMMENDED_KEY, f"{tier}:{length}"))
+    db.audit(conn, actor, "recommended_set", f"{tier}:{length}", {"tier": tier, "length": length})
+    return {"tier": tier, "length": length}
+
+
 # ---------- capacity (spec section 5) ----------
 
 TICKET_COLS = f"t.*, {db.TICKET_EFFECTIVE_END} AS effective_end"
@@ -1053,7 +1075,7 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str, starts_at: float | None = None) -> dict:
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
     amounts and a sold-out flag, and how a ticket starting at `starts_at` (default now) splits across Anthropic's
-    weeks. Nothing about who holds what, and no subscription share: `compare_pct` is the tier's weekly share as a
+    weeks, and the {tier, length} the page recommends (None when unset). Nothing about who holds what, and no subscription share: `compare_pct` is the tier's weekly share as a
     percent of its compare plan's weekly usage (share × compare_ratio), None without one. Falls back to USD without a rate."""
     now = _now(now)
     rate = current_rate(conn, currency)
@@ -1072,4 +1094,5 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
         compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
         tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
+            "recommended": recommended(conn, cfg),
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}

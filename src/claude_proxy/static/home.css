@@ -19,6 +19,7 @@ html[dir="rtl"] .home-top { justify-content: flex-start; }
 .tier { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 24px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
 .tier.featured { border: 2px solid var(--s1); padding: 23px; }
 .tier.sold-out { opacity: 0.55; }
+.tier h3 .rec { display: inline-block; vertical-align: middle; margin-inline-start: 6px; font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--s1); color: #fff; }
 .tier h3 { margin: 0; font-size: 18px; }
 .tier .compare { margin: 0; font-weight: 600; color: var(--ink); }
 .tier .share { margin: 0; font-size: 13px; color: var(--muted); }

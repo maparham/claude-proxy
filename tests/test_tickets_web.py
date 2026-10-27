@@ -68,6 +68,24 @@ async def test_shares_endpoint_sets_and_clears_the_plan_comparison(env):
         assert (await c.get("/api/admin/prices")).json()["tiers"]["lite"]["compare"] == ""
 
 
+async def test_recommended_plan_is_set_shown_and_cleared(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await c.get("/api/admin/prices")).json()["recommended"] is None
+        r = await c.post("/api/admin/recommended", json={"tier": "standard", "length": "week"})
+        assert r.status_code == 200 and r.json()["recommended"] == {"tier": "standard", "length": "week"}
+        assert last_audit(conn) == ("recommended_set", "standard:week")
+        assert (await c.get("/api/admin/prices")).json()["recommended"] == {"tier": "standard", "length": "week"}
+        assert (await c.post("/api/admin/recommended", json={"tier": "gold", "length": "week"})).status_code == 400
+        assert (await c.post("/api/admin/recommended", json={"tier": "lite", "length": "year"})).status_code == 400
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/pricing")).json()["recommended"] == {"tier": "standard", "length": "week"}
+    async with admin_client(gw) as c:
+        assert (await c.post("/api/admin/recommended", json={"tier": ""})).json()["recommended"] is None
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/pricing")).json()["recommended"] is None
+
+
 async def test_prices_grid_and_discounts(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
@@ -582,6 +600,15 @@ def test_home_highlights_the_second_tier_only(tmp_path):
     first, second = r["cards"]["week"].split("</article>")[:2]
     assert "featured" not in first and "featured" in second
     assert "featured" not in _run_home(tmp_path)["cards"]["week"]   # one tier: nothing highlighted
+
+
+def test_home_opens_on_and_marks_the_recommended_plan(tmp_path):
+    data = _prices(_tier(), _tier(tier="standard", label="Standard")) | {"recommended": {"tier": "lite", "length": "month"}}
+    r = _run_home(tmp_path, data)
+    assert "for a month" in r["pricing"]   # the page opens on the recommended length
+    first, second = r["cards"]["month"].split("</article>")[:2]
+    assert "featured" in first and "Recommended" in first and "featured" not in second
+    assert "featured" not in r["cards"]["week"] and "Recommended" not in r["cards"]["week"]   # other lengths: nothing marked
 
 
 def test_home_escapes_tier_text(tmp_path):

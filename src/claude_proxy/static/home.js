@@ -62,14 +62,19 @@ function shareOfPlan(t_, len) {
   }
   return t("home.share_of", { pct: nf0.format(t_.compare_pct), what, period: t(`home.usage_${len}`) });
 }
+// The plan the dashboard recommends, on its own length only; without one the second card stands out as before.
+function isFeatured(d, t_, i, len) {
+  return d.recommended ? d.recommended.tier === t_.tier && d.recommended.length === len : i === 1;
+}
 function card(t_, i, len, currency) {
   const l = t_.lengths[len];
+  const rec = !!data.recommended && isFeatured(data, t_, i, len);
   const p = priceIn(l, currency);
   const off = l.discount_ends_at && l.list_usd > 0 ? Math.round((1 - l.usd / l.list_usd) * 100) : 0;
   const save = savePct(t_, len);
-  return `<article class="tier${i === 1 ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
+  return `<article class="tier${isFeatured(data, t_, i, len) ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
     ${off > 0 ? `<span class="ribbon">${t("home.off_pct", { n: nf0.format(off) })}</span>` : ""}
-    <h3>${tierName(t_)}</h3>
+    <h3>${tierName(t_)}${rec ? ` <span class="rec">${t("home.recommended")}</span>` : ""}</h3>
     ${t_.compare_pct != null ? `<p class="share">${shareOfPlan(t_, len)}</p>` : ""}
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
     <p class="per">${t(LENGTHS[len][0])}</p>
@@ -162,6 +167,7 @@ document.getElementById("currency-select").addEventListener("change", (e) => {
 fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
   data = d;
   currency = d.currency;   // default: the page's own currency (IRT today)
+  if (d.recommended) length = d.recommended.length;   // open on the recommended plan's length
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
   initCurrencySelect(d);
   render(); setInterval(tick, 1000);
