@@ -408,7 +408,7 @@ const I18N = {
     "price.open_order": "You already have an open order.",
     "price.order": "Order",
     "price.sold_out": "sold out",
-    "price.sub": "Buy a slice for a day, a week or a month.",
+    "price.sub": "Buy a slice for {lengths}.",
     "price.rate_at": " Prices converted at the rate of {date}.",
     "price.tier": "Tier",
     "price.terms_note": "Your weekly allowance is split across weekly windows in proportion to the days it covers. Each piece is spendable at your own pace within its window and expires at that window's reset.",
@@ -890,7 +890,11 @@ const I18N = {
     "auth.cancelled_text": "The computer was not connected. You can close this page.",
     "login.hide_other_ways": "Hide other ways to sign in",
     "login.admin_hint": "Sign in as the admin.",
-    "home.hero_lede": "Get Claude for a day, a week or a month. You sign in, connect your computer with one command, and run <code>gclaude</code>.",
+    "home.hero_lede": "Get Claude for {lengths}. You sign in, connect your computer with one command, and run <code>gclaude</code>.",
+    "home.hero_len_day": "a day",
+    "home.hero_len_week": "a week",
+    "home.hero_len_month": "a month",
+    "home.hero_list": "disjunction",
     "home.see_pricing": "See pricing",
     "home.signin": "Sign in",
     "home.length_label": "Ticket length",
@@ -1342,7 +1346,7 @@ const I18N = {
     "price.open_order": "شما یک سفارش باز دارید.",
     "price.order": "سفارش",
     "price.sold_out": "تمام شد",
-    "price.sub": "بخشی از اشتراک را برای یک روز، یک هفته یا یک ماه بخرید.",
+    "price.sub": "بخشی از اشتراک را برای {lengths} بخرید.",
     "price.rate_at": " تعرفه‌ها با نرخ {date} تبدیل شده‌اند.",
     "price.tier": "سطح",
     "price.terms_note": "سهم هفتگی شما به نسبت روزهایی که پوشش می‌دهد بین بازه‌های هفتگی تقسیم می‌شود. هر قسمت را می‌توانید با سرعت خودتان در بازهٔ خودش مصرف کنید و با ریست همان بازه منقضی می‌شود.",
@@ -1824,7 +1828,11 @@ const I18N = {
     "auth.cancelled_text": "کامپیوتری وصل نشد. می‌توانید این صفحه را ببندید.",
     "login.hide_other_ways": "پنهان کردن راه‌های دیگر ورود",
     "login.admin_hint": "به‌عنوان مدیر وارد شوید.",
-    "home.hero_lede": "دسترسی روزانه، هفتگی، و ماهانه به کلاد",
+    "home.hero_lede": "دسترسی {lengths} به کلاد",
+    "home.hero_len_day": "روزانه",
+    "home.hero_len_week": "هفتگی",
+    "home.hero_len_month": "ماهانه",
+    "home.hero_list": "conjunction",
     "home.see_pricing": "پلن ها و قیمت",
     "home.signin": "ورود یا ثبت نام",
     "home.length_label": "مدت تیکت",
@@ -1895,6 +1903,12 @@ function t(key, vars) {
   let s = I18N[LANG][key] ?? I18N.en[key];
   if (s === undefined) { if (typeof console !== "undefined") console.warn(`i18n: missing ${key}`); return key; }
   return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
+}
+// The lengths some tier sells, in order, as one list: "a day or a week" (`word` + length names each one; `type` is
+// Intl.ListFormat's). All three when there is no price list to go by.
+function lengthsList(tiers, word, type = "disjunction") {
+  const all = ["day", "week", "month"], sold = all.filter((k) => (tiers || []).some((x) => x.lengths[k]));
+  return new Intl.ListFormat(LOC, { type }).format((sold.length ? sold : all).map((k) => t(`${word}${k}`)));
 }
 // A compare plan's name as this language writes it ("کلاود پرو"); one without a translation as the dashboard typed it.
 function planName(v) { return I18N[LANG][`plan_name.${v}`] ?? v; }

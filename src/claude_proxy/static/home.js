@@ -97,6 +97,8 @@ function initCurrencySelect(d) {
   document.getElementById("currency-select").innerHTML = [...new Set([d.currency, "USD"])]
     .map((c) => `<option value="${esc(c)}"${c === currency ? " selected" : ""}>${esc(currencyLabel(c))}</option>`).join("");
 }
+// The lede names only the lengths on sale; before the price list arrives, or without one, all three.
+function lede(d) { document.getElementById("hero-lede").innerHTML = t("home.hero_lede", { lengths: lengthsList(d && d.tiers, "home.hero_len_", t("home.hero_list")) }); }
 function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
@@ -174,7 +176,7 @@ fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw ne
   if (!onSale(d, length)) length = Object.keys(LENGTHS).find((k) => onSale(d, k)) || length;
   document.querySelectorAll("#length-toggle button").forEach((b) => { b.hidden = !onSale(d, b.dataset.length); });
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
-  initCurrencySelect(d);
+  initCurrencySelect(d); lede(d);
   render(); setInterval(tick, 1000);
 })
-  .catch(() => { document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`; });
+  .catch(() => { lede(null); document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`; });
