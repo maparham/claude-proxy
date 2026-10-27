@@ -1843,7 +1843,7 @@ const I18N = {
     "home.usage_week": "هفتگی",
     "home.usage_month": "ماهانه",
     "home.plan_one": "یک {period} {what}",
-    "home.plan_n": "یک {period} {n} برابر {what}",
+    "home.plan_n": "{n} برابر {what}، برای یک {period}",
     "home.plan_len_day": "روز",
     "home.plan_len_week": "هفته",
     "home.plan_len_month": "ماه",
