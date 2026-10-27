@@ -54,11 +54,11 @@ function priceIn(l, currency) {
 }
 // "60% of Claude Pro's weekly usage": compare_pct, worked out by the server, the same for every length.
 function shareOfPlan(t_, len) {
-  const what = bdi(t_.compare), n = t_.compare_pct / 100;
-  // A whole number of plans reads as plans: "One week of Claude Pro", "One week of two Claude Pro plans".
+  const what = bdi(planName(t_.compare)), n = t_.compare_pct / 100;
+  // A whole number of plans reads as plans: "One week of Claude Pro", "Two times Claude Pro's weekly usage".
   if (n >= 1 && Number.isInteger(n)) {
     const period = t(`home.plan_len_${len}`);
-    return n === 1 ? t("home.plan_one", { period, what }) : t("home.plan_n", { period, what, n: t("home.num_words").split(",")[n] || nf0.format(n) });
+    return n === 1 ? t("home.plan_one", { period, what }) : t("home.plan_n", { what, usage: t(`home.usage_${len}`), n: t("home.num_words").split(",")[n] || nf0.format(n) });
   }
   return t("home.share_of", { pct: nf0.format(t_.compare_pct), what, period: t(`home.usage_${len}`) });
 }

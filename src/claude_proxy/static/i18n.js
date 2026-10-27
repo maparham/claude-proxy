@@ -910,11 +910,12 @@ const I18N = {
     "home.usage_week": "weekly",
     "home.usage_month": "monthly",
     "home.plan_one": "One {period} of {what}",
-    "home.plan_n": "One {period} of {n} {what} plans",
+    "home.plan_n": "{n} times {what}'s {usage} usage",
+    "plan_name.Claude Pro": "Claude Pro",
     "home.plan_len_day": "day",
     "home.plan_len_week": "week",
     "home.plan_len_month": "month",
-    "home.num_words": ",,two,three,four,five,six,seven,eight,nine,ten",
+    "home.num_words": ",,Two,Three,Four,Five,Six,Seven,Eight,Nine,Ten",
     "home.offer_ends_in": "Offer ends in {text}",
     "home.save_pct": "Save {n}% vs daily",
     "home.sold_out": "Sold out",
@@ -1843,7 +1844,8 @@ const I18N = {
     "home.usage_week": "هفتگی",
     "home.usage_month": "ماهانه",
     "home.plan_one": "یک {period} از {what}",
-    "home.plan_n": "یک {period} از {n} تا {what}",
+    "home.plan_n": "{n} برابر مصرف {usage} {what}",
+    "plan_name.Claude Pro": "کلاود پرو",
     "home.plan_len_day": "روز",
     "home.plan_len_week": "هفته",
     "home.plan_len_month": "ماه",
@@ -1894,6 +1896,8 @@ function t(key, vars) {
   if (s === undefined) { if (typeof console !== "undefined") console.warn(`i18n: missing ${key}`); return key; }
   return vars ? s.replace(/\{(\w+)\}/g, (m, k) => (k in vars ? String(vars[k]) : m)) : s;
 }
+// A compare plan's name as this language writes it ("کلاود پرو"); one without a translation as the dashboard typed it.
+function planName(v) { return I18N[LANG][`plan_name.${v}`] ?? v; }
 function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other"}`, { n, ...vars }); }
 
 // The order terms' line on how a `days`-long ticket of `len` splits across Anthropic's weeks, from the price list's
