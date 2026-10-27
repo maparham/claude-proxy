@@ -1636,14 +1636,17 @@ function loadScript(src, attrs = {}) {
 function setupClerk() {
   clerkReady ??= (async () => {
     const cfg = await api("/api/auth-config");
-    $("#signup-hint").classList.toggle("hidden", !cfg.signup);
     if (!cfg.clerk) return null;
     const npm = `https://${cfg.clerk.frontend_api}/npm`;
     await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
     await loadScript(`${npm}/@clerk/clerk-js@6/dist/clerk.browser.js`, { "data-clerk-publishable-key": cfg.clerk.publishable_key });
     // Clerk's own Persian text (vendored: its Frontend API does not serve localizations); English if it fails to load.
-    const localization = LANG === "fa" ? await import(document.querySelector("meta[name=clerk-fa-ir]").content).then((m) => m.faIR, () => undefined) : undefined;
-    await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor }, ...(localization && { localization }) });
+    const base = LANG === "fa" ? await import(document.querySelector("meta[name=clerk-fa-ir]").content).then((m) => m.faIR, () => undefined) : undefined;
+    // The code and link steps' subtitles otherwise read "to continue to <Clerk app name>".
+    const step = { emailCode: { subtitle: t("login.clerk_email_code") }, phoneCode: { subtitle: t("login.clerk_phone_code") }, emailLink: { subtitle: t("login.clerk_email_link") } };
+    const merge = (a, b) => Object.fromEntries(Object.keys(b).map((k) => [k, { ...a?.[k], ...b[k] }]));
+    const localization = { ...base, signIn: { ...base?.signIn, ...merge(base?.signIn, step) }, signUp: { ...base?.signUp, ...merge(base?.signUp, step) } };
+    await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor }, localization });
     window.Clerk.addListener(({ session }) => { if (session && !S.user && !$("#login").classList.contains("hidden")) clerkExchange(); });
     return window.Clerk;
   })().catch((e) => { console.warn(e); return null; });
