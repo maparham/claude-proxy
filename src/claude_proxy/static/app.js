@@ -139,7 +139,7 @@ const ERROR_LABELS = Object.fromEntries(["gateway_limit", "gateway_auth", "gatew
 
 // A non-admin is never told about the subscription behind the gateway; the server sends them nothing about
 // it (no account quota, no share limits, no credential state). These replace every tip that would mention it.
-const USER_TIPS = Object.fromEntries(["weighted", "cost", "burn_rate", "split:provider", "metric:weighted", "metric:cost_usd", "provider_sub", "cache_ratio", "sess_weighted", "sess_cost", "kind:tokens_5h", "kind:cost_total", "kind:5h_limit", "kind:weekly_limit", "err:usage_limit", "err:gateway_unavailable", "err:upstream_request_scoped", "err:overloaded_error"].map((k) => [k, t(`utip.${k}`, { note: KIND_NOTE.window })]));
+const USER_TIPS = Object.fromEntries(["weighted", "cost", "burn_rate", "split:provider", "metric:weighted", "metric:cost_usd", "provider_sub", "cache_ratio", "sess_weighted", "sess_cost", "kind:tokens_5h", "kind:cost_total", "kind:5h_limit", "kind:weekly_limit", "kind:ticket_limit", "err:usage_limit", "err:gateway_unavailable", "err:upstream_request_scoped", "err:overloaded_error"].map((k) => [k, t(`utip.${k}`, { note: KIND_NOTE.window })]));
 const ADMIN_TIPS = { ...TIPS };
 const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
 
@@ -380,7 +380,7 @@ function limitLabel(l) {
 function limitValue(l) {
   if (l.kind === "allowed_models") return l.value;
   const reset = l.reset_in ? t("lim.resets_in", { d: fmtDur(l.reset_in) }) : "";
-  if (USER_LIMIT_KINDS.includes(l.kind)) {
+  if (USER_LIMIT_KINDS.includes(l.kind) || l.kind === "ticket_limit") {
     if (l.skipped || l.current == null) return t("lim.not_measured");
     if (l.weeks) return weeksValue(l.weeks) + (l.no_live_data ? t("lim.est_no_live") : "");
     return `${t("lim.used_pct", { v: nf0.format(l.current) })}${l.no_live_data ? t("lim.est_no_live") : ""}${reset}`;
@@ -400,16 +400,17 @@ function weeksValue(w) {
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";
-  if (USER_LIMIT_KINDS.includes(l.kind)) return l.skipped ? t("lim.tip_user_skipped") : "";
+  if (USER_LIMIT_KINDS.includes(l.kind) || l.kind === "ticket_limit") return l.skipped ? t("lim.tip_user_skipped") : "";
   if (l.no_live_data) return t("lim.tip_no_live");
   if (l.skipped) return t("lim.tip_skipped");
   if (l.estimated) return t("lim.tip_est");
   if (!l.reset_in) return "";
   return t("lim.tip_resets");
 }
-function limitsBlock(ls) {
+// `oneWeek`: the user's ticket ends before the weekly reset, so its weekly limit is simply the whole ticket's.
+function limitsBlock(ls, oneWeek) {
   if (!ls.length) return `<span class="muted">${t("lim.none")}</span>`;
-  return ls.map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l)), limitValueTip(l))}</span>
+  return ls.map((l) => oneWeek && l.kind === "weekly_limit" ? { ...l, kind: "ticket_limit" } : l).map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l)), limitValueTip(l))}</span>
     <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div></div>`).join("");
 }
 
@@ -607,6 +608,9 @@ function usersCard() {
 function userLimitsCard(me, tk, order) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
+  // A ticket over before the weekly reset (a day ticket, say) has nothing weekly about it for its holder: no refill
+  // date, no weekly wording, just the ticket's own use.
+  const oneWeek = !!c && c.week_known && c.effective_end <= c.week_end;
   // Anthropic's way: a ticket that can go higher offers it here, and the price list stays out of the way until it ends.
   const open = !!order && (order.status === "new" || order.status === "contacted");
   const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small primary" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
@@ -614,7 +618,7 @@ function userLimitsCard(me, tk, order) {
   const renew = c ? `<button class="btn small" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("renew.button")}</button>` : "";
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}${up}</div></div>
-      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""} · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}</div>
+      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
       ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}
@@ -622,8 +626,8 @@ function userLimitsCard(me, tk, order) {
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
-    <p class="sub">${c ? t("ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
-    ${ticket}${limitsBlock(me.limits)}</div>`;
+    <p class="sub">${c ? t(oneWeek ? "ov.ticket_sub_one" : "ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
+    ${ticket}${limitsBlock(me.limits, oneWeek)}</div>`;
 }
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
 function pickedLine(prices, pick) {
