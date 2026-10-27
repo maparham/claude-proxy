@@ -193,17 +193,16 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
 # ---------- status changes (spec section 3) ----------
 
 def _change(conn, actor, order_id: int, to: str, note, now: int) -> dict:
-    """Inside a transaction: one allowed status change, the note for a decline, the IP cleared on close, the audit row."""
+    """Inside a transaction: one allowed status change, the optional note for a decline, the IP cleared on close, the audit row."""
     o = get(conn, order_id)
     if o["status"] not in TRANSITIONS.get(to, ()):
         raise OrderError(409, f"An order that is {o['status']} cannot become {to}.")
     sets, args = ["status=?", "updated_at=?"], [to, now]
     if to == "declined":
         note = _note(note)
-        if not note:
-            raise OrderError(400, "A decline needs a note.")
-        sets.append("admin_note=?")
-        args.append(note)
+        if note:   # optional; a blank one keeps whatever note is already there
+            sets.append("admin_note=?")
+            args.append(note)
     if to not in OPEN:
         sets.append("ip=NULL")
     conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?", (*args, order_id))

@@ -1149,7 +1149,7 @@ function orderNoteDialog(o, act, post) {
   const decline = act === "decline";
   const d = openDialog(`<h3>${t(decline ? "ord.decline_title" : "ord.note_title", { name: bdi(o.name) })}</h3>
     <p class="sub">${decline ? t("ord.decline_sub") : t("ord.note_sub")}</p>
-    <form id="f-onote" class="form-grid"><label class="wide">${decline ? t("ord.note_required") : t("tk.note")}<input type="text" name="note" maxlength="200"${decline ? " required" : ""} value="${esc(decline ? "" : o.admin_note)}"></label>
+    <form id="f-onote" class="form-grid"><label class="wide">${decline ? t("ord.note_optional") : t("tk.note")}<input type="text" name="note" maxlength="200" value="${esc(decline ? "" : o.admin_note)}"></label>
     <button class="btn ${decline ? "danger" : "primary"}" type="submit">${decline ? t("ord.act_decline") : t("app.save")}</button></form>
     <div class="error" id="onote-err"></div><p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
   $("#f-onote input", d).focus();

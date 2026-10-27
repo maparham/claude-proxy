@@ -279,9 +279,9 @@ async def test_admin_list_actions_and_audit(env, ts):
         assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "contacted"})).status_code == 409
         r = await c.post(f"/api/admin/orders/{oid}", json={"action": "note", "note": "called her"})
         assert r.json()["order"]["admin_note"] == "called her"
-        assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "decline"})).status_code == 400   # needs a note
-        r = await c.post(f"/api/admin/orders/{oid}", json={"action": "decline", "note": "no capacity"})
-        assert r.json()["order"]["status"] == "declined" and r.json()["order"]["ip"] is None
+        r = await c.post(f"/api/admin/orders/{oid}", json={"action": "decline"})   # no note: the earlier one stays
+        o = r.json()["order"]
+        assert (o["status"], o["ip"], o["admin_note"]) == ("declined", None, "called her")
         assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "bogus"})).status_code == 400
         assert (await c.post("/api/admin/orders/999", json={"action": "contacted"})).status_code == 404
         assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0, "manual": False, "manual_forced": True, "mail_servers": None}

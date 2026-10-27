@@ -207,12 +207,11 @@ def test_the_transition_table(env, frm, to):
         assert e.value.status == 409 and orders.get(conn, o["id"])["status"] == frm
 
 
-def test_decline_needs_a_note_and_stores_it(env):
+def test_decline_note_is_optional_and_stored(env):
     conn, cfg, ids = env
     o = visitor(conn, cfg)
-    with refused(400, "note") as e:
-        orders.set_status(conn, ids["admin"], o["id"], "declined")
-    assert e.value.status == 400
+    assert orders.set_status(conn, ids["admin"], o["id"], "declined")["status"] == "declined"
+    o = visitor(conn, cfg)
     with refused(400):
         orders.set_status(conn, ids["admin"], o["id"], "declined", note="x" * 201)
     assert orders.set_status(conn, ids["admin"], o["id"], "declined", note="Sold elsewhere")["admin_note"] == "Sold elsewhere"
