@@ -141,7 +141,7 @@ function orderFormHtml(d, t_, len, c = currency || d.currency) {
     <p class="order-price"><b id="order-price">${esc(money(c === "USD" ? l.usd : l.amount, c))}</b></p>
     <div class="terms"><ul class="muted"><li>${splitTerms(d.week_split, len, l.days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul></div>
     <p class="muted">${t("home.sign_in_to_order")}</p>
-    <p class="order-alt"><a class="btn primary" href="${esc(signInHref(t_, len))}">${t("home.continue_sign_in")}</a> <button type="button" class="btn" data-close>${t("app.cancel")}</button></p>`;
+    <p class="order-alt"><a class="btn primary" data-signin href="${esc(signInHref(t_, len))}">${t("home.continue_sign_in")}</a> <button type="button" class="btn" data-close>${t("app.cancel")}</button></p>`;
 }
 function openOrder(tierId, len) {
   const t_ = data.tiers.find((x) => x.tier === tierId);
@@ -151,6 +151,23 @@ function openOrder(tierId, len) {
   dlg.innerHTML = orderFormHtml(data, t_, len);
   dlg.showModal();
   dlg.querySelector("[data-close]").onclick = () => dlg.close();
+  dlg.querySelector("[data-signin]").onclick = (e) => { if (signInPopup(e.currentTarget.href)) e.preventDefault(); };
+}
+// Sign-in in a small window over this page, so the visitor keeps their place; the dashboard's host owns the sign-in.
+// Signed in there, it leaves a short-lived cookie for the whole site carrying this nonce and closes; this page then
+// goes on to `href` (the dashboard, the order open). A cookie, not postMessage: Google's sign-in page cuts the
+// window's link back to its opener. false when the window was blocked: the link then works as a plain one.
+function signInPopup(href) {
+  const nonce = Math.random().toString(36).slice(2, 14);
+  const w = 460, h = 680, left = Math.max(0, screenX + (outerWidth - w) / 2), top = Math.max(0, screenY + (outerHeight - h) / 3);
+  const win = window.open(`/dashboard?popup=${nonce}`, "cp-signin", `popup,width=${w},height=${h},left=${left},top=${top}`);
+  if (!win) return false;
+  const until = Date.now() + 15 * 60 * 1000;   // a dropped link reads as closed, so the window's state can't end the wait
+  const poll = setInterval(() => {
+    if (document.cookie.split("; ").includes(`cp-signin=${nonce}`)) { clearInterval(poll); location.href = href; }
+    else if (Date.now() > until) clearInterval(poll);
+  }, 400);
+  return true;
 }
 document.getElementById("cards").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-order]");

@@ -2231,6 +2231,16 @@ function takePick() {
   }
   return S.pick;
 }
+// Opened by the home page's "Continue: sign in" as a small window (?popup=<nonce>): once signed in, tell the home page
+// with a cookie it can read (the site's parent domain; one host locally) and close. A window the browser won't let
+// close shows the dashboard instead.
+const POPUP = /^[a-z0-9]{6,20}$/.exec(new URLSearchParams(location.search).get("popup") || "")?.[0];
+function popupSignedIn() {
+  const parent = location.hostname.split(".").slice(1).join(".");
+  document.cookie = `cp-signin=${POPUP}; Path=/; Max-Age=300; SameSite=Lax${parent.includes(".") && !/^[\d.]+$/.test(location.hostname) ? `; Domain=${parent}` : ""}${location.protocol === "https:" ? "; Secure" : ""}`;
+  window.close();
+  setTimeout(() => location.replace("/dashboard"), 300);
+}
 function showLogin() {
   $("#app").classList.add("hidden");
   $("#login").classList.remove("hidden");
@@ -2254,6 +2264,7 @@ async function boot() {
     $("#cred-pill").hidden = !s.credential;
     if (s.credential) credentialPill(s.credential);
   } catch { showLogin(); return; }
+  if (POPUP && S.user) { popupSignedIn(); return; }
   const pending = rememberedAuthorize();
   if (pending && !location.hash.startsWith("#authorize/")) history.replaceState(null, "", `#authorize/${pending}`);
   $("#login").classList.add("hidden");
