@@ -58,7 +58,7 @@ function shareOfPlan(t_, len) {
   // A whole number of plans reads as plans: "One week of Claude Pro", "One week of two Claude Pro plans".
   if (n >= 1 && Number.isInteger(n)) {
     const period = t(`home.plan_len_${len}`);
-    return n === 1 ? t("home.plan_one", { period, what }) : t("home.plan_n", { period, what, n: t("home.num_words").split(",")[n] || nf0.format(n) });
+    return n === 1 ? t("home.plan_one", { period, what }) : t("home.plan_n", { period, what, usage: t(`home.usage_${len}`), n: t("home.num_words").split(",")[n] || nf0.format(n) });
   }
   return t("home.share_of", { pct: nf0.format(t_.compare_pct), what, period: t(`home.usage_${len}`) });
 }
