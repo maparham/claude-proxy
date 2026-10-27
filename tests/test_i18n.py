@@ -258,3 +258,12 @@ def test_pages_are_read_as_utf8_on_any_system():
     # Windows defaults read_text() to cp1252, which can't decode the Persian in index.html: every page read names UTF-8.
     src = (STATIC.parent / "web.py").read_text(encoding="utf-8")
     assert re.findall(r"\.read_text\(\)", src) == []
+
+
+def test_no_key_is_defined_twice_in_a_language():
+    # A repeated key silently overrides the first: "home.len_week" once turned the home page's "Week" tab into "week".
+    src = (STATIC / "i18n.js").read_text()
+    fa_at = src.index("\n  fa: {")
+    for block in (src[:fa_at], src[fa_at:]):
+        keys = re.findall(r'^    "([^"]+)":', block, re.M)
+        assert sorted({k for k in keys if keys.count(k) > 1}) == []
