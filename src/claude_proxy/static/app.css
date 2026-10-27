@@ -338,11 +338,19 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 
 /* Order requests: the buyer's order line, the Order buttons, the admin's Orders tab and the order dialogs. */
 .order-note { display: flex; align-items: center; justify-content: space-between; gap: 8px 16px; flex-wrap: wrap; margin: 16px 0; }
-.order-steps { display: flex; flex-wrap: wrap; gap: 4px 20px; list-style: none; margin: 10px 0 0; padding: 0; color: var(--muted); }
-.order-steps li::before { content: "○"; margin-inline-end: 6px; }
-.order-steps li.done::before { content: "✓"; color: var(--good-text); }
-.order-steps li.now { color: var(--ink); font-weight: 600; }
-.order-steps li.now::before { content: "●"; }
+/* An open order stands out: a blue edge and wash, and its steps as a numbered stepper. */
+.order-note:has(.order-steps) { border-color: color-mix(in srgb, var(--s1) 35%, transparent); border-inline-start: 4px solid var(--s1); background: color-mix(in srgb, var(--s1) 7%, var(--surface)); padding: 16px 20px; }
+.order-steps { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 8px; list-style: none; margin: 14px 0 0; padding: 0; color: var(--muted); counter-reset: step; }
+.order-steps li { display: flex; align-items: center; gap: 8px; counter-increment: step; }
+.order-steps li::before { content: counter(step); display: inline-grid; place-items: center; flex: none; width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--axis); background: var(--surface); font-size: 12px; font-weight: 650; box-sizing: border-box; }
+:lang(fa) .order-steps li::before { content: counter(step, persian); }
+.order-steps li:not(:last-child)::after { content: ""; flex: none; width: 32px; height: 2px; border-radius: 1px; background: var(--axis); margin-inline-start: 4px; }
+.order-steps li.done { color: var(--good-text); }
+.order-steps li.done::before { content: "✓"; border-color: var(--good); background: var(--good); color: #fff; }
+.order-steps li.done::after { background: var(--good); }
+.order-steps li.now { color: var(--ink); font-weight: 650; }
+.order-steps li.now::before { border-color: var(--s1); background: var(--s1); color: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--s1) 22%, transparent); }
+@media (forced-colors: active) { .order-steps li.done::before, .order-steps li.now::before { forced-color-adjust: none; } }
 .order-btn { margin-top: 4px; }
 .order-btn:disabled { cursor: not-allowed; opacity: 0.55; }
 .order-msg { max-width: 32ch; white-space: pre-wrap; overflow-wrap: anywhere; }
