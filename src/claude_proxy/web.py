@@ -1494,7 +1494,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if action == "withdraw":
             ticket_call(orders.withdraw, conn, user["id"], oid)
             if cfg.email is not None:   # the buyer gets a confirmation, after the response
-                task = asyncio.create_task(orders.send_withdrawn(conn, cfg, oid))
+                task = asyncio.create_task(orders.send_closed(conn, cfg, oid))
                 _mail_tasks.add(task)
                 task.add_done_callback(_mail_done)
         elif action == "dismiss":
@@ -1555,6 +1555,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             o = ticket_call(orders.set_status, conn, actor["id"], oid, "contacted")
         elif action == "decline":
             o = ticket_call(orders.set_status, conn, actor["id"], oid, "declined", note=body.get("note"))
+            if cfg.email is not None:   # the buyer hears it, after the response; the note stays the admin's
+                task = asyncio.create_task(orders.send_closed(conn, cfg, oid))
+                _mail_tasks.add(task)
+                task.add_done_callback(_mail_done)
         elif action == "note":
             o = ticket_call(orders.set_note, conn, actor["id"], oid, body.get("note"))
         elif action == "link":

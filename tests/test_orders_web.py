@@ -356,7 +356,24 @@ async def test_withdrawing_an_order_emails_the_buyer(env, sent):
         assert (await c.post(f"/api/me/orders/{oid}/withdraw", headers=h)).status_code == 200
         await drain()
         assert sent == []
-    assert orders.withdrawn_mail_text(cfg, {"tier": "lite", "length": "week", "lang": "en"})[0] == "Your order is withdrawn: Lite week"
+    assert orders.closed_mail_text(cfg, {"tier": "lite", "length": "week", "lang": "en", "status": "withdrawn"})[0] == "Your order is withdrawn: Lite week"
+
+
+async def test_declining_an_order_emails_the_buyer_without_the_note(env, monkeypatch):
+    gw, conn, cfg, ids, keys = env
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    out = []
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: out.append((to, subject, body)))
+    async with client(gw) as c:
+        oid = (await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER | {"email": "a@b.cd", "lang": "fa"})).json()["order"]["id"]
+        await drain()
+    out.clear()
+    async with admin_client(gw) as c:
+        assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "decline", "note": "secret note"})).status_code == 200
+        await drain()
+    assert [(to, subject) for to, subject, _ in out] == [("a@b.cd", "سفارش شما رد شد: اقتصادی، ۱ هفته")]   # the admin acted: no admin mail
+    assert "secret note" not in out[0][2]
+    assert orders.closed_mail_text(cfg, {"tier": "lite", "length": "week", "status": "declined"})[0] == "Your order is declined: Lite week"
 
 
 def test_the_granted_mail_carries_the_dates_and_terms_in_the_order_language(env):
