@@ -255,6 +255,7 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
                               padding-inline: clamp(20px, 7vw, 112px); }
 .signin:not(.for-authorize) .signin-intro { display: none; }
 .signin:not(.for-authorize) .signin-panel { background: none; border: 0; padding: 32px 0; }
+.signin:not(.for-authorize) :is(.signin-brand, .signin-foot) { padding: 0; }   /* the page's own inset already holds them */
 .signin .error { margin-top: 12px; }
 
 @media (max-width: 880px) {

@@ -151,21 +151,24 @@ function openOrder(tierId, len) {
   dlg.innerHTML = orderFormHtml(data, t_, len);
   dlg.showModal();
   dlg.querySelector("[data-close]").onclick = () => dlg.close();
-  dlg.querySelector("[data-signin]").onclick = (e) => { if (signInPopup(e.currentTarget.href)) e.preventDefault(); };
+  // A click with Ctrl, Cmd or Shift asks for a tab or window of its own: the link does that.
+  dlg.querySelector("[data-signin]").onclick = (e) => { if (!(e.metaKey || e.ctrlKey || e.shiftKey) && signInPopup(e.currentTarget.href)) e.preventDefault(); };
 }
 // Sign-in in a small window over this page, so the visitor keeps their place; the dashboard's host owns the sign-in.
 // Signed in there, it leaves a short-lived cookie for the whole site carrying this nonce and closes; this page then
 // goes on to `href` (the dashboard, the order open). A cookie, not postMessage: Google's sign-in page cuts the
 // window's link back to its opener. false when the window was blocked: the link then works as a plain one.
+let signInPoll = null;   // one wait at a time: a second click reuses the window with a new nonce
 function signInPopup(href) {
   const nonce = Math.random().toString(36).slice(2, 14);
   const w = 460, h = 680, left = Math.max(0, screenX + (outerWidth - w) / 2), top = Math.max(0, screenY + (outerHeight - h) / 3);
   const win = window.open(`/dashboard?popup=${nonce}`, "cp-signin", `popup,width=${w},height=${h},left=${left},top=${top}`);
   if (!win) return false;
   const until = Date.now() + 15 * 60 * 1000;   // a dropped link reads as closed, so the window's state can't end the wait
-  const poll = setInterval(() => {
-    if (document.cookie.split("; ").includes(`cp-signin=${nonce}`)) { clearInterval(poll); location.href = href; }
-    else if (Date.now() > until) clearInterval(poll);
+  clearInterval(signInPoll);
+  signInPoll = setInterval(() => {
+    if (document.cookie.split("; ").includes(`cp-signin=${nonce}`)) { clearInterval(signInPoll); location.href = href; }
+    else if (Date.now() > until) clearInterval(signInPoll);
   }, 400);
   return true;
 }
