@@ -1493,6 +1493,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         if action == "withdraw":
             ticket_call(orders.withdraw, conn, user["id"], oid)
+            if cfg.email is not None:   # the buyer gets a confirmation, after the response
+                task = asyncio.create_task(orders.send_withdrawn(conn, cfg, oid))
+                _mail_tasks.add(task)
+                task.add_done_callback(_mail_done)
         elif action == "dismiss":
             ticket_call(orders.dismiss, conn, user["id"], oid)
         else:

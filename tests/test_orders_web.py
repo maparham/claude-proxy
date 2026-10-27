@@ -332,6 +332,26 @@ async def test_granting_an_order_emails_the_buyer(env, ts, sent):
     assert sent == [("vera@example.com", "Your ticket is granted: Lite week")]
 
 
+async def test_withdrawing_an_order_emails_the_buyer(env, sent):
+    gw, conn, cfg, ids, keys = env
+    h = bearer(keys["alice"])
+    async with client(gw) as c:
+        oid = (await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd", "lang": "fa"})).json()["order"]["id"]
+        await drain()
+        sent.clear()
+        assert (await c.post(f"/api/me/orders/{oid}/withdraw", headers=h)).status_code == 200
+        await drain()
+        assert sent == [("a@b.cd", "سفارش شما پس گرفته شد: اقتصادی، ۱ هفته")]
+        oid = (await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd"})).json()["order"]["id"]
+        await drain()
+        conn.execute("UPDATE orders SET buyer_mail='skipped' WHERE id=?", (oid,))   # over the buyer cap: no confirmation either
+        sent.clear()
+        assert (await c.post(f"/api/me/orders/{oid}/withdraw", headers=h)).status_code == 200
+        await drain()
+        assert sent == []
+    assert orders.withdrawn_mail_text(cfg, {"tier": "lite", "length": "week", "lang": "en"})[0] == "Your order is withdrawn: Lite week"
+
+
 def test_the_granted_mail_carries_the_dates_and_terms_in_the_order_language(env):
     gw, conn, cfg, ids, keys = env
     o = {"tier": "lite", "length": "week", "lang": "en"}

@@ -211,7 +211,7 @@ def _change(conn, actor, order_id: int, to: str, note, now: int) -> dict:
 
 
 def set_status(conn: sqlite3.Connection, actor: int | None, order_id: int, to: str, *, note=None, now: float | None = None) -> dict:
-    """`contacted` (from new), `declined` with a note or `withdrawn` (from new or contacted); anything else 409."""
+    """`contacted` (from new), `declined` (optionally with a note) or `withdrawn` (from new or contacted); anything else 409."""
     now = _now(now)
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -353,6 +353,31 @@ def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -
                 f"{paid}سفارش شما انجام شد.\n\nتیکت شما از حالا تا {tickets.terms_date(end, 'fa')} با سطح {label} کار می‌کند.\n")
     label = _label(cfg, order)
     return f"Your ticket is upgraded: {label}", f"{paid}Your order is done.\n\nYour ticket now runs at {label} until {tickets._date(end)}.\n"
+
+
+def withdrawn_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
+    """(subject, body) for the buyer once they withdraw their order, in the language of the page they ordered from."""
+    up = order.get("upgrade_of")
+    if order.get("lang") == "fa":
+        what = f"{fa_label(cfg, order['tier'])}، " + ("ارتقا" if up else f"۱ {FA_LENGTHS.get(order['length'], order['length'])}")
+        return f"سفارش شما پس گرفته شد: {what}", f"سفارش شما ({what}) پس گرفته شد. مدیر دیگر روی آن کاری نمی‌کند.\n"
+    what = f"{_label(cfg, order)} {'upgrade' if up else order['length']}"
+    return f"Your order is withdrawn: {what}", f"Your order ({what}) is withdrawn. The admin will no longer act on it.\n"
+
+
+async def send_withdrawn(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:
+    """After the withdraw's response: confirm it to the buyer. Not when their order confirmation was over the cap
+    (buyer_mail skipped), so withdraw-and-reorder cannot flood an inbox. A failure is logged and never touches the order."""
+    if cfg.email is None:
+        return
+    o = get(conn, order_id)
+    if o["buyer_mail"] == "skipped":
+        return
+    subject, body = withdrawn_mail_text(cfg, o)
+    try:
+        await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), o["email"], subject, body)
+    except Exception as e:
+        logger.warning("order #%d: withdrawn mail to %s failed: %s", order_id, o["email"], e)
 
 
 async def send_granted(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:
