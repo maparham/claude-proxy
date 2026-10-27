@@ -230,6 +230,8 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
 #clerk-signin .cl-signIn-start .cl-header { display: none; }
 /* Clerk's fields and buttons drawn like the dashboard's own: one plain border, no shading. Its card sits a pixel outside a box that clips it, which cut the fields' top corners. */
 #clerk-signin .cl-cardBox { overflow: visible; }
+/* The emailed code is digits, read and typed left to right in Persian too; Clerk's boxes would otherwise follow the page's RTL. */
+#clerk-signin .cl-otpCodeField, #clerk-signin .cl-otpCodeFieldInputs { direction: ltr; }
 #clerk-signin .cl-card { margin: 0; }
 #clerk-signin .cl-socialButtonsBlockButton, #clerk-signin .cl-formFieldInput, #clerk-signin .cl-formButtonPrimary { height: 40px; max-height: none; box-shadow: none; }
 #clerk-signin .cl-socialButtonsBlockButton, #clerk-signin .cl-formFieldInput { border: 1px solid var(--axis); background: var(--surface); }
