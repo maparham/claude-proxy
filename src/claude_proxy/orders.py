@@ -319,12 +319,12 @@ def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple
 def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[str, str]:
     label, length = fa_label(cfg, order["tier"]), FA_LENGTHS.get(order["length"], order["length"])
     up = order.get("upgrade_of")
-    lines = [f"سفارش شما: ارتقای تیکت شما به {label} برای باقی‌ماندهٔ آن." if up else
+    lines = [f"سفارش شما: ارتقای تیکت شما به {label} برای باقی‌مانده آن." if up else
              f"سفارش شما: تیکت {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
              f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
     if not up:
         lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]))
-    lines.append("سفارش شما هنوز پرداخت نشده است. مدیر برای مرحلهٔ بعد با شما تماس می‌گیرد.")
+    lines.append("سفارش شما هنوز پرداخت نشده است. مدیر برای مرحله بعد با شما تماس می‌گیرد.")
     return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
 
