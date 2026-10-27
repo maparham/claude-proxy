@@ -341,10 +341,17 @@ async def test_withdrawing_an_order_emails_the_buyer(env, sent):
         sent.clear()
         assert (await c.post(f"/api/me/orders/{oid}/withdraw", headers=h)).status_code == 200
         await drain()
-        assert sent == [("a@b.cd", "سفارش شما پس گرفته شد: اقتصادی، ۱ هفته")]
+        assert sent == [("a@b.cd", "سفارش شما کنسل شد: اقتصادی، ۱ هفته"), ("admin@example.com", "Order withdrawn: Lite week")]
         oid = (await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd"})).json()["order"]["id"]
         await drain()
         conn.execute("UPDATE orders SET buyer_mail='skipped' WHERE id=?", (oid,))   # over the buyer cap: no confirmation either
+        sent.clear()
+        assert (await c.post(f"/api/me/orders/{oid}/withdraw", headers=h)).status_code == 200
+        await drain()
+        assert sent == [("admin@example.com", "Order withdrawn: Lite week")]
+        oid = (await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd"})).json()["order"]["id"]
+        await drain()
+        conn.execute("UPDATE orders SET buyer_mail='off', admin_mail='off' WHERE id=?", (oid,))   # an unpaid payment order
         sent.clear()
         assert (await c.post(f"/api/me/orders/{oid}/withdraw", headers=h)).status_code == 200
         await drain()
@@ -715,7 +722,8 @@ async def test_a_signed_in_user_is_capped_per_day_even_after_withdrawing(env, se
         r = await c.post("/api/me/orders", headers=h, json=ORDER | {"email": "a@b.cd"})
         assert (r.status_code, r.json()["error"]) == (429, "Too many orders today; try again tomorrow.")
         await drain()
-    assert len([t for t, _ in sent if t == "admin@example.com"]) == orders.USER_PER_DAY
+    admin = [s for t, s in sent if t == "admin@example.com"]   # each order: its own mail and its withdrawal's, no more
+    assert len(admin) == 2 * orders.USER_PER_DAY and sum(s.startswith("Order withdrawn") for s in admin) == orders.USER_PER_DAY
 
 
 async def test_the_public_response_says_whether_a_confirmation_was_queued(env, ts, monkeypatch):
