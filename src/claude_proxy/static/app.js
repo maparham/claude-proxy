@@ -1636,7 +1636,7 @@ function loadScript(src, attrs = {}) {
 function setupClerk() {
   clerkReady ??= (async () => {
     const cfg = await api("/api/auth-config");
-    signinSteps(cfg);
+    $("#signup-hint").classList.toggle("hidden", !cfg.signup);
     if (!cfg.clerk) return null;
     const npm = `https://${cfg.clerk.frontend_api}/npm`;
     await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
@@ -1656,23 +1656,6 @@ async function clerkExchange() {
     const ok = await login("/api/login/clerk", { token: await window.Clerk.session.getToken() });
     if (!ok) { const msg = $("#login-error").textContent; await window.Clerk.signOut(); $("#login-error").textContent = msg; mountClerk(); }   // refused: let them try another account
   } finally { S.exchanging = false; }
-}
-// The how-to-join steps, when a sign-up can go all the way to a connected computer. Both install commands sit in tabs;
-// the one open first suits the visitor's system, and anything not detected as Windows gets the unix one.
-function signinSteps(cfg) {
-  $("#signup-hint").classList.toggle("hidden", !cfg.signup);
-  $("#signin-steps").classList.toggle("hidden", !(cfg.clerk && cfg.install));
-  const cmds = { unix: cfg.install, windows: cfg.install_windows }, tabs = $("#signin-os");
-  tabs.classList.toggle("hidden", !cmds.windows);
-  const pick = (os) => {
-    tabs.querySelectorAll("[data-os]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.os === os)));
-    $("#signin-install").textContent = cmds[os] || "";
-    $("#signin-prompt").textContent = os === "windows" ? "PS>" : "$";
-  };
-  tabs.querySelectorAll("[data-os]").forEach((b) => (b.onclick = () => pick(b.dataset.os)));
-  let win = false;
-  try { win = /Win/.test(navigator.userAgentData?.platform || navigator.platform || ""); } catch { /* unknown: unix */ }
-  pick(win && cmds.windows ? "windows" : "unix");
 }
 // Clerk's colours from the page's own tokens, read when it mounts: the theme can be the system's or one the viewer picked.
 function clerkAppearance() {
@@ -1708,13 +1691,6 @@ async function showClerk() {
   else mountClerk();
 }
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.clerkMounted && !$("#login").classList.contains("hidden")) mountClerk(); });
-$("#signin-copy").onclick = async (e) => {
-  const b = e.currentTarget;
-  try { await navigator.clipboard.writeText($("#signin-install").textContent); } catch { return; /* clipboard blocked */ }
-  b.classList.add("copied"); b.setAttribute("aria-label", t("key.copied")); b.title = t("key.copied");
-  clearTimeout(b.timer);
-  b.timer = setTimeout(() => { b.classList.remove("copied"); b.setAttribute("aria-label", t("login.copy")); b.title = t("login.copy"); }, 1600);
-};
 $("#other-ways").onclick = (e) => {
   e.preventDefault();
   S.otherWays = !S.otherWays;
@@ -2263,7 +2239,6 @@ function showLogin() {
   if (m) rememberAuthorize(m[1]);
   const code = rememberedAuthorize();
   $("#authorize-hint").classList.toggle("hidden", !code);
-  $("#signin-about").classList.toggle("hidden", !!code);
   $("#login").classList.toggle("for-authorize", !!code);
   $("#authorize-code").textContent = code || "";
   showClerk();
