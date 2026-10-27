@@ -324,7 +324,7 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
              f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
     if not up:
         lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]))
-    lines.append("سفارش شما هنوز پرداخت نشده است. مدیر برای مرحله بعد با شما تماس می‌گیرد.")
+    lines.append("سفارش شما هنوز پرداخت نشده است. ادمین برای مرحله بعد با شما تماس می‌گیرد.")
     return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
 
@@ -363,7 +363,7 @@ def closed_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
         what = f"{fa_label(cfg, order['tier'])}، " + ("ارتقا" if up else f"۱ {FA_LENGTHS.get(order['length'], order['length'])}")
         if declined:
             return f"سفارش شما رد شد: {what}", f"سفارش شما ({what}) رد شد.\n"
-        return f"سفارش شما کنسل شد: {what}", f"سفارش شما ({what}) کنسل شد. مدیر دیگر روی آن کاری نمی‌کند.\n"
+        return f"سفارش شما کنسل شد: {what}", f"سفارش شما ({what}) کنسل شد. ادمین دیگر روی آن کاری نمی‌کند.\n"
     what = f"{_label(cfg, order)} {'upgrade' if up else order['length']}"
     if declined:
         return f"Your order is declined: {what}", f"Your order ({what}) was declined.\n"

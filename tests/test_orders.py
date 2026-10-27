@@ -526,7 +526,7 @@ def test_buyer_mail_in_persian_for_an_order_from_the_persian_page(mailing):
     subject, body = orders.buyer_mail_text(conn, cfg, o)
     assert subject == "سفارش شما: اقتصادی، ۱ هفته"
     assert "تیکت اقتصادی برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
-    assert "مدیر برای مرحله بعد با شما تماس می‌گیرد" in body and cfg.tickets.how_to_buy not in body
+    assert "ادمین برای مرحله بعد با شما تماس می‌گیرد" in body and cfg.tickets.how_to_buy not in body
     assert tickets.terms_text(conn, cfg, "fa", "week", o["created_at"]) in body and "شرایط تیکت:" in body
     assert "Ticket terms" not in body
 
