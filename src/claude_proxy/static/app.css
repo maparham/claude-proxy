@@ -288,7 +288,8 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 /* Tooltips: an info dot (.tip-i) carries data-tip / data-tip-html; one shared #tip shows it. */
 .tip-i { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-inline-start: 5px;
          border-radius: 50%; border: 1px solid var(--axis); color: var(--muted); font-size: 10px; font-weight: 700;
-         line-height: 1; vertical-align: 1px; cursor: help; user-select: none; flex: none; }
+         line-height: 1; vertical-align: 1px; cursor: help; user-select: none; flex: none;
+         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; direction: ltr; }
 .tip-i:hover, .tip-i.tip-on { color: var(--ink); border-color: var(--ink-2); background: var(--wash); }
 #tip { position: fixed; inset: auto; margin: 0; z-index: 100; max-width: min(320px, calc(100vw - 32px)); width: max-content;
        padding: 9px 12px; border: 1px solid var(--tip-line); border-radius: 10px; overflow: visible;
