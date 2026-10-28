@@ -556,7 +556,7 @@ async function renderOverview(main) {
   main.innerHTML = `
     <section class="view">
       <h2>${isAdmin() ? t("ov.title_admin") : t("ov.title_user", { name: bdi(S.user.name) })}</h2>
-      <p class="lede">${isAdmin() ? t("ov.lede_admin") : t("ov.lede_user")}</p>
+      ${isAdmin() ? `<p class="lede">${t("ov.lede_admin")}</p>` : ""}
       ${banners.join("")}
       ${tk ? myOrderCard(order) : ""}
       ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `<div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
