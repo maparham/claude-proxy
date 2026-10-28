@@ -335,21 +335,21 @@ back to zero, and the next request opens a new window. A user over a limit waits
   `[limits] max_inflight` (default 8) in flight at once; the next gets a 429 (`max_inflight`) with
   `retry-after: 1`. A token or cost limit can therefore be overshot by at most that many requests.
 
-## Selling tickets
+## Selling passes
 
 With a `[tickets]` section in the config (see `config.example.toml`), the gateway sells reserved slices of the
 subscription: a tier (its share of the account) for 1 day, 1 week or 1 month. Payment happens outside the app; the
-admin grants the ticket on the dashboard's **Tickets** tab, where the form shows the price, the start (now, or queued
-after the user's current ticket) and whether the period fits under `max_sold_pct`. **Pricing** holds the daily exchange
+admin grants the pass on the dashboard's **Passes** tab, where the form shows the price, the start (now, or queued
+after the user's current pass) and whether the period fits under `max_sold_pct`. **Pricing** holds the daily exchange
 rate, the USD prices and discounts; the home page (`/`, for visitors) shows the prices as tier cards with sold-out lengths and a lower-bound
 "at least N hours of steady use" hint computed once a day from busy hours.
 
-A ticket holder is limited to their share of Anthropic's 5-hour window and to one seventh of it per ticket day; with no
-active ticket their requests get a 403 that quotes `how_to_buy`. Third-party models are not covered unless a cost
-limit is set for the user. When the ticket ends and the user is not buying again, **Ungate** on the Users page returns
+A pass holder is limited to their share of Anthropic's 5-hour window and to one seventh of it per pass day; with no
+active pass their requests get a 403 that quotes `how_to_buy`. Third-party models are not covered unless a cost
+limit is set for the user. When the pass ends and the user is not buying again, **Ungate** on the Users page returns
 them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets-design.md`.
 
-**Online payment (ZarinPal).** When tickets are on, signed-in users can pay for tickets online in Iranian currency (Toman) through ZarinPal. The ticket is granted as soon as the payment is verified. Payments are enabled when `ZARINPAL_MERCHANT_ID` is set in `gateway.env`, `[tickets.currencies.IRT]` is configured in `config.toml`, the `[zarinpal]` section exists, and `[listener] home_url` is set. See `docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md`.
+**Online payment (ZarinPal).** When passes are on, signed-in users can pay for passes online in Iranian currency (Toman) through ZarinPal. The pass is granted as soon as the payment is verified. Payments are enabled when `ZARINPAL_MERCHANT_ID` is set in `gateway.env`, `[tickets.currencies.IRT]` is configured in `config.toml`, the `[zarinpal]` section exists, and `[listener] home_url` is set. See `docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md`.
 
 ### Order requests
 
@@ -358,7 +358,7 @@ capacity. Signed-in users press **Order** next to a price in their dashboard's p
 which they can withdraw). With `turnstile_site_key` in `[tickets]` and `TURNSTILE_SECRET` in the environment, visitors
 can also order from the home page's **Get it** buttons, behind a Cloudflare Turnstile check and per-address and daily
 limits; without it, **Get it** links to the dashboard. New orders appear on the admin's **Orders** tab (with a count of
-new ones): mark one contacted, decline it with a note, keep a private note, or **Grant ticket**, which opens the usual
+new ones): mark one contacted, decline it with a note, keep a private note, or **Grant pass**, which opens the usual
 grant form filled in from the order and closes the order with the grant. A visitor's order is first linked to an existing
 account or to a new one named after its email. With an `[email]` section (password in `SMTP_PASSWORD`), the admin gets
 an email for each order and the buyer a confirmation that contains nothing they typed. Design:
@@ -393,7 +393,7 @@ Features Anthropic prices above plain tokens are refused on API keys: web search
 mode (`/fast`) and the 1M-token context (`[1m]` models).
 
 On a machine set up with gclaude or `claude-gateway on`, the gateway key in `x-gateway-key` or `ANTHROPIC_AUTH_TOKEN`
-wins over `ANTHROPIC_API_KEY`, so that traffic is billed to the ticket, not the credit; unset those to use the API key.
+wins over `ANTHROPIC_API_KEY`, so that traffic is billed to the pass, not the credit; unset those to use the API key.
 Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
 
 ## Operations
@@ -410,7 +410,7 @@ Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
 - To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
   history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
   removes their recorded usage from totals and charts. Revoking also stops the person's OpenCode key.
-  Deleting is refused while the user holds an active or queued ticket: cancel it first. Their tickets
+  Deleting is refused while the user holds an active or queued pass: cancel it first. Their passes
   stay as sales records under the name they had.
 - Admin actions from the dashboard and the CLI go to the audit log.
 - `python scripts/demo_data.py demo.db` fills a database with synthetic traffic, for trying the dashboard.

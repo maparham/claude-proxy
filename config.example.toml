@@ -64,14 +64,14 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # input = 1.0
 # output = 5.0
 
-# Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). Present = enabled: the dashboard gains
-# Tickets and Pricing tabs and the home page at / shows the public prices. Shares and prices
-# are seeded from here on first start and edited in the dashboard afterwards; existing tickets keep what they were sold with.
+# Paid passes (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). Present = enabled: the dashboard gains
+# Passes and Pricing tabs and the home page at / shows the public prices. Shares and prices
+# are seeded from here on first start and edited in the dashboard afterwards; existing passes keep what they were sold with.
 # The plan comparison ("Up to N% of Claude Pro's weekly usage") is set on the Pricing tab only, as the shared plan can change.
 # [tickets]
 # how_to_buy = "Send the amount by bank transfer to … and email the admin."
 # how_to_buy_fa = "…"            # the same in Persian, for buyers on the Persian page; else how_to_buy
-# max_sold_pct = 80            # tickets and bonuses together may reserve at most this; the rest is headroom
+# max_sold_pct = 80            # passes and bonuses together may reserve at most this; the rest is headroom
 # [tickets.tiers.lite]
 # label = "Lite"
 # share_pct = 5                # weekly share of the account; also what max_sold_pct counts
@@ -106,7 +106,7 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # password_env = "SES_SMTP_PASSWORD"
 
 # Online payment through ZarinPal (docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md): signed-in users pay
-# in Toman and get their ticket at once. Needs ZARINPAL_MERCHANT_ID in the environment, [tickets.currencies.IRT]
+# in Toman and get their pass at once. Needs ZARINPAL_MERCHANT_ID in the environment, [tickets.currencies.IRT]
 # (round_to = 1000) with a rate set on the Pricing tab, and [listener] home_url (the callback's domain).
 # [zarinpal]
 # sandbox = false
