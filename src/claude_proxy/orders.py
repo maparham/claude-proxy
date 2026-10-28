@@ -103,14 +103,15 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
-           terms_version: str | None = None, lang: str = "en", upgrade_of: int | None = None) -> dict:
+           terms_version: str | None = None, lang: str = "en", upgrade_of: int | None = None, start_now: bool = False) -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
     Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
     `terms_version`: the ticket terms the buyer ticked; equality-checked against tickets.TERMS_VERSION, missing or
     stale → 400 (2026-10-13 spec, §3). `notify=False`: no new-order emails (an order paid online).
     `lang`: the page's language; the buyer's emails use it (anything but "fa" is English).
     `upgrade_of`: the user's running ticket, raised to `tier` for its time left (2026-10-26 spec); the length is the
-    ticket's and the quote tickets.upgrade_quote's."""
+    ticket's and the quote tickets.upgrade_quote's. `start_now`: the ticket is to start when granted, beside the buyer's
+    running tickets, not after them (tickets.grant)."""
     now = _now(now)
     if terms_version != tickets.TERMS_VERSION:
         raise OrderError(400, tickets.TERMS_CHANGED)
@@ -176,13 +177,16 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             admin_mail, buyer_mail = "pending", "skipped" if sent >= BUYER_MAILS else "pending"
         cur = conn.execute(
             "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, quoted_amount, "
-            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, upgrade_of) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)",
+            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, upgrade_of, start_now) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, upgrade_of))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, upgrade_of,
+             int(bool(start_now) and user_id is not None and upgrade_of is None)))
         oid = cur.lastrowid
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
                                                               "visitor": user_id is None, "terms_version": terms_version,
-                                                              **({"upgrade_of": upgrade_of} if upgrade_of is not None else {})})
+                                                              **({"upgrade_of": upgrade_of} if upgrade_of is not None else {}),
+                                                              **({"start_now": True} if start_now else {})})
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

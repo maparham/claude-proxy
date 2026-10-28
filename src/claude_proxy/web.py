@@ -1244,8 +1244,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def ticket_preview(request: Request):
         admin(request)
         need_tickets()
-        u, tier, length, currency = grant_args(await _json(request))
-        return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time())
+        body = await _json(request)
+        u, tier, length, currency = grant_args(body)
+        return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time(), bool(body.get("start_now")))
 
     @app.post("/api/admin/tickets")
     async def ticket_grant(request: Request):
@@ -1264,7 +1265,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         terms_version = body.get("terms_version") if order_id is None else None
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
-                        expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version)
+                        expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version,
+                        start_now=bool(body.get("start_now")))
         if order_id is not None and cfg.email is not None:   # the buyer hears their order is done, after the response
             task = asyncio.create_task(orders.send_granted(conn, cfg, order_id))
             _mail_tasks.add(task)
@@ -1327,8 +1329,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.tickets.enabled:
             return {"enabled": False}
         now = time.time()
-        if (cur := tickets.covering(conn, user["id"], now)) is not None:
-            limits.hand_over(conn, cfg, cur, now)   # a used-up ticket gives way to a queued one here too, not only on a request
+        limits.hand_over(conn, cfg, user["id"], now)   # used-up tickets give way to a queued one here too, not only on a request
         st = tickets.user_state(conn, user["id"], now)
         label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
         # No ticket ids: they number every sale on the account.
@@ -1350,13 +1351,18 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
                               "week_known": week is not None,
                               # Nothing left before it ends: the card offers a new ticket, which starts at once.
-                              "used_up": limits.used_up(conn, cfg, cur, now),
+                              "used_up": limits.used_up(conn, cfg, user["id"], now),
                               "bonus_pct": (tickets.bonus_share(conn, cur["id"], now) - sum(
                                   b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"] for b in ups)) / share_5h * 100,
                               "bonuses": [{"pct": b["share_pct"] / cur["share_pct"] * 100, "note": b["note"], "ends_at": b["ends_at"]}
                                           for b in active]}
             # Extra days with their note; a bonus that also adds a share running now is shown with that share instead.
             shown = {b["id"] for b in active}
+            # Tickets bought to start now, running beside this one: their limits add up with its.
+            run = tickets.running(conn, user["id"], now)
+            out["current"]["also"] = [{"tier": t["tier"], "label": label(t), "starts_at": t["starts_at"], "effective_end": t["effective_end"]}
+                                      for t in run if t["id"] != cur["id"]]
+            out["current"]["pool_end"] = max(t["effective_end"] for t in run)
             out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
                                              if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]
         if st["queued"]:
@@ -1368,6 +1374,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         # A new ticket queues after the last, or starts now in place of a used-up one.
         out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.next_start(conn, cfg, user["id"], now)[0])
+        # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
+        out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
         # Tiers above the running ticket, each priced for the time it has left (2026-10-26 spec).
         out["upgrades"] = user_upgrades(out["prices"]["currency"]) if cur else []
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
@@ -1404,7 +1412,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(409, "Ordering without paying online is off; pay with ZarinPal.")
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
                         currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""),
-                        terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""), **kw)
+                        terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""),
+                        start_now=bool(body.get("start_now")), **kw)
         if cfg.email is not None:   # after the response: a slow mail server never delays it
             task = asyncio.create_task(orders.dispatch(conn, cfg, o["id"]))
             _mail_tasks.add(task)
@@ -1462,7 +1471,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         email = user["email"] or str(body.get("email") or "")
         return await payments.start(conn, cfg, user, str(body.get("tier") or ""), str(body.get("length") or ""), email,
                                     terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""),
-                                    upgrade_of=upgrade_target(body, user["id"]))
+                                    upgrade_of=upgrade_target(body, user["id"]), start_now=bool(body.get("start_now")))
 
     @app.get("/pay/callback")
     async def pay_callback(Authority: str = "", Status: str = ""):

@@ -14,7 +14,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import quota, tickets
+from . import db, quota, tickets
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 from .usage import SUMS, Totals, price_totals, priced_sql
@@ -247,32 +247,42 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     return _finish(st)
 
 
-def _ticket_7d(conn, cfg, user_id, ticket, label, now) -> LimitState:
-    """The ticket's prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1).
+def _pool_cap(conn, user_id, run, start, end, now) -> float:
+    """The weekly points the user's tickets give between `start` and `end` (both inside one Anthropic week), before
+    capacity scaling: each started ticket's share × the days of the span it covers ÷ 7, plus the running tickets'
+    active bonus pieces. A ticket that ended inside the span counts too: the use measured over the span includes what it served."""
+    tks = {t["id"]: t for t in run}
+    for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
+                          f"AND t.starts_at<=? AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (user_id, now, end, start)):
+        tks.setdefault(r["id"], dict(r))
+    cap = sum(t["share_pct"] * max(0.0, min(end, t["effective_end"]) - max(start, t["starts_at"])) / DAY / 7 for t in tks.values())
+    for t in run:
+        for b in tickets.active_bonuses(conn, t["id"], now):
+            cap += b["share_pct"] * max(0.0, min(end, b["ends_at"]) - max(start, b["starts_at"])) / DAY / 7
+    return cap
 
-    Cap = ticket share × days of this week the ticket covers ÷ 7 + active bonus pieces, scaled to the gateway's
-    capacity (2026-10-18 spec). Measured from the
-    user's own weighted tokens since max(week_start, ticket starts_at) at the 7d observed rate — the same
-    estimator share_day used, only the window start moves. Unknown week (no resets_at ever) → NO_RATE."""
+
+def _ticket_7d(conn, cfg, user_id, run, label, now) -> LimitState:
+    """The running tickets' prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1), one pool for all.
+
+    Cap = each ticket's share × days of this week it covers ÷ 7 + active bonus pieces (_pool_cap), scaled to the
+    gateway's capacity (2026-10-18 spec). Measured from the user's own weighted tokens since max(week_start, the
+    earliest running ticket's start) at the 7d observed rate — the same estimator share_day used, only the window
+    start moves. Unknown week (no resets_at ever) → NO_RATE."""
     week = tickets.week_bounds(conn, cfg, now)
     if week is None:
         st = LimitState("share_7d", "*", "", "pct", limit=None, estimated=True, tier=label)
         st.skipped, st.no_live_data = NO_RATE, False
         return st
     week_start, week_end = week
-    t_start, t_end = ticket["starts_at"], ticket["effective_end"]
-    overlap = max(0.0, min(week_end, t_end) - max(week_start, t_start))
-    cap = ticket["share_pct"] * overlap / DAY / 7
-    for b in tickets.active_bonuses(conn, ticket["id"], now):
-        bover = max(0.0, min(week_end, b["ends_at"]) - max(week_start, b["starts_at"]))
-        cap += b["share_pct"] * bover / DAY / 7
+    piece_start = max(week_start, min(t["starts_at"] for t in run))
+    cap = _pool_cap(conn, user_id, run, piece_start, week_end, now)
     att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
     st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=cap * _capacity(att, now) / 100, estimated=True, tier=label,
                     resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)))
     # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since
     # the piece began would read 0 for most of a week and then jump. The cheap staleness check only decides the "no live data" mark.
-    piece_start = max(week_start, t_start)
     newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
     st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
     used = _weighted_since(conn, cfg, user_id, piece_start, now)
@@ -293,19 +303,18 @@ def _ticket_7d(conn, cfg, user_id, ticket, label, now) -> LimitState:
 
 
 def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None) -> dict | None:
-    """For the statusline: the covering ticket's use of each Anthropic week it spans and of the whole ticket, e.g.
+    """For the statusline: the running tickets' use of each Anthropic week it spans and of the whole ticket, e.g.
     {"weeks": [{"pct": 57.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 30.0, "ends_in": 3600}
     (seconds until the ticket ends). Each week's
     piece is measured as share_7d measures the current one (`current`, that state, is reused for it), at today's rate
     and capacity. None without a ticket, a known week or a rate."""
-    t = tickets.covering(conn, user_id, now)
+    run = tickets.running(conn, user_id, now)
     week = tickets.week_bounds(conn, cfg, now)
-    if t is None or week is None:
+    if not run or week is None:
         return None
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
     capacity = _capacity(quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s), now)
-    bonuses = tickets.active_bonuses(conn, t["id"], now)
-    t_start, t_end = t["starts_at"], t["effective_end"]
+    t_start, t_end = min(t["starts_at"] for t in run), max(t["effective_end"] for t in run)
     start = week[0]
     while start > t_start:
         start -= 7 * DAY
@@ -313,8 +322,7 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
     while start < t_end:
         end = start + 7 * DAY
         ps, pe = max(start, t_start), min(end, t_end)
-        cap = t["share_pct"] * (pe - ps) / DAY / 7 + sum(
-            b["share_pct"] * max(0.0, min(pe, b["ends_at"]) - max(ps, b["starts_at"])) / DAY / 7 for b in bonuses)
+        cap = _pool_cap(conn, user_id, run, ps, pe, now)
         limit = cap * capacity / 100
         state = "past" if end <= now else "future" if start > now else "current"
         if state == "future":
@@ -331,31 +339,40 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
     return {"weeks": weeks, "ticket_pct": 100.0 * used_all / limit_all if limit_all else 100.0, "ends_in": max(0, int(t_end - now))}
 
 
-def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | None = None) -> list[LimitState]:
-    """The two share limits a ticket builds (2026-10-13 spec, §1): share_5h against Anthropic's 5-hour window, and
-    share_7d, the ticket's prorated piece of Anthropic's current weekly window, against the user's weighted tokens
-    since the piece began at the weekly bucket's observed rate."""
-    t = ticket or tickets.covering(conn, user_id, now)
-    if t is None:
+def ticket_states(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> list[LimitState]:
+    """The two share limits the running tickets build together (2026-10-13 spec, §1): share_5h against Anthropic's
+    5-hour window, and share_7d, their prorated piece of Anthropic's current weekly window, against the user's
+    weighted tokens since the piece began at the weekly bucket's observed rate. Tickets running side by side add up."""
+    run = run if run is not None else tickets.running(conn, user_id, now)
+    if not run:
         return []
-    tier = tickets.tier_now(conn, t)
-    label = cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
-    # The ticket's own 5-hour share; one sold before the split has none and keeps its single share for both.
-    share_5h = (t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) + tickets.bonus_share(conn, t["id"], now)
-    return [_ticket_5h(conn, cfg, user_id, share_5h, label, now), _ticket_7d(conn, cfg, user_id, t, label, now)]
+    labels = []
+    for t in run:
+        tier = tickets.tier_now(conn, t)
+        lb = cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
+        if lb not in labels:
+            labels.append(lb)
+    label = " + ".join(labels)
+    # Each ticket's own 5-hour share; one sold before the split has none and keeps its single share for both.
+    share_5h = sum((t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) + tickets.bonus_share(conn, t["id"], now)
+                   for t in run)
+    return [_ticket_5h(conn, cfg, user_id, share_5h, label, now), _ticket_7d(conn, cfg, user_id, run, label, now)]
 
 
-def used_up(conn, cfg: Config, ticket: dict, now: float) -> bool:
-    """Whether a running ticket has nothing left before it ends: its weekly piece is used up and it ends before that
-    piece refills. Its 5-hour limit is not counted: that one refills within hours."""
-    st = _ticket_7d(conn, cfg, ticket["user_id"], ticket, "", now)
-    return st.exceeded and st.resets_at is not None and ticket["effective_end"] <= st.resets_at
+def used_up(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> bool:
+    """Whether the user's running tickets have nothing left before they end: their weekly piece is used up and the
+    last of them ends before it refills. The 5-hour limit is not counted: that one refills within hours."""
+    run = run if run is not None else tickets.running(conn, user_id, now)
+    if not run:
+        return False
+    st = _ticket_7d(conn, cfg, user_id, run, "", now)
+    return st.exceeded and st.resets_at is not None and max(t["effective_end"] for t in run) <= st.resets_at
 
 
-def hand_over(conn, cfg: Config, ticket: dict, now: float) -> bool:
-    """A used-up ticket gives way to the user's queued one at once (tickets.hand_over); True when it did."""
-    return used_up(conn, cfg, ticket, now) and tickets.next_queued(conn, ticket["user_id"], now) is not None \
-        and tickets.hand_over(conn, cfg, ticket["id"], now)
+def hand_over(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> bool:
+    """Used-up tickets give way to the user's queued one at once (tickets.hand_over); True when they did."""
+    return tickets.next_queued(conn, user_id, now) is not None and used_up(conn, cfg, user_id, now, run) \
+        and tickets.hand_over(conn, cfg, user_id, now)
 
 
 def _no_ticket_message(conn, cfg, user_id, now) -> str:
@@ -486,10 +503,10 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
         return Decision(403, TICKET, _perm(PAUSED))
     gated = _gated(conn, cfg, user_id)
-    ticket = None
+    run = None
     if gated:
-        ticket = tickets.covering(conn, user_id, now)
-        if ticket is None:   # every request, the model list included: there is no ticket to serve it on
+        run = tickets.running(conn, user_id, now)
+        if not run:   # every request, the model list included: there is no ticket to serve it on
             return Decision(403, TICKET, _perm(_no_ticket_message(conn, cfg, user_id, now)))
     rows = _rows(conn, user_id)
     if gated and third_party and not any(r["kind"].startswith("cost_") and (r["scope"] == "*" or fnmatch.fnmatchcase(model or "", r["scope"]))
@@ -524,10 +541,9 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)
     if gated and not is_count_tokens and not third_party:
-        sts = ticket_states(conn, cfg, user_id, now, ticket)
-        if any(st.kind == "share_7d" and st.exceeded for st in sts) and hand_over(conn, cfg, ticket, now):
-            ticket = tickets.covering(conn, user_id, now)
-            sts = ticket_states(conn, cfg, user_id, now, ticket)
+        sts = ticket_states(conn, cfg, user_id, now, run)
+        if any(st.kind == "share_7d" and st.exceeded for st in sts) and hand_over(conn, cfg, user_id, now, run):
+            sts = ticket_states(conn, cfg, user_id, now)
         for st in sts:
             if st.skipped == NO_RATE:
                 return Decision(503, TICKET_NO_DATA, {"type": "error", "error": {"type": "api_error", "message":

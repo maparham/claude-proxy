@@ -610,11 +610,11 @@ function userLimitsCard(me, tk, order) {
   const c = tk && tk.current;
   // A ticket over before the weekly reset (a day ticket, say) has nothing weekly about it for its holder: no refill
   // date, no weekly wording, just the ticket's own use.
-  const oneWeek = !!c && c.week_known && c.effective_end <= c.week_end;
+  const oneWeek = !!c && c.week_known && (c.pool_end || c.effective_end) <= c.week_end;
   // Anthropic's way: a ticket that can go higher offers it here, and the price list stays out of the way until it ends.
   const open = !!order && (order.status === "new" || order.status === "contacted");
   const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small primary" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
-  // Renew: the next ticket, queued after the last one the user holds; a used-up ticket's is a new one, starting at once.
+  // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
   const renew = c ? `<button class="btn small${c.used_up ? " primary" : ""}" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}${up}</div></div>
@@ -623,6 +623,7 @@ function userLimitsCard(me, tk, order) {
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
       ${c.used_up ? `<p class="sub">${t("ov.used_up")}</p>` : ""}
       ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}
+      ${(c.also || []).map((a) => `<div class="muted">${t("ov.also", { label: tierName(a.tier, a.label), date: fmtDate(a.effective_end) })}</div>`).join("")}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
@@ -690,7 +691,8 @@ function myOrderCard(o) {
     <button class="btn small" data-my-order="dismiss" data-id="${o.id}">${t("ord.dismiss")}</button></div>` : "";
 }
 // What a buyer can order in: the price list's currency and USD, which always has a rate.
-function orderFormHtml(p, tier, len, email, payL, pay, manual) {
+// `start`: with a running ticket, the choice of starting now beside it or after the last one ({ date, splitNow }).
+function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
   const payBtn = payL && !payL.sold_out
@@ -700,7 +702,10 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual) {
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
-      <div class="terms wide"><ul class="muted"><li>${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
+      ${start ? `<div class="wide"><p class="sub">${t("ord.start")}</p>
+        <label class="check"><input type="radio" name="start" value="after" checked> ${t("ord.start_after", { date: fmtDate(start.date) })}</label>
+        <label class="check"><input type="radio" name="start" value="now"> ${t("ord.start_now")}</label></div>` : ""}
+      <div class="terms wide"><ul class="muted"><li id="order-split">${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
       <div class="error wide" id="order-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
@@ -712,10 +717,15 @@ function orderButtons(manual, payBtn) {
   const send = manual || !payBtn ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
   return `${send}${send && payBtn ? `<p class="pay-or muted">${t("pay.or")}</p>` : ""}${payBtn}`;
 }
-function orderDialog(p, tier, len, pay, termsVersion, manual) {
+function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
-  const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay, manual));
+  const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay, manual, start));
   const f = $("#f-order", d);
+  const now = () => !!start && f.start.value === "now";
+  // The terms follow the choice: a ticket starting now splits across the weeks from now.
+  if (start) f.querySelectorAll('input[name="start"]').forEach((r) => (r.onchange = () => {
+    $("#order-split", d).innerHTML = splitTerms(now() ? start.splitNow : p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1");
+  }));
   f.onsubmit = async (e) => {
     e.preventDefault();
     if (!f.querySelector('button[type="submit"]')) return $("#order-pay", d).click();   // Enter, with only Pay offered
@@ -723,7 +733,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual) {
     const go = f.querySelector('button[type="submit"]');
     go.disabled = true;
     try {
-      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: p.currency, message: f.message.value, terms_version: termsVersion, lang: LANG, ...(f.email ? { email: f.email.value } : {}) } });
+      await api("/api/me/orders", { method: "POST", body: { tier: tier.tier, length: len, currency: p.currency, message: f.message.value, terms_version: termsVersion, lang: LANG, start_now: now(), ...(f.email ? { email: f.email.value } : {}) } });
       d.close(); render();
     } catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
   };
@@ -733,7 +743,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual) {
     if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
     pb.disabled = true; pb.textContent = t("pay.going");
     try {
-      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, ...(f.email ? { email: f.email.value } : {}) } });
+      const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, start_now: now(), ...(f.email ? { email: f.email.value } : {}) } });
       location.href = r.url;
     } catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payL.amount, pay.currency)) }); $("#order-err", d).textContent = err.message; }
   };
@@ -743,7 +753,7 @@ function wireOrdering(root, tk, order) {
   if (ub) ub.onclick = () => ticketUpgradeDialog(tk);
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
-    const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.queued ? tk.queued.effective_end : tk.current.effective_end) });
+    const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.queued ? tk.queued.effective_end : tk.current.pool_end || tk.current.effective_end) });
     const d = openDialog(`${priceListCard(tk, order, sub)}
       <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
     wireOrdering(d, tk, order);
@@ -752,7 +762,9 @@ function wireOrdering(root, tk, order) {
   root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
-    if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version, tk.manual);
+    // A used-up ticket's replacement starts now either way: no choice to offer.
+    const c = tk.current, start = c && !c.used_up ? { date: tk.queued ? tk.queued.effective_end : c.pool_end || c.effective_end, splitNow: tk.split_now } : null;
+    if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version, tk.manual, start);
   }));
   // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).
   const pick = takePick();
@@ -989,6 +1001,7 @@ function grantDialog(users, pre = null) {
       <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
       <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label class="wide">${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
+      <label class="check wide"><input type="checkbox" name="start_now"${pre && pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
       <div id="grant-limits" class="wide"></div>
       ${pre ? "" : `<div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
@@ -1007,11 +1020,11 @@ function grantDialog(users, pre = null) {
   const refresh = async () => {
     $("#grant-err", d).textContent = "";
     try {
-      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value } });
+      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
     const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${t("tk.discount")})` : `<b>${fmtPrice(p.usd)}</b>`;
-    const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : t("tk.starts_now");
+    const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : p.start_now ? t("tk.starts_beside") : t("tk.starts_now");
     const fit = p.available ? `<li class="good">${t("tk.available")}</li>` : `<li class="critical">${bdi(p.reason)}</li>`;
     const soldOut = p.sold_out_now && p.available ? `<li class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</li>` : "";
     const weeks = !p.week_split ? `<li class="muted">${t("tk.week_split_none")}</li>`
@@ -1026,7 +1039,7 @@ function grantDialog(users, pre = null) {
       p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(labelOf("unitname.", r.unit))}</label>`).join("") : "";
     $("#grant-go", d).disabled = !p.available;
   };
-  ["user", "tier", "length", "currency"].forEach((k) => (f[k].onchange = refresh));
+  ["user", "tier", "length", "currency", "start_now"].forEach((k) => (f[k].onchange = refresh));
   refresh();
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -1036,7 +1049,7 @@ function grantDialog(users, pre = null) {
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate,
+        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate,
         ...(pre ? { order_id: pre.order_id } : { terms_version: preview.terms_version }) } });
       d.close(); render();
     } catch (err) {
@@ -1112,7 +1125,7 @@ function orderRow(o) {
     : `<div class="muted">${t("ord.visitor")}</div>`;
   return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
     <td><b>${bdi(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${bdi(o.email)}</a></div>${account}</td>
-    <td class="nowrap">${o.upgrade_of ? `${t("up.what", { label: tierName(o.tier, o.label) })}<div class="muted">${t("ord.ticket_n", { id: esc(o.upgrade_of) })}</div>` : `${tierName(o.tier, o.label)} · ${lengthName(o.length)}`}</td>
+    <td class="nowrap">${o.upgrade_of ? `${t("up.what", { label: tierName(o.tier, o.label) })}<div class="muted">${t("ord.ticket_n", { id: esc(o.upgrade_of) })}</div>` : `${tierName(o.tier, o.label)} · ${lengthName(o.length)}${o.start_now ? `<div class="muted">${t("ord.starts_now")}</div>` : ""}`}</td>
     <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
     <td class="order-msg">${o.message ? bdi(o.message) : `<span class="muted">—</span>`}</td>
     <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">${t("ord.ticket_n", { id: esc(o.ticket_id) })}</div>` : ""}</td>
@@ -1149,7 +1162,7 @@ async function orderAction(act, o, users) {
   }
   if (act !== "grant") return;
   if (o.user_id == null) return linkDialog(o, users);
-  grantDialog(users, { order_id: o.id, user: o.user_id, tier: o.tier, length: o.length, currency: o.currency });
+  grantDialog(users, { order_id: o.id, user: o.user_id, tier: o.tier, length: o.length, currency: o.currency, start_now: !!o.start_now });
 }
 function orderNoteDialog(o, act, post) {
   const decline = act === "decline";
@@ -1181,7 +1194,7 @@ function linkDialog(o, users) {
     try {
       const r = await api(`/api/admin/orders/${o.id}`, { method: "POST", body: { action: "link", ...body } });
       const { users: fresh } = await api("/api/users");   // a created account is new
-      grantDialog(fresh, { order_id: o.id, user: r.order.user_id, tier: o.tier, length: o.length, currency: o.currency });
+      grantDialog(fresh, { order_id: o.id, user: r.order.user_id, tier: o.tier, length: o.length, currency: o.currency, start_now: !!o.start_now });
     } catch (err) {
       const existing = err.status === 409 && err.data && err.data.existing_user_id;
       if (existing && [...f.user.options].some((x) => +x.value === existing)) {
