@@ -431,7 +431,8 @@ dialog :where(input[type=email], textarea) { border: 1px solid var(--border); ba
 dialog textarea { resize: vertical; }
 code { unicode-bidi: isolate; direction: ltr; }
 /* Pointing at a pass: its card and its timeline row stand out. */
-.pass-card, .gantt-track i { transition: box-shadow .12s; }
+.pass-card, .pass-hero, .gantt-track i { transition: box-shadow .12s; }
 .pass-hl .pass-card.hl { box-shadow: 0 0 0 2px var(--ink-2); }
+.pass-hl .pass-hero.hl { box-shadow: inset 0 0 0 1px var(--good), 0 0 0 2px var(--ink-2); }   /* its green border kept */
 .pass-hl .gantt-name.hl { color: var(--ink); }
 .pass-hl .gantt-track.hl i { box-shadow: 0 0 0 2px var(--ink-2); }
