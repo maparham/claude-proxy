@@ -613,9 +613,9 @@ function userLimitsCard(me, tk, order) {
   const oneWeek = !!c && c.week_known && (c.pool_end || c.effective_end) <= c.week_end;
   // Anthropic's way: a ticket that can go higher offers it here, and the price list stays out of the way until it ends.
   const open = !!order && (order.status === "new" || order.status === "contacted");
-  const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small primary" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
+  const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
-  const renew = c ? `<button class="btn small${c.used_up ? " primary" : ""}" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
+  const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}${up}</div></div>
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
