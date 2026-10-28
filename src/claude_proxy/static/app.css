@@ -287,12 +287,13 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 
 /* Tooltips: an info dot (.tip-i) carries data-tip / data-tip-html; one shared #tip shows it. */
 .tip-i { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-inline-start: 5px;
-         border-radius: 50%; border: 1px solid var(--axis); color: var(--muted); font-size: 10px; font-weight: 700;
-         line-height: 1; vertical-align: 1px; cursor: help; user-select: none; flex: none;
-         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
-/* Persian shows the Persian question mark in place of the ? the markup carries. */
-html:lang(fa) .tip-i { font-size: 0; }
-html:lang(fa) .tip-i::before { content: "؟"; font: 700 11px/1 Vazirmatn, system-ui, sans-serif; }
+         border-radius: 50%; border: 1px solid var(--axis); color: var(--muted); font-size: 0;
+         vertical-align: -2px; cursor: help; user-select: none; flex: none; }
+/* The ? is drawn, not typed, so no font can shift it; mirrored it is the Persian ؟. */
+.tip-i::before { content: ""; width: 10px; height: 10px; background: currentColor;
+                 -webkit-mask: var(--qmark) center / contain no-repeat; mask: var(--qmark) center / contain no-repeat; }
+.tip-i:dir(rtl)::before { transform: scaleX(-1); }
+:root { --qmark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.3 5.8a2.7 2.7 0 1 1 3.9 2.4c-.8.4-1.2 1-1.2 1.8v.6' fill='none' stroke='black' stroke-width='2.2' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='13.6' r='1.4'/%3E%3C/svg%3E"); }
 .tip-i:hover, .tip-i.tip-on { color: var(--ink); border-color: var(--ink-2); background: var(--wash); }
 #tip { position: fixed; inset: auto; margin: 0; z-index: 100; max-width: min(320px, calc(100vw - 32px)); width: max-content;
        padding: 9px 12px; border: 1px solid var(--tip-line); border-radius: 10px; overflow: visible;
