@@ -1378,9 +1378,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             later = [t for t in tickets.user_tickets(conn, user["id"]) if t["cancelled_at"] is None and t["starts_at"] > now]
             out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
                 {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
-                 "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
+                 "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
                  "pinned": t["id"] == pin, **pass_use(t)} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
-                                  "effective_end": t["effective_end"], "queued": True} for t in later]
+                                  "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
             out["current"]["serving_end"] = (serving or cur)["effective_end"]
             out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
                                              if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]

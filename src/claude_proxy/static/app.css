@@ -405,6 +405,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .pass-use { display: grid; grid-template-columns: 1fr auto; font-size: 12px; }
 .pass-use .meter { grid-column: 1 / -1; min-width: 0; }
 .pass-card .btn { align-self: flex-start; margin-top: 2px; }
+.pass-bought { font-size: 11px; color: var(--muted); margin-top: auto; }   /* at the card's foot, out of the way */
 /* A pass's number, in its timeline colour, so a card matches its boxes on the timeline. */
 .pass-no { font-variant-numeric: tabular-nums; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }

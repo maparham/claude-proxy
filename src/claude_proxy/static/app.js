@@ -643,9 +643,8 @@ function passLeft(end) {
   const from = parts.findIndex(([n], k) => n > 0 || k === 2);
   return t("pass.left", { d: parts.slice(from).map(([n, u]) => t(`pass.left_${u}`, { n: nf0.format(n) })).join(t("pass.left_join")) });
 }
-// A pass's number and colour on the timeline: the list and the timeline share one order (start, then id), so the n-th
-// card is the n-th pass there. A hue per tier, in the order they first appear, shaded by length: a day light, a week
-// the hue itself, a month dark; the number tells apart passes of the same kind.
+// A pass's colour on the timeline: a hue per tier, in the order they first appear, shaded by length: a day light, a
+// week the hue itself, a month dark; the number tells apart passes of the same kind.
 const PASS_SHADE = { day: (h) => `color-mix(in oklab, ${h} 50%, white)`, week: (h) => h, month: (h) => `color-mix(in oklab, ${h} 65%, black)` };
 function passColors(tl) {
   const tiers = [];
@@ -655,9 +654,17 @@ function passColors(tl) {
     return `background:${(PASS_SHADE[p.length] || PASS_SHADE.week)(hue)};color:${p.length === "day" ? "#1a1a1a" : "#fff"}`;
   });
 }
-const passNo = (i) => `<span class="pass-no">${nf0.format(i + 1)}.</span> `;
+const passNo = (n) => `<span class="pass-no">${nf0.format(n)}.</span> `;
+// Passes are numbered, and their cards and timeline rows ordered, by when they were bought. `no[i]` is the number of
+// the i-th pass in the server's lists (the card list and the timeline share that order).
+function passNumbers(c) {
+  const by = (c && c.passes ? c.passes : []).map((p, i) => ({ i, at: p.bought_at || 0 })).sort((a, b) => a.at - b.at || a.i - b.i);
+  const no = [];
+  by.forEach((x, k) => { no[x.i] = k + 1; });
+  return no;
+}
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
-function passList(c, colors) {
+function passList(c, no) {
   const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(v))}${PCT}`);
   // Every pass says where it stands: in use, usable in a while (queued), used up, back in a while (at a limit, requests go on to the next
   // meanwhile), or ready behind the one in use.
@@ -668,13 +675,15 @@ function passList(c, colors) {
     : full(p) ? `<span class="badge state-queued">${p.back_at ? t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) }) : t("pass.at_limit")}</span>`
     : `<span class="badge">${t("pass.ready")}</span>`;
   const use = (label, v) => `<div class="pass-use"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(v)}</div>`;
-  const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving);
+  const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving).sort((a, b) => no[a.i] - no[b.i]);
+  const bought = (p) => (p.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(p.bought_at) })}</div>` : "");
   if (!others.length) return "";
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}" data-pass="${p.i}">
-      <div class="pass-card-head"><b>${passNo(p.i, colors)}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
+      <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("pass.use_7d"), p.pct_7d)}`}
-      ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}</div>`).join("")}</div>`;
+      ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
+      ${bought(p)}</div>`).join("")}</div>`;
 }
 function userLimitsCard(me, tk, order) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
@@ -693,13 +702,13 @@ function userLimitsCard(me, tk, order) {
   // With several passes, the one in use stands on its own above the others, with its limits in full.
   const inUse = multi && c.passes.find((p) => p.serving);
   const inUseAt = inUse ? c.passes.indexOf(inUse) : -1;
-  const colors = passColors(tk && tk.timeline);
-  const hero = inUse ? `<div class="pass-hero" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(inUseAt, colors)}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
+  const no = passNumbers(c);
+  const hero = inUse ? `<div class="pass-hero" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
       <span class="badge state-active">${t("pass.serving")}</span><span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
-      ${limitsCompact(me.limits, oneWeek)}</div>` : "";
+      ${limitsCompact(me.limits, oneWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
       <div class="ticket-head"><div class="muted">${t("pass.list")}</div><div class="row-actions">${renew}</div></div>
-      ${hero}${passList(c, colors)}${extras}</div>`
+      ${hero}${passList(c, no)}${extras}</div>`
     : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
@@ -709,19 +718,21 @@ function userLimitsCard(me, tk, order) {
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${multi ? t("ov.your_passes") : c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? t(oneWeek ? "ov.ticket_sub_one" : "ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
-    ${ticket}${passTimeline(tk, inUseAt)}${inUse ? "" : limitsBlock(me.limits, oneWeek)}</div>`;
+    ${ticket}${passTimeline(tk, inUseAt, no)}${inUse ? "" : limitsBlock(me.limits, oneWeek)}</div>`;
 }
 // The user's live passes over time, when there is more than one: a row per pass, numbered as its card is, with a bar
 // from its start (or now) to its end; the one in use is named in bold. A queued pass's bar is hatched. Where passes overlap, their rows run side by side.
-function passTimeline(tk, inUseAt = -1) {
+function passTimeline(tk, inUseAt = -1, no = []) {
   const tl = tk && tk.timeline;
   if (!tl || tl.passes.length < 2) return "";
   const span = tl.end - tl.start;
   const at = (ts) => (Math.max(0, ts - tl.start) / span) * 100;
   const colors = passColors(tl);
-  const rows = tl.passes.map((p, i) => {
+  const order = tl.passes.map((_, i) => i).sort((a, b) => (no[a] || a + 1) - (no[b] || b + 1));
+  const rows = order.map((i) => {
+    const p = tl.passes[i];
     const from = Math.max(p.starts_at, tl.start);
-    const name = `${nf0.format(i + 1)}. ${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`;
+    const name = `${nf0.format(no[i] || i + 1)}. ${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`;
     const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)}`;
     return `<div class="gantt-name${i === inUseAt ? " in-use" : ""}" data-pass="${i}">${esc(name)}</div><div class="gantt-track" data-pass="${i}">
       <i class="${p.starts_at > tl.start ? "later" : ""}" style="${colors[i]};inset-inline-start:${at(from).toFixed(2)}%;width:${(at(p.ends_at) - at(from)).toFixed(2)}%"
