@@ -289,7 +289,7 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .tip-i { display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; margin-inline-start: 5px;
          border-radius: 50%; border: 1px solid var(--axis); color: var(--muted); font-size: 10px; font-weight: 700;
          line-height: 1; vertical-align: 1px; cursor: help; user-select: none; flex: none;
-         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; direction: ltr; }
+         font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 /* Persian shows the Persian question mark in place of the ? the markup carries. */
 html:lang(fa) .tip-i { font-size: 0; }
 html:lang(fa) .tip-i::before { content: "؟"; font: 700 11px/1 Vazirmatn, system-ui, sans-serif; }
