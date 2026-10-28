@@ -1327,6 +1327,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.tickets.enabled:
             return {"enabled": False}
         now = time.time()
+        if (cur := tickets.covering(conn, user["id"], now)) is not None:
+            limits.hand_over(conn, cfg, cur, now)   # a used-up ticket gives way to a queued one here too, not only on a request
         st = tickets.user_state(conn, user["id"], now)
         label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
         # No ticket ids: they number every sale on the account.
@@ -1347,6 +1349,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
                               "week_known": week is not None,
+                              # Nothing left before it ends: the card offers a new ticket, which starts at once.
+                              "used_up": limits.used_up(conn, cfg, cur, now),
                               "bonus_pct": (tickets.bonus_share(conn, cur["id"], now) - sum(
                                   b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"] for b in ups)) / share_5h * 100,
                               "bonuses": [{"pct": b["share_pct"] / cur["share_pct"] * 100, "note": b["note"], "ends_at": b["ends_at"]}
@@ -1362,7 +1366,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user_upgrades = lambda c: [{k: v for k, v in q.items() if k not in ("share_pct", "share_5h_pct")}  # noqa: E731
                                    for q in tickets.upgrade_options(conn, cfg, user["id"], c, now)]
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
-        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.last_end(conn, user["id"]))   # a new ticket queues after the last
+        # A new ticket queues after the last, or starts now in place of a used-up one.
+        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.next_start(conn, cfg, user["id"], now)[0])
         # Tiers above the running ticket, each priced for the time it has left (2026-10-26 spec).
         out["upgrades"] = user_upgrades(out["prices"]["currency"]) if cur else []
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing

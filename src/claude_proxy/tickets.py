@@ -15,6 +15,7 @@ from zoneinfo import ZoneInfo
 
 from . import db, quota
 from .config import LENGTHS, Config
+from .forwarder import COUNT_TOKENS_PATH
 
 DAY = 86400
 ACCOUNT_ID = 1   # step 1 has exactly one account (spec section 1)
@@ -620,6 +621,25 @@ def last_end(conn: sqlite3.Connection, user_id: int) -> int | None:
     return conn.execute(f"SELECT MAX({db.TICKET_EFFECTIVE_END}) FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL", (user_id,)).fetchone()[0]
 
 
+def next_start(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> tuple[int, dict | None]:
+    """When a new ticket for the user starts, and the running ticket it replaces: now, in place of a last ticket that is
+    used up (limits.used_up), else now or after the user's last ticket."""
+    from . import limits   # here, not at the top: limits imports tickets
+    now, last = _now(now), last_end(conn, user_id)
+    cur = covering(conn, user_id, now)
+    if cur is not None and cur["effective_end"] == last and limits.used_up(conn, cfg, cur, now):
+        return now, cur
+    return max(now, last or 0), None
+
+
+def end_used_up(conn: sqlite3.Connection, ticket: dict, now: int) -> None:
+    """End a used-up running ticket at `now`, its bonuses and upgrades with it, so the next one can start. Inside the
+    caller's transaction."""
+    conn.execute("UPDATE tickets SET used_up_at=? WHERE id=?", (now, ticket["id"]))
+    conn.execute("UPDATE ticket_bonuses SET ends_at=MAX(starts_at, MIN(ends_at, ?)) WHERE ticket_id=? AND cancelled_at IS NULL",
+                 (now, ticket["id"]))
+
+
 def covering(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
     """The user's ticket covering now (starts_at <= now < effective end), or None."""
     return _row(conn, f"SELECT {TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND t.starts_at<=? "
@@ -692,10 +712,10 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     p = price_now(conn, tier, length, now)
     share = effective_share(conn, cfg, tier)
     share_5h = effective_share_5h(conn, cfg, tier)
-    starts_at = max(now, last_end(conn, user["id"]) or 0)
+    starts_at, replaces = next_start(conn, cfg, user["id"], now)
     ends_at = starts_at + LENGTHS[length] * DAY
-    try:
-        check_capacity(conn, cfg, ACCOUNT_ID, share, starts_at, ends_at)
+    try:   # a used-up ticket this one replaces ends as it starts: its share is not sold any more
+        check_capacity(conn, cfg, ACCOUNT_ID, share, starts_at, ends_at, exclude=replaces and replaces["id"])
         available, reason = True, None
     except CapacityError as e:
         available, reason = False, str(e)
@@ -707,6 +727,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
             "amount": round_local(p["usd"], rate["rate"], steps[currency]),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
+            "replaces": replaces and replaces["id"],
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available,
             "week_split": week_split(conn, cfg, share, starts_at, ends_at, now),
             "terms_version": TERMS_VERSION,
@@ -759,6 +780,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             if p["stale_rate"] and not confirm_stale_rate:
                 raise TicketError(f"The {currency} rate is {int((now - p['rate_set_at']) // 3600)} hours old. Confirm to grant at it "
                                   "anyway, or set today's rate first.")
+        if p["replaces"] is not None:   # the user's ticket is used up: it ends now and this one starts in its place
+            end_used_up(conn, get(conn, p["replaces"]), now)
+            db.audit(conn, actor, "ticket_used_up", user["name"], {"ticket_id": p["replaces"]})
         check_capacity(conn, cfg, ACCOUNT_ID, p["share_pct"], p["starts_at"], p["ends_at"])
         cur = conn.execute(
             "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
@@ -870,6 +894,32 @@ def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: 
     return {"ticket": get(conn, ticket_id), "moved": moved, "dates_kept": kept, "reason": reason}
 
 
+def hand_over(conn: sqlite3.Connection, cfg: Config, ticket_id: int, now: float | None = None) -> bool:
+    """A running ticket that is used up (limits.used_up) ends now and the user's queued tickets move up to start now,
+    so a ticket bought while the last one ran out is usable at once. False, changing nothing, without a queued ticket
+    or when the moved tickets would not fit."""
+    now = _now(now)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        t = get(conn, ticket_id)
+        chain = _later_tickets(conn, t["user_id"], t["effective_end"]) if t["user_id"] is not None else []
+        if t["cancelled_at"] is not None or not t["starts_at"] <= now < t["effective_end"] or not chain:
+            conn.execute("ROLLBACK")
+            return False
+        end_used_up(conn, t, now)
+        if chain[0]["starts_at"] > now:
+            _shift(conn, cfg, chain, now - chain[0]["starts_at"])
+        db.audit(conn, None, "ticket_used_up", t["user_name"], {"ticket_id": ticket_id, "moved": len(chain)})
+        conn.execute("COMMIT")
+    except CapacityError:
+        conn.execute("ROLLBACK")
+        return False
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return True
+
+
 def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, share_pct=0, extra_days=0, starts_at=None,
               ends_at=None, note: str = "", now: float | None = None) -> dict:
     """Extra share for a period inside the ticket, extra days at the ticket's share, or both. Extra days push the user's
@@ -896,6 +946,8 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         t = get(conn, ticket_id)
         if t["cancelled_at"] is not None:
             raise TicketError("The ticket is cancelled; bonuses go on live tickets.")
+        if t["used_up_at"] is not None:
+            raise TicketError("The ticket was used up and the next one took over; bonuses go on live tickets.")
         old_end, new_end, moved = t["effective_end"], t["effective_end"] + extra_days * DAY, 0
         # Capacity is checked from now on: on a ticket that has started or ended, the past is spent either way.
         if extra_days:
@@ -944,6 +996,13 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
 UPGRADE_MIN_S = 3600   # less time left than this: no upgrade is offered or sold
 
 
+def was_used(conn: sqlite3.Connection, ticket: dict) -> bool:
+    """Whether the ticket's holder has sent a request since it started. Only an unused ticket can be upgraded; a used one
+    is replaced with a new ticket instead."""
+    return conn.execute("SELECT 1 FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL AND path!=? "
+                        "AND api_key_id IS NULL LIMIT 1", (ticket["user_id"], ticket["starts_at"], COUNT_TOKENS_PATH)).fetchone() is not None
+
+
 def _upgrades(conn, ticket_id: int) -> list[dict]:
     return [dict(r) for r in conn.execute("SELECT * FROM ticket_bonuses WHERE ticket_id=? AND tier IS NOT NULL AND cancelled_at IS NULL "
                                           "ORDER BY starts_at, id", (ticket_id,))]
@@ -959,13 +1018,15 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     """What raising a running ticket to `tier` for the rest of it costs: the two tiers' prices for the ticket's length
     today, the difference prorated over the time left. The upgrade adds the share difference (weekly and 5-hour) from
     now to the ticket's end, as a bonus would, so what the ticket already spent stays spent.
-    Raises TicketError for a tier that is not higher, a ticket not running or with under an hour left, or no rate;
+    Raises TicketError for a tier that is not higher, a ticket not running, already used or with under an hour left, or no rate;
     capacity trouble is reported in `sold_out`, not raised."""
     now = _now(now)
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
     if ticket["cancelled_at"] is not None or not ticket["starts_at"] <= now < ticket["effective_end"]:
         raise TicketError("Only a running ticket can be upgraded.")
+    if was_used(conn, ticket):
+        raise TicketError("This ticket has been used; only a ticket not used yet can be upgraded. Buy a new ticket instead.")
     left = ticket["effective_end"] - now
     if left < UPGRADE_MIN_S:
         raise TicketError("Less than an hour of this ticket is left; buy a new one instead.")

@@ -345,6 +345,19 @@ def ticket_states(conn, cfg: Config, user_id: int, now: float, ticket: dict | No
     return [_ticket_5h(conn, cfg, user_id, share_5h, label, now), _ticket_7d(conn, cfg, user_id, t, label, now)]
 
 
+def used_up(conn, cfg: Config, ticket: dict, now: float) -> bool:
+    """Whether a running ticket has nothing left before it ends: its weekly piece is used up and it ends before that
+    piece refills. Its 5-hour limit is not counted: that one refills within hours."""
+    st = _ticket_7d(conn, cfg, ticket["user_id"], ticket, "", now)
+    return st.exceeded and st.resets_at is not None and ticket["effective_end"] <= st.resets_at
+
+
+def hand_over(conn, cfg: Config, ticket: dict, now: float) -> bool:
+    """A used-up ticket gives way to the user's queued one at once (tickets.hand_over); True when it did."""
+    return used_up(conn, cfg, ticket, now) and tickets.next_queued(conn, ticket["user_id"], now) is not None \
+        and tickets.hand_over(conn, cfg, ticket["id"], now)
+
+
 def _no_ticket_message(conn, cfg, user_id, now) -> str:
     nxt = tickets.next_queued(conn, user_id, now)
     if nxt:
@@ -511,7 +524,11 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)
     if gated and not is_count_tokens and not third_party:
-        for st in ticket_states(conn, cfg, user_id, now, ticket):
+        sts = ticket_states(conn, cfg, user_id, now, ticket)
+        if any(st.kind == "share_7d" and st.exceeded for st in sts) and hand_over(conn, cfg, ticket, now):
+            ticket = tickets.covering(conn, user_id, now)
+            sts = ticket_states(conn, cfg, user_id, now, ticket)
+        for st in sts:
             if st.skipped == NO_RATE:
                 return Decision(503, TICKET_NO_DATA, {"type": "error", "error": {"type": "api_error", "message":
                                 "Usage data is unavailable. Please retry in a minute."}}, 60)

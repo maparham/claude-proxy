@@ -221,7 +221,8 @@ SCHEMA = [
         cancelled_by INTEGER,
         note TEXT,
         ungated_at INTEGER,                 -- set by the Ungate action: this row no longer makes its user ticket-gated
-        share_5h_pct REAL                   -- copied at grant like share_pct; NULL (sold before the split): share_pct
+        share_5h_pct REAL,                  -- copied at grant like share_pct; NULL (sold before the split): share_pct
+        used_up_at INTEGER                  -- set: used up before its end, it ended here and the user's next ticket took over
     )""",
     "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, starts_at)",
     "CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id, starts_at)",
@@ -348,8 +349,9 @@ SCHEMA = [
 
 ]
 
-# A ticket's effective end: ends_at plus its non-cancelled bonus days. For queries that alias tickets as `t`.
-TICKET_EFFECTIVE_END = ("(t.ends_at + 86400 * COALESCE((SELECT SUM(b.extra_days) FROM ticket_bonuses b "
+# A ticket's effective end: ends_at plus its non-cancelled bonus days, or the moment it was used up and handed over to
+# the next ticket. For queries that alias tickets as `t`.
+TICKET_EFFECTIVE_END = ("COALESCE(t.used_up_at, t.ends_at + 86400 * COALESCE((SELECT SUM(b.extra_days) FROM ticket_bonuses b "
                         "WHERE b.ticket_id=t.id AND b.cancelled_at IS NULL), 0))")
 
 
@@ -419,6 +421,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in ("compare TEXT", "compare_ratio REAL"):
         if col.split()[0] not in _columns(conn, "ticket_tier_shares"):
             conn.execute(f"ALTER TABLE ticket_tier_shares ADD COLUMN {col}")
+    if "used_up_at" not in _columns(conn, "tickets"):
+        conn.execute("ALTER TABLE tickets ADD COLUMN used_up_at INTEGER")
     if "tier" not in _columns(conn, "ticket_bonuses"):
         conn.execute("ALTER TABLE ticket_bonuses ADD COLUMN tier TEXT")
     if "upgrade_of" not in _columns(conn, "orders"):
