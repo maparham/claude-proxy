@@ -662,9 +662,8 @@ function passTimeline(tk) {
     const tip = `${fmtDate(s.from)} – ${fmtDate(s.to)}: ${s.stack.map((b) => name(b.i)).join(" + ")}${s.plan_x ? ` = ${plan(s.plan_x)}` : ""}`;
     const tot = s.stack.reduce((a, b) => a + b.w, 0);
     const blocks = s.stack.map((b) => `<i style="flex-grow:${b.w};background:${color(b.i)}"></i>`).join("");
-    // The total sits on its stack: in full where the stretch is wide, as a bare multiple where it is narrow.
-    const wide = (s.to - s.from) / span;
-    const label = !s.plan_x || wide < 0.06 ? "" : wide >= 0.18 ? esc(plan(s.plan_x)) : `<bdi dir="ltr">${times(s.plan_x)}×</bdi>`;
+    // The passes the stretch runs on sit above its stack, where it is wide enough for a name.
+    const label = (s.to - s.from) / span < 0.06 ? "" : s.stack.map((b) => esc(tierNameText(tl.passes[b.i].tier, tl.passes[b.i].label))).join(" + ");
     return `<span style="flex-grow:${s.to - s.from}" title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><b>${label}</b><span class="stk" style="height:calc((100% - 16px) * ${tot.toFixed(3)})">${blocks}</span></span>`;
   }).join("");
   // A timestamp at now, at each change and at the last end. One too close to the one before drops to a second row,
