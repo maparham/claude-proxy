@@ -1015,13 +1015,14 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
 
 
 # ---------- upgrades (2026-10-26 spec) ----------
+# No longer sold (2026-10-28): a pass bought to start now runs beside the running one instead. What is here fulfils
+# the upgrade orders placed before that and reads the upgrades already sold.
 
 UPGRADE_MIN_S = 3600   # less time left than this: no upgrade is offered or sold
 
 
 def was_used(conn: sqlite3.Connection, ticket: dict) -> bool:
-    """Whether the ticket's holder has sent a request since it started. Only an unused ticket can be upgraded; a used one
-    is replaced with a new ticket instead."""
+    """Whether the ticket's holder has sent a request since it started. Only an unused ticket can be upgraded."""
     return conn.execute("SELECT 1 FROM requests WHERE user_id=? AND started_at>=? AND rejected_by IS NULL AND path!=? "
                         "AND api_key_id IS NULL LIMIT 1", (ticket["user_id"], ticket["starts_at"], COUNT_TOKENS_PATH)).fetchone() is not None
 
@@ -1080,18 +1081,6 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "from_tier": frm, "length": ticket["length"], "share_pct": share,
             "share_5h_pct": max(0.0, share_5h), "starts_at": now, "ends_at": ticket["effective_end"], "usd": usd, "currency": currency,
             "rate": rate["rate"], "amount": round_local(usd, rate["rate"], steps[currency]), "sold_out": sold}
-
-
-def upgrade_options(conn: sqlite3.Connection, cfg: Config, user_id: int, currency: str, now: float) -> list[dict]:
-    """The quotes for every tier above the user's running ticket; none without one or with under an hour left."""
-    t = covering(conn, user_id, now)
-    out = []
-    for tier in (cfg.tickets.tiers if t else ()):
-        try:
-            out.append(upgrade_quote(conn, cfg, t, tier, currency, now))
-        except TicketError:
-            pass
-    return out
 
 
 def upgrade(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, ticket_id: int, tier: str, currency: str, note: str = "",

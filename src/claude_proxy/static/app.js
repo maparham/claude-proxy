@@ -611,13 +611,11 @@ function userLimitsCard(me, tk, order) {
   // A ticket over before the weekly reset (a day ticket, say) has nothing weekly about it for its holder: no refill
   // date, no weekly wording, just the ticket's own use.
   const oneWeek = !!c && c.week_known && (c.pool_end || c.effective_end) <= c.week_end;
-  // Anthropic's way: a ticket that can go higher offers it here, and the price list stays out of the way until it ends.
   const open = !!order && (order.status === "new" || order.status === "contacted");
-  const up = c && tk.upgrades && tk.upgrades.length ? `<button class="btn small" id="upgrade-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("up.button")}</button>` : "";
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
   const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
   const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}${up}</div></div>
+      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
       <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
       ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
@@ -784,8 +782,6 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   };
 }
 function wireOrdering(root, tk, order) {
-  const ub = root.querySelector("#upgrade-btn");
-  if (ub) ub.onclick = () => ticketUpgradeDialog(tk);
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
     const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.queued ? tk.queued.effective_end : tk.current.pool_end || tk.current.effective_end) });
@@ -813,57 +809,6 @@ function wireOrdering(root, tk, order) {
     if (act === "withdraw" && !confirmInline(t("ord.confirm_withdraw"))) return;
     try { await api(`/api/me/orders/${+b.dataset.id}/${act}`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
-}
-
-// ---------- upgrades (2026-10-26 spec): the tiers above a running ticket, priced for the time it has left ----------
-
-function ticketUpgradeDialog(tk) {
-  const c = tk.current;
-  const tierOf = (id) => tk.prices.tiers.find((x) => x.tier === id);
-  const rows = tk.upgrades.map((u) => {
-    const tier = tierOf(u.tier);
-    return `<tr><td><b>${tierName(u.tier, u.label)}</b>${tier && tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, u.length)}</div>` : ""}</td>
-      <td class="r"><b>${esc(money(u.amount, u.currency))}</b><div class="muted">${t("up.until", { date: fmtDate(u.ends_at) })}</div>
-      ${u.sold_out ? `<span class="badge">${t("price.sold_out")}</span>` : `<button class="btn small primary" data-up="${esc(u.tier)}">${t("up.pick")}</button>`}</td></tr>`;
-  }).join("");
-  const d = openDialog(`<h3>${t("up.title")}</h3><p class="sub">${t("up.sub", { label: tierName(c.tier, c.label) })}</p>
-    <div class="table-wrap"><table class="data"><tbody>${rows}</tbody></table></div>
-    <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
-  d.querySelectorAll("[data-up]").forEach((b) => (b.onclick = () => ticketUpgradeOrderDialog(tk, tk.upgrades.find((u) => u.tier === b.dataset.up))));
-}
-function ticketUpgradeOrderDialog(tk, u) {
-  const payU = tk.pay && (tk.pay.upgrades || []).find((x) => x.tier === u.tier && !x.sold_out);
-  const email = S.user.email;
-  const d = openDialog(`<h3>${t("up.order_title", { label: tierName(u.tier, u.label) })}</h3>
-    <p class="order-price"><b>${esc(money(u.amount, u.currency))}</b></p>
-    <form id="f-order" class="form-grid order-form">
-      ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
-      <div class="terms wide"><ul class="muted"><li>${t("up.terms", { label: tierName(u.tier, u.label), date: fmtDate(u.ends_at) })}</li><li>${t("ord.terms_l3")}</li></ul></div>
-      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
-      <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
-      <div class="error wide" id="order-err"></div>
-      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
-        ${orderButtons(tk.manual, payU ? `<button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : "")}</div>
-    </form>`);
-  const f = $("#f-order", d);
-  const body = () => ({ tier: u.tier, upgrade: true, terms_version: tk.terms_version, lang: LANG, ...(f.email ? { email: f.email.value } : {}) });
-  f.onsubmit = async (e) => {
-    e.preventDefault();
-    if (!f.querySelector('button[type="submit"]')) return $("#order-pay", d).click();
-    if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
-    const go = f.querySelector('button[type="submit"]');
-    go.disabled = true;
-    try { await api("/api/me/orders", { method: "POST", body: { ...body(), currency: u.currency, message: f.message.value } }); d.close(); render(); }
-    catch (err) { go.disabled = false; $("#order-err", d).textContent = err.message; }
-  };
-  const pb = $("#order-pay", d);
-  if (pb) pb.onclick = async () => {
-    if (f.email && !f.email.reportValidity()) return;
-    if (!f.terms.checked) { $("#order-err", d).textContent = t("ord.terms_needed"); return; }
-    pb.disabled = true; pb.textContent = t("pay.going");
-    try { location.href = (await api("/api/orders/pay", { method: "POST", body: body() })).url; }
-    catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) }); $("#order-err", d).textContent = err.message; }
-  };
 }
 
 function quotaBar(q) {

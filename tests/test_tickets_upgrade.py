@@ -1,4 +1,5 @@
-"""Ticket upgrades (2026-10-26 spec): a running ticket raised to a higher tier for its time left, at the difference."""
+"""Ticket upgrades (2026-10-26 spec): a running ticket raised to a higher tier for its time left, at the difference.
+No longer sold (2026-10-28): the orders placed before are still fulfilled."""
 import time
 
 import pytest
@@ -34,8 +35,6 @@ def test_no_upgrade_sideways_late_or_on_a_queued_ticket(core):
         tickets.upgrade_quote(conn, cfg, t, "standard", "EUR", t["effective_end"] - 600)
     with pytest.raises(tickets.TicketError, match="running"):
         tickets.upgrade_quote(conn, cfg, t, "standard", "EUR", NOW - 1)
-    assert tickets.upgrade_options(conn, cfg, ids["alice"], "EUR", NOW + DAY)[0]["tier"] == "standard"
-    assert tickets.upgrade_options(conn, cfg, ids["admin"], "EUR", NOW + DAY) == []
 
 
 def test_upgrade_raises_the_tier_and_the_limits(core):
@@ -56,9 +55,7 @@ def test_upgrade_order_and_paid_fulfilment(core):
     conn, cfg, ids, t = core
     cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
     tickets.set_rate(conn, cfg, "IRT", 100000, ids["admin"], now=NOW - 3600)
-    o = orders.create(conn, cfg, tier="standard", length="day", currency="IRT", name="alice", email="a@example.com",
-                      user_id=ids["alice"], notify=False, now=NOW + 3.5 * DAY, terms_version="v1", upgrade_of=t["id"])
-    assert (o["length"], o["quoted_usd"], o["quoted_amount"], o["upgrade_of"]) == ("week", 13.5, 1350000, t["id"])
+    o = legacy_order(conn, ids, t, "IRT", 13.5, 100000, 1350000)
     assert orders.mine(conn, ids["alice"])["upgrade"] is True
     p = {"id": 0, "order_id": o["id"], "user_id": ids["alice"]}
     conn.execute("INSERT INTO payments(id, order_id, user_id, created_at, updated_at, amount, authority, status) "
@@ -72,33 +69,34 @@ def test_upgrade_order_and_paid_fulfilment(core):
     assert subject == "Your pass is upgraded: Standard"
 
 
-def test_someone_elses_ticket_cannot_be_ordered_up(core):
-    conn, cfg, ids, t = core
-    with pytest.raises(orders.OrderError):
-        orders.create(conn, cfg, tier="standard", length="week", currency="EUR", name="admin", email="a@example.com",
-                      user_id=ids["admin"], notify=False, now=NOW + DAY, terms_version="v1", upgrade_of=t["id"])
-
-
-async def test_buyer_orders_an_upgrade_and_the_admin_sells_it(env):
+async def test_an_upgrade_order_placed_before_is_sold_by_the_admin(env):
     gw, conn, cfg, ids, keys = env
     async with admin_client(gw) as c:
         assert (await grant(c, {"user": ids["alice"], "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
     async with client(gw) as c:
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
-        assert [u["tier"] for u in me["upgrades"]] == ["standard"] and "share_pct" not in str(me) and me["current"]["upgraded_from"] is None
-        r = await c.post("/api/me/orders", headers=bearer(keys["alice"]),
-                         json={"tier": "standard", "upgrade": True, "currency": "EUR", "terms_version": "v1", "email": "a@example.com"})
-        assert r.status_code == 200, r.text
-        assert r.json()["order"]["upgrade"] is True
-    oid = r.json()["order"]["id"]
+        assert "upgrades" not in me and "upgrades" not in (me["pay"] or {})   # no longer offered
+        assert me["current"]["upgraded_from"] is None
+    t = tickets.covering(conn, ids["alice"], time.time())
+    oid = legacy_order(conn, ids, t, "EUR", 1.0, 0.92, 1.0, now=time.time())["id"]
+    assert orders.mine(conn, ids["alice"])["upgrade"] is True
     async with admin_client(gw) as c:
         r = await c.post(f"/api/admin/orders/{oid}", json={"action": "upgrade"})
         assert r.status_code == 200 and r.json()["order"]["status"] == "done"
     async with client(gw) as c:
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert (me["current"]["tier"], me["current"]["upgraded_from"]["tier"], me["current"]["bonus_pct"]) == ("standard", "lite", 0)
-    assert me["current"]["bonuses"] == [] and me["upgrades"] == []
+    assert me["current"]["bonuses"] == []
     assert time.time() < me["current"]["effective_end"]
+
+
+def legacy_order(conn, ids, t, currency, usd, rate, amount, now=NOW + 3.5 * DAY):
+    """An upgrade order as orders.create stored them while upgrades were sold."""
+    cur = conn.execute("INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, "
+                       "quoted_amount, message, status, admin_mail, buyer_mail, terms_version, lang, upgrade_of) "
+                       "VALUES(?,?,?,'alice','a@example.com','standard',?,?,?,?,?,'','new','off','off','v1','en',?)",
+                       (now, now, ids["alice"], t["length"], currency, usd, rate, amount, t["id"]))
+    return orders.get(conn, cur.lastrowid)
 
 
 def test_bonus_days_after_an_upgrade_run_at_the_upgraded_tier(core):

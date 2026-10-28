@@ -98,10 +98,9 @@ def _label(cfg: Config, tier: str) -> str:
 
 
 async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, email: str, now: float | None = None,
-              terms_version: str | None = None, lang: str = "en", upgrade_of: int | None = None, start_now: bool = False) -> dict:
+              terms_version: str | None = None, lang: str = "en", start_now: bool = False) -> dict:
     """Create the order (the usual order rules, terms tick included) and open a ZarinPal payment for its quote.
-    `upgrade_of`: the user's running ticket, upgraded to `tier`; `start_now`: the ticket starts beside the running
-    one (orders.create).
+    `start_now`: the ticket starts beside the running one (orders.create).
     Returns the payment id and the StartPay address the browser goes to."""
     now = _now(now)
     if not on(cfg):
@@ -110,11 +109,11 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
         raise PaymentError(409, PAUSED)
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
                       user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang,
-                      upgrade_of=upgrade_of, start_now=start_now)
+                      start_now=start_now)
     amount = int(round(o["quoted_amount"]))
     try:
         authority = await zarinpal.request(cfg.zarinpal.merchant_id(), amount,
-                                           f"Claude Gateway: {_label(cfg, tier)}, {'upgrade' if upgrade_of else length}, order #{o['id']}",
+                                           f"Claude Gateway: {_label(cfg, tier)}, {length}, order #{o['id']}",
                                            f"{cfg.listener.home_url.rstrip('/')}/pay/callback", o["email"], o["id"],
                                            cfg.zarinpal.sandbox)
     except (zarinpal.ZarinpalUnavailable, zarinpal.ZarinpalRefused) as e:

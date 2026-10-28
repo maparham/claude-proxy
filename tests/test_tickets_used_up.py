@@ -78,7 +78,6 @@ def test_only_an_unused_ticket_can_be_upgraded(env):
     req(conn, ids["alice"], NOW - 150, i=10)
     with pytest.raises(tickets.TicketError, match="has been used"):
         tickets.upgrade_quote(conn, cfg, t, "standard", "USD", NOW - 100)
-    assert tickets.upgrade_options(conn, cfg, ids["alice"], "USD", NOW - 100) == []
 
 
 def test_a_ticket_started_now_runs_beside_the_first_and_the_limits_add_up(env):

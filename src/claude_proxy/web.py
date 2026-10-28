@@ -1368,22 +1368,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if st["queued"]:
             q = st["queued"]
             out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
-        # The upgrade quotes without their shares: the user never learns the subscription's percents.
-        user_upgrades = lambda c: [{k: v for k, v in q.items() if k not in ("share_pct", "share_5h_pct")}  # noqa: E731
-                                   for q in tickets.upgrade_options(conn, cfg, user["id"], c, now)]
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         # A new ticket queues after the last, or starts now in place of a used-up one.
         out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.next_start(conn, cfg, user["id"], now)[0])
         # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
         out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
-        # Tiers above the running ticket, each priced for the time it has left (2026-10-26 spec).
-        out["upgrades"] = user_upgrades(out["prices"]["currency"]) if cur else []
         out["timeline"] = tickets.timeline(conn, cfg, user["id"], now)   # the card's chart, with more than one live ticket
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
-        out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY),
-                       "upgrades": user_upgrades(payments.CURRENCY) if cur else []}
+        out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY)}
                       if payments.on(cfg) and payments.rate_ok(conn, now) else None)
         return out
 
@@ -1397,15 +1391,6 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         """What the buyer's dashboard shows: their open order, or their latest closed one until dismissed."""
         m = orders.mine(conn, user_id)
         return m | {"label": tier_label(m["tier"])} if m else None
-
-    def upgrade_target(body: dict, user_id: int) -> int | None:
-        """`"upgrade": true` in an order: the buyer's running ticket, which they never name (no ticket ids reach them)."""
-        if not body.get("upgrade"):
-            return None
-        t = tickets.covering(conn, user_id, time.time())
-        if t is None:
-            fail(409, "You have no running pass to upgrade.")
-        return t["id"]
 
     def place_order(body: dict, **kw) -> dict:
         # An unpaid order only while the admin's switch is on or ZarinPal cannot take the payment.
@@ -1451,8 +1436,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         # The account email (verified by Clerk), else one typed in the dialog: stored on the order only, never in
         # users.email, which Clerk sign-in matches against (spec section 2).
-        place_order(body, name=user["name"], email=user["email"] or str(body.get("email") or ""), user_id=user["id"],
-                    upgrade_of=upgrade_target(body, user["id"]))
+        place_order(body, name=user["name"], email=user["email"] or str(body.get("email") or ""), user_id=user["id"])
         return {"ok": True, "order": my_order(user["id"])}
 
     @app.get("/api/me/orders")
@@ -1472,7 +1456,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         email = user["email"] or str(body.get("email") or "")
         return await payments.start(conn, cfg, user, str(body.get("tier") or ""), str(body.get("length") or ""), email,
                                     terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""),
-                                    upgrade_of=upgrade_target(body, user["id"]), start_now=bool(body.get("start_now")))
+                                    start_now=bool(body.get("start_now")))
 
     @app.get("/pay/callback")
     async def pay_callback(Authority: str = "", Status: str = ""):
@@ -1582,7 +1566,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 fail(404, "No such user.")
             uid = target_user(ref)["id"] if not create and ref not in (None, "") else None   # neither: orders.link says so
             o = ticket_call(orders.link, conn, cfg, actor["id"], oid, user_id=uid, create=create)
-        elif action == "upgrade":   # an upgrade order is sold here; a ticket order through the grant dialog
+        elif action == "upgrade":   # an upgrade order placed while they were sold; a ticket order through the grant dialog
             o = ticket_call(orders.get, conn, oid)
             if o["upgrade_of"] is None or o["user_id"] is None:
                 fail(400, "This order is not an upgrade.")
