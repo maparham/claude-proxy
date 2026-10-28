@@ -9,9 +9,13 @@ def set_limit(conn, uid, kind, value, unit, scope="*"):
     conn.execute("INSERT OR REPLACE INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (uid, kind, scope, str(value), unit))
 
 
-def req(conn, uid, t, i=0, o=0, model="claude-sonnet-5", provider="anthropic", path="/v1/messages"):
-    conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, input_tokens, output_tokens) VALUES(?,?,?,?,?,?,?,?,?)",
-                 (uid, t - 1, t, "POST", path, provider, model, i, o))
+def req(conn, uid, t, i=0, o=0, model="claude-sonnet-5", provider="anthropic", path="/v1/messages", ticket=None):
+    """A request row. Served on `ticket` (an id), else on the oldest pass running then, as limits.evaluate picks one."""
+    if ticket is None:
+        cov = tickets.covering(conn, uid, t - 1)
+        ticket = cov["id"] if cov else None
+    conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, input_tokens, output_tokens, "
+                 "ticket_id) VALUES(?,?,?,?,?,?,?,?,?,?)", (uid, t - 1, t, "POST", path, provider, model, i, o, ticket))
 
 
 def snap(conn, t, util, bucket, resets):
@@ -213,8 +217,8 @@ def test_same_user_renewal_gets_a_fresh_piece(db):
     fresh(conn, NOW - 600)
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)   # rate: 1000 per point
-    req(conn, ids["alice"], NOW - 200, i=2000)   # 3 points: past any day-ticket piece
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW - 300, terms_version="v1")
+    req(conn, ids["alice"], NOW - 200, i=2000)   # 3 points: past any day-ticket piece
     assert check(conn, cfg, ids["alice"], now=NOW - 100).kind == "share_7d"
     nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD",
                         now=t["ends_at"], terms_version="v1")   # queued renewal

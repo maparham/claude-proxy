@@ -1358,11 +1358,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                           for b in active]}
             # Extra days with their note; a bonus that also adds a share running now is shown with that share instead.
             shown = {b["id"] for b in active}
-            # Tickets bought to start now, running beside this one: their limits add up with its.
+            # Passes running side by side, each with limits of its own (2026-10-28): which one serves now, which the
+            # user pinned, and how much of each limit it has used. Its place in the list names one to pin (no ticket ids).
             run = tickets.running(conn, user["id"], now)
-            out["current"]["also"] = [{"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"],
-                                       "effective_end": t["effective_end"]} for t in run if t["id"] != cur["id"]]
-            out["current"]["pool_end"] = max(t["effective_end"] for t in run)
+            serving = limits.serving(conn, cfg, user["id"], now, run)[0]
+            pin = conn.execute("SELECT pass_pin FROM users WHERE id=?", (user["id"],)).fetchone()[0]
+            out["current"]["passes"] = [] if len(run) < 2 else [
+                {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"],
+                 "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
+                 "pinned": t["id"] == pin, **{f"pct_{s.kind[6:]}": s.pct for s in limits.pass_states(conn, cfg, t, now)}}
+                for t in run]
+            out["current"]["serving_end"] = (serving or cur)["effective_end"]
             out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
                                              if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]
         if st["queued"]:
@@ -1488,6 +1494,23 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"id": row["id"], "status": row["status"], "amount": row["amount"], "ref_id": row["ref_id"], "tier": row["tier"],
                 "label": tier_label(row["tier"]), "length": row["length"], "upgrade": row["upgrade_of"] is not None,
                 "error_shown": row["error"] if row["status"] == "failed" else None}
+
+    @app.post("/api/me/tickets/pin")
+    async def pass_pin(request: Request):
+        """`{"pass": i, "starts_at": t}`: the i-th running pass (as /api/me/tickets lists them; it must still start at t)
+        serves first; `{"pass": null}`: the oldest does again (2026-10-28)."""
+        user = principal(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        i, pick = body.get("pass"), None
+        if i is not None:
+            run = tickets.running(conn, user["id"], time.time())
+            if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(run) or run[i]["starts_at"] != body.get("starts_at"):
+                fail(409, "That pass is not running.")
+            pick = run[i]
+        conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (pick and pick["id"], user["id"]))
+        db.audit(conn, user["id"], "pass_pin", user["name"], {"ticket_id": pick and pick["id"]})
+        return {"ok": True}
 
     @app.post("/api/me/orders/{oid}/{action}")
     async def order_mine_action(request: Request, oid: int, action: str):

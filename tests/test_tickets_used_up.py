@@ -80,7 +80,8 @@ def test_only_an_unused_ticket_can_be_upgraded(env):
         tickets.upgrade_quote(conn, cfg, t, "standard", "USD", NOW - 100)
 
 
-def test_a_ticket_started_now_runs_beside_the_first_and_the_limits_add_up(env):
+def test_a_pass_started_now_runs_beside_the_first_with_limits_of_its_own(env):
+    """As if another user held it: the second pass counts only what it served, so it starts with all of its limits."""
     conn, cfg, ids, t = env
     use_up(conn, ids)
     req(conn, ids["alice"], NOW - 190, i=0)
@@ -90,15 +91,29 @@ def test_a_ticket_started_now_runs_beside_the_first_and_the_limits_add_up(env):
                        terms_version="v1", start_now=True)
     assert t2["starts_at"] == NOW - 100 and tickets.get(conn, t["id"])["used_up_at"] is None   # both run
     assert [x["id"] for x in tickets.running(conn, ids["alice"], NOW - 50)] == [t["id"], t2["id"]]
-    st = {s.kind: s for s in limits.ticket_states(conn, cfg, ids["alice"], NOW - 50)}
-    assert st["share_5h"].value == "30" and st["share_5h"].tier == "Lite + Standard"   # 5% + 25%
-    w = t2["ends_at"]
+    served, sts = limits.serving(conn, cfg, ids["alice"], NOW - 50)
+    assert served["id"] == t2["id"]   # the first is at its limit: requests spill over to the second
+    st = {s.kind: s for s in sts}
+    assert st["share_5h"].value == "25" and st["share_5h"].tier == "Standard" and st["share_5h"].current == 0
     week_end = tickets.week_bounds(conn, cfg, NOW - 50)[1]
-    pool = 5 * (t["ends_at"] - (NOW - 300)) / DAY / 7 + 25 * (min(w, week_end) - (NOW - 100)) / DAY / 7
-    assert st["share_7d"].limit == pytest.approx(pool)
-    assert check(conn, cfg, ids["alice"], now=NOW - 50) is None
+    assert st["share_7d"].limit == pytest.approx(25 * (min(t2["ends_at"], week_end) - (NOW - 100)) / DAY / 7)
+    assert st["share_7d"].current == 0
+    out = {}
+    assert limits.evaluate(conn, cfg, ids["alice"], "claude-sonnet-5", "/v1/messages", now=NOW - 50, served=out) is None
+    assert out == {"ticket_id": t2["id"]}
     with pytest.raises(tickets.TicketError, match="on its own"):
         tickets.upgrade_quote(conn, cfg, tickets.get(conn, t["id"]), "standard", "USD", NOW - 50)
+
+
+def test_the_oldest_pass_serves_first_unless_the_user_pins_another(env):
+    conn, cfg, ids, t = env
+    t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
+                       terms_version="v1", start_now=True)
+    assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t["id"]
+    conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (t2["id"], ids["alice"]))
+    assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t2["id"]
+    req(conn, ids["alice"], NOW - 40, i=100000, ticket=t2["id"])   # the pinned one at its limit: back to the oldest
+    assert limits.serving(conn, cfg, ids["alice"], NOW - 30)[0]["id"] == t["id"]
 
 
 def test_an_order_to_start_now_is_granted_beside_the_running_ticket(env):
@@ -141,7 +156,10 @@ def test_a_used_up_pool_hands_over_to_a_pass_queued_before_a_side_pass_ends(env)
     q = day(conn, cfg, ids, NOW - 250)
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW - 240,
                   terms_version="v1", start_now=True)   # ends after q starts
+    side = tickets.running(conn, ids["alice"], NOW - 200)[-1]
     req(conn, ids["alice"], NOW - 200, i=4000)
+    assert not limits.used_up(conn, cfg, ids["alice"], NOW - 100)   # the side pass has its own limits left
+    req(conn, ids["alice"], NOW - 150, i=4000, ticket=side["id"])
     assert limits.used_up(conn, cfg, ids["alice"], NOW - 100)
     assert limits.hand_over(conn, cfg, ids["alice"], NOW - 100)
     assert tickets.get(conn, q["id"])["starts_at"] == NOW - 100

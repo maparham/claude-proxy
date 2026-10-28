@@ -614,12 +614,21 @@ function pastCard(tk) {
 function usersCard() {
   return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;
 }
+// Passes running side by side, each with limits of its own: the one in use, and a choice of which to use first.
+function passList(c) {
+  if (!c.passes || !c.passes.length) return "";
+  const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(v))}${PCT}`);
+  return `<div class="pass-list"><p class="sub">${t("pass.list")}</p>${c.passes.map((p, i) => `<div class="pass-row">
+      <div><b>${t("pass.row", { label: tierName(p.tier, p.label), date: fmtDate(p.effective_end) })}</b>${p.serving ? ` <span class="badge state-active">${t("pass.serving")}</span>` : ""}
+        <div class="muted">${t("pass.use", { h: pct(p.pct_5h), w: pct(p.pct_7d) })}</div></div>
+      ${p.pinned || p.serving ? "" : `<button class="btn small" data-pin="${i}" data-at="${p.starts_at}">${t("pass.pin")}</button>`}</div>`).join("")}</div>`;
+}
 function userLimitsCard(me, tk, order) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
   // A ticket over before the weekly reset (a day ticket, say) has nothing weekly about it for its holder: no refill
   // date, no weekly wording, just the ticket's own use.
-  const oneWeek = !!c && c.week_known && (c.pool_end || c.effective_end) <= c.week_end;
+  const oneWeek = !!c && c.week_known && (c.serving_end || c.effective_end) <= c.week_end;
   const open = !!order && (order.status === "new" || order.status === "contacted");
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
   const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
@@ -630,7 +639,7 @@ function userLimitsCard(me, tk, order) {
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
       ${c.used_up ? `<p class="sub">${t("ov.used_up")}</p>` : ""}
       ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}
-      ${(c.also || []).map((a) => `<div class="muted">${t("ov.also", { label: tierName(a.tier, a.label), date: fmtDate(a.effective_end) })}</div>`).join("")}
+      ${passList(c)}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
@@ -791,6 +800,11 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   };
 }
 function wireOrdering(root, tk, order) {
+  root.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    try { await api("/api/me/tickets/pin", { method: "POST", body: { pass: +b.dataset.pin, starts_at: +b.dataset.at } }); render(); }
+    catch (e) { b.disabled = false; alertInline(e.message); }
+  }));
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
     const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.next_start) });

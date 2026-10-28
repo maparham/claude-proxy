@@ -392,6 +392,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .pass-axis em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 6px; background: var(--muted); }
 .pass-axis em small { margin-top: 8px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .pass-axis em.edge-start small { text-align: start; } .pass-axis em.edge-end small { text-align: end; }
+.pass-list { margin-top: 10px; }
+.pass-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
 .pass-legend { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; }
 .pass-legend li { display: flex; align-items: center; gap: 6px; }
 .pass-legend i { width: 10px; height: 10px; border-radius: 2px; flex: none; }

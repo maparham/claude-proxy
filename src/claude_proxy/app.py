@@ -307,14 +307,18 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         # Taken before the check, which yields to the loop: a request arriving meanwhile counts this one.
         inflight.acquire(user["id"])
         held = True
-    evaluate = api_credit.evaluate if is_api else limits.evaluate
+    served: dict = {}   # the pass serving the request (limits.evaluate): its row counts toward that pass alone
     try:
-        decision = await gw.db.run(evaluate, cfg, user["id"], model, path, inflight=held_now)
+        if is_api:
+            decision = await gw.db.run(api_credit.evaluate, cfg, user["id"], model, path, inflight=held_now)
+        else:
+            decision = await gw.db.run(limits.evaluate, cfg, user["id"], model, path, inflight=held_now, served=served)
     except BaseException:
         if held:
             inflight.release(user["id"])
             held = False
         raise
+    base.update(served)
     if decision:
         # Refused: its slot goes back now, not after the reject row is written (rejected rows count toward nothing).
         if held:

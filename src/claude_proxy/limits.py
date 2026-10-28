@@ -14,7 +14,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import db, quota, tickets
+from . import quota, tickets
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 from .usage import SUMS, Totals, price_totals, priced_sql
@@ -210,11 +210,14 @@ def _gated(conn, cfg, user_id) -> bool:
     return cfg.tickets.enabled and tickets.is_gated(conn, user_id)
 
 
-def _weighted_since(conn, cfg, user_id, since, now) -> float:
-    """The user's weighted Anthropic tokens that ended in (since, now], weighed as quota.observed_rate weighs them."""
+def _weighted_since(conn, cfg, user_id, since, now, ticket_id: int | None = None) -> float:
+    """The user's weighted Anthropic tokens that ended in (since, now], weighed as quota.observed_rate weighs them;
+    with `ticket_id`, only those that pass served."""
     span = ("user_id=? AND provider='anthropic' AND rejected_by IS NULL AND path!=? AND api_key_id IS NULL "
             "AND ended_at>? AND ended_at<=?")
     params = (user_id, COUNT_TOKENS_PATH, since, now)
+    if ticket_id is not None:
+        span, params = span + " AND ticket_id=?", (*params, ticket_id)
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
     w, args = quota.weighted_sql(cfg.pricing, models)
     return float(conn.execute(f"SELECT COALESCE(SUM({w}), 0) FROM requests WHERE {span}", (*args, *params)).fetchone()[0])
@@ -226,13 +229,22 @@ def _finish(st: LimitState) -> LimitState:
     return st
 
 
-def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
+def _label(conn, cfg, t) -> str:
+    tier = tickets.tier_now(conn, t)
+    return cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
+
+
+def _ticket_5h(conn, cfg, t, now) -> LimitState:
+    """One pass's 5-hour limit (2026-10-28): its share of Anthropic's 5-hour window against the points its own requests
+    moved, as if another user held it, so a pass bought past a limit starts with all of its own."""
+    share = (t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) + tickets.bonus_share(conn, t["id"], now)
     att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
-    st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share * _capacity(att, now) / 100, estimated=True, tier=label)
+    st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share * _capacity(att, now) / 100, estimated=True,
+                    tier=_label(conn, cfg, t))
     if att["resets_at"] and att["resets_at"] > now:
         st.resets_at, st.reset_in = att["resets_at"], max(1, math.ceil(att["resets_at"] - now))
     if att["utilization_pct"] is not None and not att["stale"]:
-        st.current = att["shares"].get(user_id, 0.0)
+        st.current = att["ticket_shares"].get(t["id"], 0.0)
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "5h", now)
     if rate is None:
@@ -243,49 +255,43 @@ def _ticket_5h(conn, cfg, user_id, share, label, now) -> LimitState:
     start = att["window_start"] if att["window_start"] is not None else now - 5 * HOUR
     if att["resets_at"] and att["resets_at"] <= now:
         start = max(att["resets_at"], now - 5 * HOUR)
-    st.current, st.no_live_data = _weighted_since(conn, cfg, user_id, start, now) / rate, True
+    st.current, st.no_live_data = _weighted_since(conn, cfg, t["user_id"], start, now, t["id"]) / rate, True
     return _finish(st)
 
 
-def _pool_cap(conn, user_id, run, start, end, now) -> float:
-    """The weekly points the user's tickets give between `start` and `end` (both inside one Anthropic week), before
-    capacity scaling: each started ticket's share × the days of the span it covers ÷ 7, plus the running tickets'
-    active bonus pieces. A ticket that ended inside the span counts too: the use measured over the span includes what it served."""
-    tks = {t["id"]: t for t in run}
-    for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
-                          f"AND t.starts_at<=? AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (user_id, now, end, start)):
-        tks.setdefault(r["id"], dict(r))
-    cap = sum(t["share_pct"] * max(0.0, min(end, t["effective_end"]) - max(start, t["starts_at"])) / DAY / 7 for t in tks.values())
-    for t in run:
-        for b in tickets.active_bonuses(conn, t["id"], now):
-            cap += b["share_pct"] * max(0.0, min(end, b["ends_at"]) - max(start, b["starts_at"])) / DAY / 7
+def _pass_cap(conn, t, start, end, now) -> float:
+    """The weekly points one pass gives between `start` and `end` (both inside one Anthropic week), before capacity
+    scaling: its share × the days of the span it covers ÷ 7, plus its active bonus pieces."""
+    cap = t["share_pct"] * max(0.0, min(end, t["effective_end"]) - max(start, t["starts_at"])) / DAY / 7
+    for b in tickets.active_bonuses(conn, t["id"], now):
+        cap += b["share_pct"] * max(0.0, min(end, b["ends_at"]) - max(start, b["starts_at"])) / DAY / 7
     return cap
 
 
-def _ticket_7d(conn, cfg, user_id, run, label, now) -> LimitState:
-    """The running tickets' prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1), one pool for all.
+def _ticket_7d(conn, cfg, t, now) -> LimitState:
+    """One pass's prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1; per pass since 2026-10-28).
 
-    Cap = each ticket's share × days of this week it covers ÷ 7 + active bonus pieces (_pool_cap), scaled to the
-    gateway's capacity (2026-10-18 spec). Measured from the user's own weighted tokens since max(week_start, the
-    earliest running ticket's start) at the 7d observed rate — the same estimator share_day used, only the window
-    start moves. Unknown week (no resets_at ever) → NO_RATE."""
+    Cap = its share × days of this week it covers ÷ 7 + active bonus pieces (_pass_cap), scaled to the gateway's
+    capacity (2026-10-18 spec). Measured from the weighted tokens of the requests it served since max(week_start, its
+    start) at the 7d observed rate. Unknown week (no resets_at ever) → NO_RATE."""
+    label = _label(conn, cfg, t)
     week = tickets.week_bounds(conn, cfg, now)
     if week is None:
         st = LimitState("share_7d", "*", "", "pct", limit=None, estimated=True, tier=label)
         st.skipped, st.no_live_data = NO_RATE, False
         return st
     week_start, week_end = week
-    piece_start = max(week_start, min(t["starts_at"] for t in run))
-    cap = _pool_cap(conn, user_id, run, piece_start, week_end, now)
+    piece_start = max(week_start, t["starts_at"])
+    cap = _pass_cap(conn, t, piece_start, week_end, now)
     att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
     st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=cap * _capacity(att, now) / 100, estimated=True, tier=label,
                     resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)))
-    # Measured from the user's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
+    # Measured from the pass's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since
     # the piece began would read 0 for most of a week and then jump. The cheap staleness check only decides the "no live data" mark.
     newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
     st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
-    used = _weighted_since(conn, cfg, user_id, piece_start, now)
+    used = _weighted_since(conn, cfg, t["user_id"], piece_start, now, t["id"])
     if not used and not st.no_live_data:
         st.current = 0.0   # live data and nothing used in this piece: no rate needed, so a young account isn't refused
         return _finish(st)
@@ -293,7 +299,7 @@ def _ticket_7d(conn, cfg, user_id, run, label, now) -> LimitState:
     if rate is None and not st.no_live_data:
         # A young account: utilization has never risen a whole point, so there is no rate yet. Live snapshots still say
         # who moved it, and until the first rise that is nobody, so a lone first user isn't locked out by their own usage.
-        st.current = quota.attributed_since(conn, cfg.pricing, "7d", user_id, piece_start, now)
+        st.current = quota.attributed_since(conn, cfg.pricing, "7d", t["user_id"], piece_start, now, t["id"])
         return _finish(st)
     if rate is None:
         st.skipped, st.no_live_data = NO_RATE, False
@@ -302,19 +308,47 @@ def _ticket_7d(conn, cfg, user_id, run, label, now) -> LimitState:
     return _finish(st)
 
 
+def pass_states(conn, cfg: Config, t: dict, now: float) -> list[LimitState]:
+    """One pass's two share limits, measured on the requests it served alone."""
+    return [_ticket_5h(conn, cfg, t, now), _ticket_7d(conn, cfg, t, now)]
+
+
+def pass_order(conn, user_id: int, run: list[dict]) -> list[dict]:
+    """The running passes in the order they serve: the one the user pinned, then the rest oldest first."""
+    pin = conn.execute("SELECT pass_pin FROM users WHERE id=?", (user_id,)).fetchone()
+    pin = pin[0] if pin else None
+    return sorted(run, key=lambda t: t["id"] != pin)
+
+
+def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> tuple[dict | None, list[LimitState]]:
+    """The pass that serves the user's next request and its limits (2026-10-28): the first in pass_order not at a
+    limit, so requests spill to the next pass when one is at a limit and come back once it refills. A pass without
+    usage data is returned as it is (evaluate answers 503 then). (None, the limits that free up soonest) when every
+    pass is at a limit; (None, []) without a pass."""
+    run = run if run is not None else tickets.running(conn, user_id, now)
+    best = None
+    for t in pass_order(conn, user_id, run):
+        sts = pass_states(conn, cfg, t, now)
+        if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):
+            return t, sts
+        wait = max(st.reset_in or 60 for st in sts if st.exceeded)
+        if best is None or wait < best[0]:
+            best = (wait, sts)
+    return None, best[1] if best else []
+
+
 def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None) -> dict | None:
-    """For the statusline: the running tickets' use of each Anthropic week it spans and of the whole ticket, e.g.
+    """For the statusline: the serving pass's use of each Anthropic week it spans and of the whole pass, e.g.
     {"weeks": [{"pct": 57.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 30.0, "ends_in": 3600}
-    (seconds until the ticket ends). Each week's
-    piece is measured as share_7d measures the current one (`current`, that state, is reused for it), at today's rate
-    and capacity. None without a ticket, a known week or a rate."""
-    run = tickets.running(conn, user_id, now)
+    (seconds until the pass ends). Each week's piece is measured as share_7d measures the current one (`current`,
+    that state, is reused for it), at today's rate and capacity. None without a pass, a known week or a rate."""
+    t = serving(conn, cfg, user_id, now)[0]
     week = tickets.week_bounds(conn, cfg, now)
-    if not run or week is None:
+    if t is None or week is None:
         return None
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
     capacity = _capacity(quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s), now)
-    t_start, t_end = min(t["starts_at"] for t in run), max(t["effective_end"] for t in run)
+    t_start, t_end = t["starts_at"], t["effective_end"]
     start = week[0]
     while start > t_start:
         start -= 7 * DAY
@@ -322,15 +356,14 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
     while start < t_end:
         end = start + 7 * DAY
         ps, pe = max(start, t_start), min(end, t_end)
-        cap = _pool_cap(conn, user_id, run, ps, pe, now)
-        limit = cap * capacity / 100
+        limit = _pass_cap(conn, t, ps, pe, now) * capacity / 100
         state = "past" if end <= now else "future" if start > now else "current"
         if state == "future":
             used = 0.0
         elif state == "current" and current is not None and current.current is not None:
             used = current.current
         elif rate:
-            used = _weighted_since(conn, cfg, user_id, ps, min(pe, now)) / rate
+            used = _weighted_since(conn, cfg, user_id, ps, min(pe, now), t["id"]) / rate
         else:
             return None
         weeks.append({"pct": 100.0 * used / limit if limit else 100.0, "state": state})
@@ -340,33 +373,22 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
 
 
 def ticket_states(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> list[LimitState]:
-    """The two share limits the running tickets build together (2026-10-13 spec, §1): share_5h against Anthropic's
-    5-hour window, and share_7d, their prorated piece of Anthropic's current weekly window, against the user's
-    weighted tokens since the piece began at the weekly bucket's observed rate. Tickets running side by side add up."""
-    run = run if run is not None else tickets.running(conn, user_id, now)
-    if not run:
-        return []
-    labels = []
-    for t in run:
-        tier = tickets.tier_now(conn, t)
-        lb = cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
-        if lb not in labels:
-            labels.append(lb)
-    label = " + ".join(labels)
-    # Each ticket's own 5-hour share; one sold before the split has none and keeps its single share for both.
-    share_5h = sum((t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) + tickets.bonus_share(conn, t["id"], now)
-                   for t in run)
-    return [_ticket_5h(conn, cfg, user_id, share_5h, label, now), _ticket_7d(conn, cfg, user_id, run, label, now)]
+    """The two share limits of the pass serving the user now (serving): share_5h against Anthropic's 5-hour window, and
+    share_7d, its prorated piece of Anthropic's current weekly window. With every pass at a limit, the ones that free up soonest."""
+    return serving(conn, cfg, user_id, now, run)[1]
 
 
 def used_up(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> bool:
-    """Whether the user's running tickets have nothing left before they end: their weekly piece is used up and the
-    last of them ends before it refills. The 5-hour limit is not counted: that one refills within hours."""
+    """Whether the user's running passes have nothing left before they end: each one's weekly piece is used up and it
+    ends before that refills. The 5-hour limit is not counted: that one refills within hours."""
     run = run if run is not None else tickets.running(conn, user_id, now)
     if not run:
         return False
-    st = _ticket_7d(conn, cfg, user_id, run, "", now)
-    return st.exceeded and st.resets_at is not None and max(t["effective_end"] for t in run) <= st.resets_at
+    for t in run:
+        st = _ticket_7d(conn, cfg, t, now)
+        if not (st.exceeded and st.resets_at is not None and t["effective_end"] <= st.resets_at):
+            return False
+    return True
 
 
 def hand_over(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> bool:
@@ -484,9 +506,10 @@ UNPRICED = "unpriced_model"     # rejected_by for a model with no [pricing] entr
 
 
 def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | None, path: str,
-             now: float | None = None, inflight: int = 0) -> Decision | None:
+             now: float | None = None, inflight: int = 0, served: dict | None = None) -> Decision | None:
     """None to allow, or the rejection to send. `inflight`: how many of the user's metered requests are being served
-    right now; recorded only when they finish, they would otherwise slip past every limit."""
+    right now; recorded only when they finish, they would otherwise slip past every limit. `served`: given, an allowed
+    request's pass goes in as served["ticket_id"], for its row (each pass counts only its own requests)."""
     now = time.time() if now is None else now
     is_count_tokens = path == COUNT_TOKENS_PATH
     third_party = cfg.route_for(model) is not None
@@ -503,7 +526,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
         return Decision(403, TICKET, _perm(PAUSED))
     gated = _gated(conn, cfg, user_id)
-    run = None
+    run, t = None, None
     if gated:
         run = tickets.running(conn, user_id, now)
         if not run:   # every request, the model list included: there is no ticket to serve it on
@@ -541,9 +564,9 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)
     if gated and not is_count_tokens and not third_party:
-        sts = ticket_states(conn, cfg, user_id, now, run)
-        if any(st.kind == "share_7d" and st.exceeded for st in sts) and hand_over(conn, cfg, user_id, now, run):
-            sts = ticket_states(conn, cfg, user_id, now)
+        t, sts = serving(conn, cfg, user_id, now, run)
+        if t is None and hand_over(conn, cfg, user_id, now, run):
+            t, sts = serving(conn, cfg, user_id, now)
         for st in sts:
             if st.skipped == NO_RATE:
                 return Decision(503, TICKET_NO_DATA, {"type": "error", "error": {"type": "api_error", "message":
@@ -560,4 +583,6 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             return Decision(429, FREE_CAP, {"type": "error", "error": {"type": "rate_limit_error", "message":
                             f"The gateway's free credit is used up for today across all new accounts. {ask} the "
                             "gateway admin to upgrade your account."}}, wait or 3600)
+    if t is not None and served is not None:
+        served["ticket_id"] = t["id"]
     return None

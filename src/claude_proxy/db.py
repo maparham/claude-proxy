@@ -433,6 +433,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "api_key_id" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")
+    if "ticket_id" not in _columns(conn, "requests"):
+        # The pass that served the request (2026-10-28): each pass's limits count only its own requests, as if another
+        # user held it. Requests from before go to the pass that covered them, the earliest when passes ran side by side.
+        conn.execute("ALTER TABLE requests ADD COLUMN ticket_id INTEGER")
+        conn.execute(f"UPDATE requests SET ticket_id=(SELECT t.id FROM tickets t WHERE t.user_id=requests.user_id "
+                     f"AND t.cancelled_at IS NULL AND t.starts_at<=requests.started_at AND {TICKET_EFFECTIVE_END}>requests.started_at "
+                     f"ORDER BY t.starts_at, t.id LIMIT 1) WHERE user_id IN (SELECT user_id FROM tickets) AND rejected_by IS NULL "
+                     f"AND api_key_id IS NULL AND started_at>?", (time.time() - 40 * 86400,))
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ticket ON requests(ticket_id, ended_at)")
+    if "pass_pin" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN pass_pin INTEGER")   # the running pass the user chose to serve first
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:

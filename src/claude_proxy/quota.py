@@ -165,7 +165,7 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
                         "AND observed_at >= ? ORDER BY observed_at", (bucket, now - 8 * 86400)).fetchall()
     if not rows:
         return {"bucket": bucket, "utilization_pct": None, "resets_at": None, "observed_at": None,
-                "stale": True, "shares": {}, "unattributed": None, "window_start": None, "counted_from": None, "history": []}
+                "stale": True, "shares": {}, "ticket_shares": {}, "unattributed": None, "window_start": None, "counted_from": None, "history": []}
     start = _window_index(rows)
     win = rows[start:]
     latest = win[-1]
@@ -177,17 +177,21 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
     # Weighted tokens, priced in SQL (this runs before every request under a share limit); unpriced models count raw tokens.
     w, args = weighted_sql(pricing, models)
-    weighted = conn.execute(f"SELECT user_id, ended_at, {w} FROM requests WHERE {span} ORDER BY ended_at",
+    weighted = conn.execute(f"SELECT user_id, ended_at, {w}, ticket_id FROM requests WHERE {span} ORDER BY ended_at",
                             (*args, *bounds)).fetchall()
     shares: dict[int, float] = {}
+    by_ticket: dict[int, float] = {}   # the same points by the pass that served them: each pass's limits count only its own
     history = []
     high = 0.0 if reset_at is not None else win[0]["utilization_pct"]   # only rises above the high-water mark are new usage
     j = 0
     for cur in win:
         by_user: dict[int, float] = {}
+        by_tk: dict[int, float] = {}
         while j < len(weighted) and weighted[j][1] <= cur["observed_at"]:
-            uid, _, w = weighted[j]
+            uid, _, w, tid = weighted[j]
             by_user[uid] = by_user.get(uid, 0.0) + w
+            if tid is not None:
+                by_tk[tid] = by_tk.get(tid, 0.0) + w
             j += 1
         delta = cur["utilization_pct"] - high
         high = max(high, cur["utilization_pct"])
@@ -195,6 +199,8 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
         if delta > 0 and total_w > 0:
             for uid, w in by_user.items():
                 shares[uid] = shares.get(uid, 0.0) + delta * w / total_w
+            for tid, w in by_tk.items():
+                by_ticket[tid] = by_ticket.get(tid, 0.0) + delta * w / total_w
         history.append({"t": cur["observed_at"], "utilization_pct": cur["utilization_pct"], "shares": dict(shares)})
     return {
         "bucket": bucket,
@@ -203,6 +209,7 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
         "observed_at": latest["observed_at"],
         "stale": now - latest["observed_at"] > stale_after_s,
         "shares": shares,
+        "ticket_shares": by_ticket,
         "unattributed": max(0.0, latest["utilization_pct"] - sum(shares.values())),
         "window_start": win[0]["observed_at"],
         "counted_from": bounds[0],
@@ -298,9 +305,13 @@ def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, sinc
     return out
 
 
-def attributed_since(conn: sqlite3.Connection, pricing: Pricing, bucket: str, user_id: int, since: float, now: float) -> float:
-    """The bucket's share attributed to one user's requests since `since` (a ticket day's start, spec section 7)."""
-    return sum(p for (_, uid, _, _, p) in request_shares(conn, pricing, bucket, since, now) if uid == user_id)
+def attributed_since(conn: sqlite3.Connection, pricing: Pricing, bucket: str, user_id: int, since: float, now: float,
+                     ticket_id: int | None = None) -> float:
+    """The bucket's share attributed to one user's requests since `since` (a ticket day's start, spec section 7);
+    with `ticket_id`, to those that pass served only."""
+    mine = None if ticket_id is None else {r for (r,) in conn.execute("SELECT id FROM requests WHERE ticket_id=? AND ended_at>?",
+                                                                       (ticket_id, since))}
+    return sum(p for (rid, uid, _, _, p) in request_shares(conn, pricing, bucket, since, now) if uid == user_id and (mine is None or rid in mine))
 
 
 RATE_CACHE_S = 300   # observed_rate's cache lifetime, measured in the `now` argument so synthetic-clock tests behave
