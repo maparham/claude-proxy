@@ -109,3 +109,17 @@ def test_an_order_to_start_now_is_granted_beside_the_running_ticket(env):
     assert o["start_now"] == 1
     g = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", order_id=o["id"], now=NOW - 90)
     assert g["starts_at"] == NOW - 90
+
+
+def test_timeline_stacks_overlapping_tickets_relative_to_the_tallest(env):
+    conn, cfg, ids, t = env
+    assert tickets.timeline(conn, cfg, ids["alice"], NOW) is None   # one ticket: no chart
+    t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
+                       terms_version="v1", start_now=True)
+    t3 = day(conn, cfg, ids, NOW - 50)   # queued after the last
+    tl = tickets.timeline(conn, cfg, ids["alice"], NOW)
+    assert [p["tier"] for p in tl["passes"]] == ["lite", "standard", "lite"]
+    assert [(s["from"], s["to"], [b["i"] for b in s["stack"]]) for s in tl["segments"]] == [
+        (NOW, t["ends_at"], [0, 1]), (t["ends_at"], t2["ends_at"], [1]), (t2["ends_at"], t3["ends_at"], [2])]
+    assert [b["w"] for b in tl["segments"][0]["stack"]] == pytest.approx([5 / 30, 25 / 30])
+    assert tl["plan"] is None and tl["segments"][0]["plan_x"] is None   # no compare plan set

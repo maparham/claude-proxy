@@ -629,7 +629,42 @@ function userLimitsCard(me, tk, order) {
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? t(oneWeek ? "ov.ticket_sub_one" : "ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
-    ${ticket}${limitsBlock(me.limits, oneWeek)}</div>`;
+    ${ticket}${passTimeline(tk)}${limitsBlock(me.limits, oneWeek)}</div>`;
+}
+// The user's live Passes over time, when there is more than one: each Pass a colour in the order bought, stacked where
+// they overlap, each as tall as its weekly allowance relative to the tallest stack. Relative only: the user never learns
+// the account's percents; a stack's total is named against the compare plan, as the price list does.
+function passTimeline(tk) {
+  const tl = tk && tk.timeline;
+  if (!tl || tl.passes.length < 2) return "";
+  const span = tl.end - tl.start;
+  const times = (x) => (Number.isInteger(x) ? nf0 : nfFix(1)).format(x);
+  const plan = (x) => (tl.plan && x ? t("tl.plan", { n: times(x), plan: planName(tl.plan) }) : "");
+  const name = (i) => t("tl.pass", { label: tierNameText(tl.passes[i].tier, tl.passes[i].label) });
+  const color = (i) => `var(--s${(i % 8) + 1})`;
+  const cols = tl.segments.map((s) => {
+    const tip = `${fmtDate(s.from)} – ${fmtDate(s.to)}: ${s.stack.map((b) => name(b.i)).join(" + ")}${s.plan_x ? ` = ${plan(s.plan_x)}` : ""}`;
+    const tot = s.stack.reduce((a, b) => a + b.w, 0);
+    const blocks = s.stack.map((b) => `<i style="flex-grow:${b.w};background:${color(b.i)}"></i>`).join("");
+    // The total sits on its stack: in full where the stretch is wide, as a bare multiple where it is narrow.
+    const wide = (s.to - s.from) / span;
+    const label = !s.plan_x || wide < 0.06 ? "" : wide >= 0.18 ? esc(plan(s.plan_x)) : `<bdi dir="ltr">${times(s.plan_x)}×</bdi>`;
+    return `<span style="flex-grow:${s.to - s.from}" title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><b>${label}</b><span class="stk" style="height:calc((100% - 16px) * ${tot.toFixed(3)})">${blocks}</span></span>`;
+  }).join("");
+  // Ticks at now, each change and the last end; a date only where it has room beside the one before it.
+  const short = (ts) => { const d = new Date(ts * 1000); return `${d.toLocaleDateString(LOC, { month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`; };
+  let last = -1;
+  const ticks = [tl.start, ...tl.segments.map((s) => s.to)].map((ts, k, all) => {
+    const at = (ts - tl.start) / span;
+    const show = k === 0 || k === all.length - 1 ? true : at - last >= 0.16 && 1 - at >= 0.16;
+    if (show) last = at;
+    const cls = at < 0.08 ? "edge-start" : at > 0.92 ? "edge-end" : "";
+    return `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%">${show ? `<small>${k === 0 ? t("tl.now") : short(ts)}</small>` : ""}</em>`;
+  }).join("");
+  const legend = tl.passes.map((p, i) => `<li><i style="background:${color(i)}"></i>${esc(name(i))} <span class="muted">${p.starts_at > tl.start
+    ? t("tl.from_until", { from: fmtDate(p.starts_at), until: fmtDate(p.ends_at) }) : t("tl.until", { until: fmtDate(p.ends_at) })}</span></li>`).join("");
+  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="pass-tl">${cols}</div><div class="pass-axis" aria-hidden="true">${ticks}</div>
+    <ul class="pass-legend">${legend}</ul></div>`;
 }
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
 function pickedLine(prices, pick) {

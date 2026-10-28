@@ -1168,6 +1168,35 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
             "has_tickets": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is not None}
 
 
+def timeline(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> dict | None:
+    """The dashboard's chart of the user's live tickets (running and queued) from now on, when there is more than one:
+    `passes` in the order they start, and `segments`, the stretches with the same tickets, each with its `stack` of
+    tickets (`i`, the pass's index) and `w`, its weekly share (upgrades included) over the tallest stack's, so no
+    percent reaches the user. `plan_x`: a stack's total in multiples of the compare plan, when every tier names the
+    same one, as the price list names it."""
+    now = _now(now)
+    live = [dict(r) for r in conn.execute(f"SELECT {TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
+                                          f"AND {db.TICKET_EFFECTIVE_END}>? ORDER BY t.starts_at, t.id", (user_id, now))]
+    if len(live) < 2:
+        return None
+    eff = effective_tiers(conn, cfg)
+    tiers = [tier_now(conn, t) for t in live]
+    share = [t["share_pct"] + sum(u["share_pct"] for u in _upgrades(conn, t["id"]) if u["ends_at"] > now) for t in live]
+    plans = {eff[x]["compare"] if x in eff else "" for x in tiers}
+    plan = next(iter(plans)) if len(plans) == 1 else ""
+    points = sorted({now, *(max(now, t["starts_at"]) for t in live), *(t["effective_end"] for t in live)})
+    segments = [{"from": a, "to": b, "on": [i for i, t in enumerate(live) if t["starts_at"] <= a and t["effective_end"] >= b]}
+                for a, b in zip(points, points[1:])]
+    top = max(sum(share[i] for i in s["on"]) for s in segments) or 1
+    for s in segments:
+        on = s.pop("on")
+        s["stack"] = [{"i": i, "w": share[i] / top} for i in on]
+        s["plan_x"] = round(sum(share[i] * eff[tiers[i]]["compare_ratio"] for i in on) / 100, 1) if plan and on else None
+    label = lambda x: cfg.tickets.tiers[x].label if x in cfg.tickets.tiers else x  # noqa: E731
+    return {"start": now, "end": points[-1], "plan": plan or None, "segments": segments,
+            "passes": [{"tier": x, "label": label(x), "starts_at": t["starts_at"], "ends_at": t["effective_end"]} for x, t in zip(tiers, live)]}
+
+
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str, starts_at: float | None = None) -> dict:
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
     amounts and a sold-out flag, and how a ticket starting at `starts_at` (default now) splits across Anthropic's

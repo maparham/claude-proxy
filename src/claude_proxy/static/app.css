@@ -377,6 +377,24 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar em.edge-start small { text-align: start; } .split-bar em.edge-end small { text-align: end; }
 .split-bar.has-low { padding-bottom: 68px; }
 .split-bar em.low::before { height: 50px; } .split-bar em.low small { margin-top: 52px; }
+/* Live Passes over time (passTimeline): one column per stretch with the same Passes, as wide as it lasts, its Passes
+   stacked as tall as their allowances, 2px apart; ticks and dates under it, a legend naming each colour. */
+.pass-tl-wrap { margin: 4px 0 16px; }
+.pass-tl { display: flex; gap: 2px; height: 76px; }
+.pass-tl > span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; justify-content: flex-end; }
+.pass-tl b { flex: none; font-size: 11px; line-height: 16px; font-weight: 600; color: var(--ink-2); white-space: nowrap; text-align: center; overflow: hidden; }
+.pass-tl .stk { flex: none; min-height: 3px; display: flex; flex-direction: column-reverse; gap: 2px; }
+.pass-tl .stk i { display: block; flex-basis: 0; min-height: 3px; border-radius: 2px; }
+.pass-tl .stk i:last-child { border-radius: 4px 4px 2px 2px; }
+.pass-axis { position: relative; height: 38px; }
+.pass-axis em { position: absolute; top: 2px; width: 0; display: flex; justify-content: center; font-style: normal; }
+.pass-axis em.edge-start { justify-content: flex-start; } .pass-axis em.edge-end { justify-content: flex-end; }
+.pass-axis em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 6px; background: var(--muted); }
+.pass-axis em small { margin-top: 8px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
+.pass-axis em.edge-start small { text-align: start; } .pass-axis em.edge-end small { text-align: end; }
+.pass-legend { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; }
+.pass-legend li { display: flex; align-items: center; gap: 6px; }
+.pass-legend i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
 /* The grant dialog: the amount as a headline over the period's facts, the stale-rate confirm, and the Cancel / Grant footer. */
 .grant-sum { background: var(--wash); border-radius: 10px; padding: 12px 14px; margin-top: 6px; font-size: 13px; color: var(--ink-2); }

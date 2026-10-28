@@ -1378,6 +1378,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
         # Tiers above the running ticket, each priced for the time it has left (2026-10-26 spec).
         out["upgrades"] = user_upgrades(out["prices"]["currency"]) if cur else []
+        out["timeline"] = tickets.timeline(conn, cfg, user["id"], now)   # the card's chart, with more than one live ticket
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
