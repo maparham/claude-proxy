@@ -423,7 +423,7 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
     assert weeks["weeks"][0]["pct"] == pytest.approx(weekly.pct) and weeks["weeks"][1]["pct"] == 0
     assert weeks["ticket_pct"] == pytest.approx(weekly.pct * (3 * DAY + 300) / (7 * DAY))   # this week holds 3d + 300s of 7d
     line = _status_line(user(conn, ids["alice"]), sts, None, weeks)
-    assert line.endswith(f" · {weekly.pct:.0f}% of first week · 0% of second week · {weeks['ticket_pct']:.0f}% of ticket "
+    assert line.endswith(f" · {weekly.pct:.0f}% of first week · 0% of second week · {weeks['ticket_pct']:.0f}% used "
                          "(6d:23h left)")   # granted 300 s ago
     assert "First week ended" not in line and line.count("resets in") == 1   # only the 5-hour limit's
     later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)   # into the second week: the first is over

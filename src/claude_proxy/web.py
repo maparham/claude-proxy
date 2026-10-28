@@ -1787,10 +1787,10 @@ def _days_hours(s: int) -> str:
 
 
 def _ticket_weeks_text(weeks: dict, est: str) -> str:
-    """`57% of first week · 0% of second week · 30% of ticket (3d:5h left)`; a week that is over reads
+    """`57% of first week · 0% of second week · 30% used (3d:5h left)`; a week that is over reads
     `First week ended`, since gclaude warns on the highest percentage on the line and a used-up past week would read as a
     limit reached. A ticket within one week: the ticket's part only."""
-    ticket = f"{weeks['ticket_pct']:.0f}%{est} of ticket ({_days_hours(weeks['ends_in'])} left)"
+    ticket = f"{weeks['ticket_pct']:.0f}%{est} used ({_days_hours(weeks['ends_in'])} left)"
     if len(weeks["weeks"]) == 1:
         return ticket
     nth = tickets.TERMS["en"]["nth"]
