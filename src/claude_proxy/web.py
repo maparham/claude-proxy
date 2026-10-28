@@ -651,7 +651,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return PlainTextResponse(_account_line(conn, user) + "\n")
         weekly = next((s for s in states if s.kind == "share_7d" and s.tier is not None), None)
         weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly) if weekly is not None and account is None else None
-        line = _status_line(user, states, account, weeks)
+        line = _status_line(user, states, account, weeks, _ticket_name(conn, cfg, user["id"], now))
         if format == "text":
             return PlainTextResponse(line + "\n")
         views = [v | {"weeks": weeks} if weeks and v["kind"] == "weekly_limit" else v for v in limit_views(user, states)]
@@ -1791,12 +1791,22 @@ def _ticket_weeks_text(weeks: dict, est: str) -> str:
     return " · ".join(parts + [ticket])
 
 
-def _status_line(user, states, account, weeks: dict | None = None) -> str:
-    """e.g. `maya · daily $61/$100 (resets in 3.2 h) · plan 5h 8% (yours 6%) · week 10%`: the user's limits as
+def _ticket_name(conn, cfg, user_id: int, now: float) -> str | None:
+    """`Lite week ticket`: the covering ticket's tier as it runs now (an upgrade's) and its length; None without one."""
+    t = tickets.covering(conn, user_id, now)
+    if t is None:
+        return None
+    tier = tickets.tier_now(conn, t)
+    return f"{cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier} {t['length']} ticket"
+
+
+def _status_line(user, states, account, weeks: dict | None = None, ticket: str | None = None) -> str:
+    """e.g. `maya · Lite week ticket · daily $61/$100 (resets in 3.2 h) · plan 5h 8% (yours 6%) · week 10%`: the user's limits as
     used/limit, each with when its window resets, then, for an admin (`account` given), the shared subscription's quota
     and the estimated part their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`;
-    with a ticket's `weeks` (limits.ticket_weeks), its weekly limit reads as each week's use and the whole ticket's."""
-    parts = [user["name"]]
+    with a ticket's `weeks` (limits.ticket_weeks), its weekly limit reads as each week's use and the whole ticket's.
+    `ticket` (_ticket_name) follows the name."""
+    parts = [user["name"]] + ([ticket] if ticket else [])
     for s in states:
         if s.kind == "allowed_models":
             continue

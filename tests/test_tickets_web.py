@@ -488,6 +488,7 @@ async def test_my_status_gives_the_weekly_limits_week_breakdown(env):
     weekly = next(v for v in me["limits"] if v["kind"] == "weekly_limit")
     assert [w["state"] for w in weekly["weeks"]["weeks"]] == ["current", "future"] and weekly["weeks"]["ticket_pct"] == 0
     assert "0% of first week · 0% of second week · 0% of ticket (6d:23h left)" in me["line"]
+    assert me["line"].startswith("alice · Lite week ticket · ")   # the statusline names the ticket it runs on
 
 
 async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
