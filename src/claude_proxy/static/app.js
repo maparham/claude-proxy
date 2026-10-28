@@ -701,12 +701,12 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
-      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       ${start ? `<div class="wide"><p class="sub">${t("ord.start")}</p>
         <label class="check"><input type="radio" name="start" value="after" checked> ${t("ord.start_after", { date: fmtDate(start.date) })}</label>
         <label class="check"><input type="radio" name="start" value="now"> ${t("ord.start_now")}</label></div>` : ""}
-      <div class="terms wide"><ul class="muted"><li id="order-split">${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
-        <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
+      <div class="terms wide"><ul class="muted"><li id="order-split">${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul></div>
+      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
+      <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         ${orderButtons(manual, payBtn)}</div>
@@ -803,9 +803,9 @@ function ticketUpgradeOrderDialog(tk, u) {
     <p class="order-price"><b>${esc(money(u.amount, u.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
+      <div class="terms wide"><ul class="muted"><li>${t("up.terms", { label: tierName(u.tier, u.label), date: fmtDate(u.ends_at) })}</li><li>${t("ord.terms_l3")}</li></ul></div>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
-      <div class="terms wide"><ul class="muted"><li>${t("up.terms", { label: tierName(u.tier, u.label), date: fmtDate(u.ends_at) })}</li><li>${t("ord.terms_l3")}</li></ul>
-        <label class="check"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label></div>
+      <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         ${orderButtons(tk.manual, payU ? `<button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payU.amount, tk.pay.currency)) })}</button>` : "")}</div>
