@@ -559,7 +559,6 @@ async function renderOverview(main) {
       </div>`}
       ${machinesCard(keys.keys, S.install)}
       ${tk && !tk.current ? priceListCard(tk, order) : ""}
-      ${tk ? pastCard(tk) : ""}
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
@@ -603,14 +602,6 @@ function paymentNoticeMsg(p) {
     started: t("pay.pending") }[p.status];
 }
 
-// The buyer's ended passes, newest first: a purchase history, folded away.
-function pastCard(tk) {
-  if (!tk.past || !tk.past.length) return "";
-  return `<details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("past.title")} <span class="badge">${nfFull.format(tk.past.length)}</span></h3></summary>
-    <table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th>${t("past.how")}</th><th class="r">${t("tk.paid")}</th></tr></thead>
-    <tbody>${tk.past.map((p) => `<tr><td>${tierName(p.tier, p.label)}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
-      <td class="muted">${t(`past.how_${p.how}`)}</td><td class="r">${esc(money(p.amount, p.currency))}</td></tr>`).join("")}</tbody></table></details>`;
-}
 function usersCard() {
   return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;
 }
@@ -793,7 +784,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
 function wireOrdering(root, tk, order) {
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
-    const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.queued ? tk.queued.effective_end : tk.current.pool_end || tk.current.effective_end) });
+    const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.next_start) });
     const d = openDialog(`${priceListCard(tk, order, sub)}
       <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
     wireOrdering(d, tk, order);
@@ -803,7 +794,7 @@ function wireOrdering(root, tk, order) {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
     // A used-up ticket's replacement starts now either way: no choice to offer.
-    const c = tk.current, start = c && !c.used_up ? { date: tk.queued ? tk.queued.effective_end : c.pool_end || c.effective_end, splitNow: tk.split_now } : null;
+    const c = tk.current, start = c && !c.used_up ? { date: tk.next_start, splitNow: tk.split_now } : null;
     if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version, tk.manual, start);
   }));
   // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).

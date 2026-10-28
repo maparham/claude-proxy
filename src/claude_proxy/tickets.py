@@ -559,9 +559,10 @@ def _exclude(exclude) -> tuple[str, list]:
     return (f" AND t.id NOT IN ({','.join('?' * len(ids))})", ids) if ids else ("", [])
 
 
-def sold_at(conn: sqlite3.Connection, account_id: int, t: float, exclude: int | None = None) -> float:
+def sold_at(conn: sqlite3.Connection, account_id: int, t: float, exclude=None) -> float:
     """sold(t): shares of the non-cancelled tickets and bonus shares covering `t` (half-open periods).
-    `exclude` leaves one ticket and its bonuses out, for re-checking that ticket at a new place."""
+    `exclude` (an id or several, _exclude) leaves those tickets and their bonuses out, for re-checking a ticket at a new
+    place or replacing used-up ones."""
     ex, args = _exclude(exclude)
     a = conn.execute(f"SELECT COALESCE(SUM(t.share_pct), 0) FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
                      f"AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?{ex}", (account_id, t, t, *args)).fetchone()[0]
@@ -571,7 +572,7 @@ def sold_at(conn: sqlite3.Connection, account_id: int, t: float, exclude: int | 
     return a + b
 
 
-def _starts_within(conn, account_id: int, starts_at: int, ends_at: int, exclude: int | None = None) -> set[int]:
+def _starts_within(conn, account_id: int, starts_at: int, ends_at: int, exclude=None) -> set[int]:
     """Every ticket or bonus start strictly inside (starts_at, ends_at): the only places sold(t) can rise."""
     ex, args = _exclude(exclude)
     pts = {r[0] for r in conn.execute(f"SELECT t.starts_at FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
@@ -583,7 +584,7 @@ def _starts_within(conn, account_id: int, starts_at: int, ends_at: int, exclude:
 
 
 def check_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, starts_at: int, ends_at: int,
-                   exclude: int | None = None) -> None:
+                   exclude=None) -> None:
     """sold(t) + share <= max_sold_pct at the period's start and at every start inside it, else CapacityError."""
     ceiling = cfg.tickets.max_sold_pct
     for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at, exclude)}):
@@ -658,31 +659,13 @@ def running(conn: sqlite3.Connection, user_id: int, now: float) -> list[dict]:
 
 
 def covering(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
-    """The user's ticket covering now (starts_at <= now < effective end), or None."""
-    return _row(conn, f"SELECT {TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND t.starts_at<=? "
-                      f"AND {db.TICKET_EFFECTIVE_END}>? ORDER BY t.starts_at LIMIT 1", (user_id, now, now))
+    """The user's earliest ticket covering now (starts_at <= now < effective end), or None: running's first."""
+    return next(iter(running(conn, user_id, now)), None)
 
 
 def next_queued(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
     return _row(conn, f"SELECT {TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND t.starts_at>? "
                       f"ORDER BY t.starts_at LIMIT 1", (user_id, now))
-
-
-def past(conn: sqlite3.Connection, user_id: int, now: float, limit: int = 50) -> list[dict]:
-    """The user's ended tickets, newest end first, each with `ended_at` and `how` it ended: "cancelled", "used_up"
-    (before its end) or "ended". A ticket cancelled before it started never ran and is left out, as in last_ended."""
-    out = []
-    for t in user_tickets(conn, user_id):
-        if t["cancelled_at"] is not None:
-            if t["cancelled_at"] <= t["starts_at"]:
-                continue
-            ended, how = min(t["effective_end"], t["cancelled_at"]), "cancelled"
-        else:
-            ended, how = t["effective_end"], "used_up" if t["used_up_at"] is not None else "ended"
-        if ended <= now:
-            out.append({**t, "ended_at": ended, "how": how})
-    out.sort(key=lambda t: (t["ended_at"], t["id"]), reverse=True)
-    return out[:limit]
 
 
 def last_ended(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
@@ -918,7 +901,11 @@ def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: 
         moved, kept, reason = 0, False, None
         chain = _later_tickets(conn, t["user_id"], t["effective_end"]) if t["user_id"] is not None else []
         if chain:
-            shift = max(now, t["starts_at"]) - chain[0]["starts_at"]   # a queued ticket never starts in the past
+            # The gap closes only up to the user's other passes before the queue: one running beside this one keeps
+            # the queue behind it. A queued ticket never starts in the past.
+            held = conn.execute(f"SELECT MAX({db.TICKET_EFFECTIVE_END}) FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
+                                "AND t.starts_at<?", (t["user_id"], chain[0]["starts_at"])).fetchone()[0]
+            shift = max(now, t["starts_at"], held or 0) - chain[0]["starts_at"]
             if shift < 0:
                 try:
                     _shift(conn, cfg, chain, shift)
@@ -941,7 +928,8 @@ def hand_over(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | 
     conn.execute("BEGIN IMMEDIATE")
     try:
         run = running(conn, user_id, now)
-        chain = _later_tickets(conn, user_id, max(t["effective_end"] for t in run)) if run else []
+        # Every ticket not started yet: one queued before a pass bought to start now may start before that pass ends.
+        chain = _later_tickets(conn, user_id, now + 1) if run else []
         if not chain:
             conn.execute("ROLLBACK")
             return False

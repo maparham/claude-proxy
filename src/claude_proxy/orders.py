@@ -110,8 +110,9 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
     stale → 400 (2026-10-13 spec, §3). `notify=False`: no new-order emails (an order paid online).
     `lang`: the page's language; the buyer's emails use it (anything but "fa" is English).
     `start_now`: the ticket is to start when granted, beside the buyer's
-    running tickets, not after them (tickets.grant)."""
+    running tickets, not after them (tickets.grant). A visitor has none: theirs never starts now."""
     now = _now(now)
+    start_now = bool(start_now) and user_id is not None
     if terms_version != tickets.TERMS_VERSION:
         raise OrderError(400, tickets.TERMS_CHANGED)
     if tier not in cfg.tickets.tiers:
@@ -163,8 +164,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             "message, status, ip, admin_mail, buyer_mail, terms_version, lang, start_now) "
             "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang,
-             int(bool(start_now) and user_id is not None)))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, int(start_now)))
         oid = cur.lastrowid
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
                                                               "visitor": user_id is None, "terms_version": terms_version,

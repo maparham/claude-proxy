@@ -122,3 +122,26 @@ def test_timeline_stacks_overlapping_tickets_relative_to_the_tallest(env):
         (NOW, t["ends_at"], [0, 1]), (t["ends_at"], t2["ends_at"], [1]), (t2["ends_at"], t3["ends_at"], [2])]
     assert [b["w"] for b in tl["segments"][0]["stack"]] == pytest.approx([5 / 30, 25 / 30])
     assert tl["plan"] is None and tl["segments"][0]["plan_x"] is None   # no compare plan set
+
+
+def test_cancelling_a_pass_beside_another_keeps_the_queue_behind_the_other(db):
+    conn, cfg, ids = seeded(db)
+    g = lambda length, now, **kw: tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", length, "EUR",  # noqa: E731
+                                                now=now, terms_version="v1", confirm_stale_rate=True, **kw)
+    a, q = g("week", NOW), g("day", NOW + 100)   # q queued after a
+    b, c = g("day", NOW + 200, start_now=True), g("day", NOW + 300, start_now=True)
+    tickets.cancel(conn, cfg, ids["admin"], b["id"], now=NOW + 400)   # a still runs: q stays behind it
+    assert tickets.get(conn, q["id"])["starts_at"] == a["ends_at"]
+    tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + 500)   # c still runs: q closes up to c's end, not to now
+    assert tickets.get(conn, q["id"])["starts_at"] == c["ends_at"]
+
+
+def test_a_used_up_pool_hands_over_to_a_pass_queued_before_a_side_pass_ends(env):
+    conn, cfg, ids, t = env
+    q = day(conn, cfg, ids, NOW - 250)
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW - 240,
+                  terms_version="v1", start_now=True)   # ends after q starts
+    req(conn, ids["alice"], NOW - 200, i=4000)
+    assert limits.used_up(conn, cfg, ids["alice"], NOW - 100)
+    assert limits.hand_over(conn, cfg, ids["alice"], NOW - 100)
+    assert tickets.get(conn, q["id"])["starts_at"] == NOW - 100

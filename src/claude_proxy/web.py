@@ -1360,19 +1360,18 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             shown = {b["id"] for b in active}
             # Tickets bought to start now, running beside this one: their limits add up with its.
             run = tickets.running(conn, user["id"], now)
-            out["current"]["also"] = [{"tier": t["tier"], "label": label(t), "starts_at": t["starts_at"], "effective_end": t["effective_end"]}
-                                      for t in run if t["id"] != cur["id"]]
+            out["current"]["also"] = [{"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"],
+                                       "effective_end": t["effective_end"]} for t in run if t["id"] != cur["id"]]
             out["current"]["pool_end"] = max(t["effective_end"] for t in run)
             out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
                                              if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]
         if st["queued"]:
             q = st["queued"]
             out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
-        out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
-                        "amount": t["amount"], "currency": t["currency"]} for t in tickets.past(conn, user["id"], now)]
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
-        # A new ticket queues after the last, or starts now in place of a used-up one.
-        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=tickets.next_start(conn, cfg, user["id"], now)[0])
+        # A new ticket queues after the last, or starts now in place of a used-up one: the order dialog's "after" date.
+        out["next_start"] = tickets.next_start(conn, cfg, user["id"], now)[0]
+        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"])
         # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
         out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
         out["timeline"] = tickets.timeline(conn, cfg, user["id"], now)   # the card's chart, with more than one live ticket
