@@ -85,6 +85,15 @@ function fmtDur(s) {
     : [Math.floor(s / 86400), "d", Math.floor(s % 86400 / 3600), "h"];
   return small ? t("dur.join", { a: u(big, bigU), b: u(small, smallU) }) : u(big, bigU);
 }
+// Spelled out, for a sentence: "2 days, 3 hours", "3 hours, 12 minutes", "5 minutes" (the two largest units).
+function fmtDurLong(s) {
+  s = Math.max(60, Math.round(s));
+  const u = (n, unit) => plural(`dl.${unit}`, n, { n: nf0.format(n) });
+  const [big, bigU, small, smallU] = s < 3600 ? [Math.floor(s / 60), "m", 0, "m"]
+    : s < 86400 ? [Math.floor(s / 3600), "h", Math.floor(s % 3600 / 60), "m"]
+    : [Math.floor(s / 86400), "d", Math.floor(s % 86400 / 3600), "h"];
+  return small ? t("dl.join", { a: u(big, bigU), b: u(small, smallU) }) : u(big, bigU);
+}
 function fmtAgo(t_) { return t_ ? t("app.ago", { d: fmtDur(Date.now() / 1000 - t_) }) : t("app.never"); }
 function fmtTime(t_) { return t_ ? new Date(t_ * 1000).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
 const fmtDate = (t_) => (t_ ? new Date(t_ * 1000).toLocaleString(LOC, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -414,6 +423,16 @@ function limitsBlock(ls, oneWeek) {
     <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div></div>`).join("");
 }
 
+// The pass in use, as compact as the other cards: each limit's percent and bar, the full reading behind its "?".
+function limitsCompact(ls, oneWeek) {
+  if (!ls.length) return `<span class="muted">${t("lim.none")}</span>`;
+  return ls.map((l) => oneWeek && l.kind === "weekly_limit" ? { ...l, kind: "ticket_limit" } : l).map((l) => {
+    const tip = [esc(limitValue(l)), limitValueTip(l)].filter(Boolean).join("<br>");
+    const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(l.pct))}${PCT}`;
+    return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div>`;
+  }).join("");
+}
+
 // ---------- views ----------
 
 const VIEWS = {
@@ -614,14 +633,48 @@ function pastCard(tk) {
 function usersCard() {
   return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;
 }
-// Passes running side by side, each with limits of its own: the one in use, and a choice of which to use first.
-function passList(c) {
-  if (!c.passes || !c.passes.length) return "";
+// With more than one live pass, one row each: the running ones with their own use and the one in use, then the queued
+// ones; "Use first" picks which running pass serves first.
+const fmtShort = (t_) => new Date(t_ * 1000).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+// The pass in use counts down to its end: days, hours and minutes left, leading zero units left out ("21h:17m left").
+function passLeft(end) {
+  const m = Math.max(0, Math.floor((end - Date.now() / 1000) / 60));
+  const parts = [[Math.floor(m / 1440), "d"], [Math.floor(m % 1440 / 60), "h"], [m % 60, "m"]];
+  const from = parts.findIndex(([n], k) => n > 0 || k === 2);
+  return t("pass.left", { d: parts.slice(from).map(([n, u]) => t(`pass.left_${u}`, { n: nf0.format(n) })).join(t("pass.left_join")) });
+}
+// A pass's number and colour on the timeline: the list and the timeline share one order (start, then id), so the n-th
+// card is the n-th pass there. A hue per tier, in the order they first appear, shaded by length: a day light, a week
+// the hue itself, a month dark; the number tells apart passes of the same kind.
+const PASS_SHADE = { day: (h) => `color-mix(in oklab, ${h} 50%, white)`, week: (h) => h, month: (h) => `color-mix(in oklab, ${h} 65%, black)` };
+function passColors(tl) {
+  const tiers = [];
+  return (tl ? tl.passes : []).map((p) => {
+    if (!tiers.includes(p.tier)) tiers.push(p.tier);
+    const hue = `var(--s${(tiers.indexOf(p.tier) % 8) + 1})`;
+    return `background:${(PASS_SHADE[p.length] || PASS_SHADE.week)(hue)};color:${p.length === "day" ? "#1a1a1a" : "#fff"}`;
+  });
+}
+const passNo = (i) => `<span class="pass-no">${nf0.format(i + 1)}.</span> `;
+// The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
+function passList(c, colors) {
   const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(v))}${PCT}`);
-  return `<div class="pass-list"><p class="sub">${t("pass.list")}</p>${c.passes.map((p, i) => `<div class="pass-row">
-      <div><b>${t("pass.row", { label: tierName(p.tier, p.label), date: fmtDate(p.effective_end) })}</b>${p.serving ? ` <span class="badge state-active">${t("pass.serving")}</span>` : ""}
-        <div class="muted">${t("pass.use", { h: pct(p.pct_5h), w: pct(p.pct_7d) })}</div></div>
-      ${p.pinned || p.serving ? "" : `<button class="btn small" data-pin="${i}" data-at="${p.starts_at}">${t("pass.pin")}</button>`}</div>`).join("")}</div>`;
+  // Every pass says where it stands: in use, usable in a while (queued), used up, back in a while (at a limit, requests go on to the next
+  // meanwhile), or ready behind the one in use.
+  const full = (p) => p.used_up != null;
+  const badge = (p) => p.serving ? `<span class="badge state-active">${t("pass.serving")}</span>`
+    : p.queued ? `<span class="badge state-queued">${t("pass.usable_in", { d: fmtDurLong(p.starts_at - Date.now() / 1000) })}</span>`
+    : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
+    : full(p) ? `<span class="badge state-queued">${p.back_at ? t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) }) : t("pass.at_limit")}</span>`
+    : `<span class="badge">${t("pass.ready")}</span>`;
+  const use = (label, v) => `<div class="pass-use"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(v)}</div>`;
+  const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving);
+  if (!others.length) return "";
+  return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}" data-pass="${p.i}">
+      <div class="pass-card-head"><b>${passNo(p.i, colors)}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
+      <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("pass.use_7d"), p.pct_7d)}`}
+      ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}</div>`).join("")}</div>`;
 }
 function userLimitsCard(me, tk, order) {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
@@ -632,56 +685,64 @@ function userLimitsCard(me, tk, order) {
   const open = !!order && (order.status === "new" || order.status === "contacted");
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
   const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
-  const ticket = !tk || !tk.gated ? "" : c ? `<div class="ticket">
-      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
-      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
-      ${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
+  const multi = !!c && !!c.passes && c.passes.length > 1;
+  const extras = !c ? "" : `${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
       ${c.used_up ? `<p class="sub">${t("ov.used_up")}</p>` : ""}
-      ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}
-      ${passList(c)}
+      ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}`;
+  // With several passes, the one in use stands on its own above the others, with its limits in full.
+  const inUse = multi && c.passes.find((p) => p.serving);
+  const inUseAt = inUse ? c.passes.indexOf(inUse) : -1;
+  const colors = passColors(tk && tk.timeline);
+  const hero = inUse ? `<div class="pass-hero" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(inUseAt, colors)}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
+      <span class="badge state-active">${t("pass.serving")}</span><span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
+      ${limitsCompact(me.limits, oneWeek)}</div>` : "";
+  const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
+      <div class="ticket-head"><div class="muted">${t("pass.list")}</div><div class="row-actions">${renew}</div></div>
+      ${hero}${passList(c, colors)}${extras}</div>`
+    : c ? `<div class="ticket">
+      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
+      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
+      ${extras}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
-  return `<div class="card"><h3>${c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
+  return `<div class="card"><h3>${multi ? t("ov.your_passes") : c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? t(oneWeek ? "ov.ticket_sub_one" : "ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
-    ${ticket}${passTimeline(tk)}${limitsBlock(me.limits, oneWeek)}</div>`;
+    ${ticket}${passTimeline(tk, inUseAt)}${inUse ? "" : limitsBlock(me.limits, oneWeek)}</div>`;
 }
-// The user's live Passes over time, when there is more than one: each Pass a colour in the order bought, stacked where
-// they overlap, each as tall as its weekly allowance relative to the tallest stack. Relative only: the user never learns
-// the account's percents; a stack's total is named against the compare plan, as the price list does.
-function passTimeline(tk) {
+// The user's live passes over time, when there is more than one: a row per pass, numbered as its card is, with a bar
+// from its start (or now) to its end; the one in use is named in bold. A queued pass's bar is hatched. Where passes overlap, their rows run side by side.
+function passTimeline(tk, inUseAt = -1) {
   const tl = tk && tk.timeline;
   if (!tl || tl.passes.length < 2) return "";
   const span = tl.end - tl.start;
-  const times = (x) => (Number.isInteger(x) ? nf0 : nfFix(1)).format(x);
-  const plan = (x) => (tl.plan && x ? t("tl.plan", { n: times(x), plan: planName(tl.plan) }) : "");
-  const name = (i) => t("tl.pass", { label: tierNameText(tl.passes[i].tier, tl.passes[i].label) });
-  const color = (i) => `var(--s${(i % 8) + 1})`;
-  const cols = tl.segments.map((s) => {
-    const tip = `${fmtDate(s.from)} – ${fmtDate(s.to)}: ${s.stack.map((b) => name(b.i)).join(" + ")}${s.plan_x ? ` = ${plan(s.plan_x)}` : ""}`;
-    const tot = s.stack.reduce((a, b) => a + b.w, 0);
-    const blocks = s.stack.map((b) => `<i style="flex-grow:${b.w};background:${color(b.i)}"></i>`).join("");
-    // The passes the stretch runs on sit above its stack, where it is wide enough for a name.
-    const label = (s.to - s.from) / span < 0.06 ? "" : s.stack.map((b) => esc(tierNameText(tl.passes[b.i].tier, tl.passes[b.i].label))).join(" + ");
-    return `<span style="flex-grow:${s.to - s.from}" title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><b>${label}</b><span class="stk" style="height:calc((100% - 16px) * ${tot.toFixed(3)})">${blocks}</span></span>`;
+  const at = (ts) => (Math.max(0, ts - tl.start) / span) * 100;
+  const colors = passColors(tl);
+  const rows = tl.passes.map((p, i) => {
+    const from = Math.max(p.starts_at, tl.start);
+    const name = `${nf0.format(i + 1)}. ${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`;
+    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)}`;
+    return `<div class="gantt-name${i === inUseAt ? " in-use" : ""}" data-pass="${i}">${esc(name)}</div><div class="gantt-track" data-pass="${i}">
+      <i class="${p.starts_at > tl.start ? "later" : ""}" style="${colors[i]};inset-inline-start:${at(from).toFixed(2)}%;width:${(at(p.ends_at) - at(from)).toFixed(2)}%"
+        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"></i></div>`;
   }).join("");
-  // A timestamp at now, at each change and at the last end. One too close to the one before drops to a second row,
-  // so every change keeps its time; the legend then names the passes only.
-  const short = (ts) => { const d = new Date(ts * 1000); return `${d.toLocaleDateString(LOC, { month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`; };
-  const lastAt = [-1, -1];
-  let rows = 1;
-  const ticks = [tl.start, ...tl.segments.map((s) => s.to)].map((ts, k) => {
-    const at = (ts - tl.start) / span;
-    const row = at - lastAt[0] >= 0.12 ? 0 : 1;
-    lastAt[row] = at;
-    rows = Math.max(rows, row + 1);
-    const cls = `${at < 0.08 ? "edge-start" : at > 0.92 ? "edge-end" : ""}${row ? " low" : ""}`;
-    return `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${k === 0 ? t("tl.now") : short(ts)}</small></em>`;
-  }).join("");
-  const legend = tl.passes.map((p, i) => `<li><i style="background:${color(i)}"></i>${esc(name(i))}</li>`).join("");
-  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="pass-tl">${cols}</div><div class="pass-axis${rows > 1 ? " two" : ""}" aria-hidden="true">${ticks}</div>
-    <ul class="pass-legend">${legend}</ul></div>`;
+  // A timestamp at now and at each start and end, all on one line. One close to the label before, on the same day,
+  // adds its time under that label; on another day it is left out. A bar's hover names its own times.
+  const day = (ts) => new Date(ts * 1000).toLocaleDateString(LOC, { month: "short", day: "numeric" });
+  const hm = (ts) => new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" });
+  const points = [...new Set([tl.start, ...tl.passes.flatMap((p) => [p.starts_at, p.ends_at]).filter((ts) => ts > tl.start)])].sort((a, b) => a - b);
+  const labels = [];
+  points.forEach((ts, k) => {
+    const x = at(ts) / 100, prev = labels[labels.length - 1];
+    if (k === 0) return labels.push({ x, ts: null, lines: [t("tl.now")] });
+    if (!prev || x - prev.x >= (prev.ts == null ? 0.07 : 0.12)) return labels.push({ x, ts, lines: [day(ts), hm(ts)] });
+    if (prev.ts != null && day(prev.ts) === day(ts) && hm(ts) !== prev.lines[prev.lines.length - 1]) prev.lines.push(hm(ts));
+  });
+  const ticks = labels.map((l) => `<em class="${l.x < 0.08 ? "edge-start" : l.x > 0.92 ? "edge-end" : ""}" style="inset-inline-start:${(l.x * 100).toFixed(2)}%"><small>${l.lines.join("<br>")}</small></em>`).join("");
+  const tall = Math.max(...labels.map((l) => l.lines.length));
+  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="gantt">${rows}
+    <div></div><div class="pass-axis" style="height:${10 + tall * 14}px" aria-hidden="true">${ticks}</div></div></div>`;
 }
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
 function pickedLine(prices, pick) {
@@ -801,10 +862,26 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   };
 }
 function wireOrdering(root, tk, order) {
-  root.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = async () => {
-    b.disabled = true;
-    try { await api("/api/me/tickets/pin", { method: "POST", body: { pass: +b.dataset.pin, starts_at: +b.dataset.at } }); render(); }
-    catch (e) { b.disabled = false; alertInline(e.message); }
+  // Pointing at a pass's card or at one of its stretches on the timeline lights up the others of that pass.
+  root.querySelectorAll(".card").forEach((card) => {
+    if (!card.querySelector("[data-pass]")) return;
+    const light = (i) => {
+      card.classList.toggle("pass-hl", i != null);
+      card.querySelectorAll("[data-pass]").forEach((el) => el.classList.toggle("hl", el.dataset.pass === i));
+    };
+    card.addEventListener("pointerover", (e) => { const el = e.target.closest("[data-pass]"); light(el ? el.dataset.pass : null); });
+    card.addEventListener("pointerleave", () => light(null));
+  });
+  root.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = () => {
+    const d = openDialog(`<h3>${t("pass.pin_title", { pass: esc(b.dataset.name) })}</h3><p>${t("pass.confirm_pin")}</p>
+      <div class="error" id="pin-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="button" id="pin-go">${t("pass.pin")}</button></div>`);
+    $("#pin-go", d).onclick = async (e) => {
+      e.target.disabled = true;
+      try { await api("/api/me/tickets/pin", { method: "POST", body: { pass: +b.dataset.pin, starts_at: +b.dataset.at } }); d.close(); render(); }
+      catch (err) { e.target.disabled = false; $("#pin-err", d).textContent = err.message; }
+    };
   }));
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {

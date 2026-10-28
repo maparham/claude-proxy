@@ -1363,11 +1363,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             run = tickets.running(conn, user["id"], now)
             serving = limits.serving(conn, cfg, user["id"], now, run)[0]
             pin = conn.execute("SELECT pass_pin FROM users WHERE id=?", (user["id"],)).fetchone()[0]
-            out["current"]["passes"] = [] if len(run) < 2 else [
-                {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"],
+            def pass_use(t) -> dict:
+                """A running pass's use of each limit, and at one: when it is back (`back_at`, the last of its limits
+                to refill), or `used_up` when that is after it ends."""
+                sts = limits.pass_states(conn, cfg, t, now)
+                out = {f"pct_{s.kind[6:]}": s.pct for s in sts}
+                hit = [s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded]
+                if hit:
+                    back = None if None in hit else max(hit)
+                    out |= {"back_at": back, "used_up": back is not None and back >= t["effective_end"]}
+                return out
+
+            # With more than one live pass the card lists them all, the queued ones after the running ones (`queued`).
+            later = [t for t in tickets.user_tickets(conn, user["id"]) if t["cancelled_at"] is None and t["starts_at"] > now]
+            out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
+                {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
                  "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
-                 "pinned": t["id"] == pin, **{f"pct_{s.kind[6:]}": s.pct for s in limits.pass_states(conn, cfg, t, now)}}
-                for t in run]
+                 "pinned": t["id"] == pin, **pass_use(t)} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
+                                  "effective_end": t["effective_end"], "queued": True} for t in later]
             out["current"]["serving_end"] = (serving or cur)["effective_end"]
             out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
                                              if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]

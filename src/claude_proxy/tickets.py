@@ -1205,7 +1205,8 @@ def timeline(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) ->
         s["plan_x"] = round(sum(share[i] * eff[tiers[i]]["compare_ratio"] for i in on) / 100, 1) if plan and on else None
     label = lambda x: cfg.tickets.tiers[x].label if x in cfg.tickets.tiers else x  # noqa: E731
     return {"start": now, "end": points[-1], "plan": plan or None, "segments": segments,
-            "passes": [{"tier": x, "label": label(x), "starts_at": t["starts_at"], "ends_at": t["effective_end"]} for x, t in zip(tiers, live)]}
+            "passes": [{"tier": x, "label": label(x), "length": t["length"], "starts_at": t["starts_at"], "ends_at": t["effective_end"]}
+                       for x, t in zip(tiers, live)]}
 
 
 def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str, starts_at: float | None = None) -> dict:

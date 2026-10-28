@@ -377,29 +377,36 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar em.edge-start small { text-align: start; } .split-bar em.edge-end small { text-align: end; }
 .split-bar.has-low { padding-bottom: 68px; }
 .split-bar em.low::before { height: 50px; } .split-bar em.low small { margin-top: 52px; }
-/* Live Passes over time (passTimeline): one column per stretch with the same Passes, as wide as it lasts, its Passes
-   stacked as tall as their allowances, 2px apart; ticks and dates under it, a legend naming each colour. */
+/* Live passes over time (passTimeline): a row per pass, its name beside a bar from its start to its end; ticks and
+   dates under the bars. */
 .pass-tl-wrap { margin: 4px 0 16px; }
-.pass-tl { display: flex; gap: 2px; height: 76px; }
-.pass-tl > span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; justify-content: flex-end; }
-.pass-tl b { flex: none; font-size: 11px; line-height: 16px; font-weight: 600; color: var(--ink-2); white-space: nowrap; text-align: center; overflow: hidden; }
-.pass-tl .stk { flex: none; min-height: 3px; display: flex; flex-direction: column-reverse; gap: 2px; }
-.pass-tl .stk i { display: block; flex-basis: 0; min-height: 3px; border-radius: 2px; }
-.pass-tl .stk i:last-child { border-radius: 4px 4px 2px 2px; }
+.gantt { display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; align-items: center; }
+.gantt-name { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
+.gantt-name.in-use { font-weight: 600; color: var(--ink); }
+.gantt-track { position: relative; height: 16px; background: var(--wash); border-radius: 4px; }
+.gantt-track i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 4px; }
+.gantt-track i.later { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.45) 0 3px, transparent 3px 7px) !important; }
 .pass-axis { position: relative; height: 38px; }
 .pass-axis em { position: absolute; top: 2px; width: 0; display: flex; justify-content: center; font-style: normal; }
 .pass-axis em.edge-start { justify-content: flex-start; } .pass-axis em.edge-end { justify-content: flex-end; }
 .pass-axis em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 6px; background: var(--muted); }
-.pass-axis.two { height: 72px; }
-.pass-axis em.low::before { height: 40px; }
-.pass-axis em.low small { margin-top: 42px; }
 .pass-axis em small { margin-top: 8px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .pass-axis em.edge-start small { text-align: start; } .pass-axis em.edge-end small { text-align: end; }
-.pass-list { margin-top: 10px; }
-.pass-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; border-top: 1px solid var(--border); }
-.pass-legend { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px 16px; font-size: 12px; }
-.pass-legend li { display: flex; align-items: center; gap: 6px; }
-.pass-legend i { width: 10px; height: 10px; border-radius: 2px; flex: none; }
+.pass-hero { border: 1px solid var(--good); box-shadow: inset 0 0 0 1px var(--good); border-radius: 8px; padding: 10px 12px; margin-top: 10px; max-width: 420px; }
+.pass-hero { display: flex; flex-direction: column; gap: 6px; }
+.pass-hero .pass-card-head { margin-bottom: 0; }
+.pass-hero .pass-card-head { justify-content: flex-start; margin-bottom: 8px; }
+.pass-hero-left { margin-inline-start: auto; }
+.pass-others { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 14px 0 0; }
+.pass-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; margin-top: 10px; }
+.pass-card { border: 1px solid var(--border); border-radius: 8px; padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; }
+.pass-card-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 8px; }
+.pass-card-head b, .pass-card-head .badge { white-space: nowrap; }   /* a long status goes under the name, never splitting it */
+.pass-use { display: grid; grid-template-columns: 1fr auto; font-size: 12px; }
+.pass-use .meter { grid-column: 1 / -1; min-width: 0; }
+.pass-card .btn { align-self: flex-start; margin-top: 2px; }
+/* A pass's number, in its timeline colour, so a card matches its boxes on the timeline. */
+.pass-no { font-variant-numeric: tabular-nums; }
 .form-grid > p.hint { grid-column: 1 / -1; margin: 0; }
 /* The grant dialog: the amount as a headline over the period's facts, the stale-rate confirm, and the Cancel / Grant footer. */
 .grant-sum { background: var(--wash); border-radius: 10px; padding: 12px 14px; margin-top: 6px; font-size: 13px; color: var(--ink-2); }
@@ -422,3 +429,8 @@ dialog :where(input[type=email], textarea) { border: 1px solid var(--border); ba
                                              min-width: 0; width: 100%; font: inherit; color: inherit; }
 dialog textarea { resize: vertical; }
 code { unicode-bidi: isolate; direction: ltr; }
+/* Pointing at a pass: its card and its timeline row stand out. */
+.pass-card, .gantt-track i { transition: box-shadow .12s; }
+.pass-hl .pass-card.hl { box-shadow: 0 0 0 2px var(--ink-2); }
+.pass-hl .gantt-name.hl { color: var(--ink); }
+.pass-hl .gantt-track.hl i { box-shadow: 0 0 0 2px var(--ink-2); }
