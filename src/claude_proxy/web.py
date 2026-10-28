@@ -1368,6 +1368,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if st["queued"]:
             q = st["queued"]
             out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+        out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
+                        "amount": t["amount"], "currency": t["currency"]} for t in tickets.past(conn, user["id"], now)]
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         # A new ticket queues after the last, or starts now in place of a used-up one: the order dialog's "after" date.
         out["next_start"] = tickets.next_start(conn, cfg, user["id"], now)[0]

@@ -668,6 +668,23 @@ def next_queued(conn: sqlite3.Connection, user_id: int, now: float) -> dict | No
                       f"ORDER BY t.starts_at LIMIT 1", (user_id, now))
 
 
+def past(conn: sqlite3.Connection, user_id: int, now: float, limit: int = 50) -> list[dict]:
+    """The user's ended tickets, newest end first, each with `ended_at` and `how` it ended: "cancelled", "used_up"
+    (before its end) or "ended". A ticket cancelled before it started never ran and is left out, as in last_ended."""
+    out = []
+    for t in user_tickets(conn, user_id):
+        if t["cancelled_at"] is not None and t["cancelled_at"] <= t["starts_at"]:
+            continue
+        if t["cancelled_at"] is not None and t["cancelled_at"] < t["effective_end"]:   # cut short; one cancelled after its end ran its course
+            ended, how = t["cancelled_at"], "cancelled"
+        else:
+            ended, how = t["effective_end"], "used_up" if t["used_up_at"] is not None else "ended"
+        if ended <= now:
+            out.append({**t, "ended_at": ended, "how": how})
+    out.sort(key=lambda t: (t["ended_at"], t["id"]), reverse=True)
+    return out[:limit]
+
+
 def last_ended(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
     """The user's most recently ended ticket, with `ended_at`: its effective end, or when it was cancelled if earlier.
     A ticket cancelled before it started is skipped."""

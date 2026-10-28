@@ -312,6 +312,29 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
         assert (await c.get("/api/me/tickets")).status_code == 401
 
 
+async def test_me_tickets_lists_past_tickets_newest_first(env):
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    alice = user(conn, ids["alice"])
+    ran = tickets.grant(conn, cfg, ids["admin"], alice, "lite", "day", "EUR", now=now - 20 * DAY, terms_version="v1")
+    tickets.cancel(conn, cfg, ids["admin"], ran["id"], now=now - 18 * DAY)   # cancelled after its end: it still ran its course
+    used = tickets.grant(conn, cfg, ids["admin"], alice, "lite", "week", "EUR", now=now - 15 * DAY, terms_version="v1")
+    conn.execute("UPDATE tickets SET used_up_at=? WHERE id=?", (used["starts_at"] + 2 * DAY, used["id"]))
+    gone = tickets.grant(conn, cfg, ids["admin"], alice, "lite", "week", "EUR", now=now - 3 * DAY, terms_version="v1")
+    tickets.cancel(conn, cfg, ids["admin"], gone["id"], now=now - DAY)
+    never = tickets.grant(conn, cfg, ids["admin"], alice, "lite", "day", "EUR", now=now, terms_version="v1")
+    tickets.cancel(conn, cfg, ids["admin"], never["id"], now=never["starts_at"] - 60)   # cancelled before it ran: not a past pass
+    tickets.grant(conn, cfg, ids["admin"], alice, "lite", "day", "EUR", now=now - 3600, terms_version="v1")   # running: not past
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        past = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["past"]
+    assert [(p["how"], p["starts_at"], p["ended_at"]) for p in past] == [
+        ("cancelled", gone["starts_at"], now - DAY),
+        ("used_up", used["starts_at"], used["starts_at"] + 2 * DAY),
+        ("ended", ran["starts_at"], ran["ends_at"])]
+    assert past[0] == {"tier": "lite", "label": "Lite", "how": "cancelled", "starts_at": gone["starts_at"], "ended_at": now - DAY,
+                       "amount": gone["amount"], "currency": "EUR"}   # no ids, no shares
+
+
 async def test_order_terms_split_from_the_pricing_payloads(env):
     """The order terms' weekly split: from now on the public page, from the end of the queue when signed in."""
     gw, conn, cfg, ids, keys = env
