@@ -127,10 +127,12 @@ table.data td.nowrap, bdi.nowrap { white-space: nowrap; }
 details.tableview { margin-top: 8px; }
 details.tableview summary { cursor: pointer; color: var(--ink-2); font-size: 12px; }
 details.fold > summary { list-style: none; cursor: pointer; }
+details.fold > summary h3 { margin: 0 0 2px; font-size: 14px; font-weight: 650; }   /* as .card > h3: the summary sits between them */
 details.fold > summary::-webkit-details-marker { display: none; }
-details.fold > summary h3::before { content: "›"; display: inline-block; width: 1em; color: var(--muted); transition: transform .15s; }
+details.fold > summary h3::before { content: "›"; display: inline-block; width: 1em; text-align: center; margin-inline-end: 4px; color: var(--muted); transition: transform .15s; }
 details.fold > summary h3:dir(rtl)::before { transform: scaleX(-1); }
 details.fold[open] > summary h3::before { transform: rotate(90deg); }
+details.fold[open] > summary h3:dir(rtl)::before { transform: rotate(-90deg); }   /* the glyph is drawn mirrored there */
 details.fold:not([open]) > summary h3 { margin-bottom: 0; }
 .more-rows { margin-top: 8px; }
 input.search { width: 18rem; max-width: 100%; }
