@@ -689,6 +689,8 @@ const I18N = {
     "ord.split_piece": "{pct} until {date}",
     "ord.split_and": " and ",
     "ord.split_week": "{n} week: {pct}",
+    "ord.split_before": "Before the weekly reset: {pct}",
+    "ord.split_after": "After the weekly reset: {pct}",
     "ord.nth.1": "First", "ord.nth.2": "Second", "ord.nth.3": "Third", "ord.nth.4": "Fourth", "ord.nth.5": "Fifth",
     "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
     "ord.terms_l3": "Anthropic also applies its own 5-hour limit.",
@@ -1634,6 +1636,8 @@ const I18N = {
     "ord.split_piece": "{pct} تا {date}",
     "ord.split_and": " و ",
     "ord.split_week": "هفته {n}: {pct}",
+    "ord.split_before": "پیش از ریست هفتگی: {pct}",
+    "ord.split_after": "پس از ریست هفتگی: {pct}",
     "ord.nth.1": "اول", "ord.nth.2": "دوم", "ord.nth.3": "سوم", "ord.nth.4": "چهارم", "ord.nth.5": "پنجم",
     "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
     "ord.terms_l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.",
@@ -1945,7 +1949,9 @@ function splitTerms(ws, len, days) {
   if (parts.length === 1) return t("ord.split_one", { date: when(end) });
   const pieces = parts.map((v, i) => t("ord.split_piece", { pct: pct(v), date: when(until(i)) }));
   const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
-  const label = (v, i) => (v >= 0.2 ? t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) }) : v >= 0.1 ? pct(v) : "&nbsp;");
+  // A ticket under a week crosses one reset at most: its two parts are named for that reset, not as weeks.
+  const name = (v, i) => (days < 7 ? t(i ? "ord.split_after" : "ord.split_before", { pct: pct(v) }) : t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) }));
+  const label = (v, i) => (v >= 0.2 ? name(v, i) : v >= 0.1 ? pct(v) : "&nbsp;");
   const bar = parts.map((v, i) => `<span style="flex-grow:${v}"><b>${label(v, i)}</b><i style="background:var(--s${i % 5 + 1})"></i></span>`).join("");
   const short = (ts) => {   // date over time, narrow enough for a month's four resets to sit side by side
     const d = new Date(ts * 1000);

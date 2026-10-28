@@ -36,6 +36,7 @@ TERMS = {
     "en": {"head": "Ticket terms:", "split": "Your use of the ticket will be limited in {n} parts: {pieces}.",
            "split_one": "Your whole ticket is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
            "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "{n} week: {pct}",
+           "halves": ("Before the weekly reset: {pct}", "After the weekly reset: {pct}"),
            "nth": ("First", "Second", "Third", "Fourth", "Fifth"),
            "l1": "Your allowance is split across weekly windows by the days each one covers; each piece is "
                  "spendable at your own pace and expires at its window's reset.",
@@ -43,6 +44,7 @@ TERMS = {
     "fa": {"head": "شرایط تیکت:", "split": "استفاده شما از تیکت در {n} قسمت محدود خواهد بود: {pieces}.",
            "split_one": "کل تیکت شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
            "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "هفته {n}: {pct}",
+           "halves": ("پیش از ریست هفتگی: {pct}", "پس از ریست هفتگی: {pct}"),
            "nth": ("اول", "دوم", "سوم", "چهارم", "پنجم"),
            "l1": "سهم شما به نسبت روزهایی که هر بازه هفتگی پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت "
                  "خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
@@ -111,6 +113,8 @@ def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: flo
         split = esc(w["split"]).replace("{n}", esc(n)).replace(
             "{pieces}", esc(w["sep"]).join(pieces[:-1]) + esc(w["and"]) + pieces[-1])
         def label(v, i):   # as the dialog's: week and percent, a narrow part's percent only, a sliver's nothing
+            if v >= 0.2 and days < 7:   # a ticket under a week crosses one reset at most: its parts sit either side of it
+                return esc(w["halves"][i].format(pct=pct(v)))
             if v >= 0.2:
                 return esc(w["week"].format(n=w["nth"][i] if i < len(w["nth"]) else i + 1, pct=pct(v)))
             return esc(pct(v)) if v >= 0.1 else "&nbsp;"
