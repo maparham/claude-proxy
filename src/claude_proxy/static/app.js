@@ -363,14 +363,14 @@ function tableView(title, head, rows) {
     <tbody>${rows.map((r) => `<tr>${r.map((v, i) => `<td class="${i ? "r" : ""}">${esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div></details>`;
 }
 
-// options: [value, label, tip key?]
+// options: [value, label, tip key?, disabled?]
 function seg(name, options, value) {
-  return `<span class="seg" data-pref="${name}">${options.map(([v, label, tip]) =>
-    `<button type="button" data-v="${v}" aria-pressed="${v === value}"${TIPS[tip] ? ` data-tip="${esc(tip)}"` : ""}>${esc(label)}</button>`).join("")}</span>`;
+  return `<span class="seg" data-pref="${name}">${options.map(([v, label, tip, off]) =>
+    `<button type="button" data-v="${v}" aria-pressed="${v === value}"${off ? " disabled" : ""}${TIPS[tip] ? ` data-tip="${esc(tip)}"` : ""}>${esc(label)}</button>`).join("")}</span>`;
 }
 function wireSegs(root, rerender) {
   root.querySelectorAll(".seg[data-pref]").forEach((s) => s.addEventListener("click", (e) => {
-    const b = e.target.closest("button[data-v]"); if (!b) return;
+    const b = e.target.closest("button[data-v]"); if (!b || b.disabled) return;
     S.prefs[s.dataset.pref] = b.dataset.v; savePrefs(); rerender();
   }));
 }
@@ -946,23 +946,28 @@ async function renderUsage(main) {
   const p = S.prefs;
   const splits = isAdmin() ? [["user", t("usage.by_user")], ["model", t("usage.by_model")], ["provider", t("usage.by_provider"), "split:provider"]] : [["model", t("usage.by_model")], ["provider", t("usage.by_provider"), "split:provider"]];
   if (!isAdmin() && p.split === "user") p.split = "model";
-  const d = await api(`/api/series?range=${p.range}&granularity=${p.granularity}&split=${p.split}&tz_offset=${tzOffset()}`);
+  // A granularity giving under 4 buckets in the range (Daily over 24 h, Weekly over 7 days) is greyed out, and the chart
+  // falls back to the finest one, without overwriting the saved choice for the longer ranges.
+  const days = { "1d": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365 }[p.range] || 7;
+  const tooCoarse = (g) => days / { hour: 1 / 24, day: 1, week: 7 }[g] < 4;
+  const gran = tooCoarse(p.granularity) ? "hour" : p.granularity;
+  const d = await api(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
     <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
     <div class="controls">
       ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range)}
-      ${seg("granularity", [["hour", t("gran.hour")], ["day", t("gran.day")], ["week", t("gran.week")]], p.granularity)}
+      ${seg("granularity", ["hour", "day", "week"].map((g) => [g, t(`gran.${g}`), null, tooCoarse(g)]), gran)}
       ${seg("split", splits, p.split)}
       ${seg("metric", Object.entries(METRICS).map(([k, v]) => [k, v, `metric:${k}`]), p.metric)}
     </div>
-    <div class="card"><h3>${t(`usage.per_${p.granularity}`, { metric: esc(METRICS[p.metric]) })}</h3><p class="sub" id="usage-hint">${t("usage.zoom")}</p>
+    <div class="card"><h3>${t(`usage.per_${gran}`, { metric: esc(METRICS[p.metric]) })}</h3><p class="sub" id="usage-hint">${t("usage.zoom")}</p>
       <div class="chart tall" id="usage-chart"></div><div id="usage-table"></div></div></section>`;
   wireSegs(main, render);
   if (!d.points.length) { $("#usage-chart").outerHTML = `<p class="muted">${t("usage.none")}</p>`; return; }
-  const { keys, times, series } = stackedTime($("#usage-chart"), d.points, p.metric, p.split, p.granularity);
+  const { keys, times, series } = stackedTime($("#usage-chart"), d.points, p.metric, p.split, gran);
   if (keys.length > 1) $("#usage-hint").textContent = t("usage.zoom_legend");
   $("#usage-table").innerHTML = tableView(t("app.show_table"), [t("usage.period"), ...keys.map(seriesLabel)], times.map((tm) =>
-    [timeLabel(p.granularity)(tm * 1000), ...keys.map((k) => fmtMetric(p.metric, series[k].get(tm) || 0))]));
+    [timeLabel(gran)(tm * 1000), ...keys.map((k) => fmtMetric(p.metric, series[k].get(tm) || 0))]));
 }
 
 async function renderUsers(main) {
