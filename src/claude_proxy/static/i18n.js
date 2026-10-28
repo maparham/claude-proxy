@@ -227,7 +227,7 @@ const I18N = {
     "lim.tip_resets": "<b>Resets</b> is when the window that opened with the first request ends and the count goes back to zero.",
     "lim.none": "No limits",
     "tab.overview": "Overview",
-    "tab.usage": "Usage over time",
+    "tab.usage": "Usage history",
     "tab.users": "Users & limits",
     "tab.tickets": "Tickets",
     "tab.orders": "Orders",
