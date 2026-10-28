@@ -390,6 +390,9 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .pass-axis em { position: absolute; top: 2px; width: 0; display: flex; justify-content: center; font-style: normal; }
 .pass-axis em.edge-start { justify-content: flex-start; } .pass-axis em.edge-end { justify-content: flex-end; }
 .pass-axis em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 6px; background: var(--muted); }
+.pass-axis.two { height: 72px; }
+.pass-axis em.low::before { height: 40px; }
+.pass-axis em.low small { margin-top: 42px; }
 .pass-axis em small { margin-top: 8px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .pass-axis em.edge-start small { text-align: start; } .pass-axis em.edge-end small { text-align: end; }
 .pass-list { margin-top: 10px; }

@@ -667,19 +667,21 @@ function passTimeline(tk) {
     const label = !s.plan_x || wide < 0.06 ? "" : wide >= 0.18 ? esc(plan(s.plan_x)) : `<bdi dir="ltr">${times(s.plan_x)}×</bdi>`;
     return `<span style="flex-grow:${s.to - s.from}" title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><b>${label}</b><span class="stk" style="height:calc((100% - 16px) * ${tot.toFixed(3)})">${blocks}</span></span>`;
   }).join("");
-  // Ticks at now, each change and the last end; a date only where it has room beside the one before it.
+  // A timestamp at now, at each change and at the last end. One too close to the one before drops to a second row,
+  // so every change keeps its time; the legend then names the passes only.
   const short = (ts) => { const d = new Date(ts * 1000); return `${d.toLocaleDateString(LOC, { month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`; };
-  let last = -1;
-  const ticks = [tl.start, ...tl.segments.map((s) => s.to)].map((ts, k, all) => {
+  const lastAt = [-1, -1];
+  let rows = 1;
+  const ticks = [tl.start, ...tl.segments.map((s) => s.to)].map((ts, k) => {
     const at = (ts - tl.start) / span;
-    const show = k === 0 || k === all.length - 1 ? true : at - last >= 0.16 && 1 - at >= 0.16;
-    if (show) last = at;
-    const cls = at < 0.08 ? "edge-start" : at > 0.92 ? "edge-end" : "";
-    return `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%">${show ? `<small>${k === 0 ? t("tl.now") : short(ts)}</small>` : ""}</em>`;
+    const row = at - lastAt[0] >= 0.12 ? 0 : 1;
+    lastAt[row] = at;
+    rows = Math.max(rows, row + 1);
+    const cls = `${at < 0.08 ? "edge-start" : at > 0.92 ? "edge-end" : ""}${row ? " low" : ""}`;
+    return `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${k === 0 ? t("tl.now") : short(ts)}</small></em>`;
   }).join("");
-  const legend = tl.passes.map((p, i) => `<li><i style="background:${color(i)}"></i>${esc(name(i))} <span class="muted">${p.starts_at > tl.start
-    ? t("tl.from_until", { from: fmtDate(p.starts_at), until: fmtDate(p.ends_at) }) : t("tl.until", { until: fmtDate(p.ends_at) })}</span></li>`).join("");
-  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="pass-tl">${cols}</div><div class="pass-axis" aria-hidden="true">${ticks}</div>
+  const legend = tl.passes.map((p, i) => `<li><i style="background:${color(i)}"></i>${esc(name(i))}</li>`).join("");
+  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="pass-tl">${cols}</div><div class="pass-axis${rows > 1 ? " two" : ""}" aria-hidden="true">${ticks}</div>
     <ul class="pass-legend">${legend}</ul></div>`;
 }
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
