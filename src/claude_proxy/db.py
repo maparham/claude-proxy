@@ -621,7 +621,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
         raise ValueError("Only a revoked user can be deleted; revoke them first.")
     if conn.execute(f"SELECT 1 FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {TICKET_EFFECTIVE_END}>? LIMIT 1",
                     (user_id, now)).fetchone():
-        raise ValueError("Cancel the user's active or queued ticket first.")
+        raise ValueError("Cancel the user's active or queued pass first.")
     n = conn.execute("UPDATE requests SET user_id=NULL, session_id=NULL, client_version=NULL WHERE user_id=?",
                      (user_id,)).rowcount
     conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits, sessions and titles cascade; tickets keep user_name

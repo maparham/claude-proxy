@@ -13,7 +13,7 @@ def test_delete_refused_with_a_live_ticket_and_keeps_records_after(db):
     conn, cfg, ids = seeded(db)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
     dbm.revoke(conn, ids["alice"])
-    with pytest.raises(ValueError, match="active or queued ticket"):
+    with pytest.raises(ValueError, match="active or queued pass"):
         dbm.delete_user(conn, ids["alice"], ids["admin"], now=NOW + 10)
     dbm.delete_user(conn, ids["alice"], ids["admin"], now=NOW + 2 * DAY)         # ended: allowed
     row = conn.execute("SELECT user_id, user_name FROM tickets WHERE id=?", (t["id"],)).fetchone()

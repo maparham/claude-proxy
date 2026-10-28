@@ -1085,7 +1085,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     def need_tickets():
         if not cfg.tickets.enabled:
-            fail(404, "Tickets are not enabled on this gateway.")
+            fail(404, "Passes are not enabled on this gateway.")
 
     # --- Subscription accounts (spec 2026-10-13): the same paste-the-code login as `claude-proxy login --account` ---
 
@@ -1257,7 +1257,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         remove = [(str(r.get("kind", "")), str(r.get("scope") or "*")) for r in body.get("remove_limits") or [] if isinstance(r, dict)]
         # The price and rate the preview showed: required, and a grant at a price the admin did not see is refused (409).
         if body.get("usd") is None or body.get("rate") is None:
-            fail(400, "Preview the ticket first and send the usd and rate it showed.")
+            fail(400, "Preview the pass first and send the usd and rate it showed.")
         quoted = {k: _number(body[k], k) for k in ("usd", "rate")}
         # Granted from an order: it is marked done in the same transaction, or the grant is refused (409, OrderError).
         # With order_id the order row's stored terms version governs (no new tick); a direct grant needs the tick.
@@ -1403,7 +1403,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return None
         t = tickets.covering(conn, user_id, time.time())
         if t is None:
-            fail(409, "You have no running ticket to upgrade.")
+            fail(409, "You have no running pass to upgrade.")
         return t["id"]
 
     def place_order(body: dict, **kw) -> dict:
@@ -1806,7 +1806,7 @@ def _ticket_name(conn, cfg, user_id: int, now: float) -> str | None:
     if t is None:
         return None
     tier = tickets.tier_now(conn, t)
-    return f"{cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier} {t['length']} ticket"
+    return f"{cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier} {t['length']} pass"
 
 
 def _status_line(user, states, account, weeks: dict | None = None, ticket: str | None = None) -> str:

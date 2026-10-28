@@ -33,16 +33,16 @@ TERMS_VERSION = "v1"
 # The order dialog's terms (i18n.js ord.split*, ord.terms_l1, ord.terms_l3), repeated in the buyer's emails in the
 # language of the page they ordered from. Dates in Tehran time: the dialog shows the buyer's own clock.
 TERMS = {
-    "en": {"head": "Ticket terms:", "split": "Your use of the ticket will be limited in {n} parts: {pieces}.",
-           "split_one": "Your whole ticket is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
+    "en": {"head": "Pass terms:", "split": "Your use of the pass will be limited in {n} parts: {pieces}.",
+           "split_one": "Your whole pass is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
            "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "{n} week: {pct}",
            "halves": ("Before the weekly reset: {pct}", "After the weekly reset: {pct}"),
            "nth": ("First", "Second", "Third", "Fourth", "Fifth"),
            "l1": "Your allowance is split across weekly windows by the days each one covers; each piece is "
                  "spendable at your own pace and expires at its window's reset.",
            "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
-    "fa": {"head": "شرایط تیکت:", "split": "استفاده شما از تیکت در {n} قسمت محدود خواهد بود: {pieces}.",
-           "split_one": "کل تیکت شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
+    "fa": {"head": "شرایط بسته:", "split": "استفاده شما از بسته در {n} قسمت محدود خواهد بود: {pieces}.",
+           "split_one": "کل بسته شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
            "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "هفته {n}: {pct}",
            "halves": ("پیش از ریست هفتگی: {pct}", "پس از ریست هفتگی: {pct}"),
            "nth": ("اول", "دوم", "سوم", "چهارم", "پنجم"),
@@ -156,7 +156,7 @@ def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float, body:
     return f'<div dir="{d}" style="text-align:{"right" if d == "rtl" else "left"};white-space:pre-wrap">{inner}</div>\n'
 
 
-TERMS_CHANGED = "Ticket terms have changed; reload and accept the current terms."
+TERMS_CHANGED = "Pass terms have changed; reload and accept the current terms."
 
 
 def _check_terms(terms_version) -> str:
@@ -615,7 +615,7 @@ def _row(conn, sql: str, args: tuple) -> dict | None:
 def get(conn: sqlite3.Connection, ticket_id: int) -> dict:
     t = _row(conn, f"SELECT {TICKET_COLS} FROM tickets t WHERE t.id=?", (ticket_id,))
     if t is None:
-        raise TicketError(f"No ticket #{ticket_id}.")
+        raise TicketError(f"No pass #{ticket_id}.")
     return t
 
 
@@ -895,7 +895,7 @@ def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: 
     try:
         t = get(conn, ticket_id)
         if t["cancelled_at"] is not None:
-            raise TicketError("This ticket is already cancelled.")
+            raise TicketError("This pass is already cancelled.")
         conn.execute("UPDATE tickets SET cancelled_at=?, cancelled_by=? WHERE id=?", (now, actor, ticket_id))
         conn.execute("UPDATE ticket_bonuses SET cancelled_at=?, cancelled_by=? WHERE ticket_id=? AND cancelled_at IS NULL", (now, actor, ticket_id))
         moved, kept, reason = 0, False, None
@@ -978,19 +978,19 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
             if chain and chain[0]["starts_at"] < new_end:
                 # Only a ticket the extension reaches has to move, and one that has started cannot.
                 if chain[0]["starts_at"] <= now:
-                    raise TicketError("The user's next ticket has already started; the extra days would run into it.")
+                    raise TicketError("The user's next pass has already started; the extra days would run into it.")
                 try:
                     _shift(conn, cfg, chain, new_end - chain[0]["starts_at"])
                     moved = len(chain)
                 except CapacityError as e:
-                    raise CapacityError(f"The extra days would move {t['user_name']}'s queued ticket, which then does not fit: {e}") from e
+                    raise CapacityError(f"The extra days would move {t['user_name']}'s queued pass, which then does not fit: {e}") from e
             if new_end > now:
                 check_capacity(conn, cfg, t["account_id"], t["share_pct"], max(old_end, now), new_end)
         if share_pct:
             s = max(int(now if starts_at is None else starts_at), t["starts_at"])
             e = min(int(new_end if ends_at is None else ends_at), new_end)
             if s >= e:
-                raise TicketError("The bonus share period must lie within the ticket's period.")
+                raise TicketError("The bonus share period must lie within the pass's period.")
             if e > now:
                 check_capacity(conn, cfg, t["account_id"], share_pct, max(s, now), e)
         else:
@@ -1047,14 +1047,14 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
     if ticket["cancelled_at"] is not None or not ticket["starts_at"] <= now < ticket["effective_end"]:
-        raise TicketError("Only a running ticket can be upgraded.")
+        raise TicketError("Only a running pass can be upgraded.")
     if len(running(conn, ticket["user_id"], now)) > 1:
-        raise TicketError("Only a ticket running on its own can be upgraded; buy another ticket to start now instead.")
+        raise TicketError("Only a pass running on its own can be upgraded; buy another pass to start now instead.")
     if was_used(conn, ticket):
-        raise TicketError("This ticket has been used; only a ticket not used yet can be upgraded. Buy a new ticket instead.")
+        raise TicketError("This pass has been used; only a pass not used yet can be upgraded. Buy a new pass instead.")
     left = ticket["effective_end"] - now
     if left < UPGRADE_MIN_S:
-        raise TicketError("Less than an hour of this ticket is left; buy a new one instead.")
+        raise TicketError("Less than an hour of this pass is left; buy a new one instead.")
     steps = currencies(cfg)
     if currency not in steps:
         raise TicketError(f"Unknown currency {currency!r}.")
@@ -1071,7 +1071,7 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     whole = LENGTHS[ticket["length"]] * DAY
     usd = round((price_now(conn, tier, ticket["length"], now)["usd"] - price_now(conn, frm, ticket["length"], now)["usd"]) * left / whole, 2)
     if share <= 0 or usd <= 0:
-        raise TicketError(f"{cfg.tickets.tiers[tier].label} is not above this ticket's tier.")
+        raise TicketError(f"{cfg.tickets.tiers[tier].label} is not above this pass's tier.")
     try:
         check_capacity(conn, cfg, ticket["account_id"], share, now, ticket["effective_end"])
         sold = False
@@ -1107,7 +1107,7 @@ def upgrade(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tick
     try:
         t = get(conn, ticket_id)
         if t["user_id"] != user["id"]:
-            raise TicketError("That ticket is not this user's.")
+            raise TicketError("That pass is not this user's.")
         q = upgrade_quote(conn, cfg, t, tier, currency, now)
         if paid:
             o = conn.execute("SELECT quoted_usd, quoted_rate, quoted_amount FROM orders WHERE id=?", (order_id,)).fetchone()
@@ -1142,7 +1142,7 @@ def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float
     live = conn.execute(f"SELECT t.id FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {db.TICKET_EFFECTIVE_END}>?",
                         (user_id, now)).fetchall()
     if live and not end_live:
-        raise TicketError(f"{name} has an active or queued ticket; cancel it before ungating.")
+        raise TicketError(f"{name} has an active or queued pass; cancel it before ungating.")
     conn.execute("BEGIN IMMEDIATE")
     try:
         ids = [r[0] for r in live]
@@ -1151,7 +1151,7 @@ def ungate(conn: sqlite3.Connection, actor: int | None, user_id: int, now: float
             conn.execute("UPDATE ticket_bonuses SET cancelled_at=?, cancelled_by=? WHERE ticket_id=? AND cancelled_at IS NULL", (now, actor, tid))
         n = conn.execute("UPDATE tickets SET ungated_at=? WHERE user_id=? AND ungated_at IS NULL", (now, user_id)).rowcount
         if n == 0:
-            raise TicketError(f"{name} has no tickets to ungate.")
+            raise TicketError(f"{name} has no passes to ungate.")
         db.audit(conn, actor, "ungate", name, {"tickets": n, **({"cancelled": ids} if ids else {})})
         conn.execute("COMMIT")
     except BaseException:

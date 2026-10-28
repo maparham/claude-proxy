@@ -205,12 +205,12 @@ async def test_order_endpoints_refuse_missing_or_stale_terms(env, ts):
     async with client(gw) as c:
         bare = {k: v for k, v in VISITOR.items() if k != "terms_version"}
         r = await c.post("/api/orders", json=bare)
-        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        assert r.status_code == 400 and r.json()["error"] == "Pass terms have changed; reload and accept the current terms."
         r = await c.post("/api/orders", json=VISITOR | {"terms_version": "v0"})
-        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        assert r.status_code == 400 and r.json()["error"] == "Pass terms have changed; reload and accept the current terms."
         h = bearer(keys["alice"])
         r = await c.post("/api/me/orders", headers=h, json={k: v for k, v in ORDER.items() if k != "terms_version"} | {"email": "a@b.cd"})
-        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        assert r.status_code == 400 and r.json()["error"] == "Pass terms have changed; reload and accept the current terms."
     assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
 
 
@@ -329,7 +329,7 @@ async def test_granting_an_order_emails_the_buyer(env, ts, sent):
         assert sent == []
         assert (await grant(c, ORDER | {"user": uid, "order_id": oid})).status_code == 200
         await drain()
-    assert sent == [("vera@example.com", "Your ticket is granted: Lite week")]
+    assert sent == [("vera@example.com", "Your pass is granted: Lite week")]
 
 
 async def test_withdrawing_an_order_emails_the_buyer(env, sent):
@@ -383,7 +383,7 @@ def test_the_granted_mail_carries_the_dates_and_terms_in_the_order_language(env)
     subject, body = orders.granted_mail_text(conn, cfg, o, t)
     assert tickets._date(t["starts_at"]) in body and tickets.terms_text(conn, cfg, "en", "week", t["starts_at"]) in body
     subject, body = orders.granted_mail_text(conn, cfg, o | {"lang": "fa"}, t)
-    assert subject.startswith("تیکت شما فعال شد") and tickets.terms_date(t["ends_at"], "fa") in body
+    assert subject.startswith("بسته شما فعال شد") and tickets.terms_date(t["ends_at"], "fa") in body
 
 
 async def test_the_admin_picks_which_mail_server_goes_first(env, sent):

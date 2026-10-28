@@ -52,8 +52,8 @@ password_env = "SES_SMTP_PASSWORD"
 # on first start; after that they are edited on the dashboard's Pricing tab. The plan comparison is set there only:
 # the shared account's plan can change any time, so nothing here assumes its size.
 [tickets]
-how_to_buy = "Send the amount by bank transfer to the admin and email them with the ticket you want."
-how_to_buy_fa = "مبلغ را با انتقال بانکی برای ادمین بفرستید و تیکتی را که می‌خواهید به او ایمیل کنید."
+how_to_buy = "Send the amount by bank transfer to the admin and email them with the pass you want."
+how_to_buy_fa = "مبلغ را با انتقال بانکی برای ادمین بفرستید و بسته‌ای را که می‌خواهید به او ایمیل کنید."
 max_sold_pct = 100
 # Visitor orders on the home page are off: buyers sign in before ordering, so "Get it" links to the dashboard.
 # To bring them back, uncomment (Turnstile widget "Claude Gateway orders"; the secret is TURNSTILE_SECRET in gateway.env).

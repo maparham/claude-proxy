@@ -257,7 +257,7 @@ def test_bonus_validation(db):
     for kw in ({}, {"share_pct": 0, "extra_days": 0}, {"share_pct": -1}, {"extra_days": -1}):
         with pytest.raises(tickets.TicketError):
             bonus(conn, cfg, ids, t["id"], **kw)
-    with pytest.raises(tickets.TicketError, match="within the ticket"):
+    with pytest.raises(tickets.TicketError, match="within the pass"):
         bonus(conn, cfg, ids, t["id"], share_pct=1, starts_at=NOW + 8 * DAY, ends_at=NOW + 9 * DAY)   # after the ticket
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW)
     with pytest.raises(tickets.TicketError, match="cancelled"):
@@ -301,7 +301,7 @@ def test_bonus_days_refused_when_a_moved_ticket_does_not_fit(db):
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 2 * DAY, confirm_stale_rate=True)     # bob day 2
     grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=NOW + 2 * DAY, confirm_stale_rate=True)   # carol day 2: day 2 = 50
     # An extra day on a extends it over day 1, so b must move onto day 2, which is full.
-    with pytest.raises(tickets.CapacityError, match="queued ticket"):
+    with pytest.raises(tickets.CapacityError, match="queued pass"):
         bonus(conn, cfg, ids, a["id"], extra_days=1)
     assert tickets.get(conn, a["id"])["effective_end"] == NOW + DAY           # nothing applied
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + DAY
@@ -383,7 +383,7 @@ def test_ungate_only_without_live_tickets(db):
     assert tickets.is_gated(conn, ids["alice"]) is False
     assert conn.execute("SELECT COUNT(*) FROM tickets WHERE user_id=?", (ids["alice"],)).fetchone()[0] == 2   # records stay
     assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()[:] == ("ungate", "alice")
-    with pytest.raises(tickets.TicketError, match="no tickets"):
+    with pytest.raises(tickets.TicketError, match="no passes"):
         tickets.ungate(conn, ids["admin"], ids["admin"], now=NOW)
 
 

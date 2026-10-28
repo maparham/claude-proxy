@@ -378,12 +378,12 @@ def hand_over(conn, cfg: Config, user_id: int, now: float, run: list[dict] | Non
 def _no_ticket_message(conn, cfg, user_id, now) -> str:
     nxt = tickets.next_queued(conn, user_id, now)
     if nxt:
-        return f"Your next ticket starts on {_date(nxt['starts_at'])}."
+        return f"Your next pass starts on {_date(nxt['starts_at'])}."
     last = tickets.last_ended(conn, user_id, now)
     buy = f" Buy one at {cfg.listener.dashboard_url.rstrip('/')}/dashboard" if cfg.listener.dashboard_url else ""
     if last is None:   # e.g. their only ticket was cancelled before it started
-        return f"You have no ticket.{buy}"
-    return f"Your ticket ended on {_date(last['ended_at'])}.{buy}"
+        return f"You have no pass.{buy}"
+    return f"Your pass ended on {_date(last['ended_at'])}.{buy}"
 
 
 def _perm(message: str) -> dict:
@@ -415,7 +415,7 @@ USER_KINDS = {"share_5h": "5h_limit", "share_7d": "weekly_limit"}   # what a non
 TICKET = "ticket"                  # rejected_by: a ticket-gated user with no active ticket, or on a third-party model
 TICKET_NO_DATA = "ticket_no_data"  # rejected_by: the 503 while no usage rate was ever observed
 NO_RATE = "no usage rate observed yet"
-PAUSED = "Tickets are paused; ask the admin."   # a ticket-gated user while [tickets] is switched off
+PAUSED = "Passes are paused; ask the admin."   # a ticket-gated user while [tickets] is switched off
 
 
 def _describe(st: LimitState) -> str:
@@ -424,7 +424,7 @@ def _describe(st: LimitState) -> str:
     scope = f" for models {st.scope}" if st.scope != "*" else ""
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
     if st.kind == "share_7d":
-        return (f"Weekly share of your {st.tier} ticket is used up. It resets at "
+        return (f"Weekly share of your {st.tier} pass is used up. It resets at "
                 f"{_date(st.resets_at) if st.resets_at else 'the next weekly reset'}.")
     if st.kind in SHARE_LABELS:
         return f"Gateway {SHARE_LABELS[st.kind]}{scope} reached: {st.pct or 0:.0f}% used{wait}."
@@ -513,7 +513,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
                                          for r in rows):
         # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set for
         # this model governs instead (scoped as the loop below scopes rows).
-        return Decision(403, TICKET, _perm("Your ticket covers Claude models only."))
+        return Decision(403, TICKET, _perm("Your pass covers Claude models only."))
     for row in rows:
         kind = row["kind"]
         if kind == "allowed_models":

@@ -295,14 +295,14 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
     if cfg.email is None:
         return []
     up = o.get("upgrade_of")
-    what = f"upgrade of ticket #{up} to {_label(cfg, o['tier'])}" if up else f"{_label(cfg, o['tier'])}, {o['length']} ({LENGTHS.get(o['length'], '?')} days)"
+    what = f"upgrade of pass #{up} to {_label(cfg, o['tier'])}" if up else f"{_label(cfg, o['tier'])}, {o['length']} ({LENGTHS.get(o['length'], '?')} days)"
     head = f"Paid: {what}, {_toman(p['amount'])}, ZarinPal reference {p['ref_id']}, by {o['name']} <{o['email']}>."
     link = f"\n\nOrders: {cfg.listener.dashboard_url.rstrip('/')}/dashboard#orders" if cfg.listener.dashboard_url else ""
     if p["status"] == "paid_unfulfilled":
-        return [(cfg.email.admin_to, f"Paid, ticket NOT granted: order #{o['id']}",
-                 f"{head}\n\nThe ticket was NOT granted: {reason}. Grant it from the order or refund the payment.{link}\n")]
+        return [(cfg.email.admin_to, f"Paid, pass NOT granted: order #{o['id']}",
+                 f"{head}\n\nThe pass was NOT granted: {reason}. Grant it from the order or refund the payment.{link}\n")]
     out = [(cfg.email.admin_to, f"Paid: {_label(cfg, o['tier'])} {'upgrade' if up else o['length']}",
-            f"{head}\nThe {'upgrade' if up else 'ticket'} is live.{link}\n")]
+            f"{head}\nThe {'upgrade' if up else 'pass'} is live.{link}\n")]
     if ticket is not None and up:
         paid = (f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد. کد پیگیری زرین‌پال: {p['ref_id']}\n\n"
                 if o.get("lang") == "fa" else f"Thank you. Your payment of {_toman(p['amount'])} went through. ZarinPal reference: {p['ref_id']}\n\n")
@@ -311,12 +311,12 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
         what_fa = f"{orders.fa_label(cfg, o['tier'])}، ۱ {orders.FA_LENGTHS.get(o['length'], o['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
         out.append((o["email"], f"پرداخت شما: {what_fa}",
-                    f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n\nتیکت: {what_fa}، {span}.\n"
+                    f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n\nبسته: {what_fa}، {span}.\n"
                     f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'fa', o['length'], ticket['starts_at'])}"))
     elif ticket is not None:
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
-                    f"Thank you. Your payment of {_toman(p['amount'])} went through.\n\nTicket: {what}, {span}.\n"
+                    f"Thank you. Your payment of {_toman(p['amount'])} went through.\n\nPass: {what}, {span}.\n"
                     f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'en', o['length'], ticket['starts_at'])}"))
     return out
 

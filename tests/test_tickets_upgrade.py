@@ -69,7 +69,7 @@ def test_upgrade_order_and_paid_fulfilment(core):
     assert orders.get(conn, o["id"])["status"] == "done"
     assert tickets.tier_now(conn, tickets.get(conn, t["id"])) == "standard"
     subject, body = orders.granted_mail_text(conn, cfg, orders.get(conn, o["id"]), tickets.get(conn, t["id"]))
-    assert subject == "Your ticket is upgraded: Standard"
+    assert subject == "Your pass is upgraded: Standard"
 
 
 def test_someone_elses_ticket_cannot_be_ordered_up(core):

@@ -240,10 +240,10 @@ def test_missing_order_is_404(env):
 
 def test_order_without_terms_is_400(env):
     conn, cfg, ids = env
-    with refused(400, "Ticket terms have changed") as e:
+    with refused(400, "Pass terms have changed") as e:
         orders.create(conn, cfg, tier="lite", length="week", currency="EUR", name="V", email="v@example.com", ip="1.2.3.4")
     assert e.value.status == 400
-    with refused(400, "Ticket terms have changed"):
+    with refused(400, "Pass terms have changed"):
         visitor(conn, cfg, terms_version="v0")
     assert conn.execute("SELECT COUNT(*) FROM orders").fetchone()[0] == 0
 
@@ -260,9 +260,9 @@ def test_direct_grant_needs_current_terms_but_an_order_grant_uses_the_orders(env
     conn, cfg, ids = env
     o = signed_in(conn, cfg, ids["alice"])
     monkeypatch.setattr(tickets, "TERMS_VERSION", "v2")   # terms changed after the order was placed
-    with pytest.raises(tickets.TicketError, match="Ticket terms have changed"):
+    with pytest.raises(tickets.TicketError, match="Pass terms have changed"):
         tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
-    with pytest.raises(orders.OrderError, match="Ticket terms have changed"):
+    with pytest.raises(orders.OrderError, match="Pass terms have changed"):
         signed_in(conn, cfg, add_user(conn, ids, "bob"), email="bob@example.com")
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR",
                       order_id=o["id"], now=NOW + 60)   # the in-flight v1 order still grants, no new tick
@@ -525,10 +525,10 @@ def test_buyer_mail_in_persian_for_an_order_from_the_persian_page(mailing):
     o = visitor(conn, cfg, lang="fa")
     subject, body = orders.buyer_mail_text(conn, cfg, o)
     assert subject == "سفارش شما: اقتصادی، ۱ هفته"
-    assert "تیکت اقتصادی برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
+    assert "بسته اقتصادی برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
     assert "ادمین برای مرحله بعد با شما تماس می‌گیرد" in body and cfg.tickets.how_to_buy not in body
-    assert tickets.terms_text(conn, cfg, "fa", "week", o["created_at"]) in body and "شرایط تیکت:" in body
-    assert "Ticket terms" not in body
+    assert tickets.terms_text(conn, cfg, "fa", "week", o["created_at"]) in body and "شرایط بسته:" in body
+    assert "Pass terms" not in body
 
 
 def test_persian_amounts_in_toman():

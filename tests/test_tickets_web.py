@@ -436,7 +436,7 @@ async def test_a_grant_needs_the_quote_its_preview_showed(env):
     gw, conn, cfg, ids, keys = env
     async with admin_client(gw) as c:
         r = await c.post("/api/admin/tickets", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})
-        assert r.status_code == 400 and "Preview the ticket first" in r.json()["error"]
+        assert r.status_code == 400 and "Preview the pass first" in r.json()["error"]
     assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 0
 
 
@@ -447,9 +447,9 @@ async def test_a_grant_needs_the_terms_tick_unless_from_an_order(env):
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).json()
         quote = {"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "usd": p["usd"], "rate": p["rate"]}
         r = await c.post("/api/admin/tickets", json=quote)
-        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        assert r.status_code == 400 and r.json()["error"] == "Pass terms have changed; reload and accept the current terms."
         r = await c.post("/api/admin/tickets", json=quote | {"terms_version": "v0"})
-        assert r.status_code == 400 and r.json()["error"] == "Ticket terms have changed; reload and accept the current terms."
+        assert r.status_code == 400 and r.json()["error"] == "Pass terms have changed; reload and accept the current terms."
         o = orders.create(conn, cfg, tier="lite", length="week", currency="USD", name="alice", email="a@b.cd",
                           user_id=ids["alice"], now=int(time.time()), terms_version="v1")
         r = await c.post("/api/admin/tickets", json=quote | {"order_id": o["id"]})   # the order's tick governs: none needed
@@ -488,7 +488,7 @@ async def test_my_status_gives_the_weekly_limits_week_breakdown(env):
     weekly = next(v for v in me["limits"] if v["kind"] == "weekly_limit")
     assert [w["state"] for w in weekly["weeks"]["weeks"]] == ["current", "future"] and weekly["weeks"]["ticket_pct"] == 0
     assert "0% of first week · 0% of second week · 0% used (6d:23h left)" in me["line"]
-    assert me["line"].startswith("alice · Lite week ticket · ")   # the statusline names the ticket it runs on
+    assert me["line"].startswith("alice · Lite week pass · ")   # the statusline names the ticket it runs on
 
 
 async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
