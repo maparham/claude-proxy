@@ -498,9 +498,11 @@ function sourceSwitch(main, view) {
   if (!S.api?.enabled || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
   const box = document.createElement("span");
   box.innerHTML = seg("source", [["cli", t("source.cli"), "source:cli"], ["api", t("source.api"), "source:api"]], S.prefs.source);
-  const row = main.querySelector(".controls");
+  // No controls row and no lede (a new buyer's overview, with nothing used yet): no switch.
+  const row = main.querySelector(".controls"), lede = main.querySelector(".lede");
+  if (!row && !lede) return;
   if (row) row.prepend(box.firstChild);
-  else { const div = Object.assign(document.createElement("div"), { className: "controls" }); div.append(box.firstChild); main.querySelector(".lede")?.after(div); }
+  else { const div = Object.assign(document.createElement("div"), { className: "controls" }); div.append(box.firstChild); lede.after(div); }
   wireSegs(main.querySelector('.seg[data-pref="source"]').parentElement, render);
 }
 async function render() {
