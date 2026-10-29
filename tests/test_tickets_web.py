@@ -345,8 +345,8 @@ async def test_order_terms_split_from_the_pricing_payloads(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         public = (await c.get("/api/pricing")).json()["week_split"]
         mine = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["prices"]["week_split"]
-    assert public["first_reset"] == now + DAY and public["week"] == pytest.approx([1 / 7, 6 / 7], abs=1e-3)
-    assert mine["starts_at"] == t["effective_end"] and mine["first_reset"] == now + DAY + 7 * DAY   # queued past one reset
+    assert "first_reset" not in public and public["week"] == pytest.approx([1 / 7, 6 / 7], abs=1e-3)
+    assert mine["starts_at"] == t["effective_end"] and "first_reset" not in mine   # queued past one reset
     assert mine["week"] == pytest.approx([1 / 7, 6 / 7], abs=1e-3)
 
 

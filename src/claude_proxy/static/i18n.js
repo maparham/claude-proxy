@@ -705,11 +705,10 @@ const I18N = {
     "ord.terms_l1": "Your allowance is split across weekly windows by the days each one covers; each piece is spendable at your own pace and expires at its window's reset.",
     "ord.split": "Your use of the pass will be limited in {n} parts: {pieces}.",
     "ord.split_one": "Your whole pass is usable until {date}.",
-    "ord.split_piece": "{pct} until {date}",
     "ord.split_and": " and ",
     "ord.split_week": "{n} week: {pct}",
-    "ord.split_before": "Before the weekly reset: {pct}",
-    "ord.split_after": "After the weekly reset: {pct}",
+    "ord.split_before": "First part: {pct}",
+    "ord.split_after": "Second part: {pct}",
     "ord.nth.1": "First", "ord.nth.2": "Second", "ord.nth.3": "Third", "ord.nth.4": "Fourth", "ord.nth.5": "Fifth",
     "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
     "ord.terms_l3": "Anthropic also applies its own 5-hour limit.",
@@ -1672,11 +1671,10 @@ const I18N = {
     "ord.terms_l1": "سهم شما به نسبت روزهایی که هر بازه هفتگی پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
     "ord.split": "بسته شما در {n} قسمت قابل استفاده است: {pieces}.",
     "ord.split_one": "کل بسته شما تا {date} قابل استفاده است.",
-    "ord.split_piece": "{pct} تا {date}",
     "ord.split_and": " و ",
     "ord.split_week": "هفته {n}: {pct}",
-    "ord.split_before": "پیش از ریست هفتگی: {pct}",
-    "ord.split_after": "پس از ریست هفتگی: {pct}",
+    "ord.split_before": "قسمت اول: {pct}",
+    "ord.split_after": "قسمت دوم: {pct}",
     "ord.nth.1": "اول", "ord.nth.2": "دوم", "ord.nth.3": "سوم", "ord.nth.4": "چهارم", "ord.nth.5": "پنجم",
     "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
     "ord.terms_l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.",
@@ -1973,11 +1971,11 @@ function planName(v) { return I18N[LANG][`plan_name.${v}`] ?? v; }
 function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other"}`, { n, ...vars }); }
 
 // The order terms' line on how a `days`-long ticket of `len` splits across Anthropic's weeks, from the price list's
-// week_split (fractions of the ticket per week): each piece with the date it runs until, a weekly reset or the
-// ticket's end. Whole percents: "rough" is the promise. "" without quota data. Several pieces are also drawn as a bar,
-// each segment as long as its share, labelled with its week and percent (a narrow one with the percent only, a
-// sliver with neither: the sentence has them all), with the ticket's start, each weekly reset and its end marked
-// with their date and time.
+// week_split (fractions of the ticket per week): each piece named for its week (a ticket under a week: first and
+// second part) with its share. Whole percents: "rough" is the promise. "" without quota data. Never a weekly reset's
+// date: that is the account's, not the buyer's. Several pieces are also drawn as a bar, each segment as long as its
+// share, labelled with its name and percent (a narrow one with the percent only, a sliver with neither: the sentence
+// has them all), with only the ticket's start and end marked with their date and time.
 function splitTerms(ws, len, days) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
@@ -1985,29 +1983,20 @@ function splitTerms(ws, len, days) {
     : new Intl.NumberFormat(LOC, { style: "percent", maximumFractionDigits: 0 }).format(v));
   const when = (ts) => new Date(ts * 1000).toLocaleString(LOC, { weekday: "long", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const end = ws.starts_at + days * 86400;
-  const until = (i) => Math.min(ws.first_reset + i * 7 * 86400, end);
   if (parts.length === 1) return t("ord.split_one", { date: when(end) });
-  const pieces = parts.map((v, i) => t("ord.split_piece", { pct: pct(v), date: when(until(i)) }));
-  const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
-  // A ticket under a week crosses one reset at most: its two parts are named for that reset, not as weeks.
+  // A ticket under a week crosses one reset at most: its two parts are named first and second, not as weeks.
   const name = (v, i) => (days < 7 ? t(i ? "ord.split_after" : "ord.split_before", { pct: pct(v) }) : t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) }));
+  const pieces = parts.map(name);
+  const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
   const label = (v, i) => (v >= 0.2 ? name(v, i) : v >= 0.1 ? pct(v) : "&nbsp;");
   const bar = parts.map((v, i) => `<span style="flex-grow:${v}"><b>${label(v, i)}</b><i style="background:var(--s${i % 5 + 1})"></i></span>`).join("");
-  const short = (ts) => {   // date over time, narrow enough for a month's four resets to sit side by side
+  const short = (ts) => {   // date over time
     const d = new Date(ts * 1000);
     return `${d.toLocaleDateString(LOC, { weekday: "short", month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`;
   };
-  // The ticket's start and end sit at the bar's ends; a reset close enough to one to collide drops to a second row.
   const mark = (at, ts, cls) => `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${short(ts)}</small></em>`;
-  let at = 0, low = false;
-  const resets = parts.slice(0, -1).map((v, i) => {
-    at += v;
-    const near = at < 0.22 || at > 0.78;
-    low ||= near;
-    return mark(at, until(i), [at < 0.12 ? "edge-start" : at > 0.88 ? "edge-end" : "", near ? "low" : ""].join(" ").trim());
-  }).join("");
   const ends = mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end");
-  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${low ? " has-low" : ""}" aria-hidden="true">${bar}${ends}${resets}</span>`;
+  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar" aria-hidden="true">${bar}${ends}</span>`;
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"

@@ -377,8 +377,6 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 18px; background: var(--ink); }
 .split-bar em small { margin-top: 20px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
 .split-bar em.edge-start small { text-align: start; } .split-bar em.edge-end small { text-align: end; }
-.split-bar.has-low { padding-bottom: 68px; }
-.split-bar em.low::before { height: 50px; } .split-bar em.low small { margin-top: 52px; }
 /* Live passes over time (passTimeline): a row per pass, its name beside a bar from its start to its end; ticks and
    dates under the bars. */
 .pass-tl-wrap { margin: 4px 0 16px; }

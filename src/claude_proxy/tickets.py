@@ -34,17 +34,17 @@ TERMS_VERSION = "v1"
 # language of the page they ordered from. Dates in Tehran time: the dialog shows the buyer's own clock.
 TERMS = {
     "en": {"head": "Pass terms:", "split": "Your use of the pass will be limited in {n} parts: {pieces}.",
-           "split_one": "Your whole pass is usable until {date}.", "piece": "{pct} until {date}", "sep": ", ", "and": " and ",
+           "split_one": "Your whole pass is usable until {date}.", "sep": ", ", "and": " and ",
            "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "{n} week: {pct}",
-           "halves": ("Before the weekly reset: {pct}", "After the weekly reset: {pct}"),
+           "halves": ("First part: {pct}", "Second part: {pct}"),
            "nth": ("First", "Second", "Third", "Fourth", "Fifth"),
            "l1": "Your allowance is split across weekly windows by the days each one covers; each piece is "
                  "spendable at your own pace and expires at its window's reset.",
            "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
     "fa": {"head": "شرایط بسته:", "split": "استفاده شما از بسته در {n} قسمت محدود خواهد بود: {pieces}.",
-           "split_one": "کل بسته شما تا {date} قابل استفاده است.", "piece": "{pct} تا {date}", "sep": "، ", "and": " و ",
+           "split_one": "کل بسته شما تا {date} قابل استفاده است.", "sep": "، ", "and": " و ",
            "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "هفته {n}: {pct}",
-           "halves": ("پیش از ریست هفتگی: {pct}", "پس از ریست هفتگی: {pct}"),
+           "halves": ("قسمت اول: {pct}", "قسمت دوم: {pct}"),
            "nth": ("اول", "دوم", "سوم", "چهارم", "پنجم"),
            "l1": "سهم شما به نسبت روزهایی که هر بازه هفتگی پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت "
                  "خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
@@ -106,17 +106,18 @@ def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: flo
     elif len(parts) == 1:
         split = esc(w["split_one"].format(date=terms_date(starts_at + days * DAY, lang)))
     else:
-        end = starts_at + days * DAY
-        pieces = [esc(w["piece"].format(pct=pct(v), date=terms_date(min(ws["first_reset"] + i * 7 * DAY, end), lang)))
-                  for i, v in enumerate(parts)]
+        def name(v, i):   # a ticket under a week crosses one reset at most: its parts are first and second
+            if days < 7:
+                return esc(w["halves"][i].format(pct=pct(v)))
+            return esc(w["week"].format(n=w["nth"][i] if i < len(w["nth"]) else i + 1, pct=pct(v)))
+
+        pieces = [name(v, i) for i, v in enumerate(parts)]   # never a weekly reset's date: that is the account's
         n = w["nums"].get(len(parts)) or (fa_num(len(parts)) if lang == "fa" else str(len(parts)))
         split = esc(w["split"]).replace("{n}", esc(n)).replace(
             "{pieces}", esc(w["sep"]).join(pieces[:-1]) + esc(w["and"]) + pieces[-1])
         def label(v, i):   # as the dialog's: week and percent, a narrow part's percent only, a sliver's nothing
-            if v >= 0.2 and days < 7:   # a ticket under a week crosses one reset at most: its parts sit either side of it
-                return esc(w["halves"][i].format(pct=pct(v)))
             if v >= 0.2:
-                return esc(w["week"].format(n=w["nth"][i] if i < len(w["nth"]) else i + 1, pct=pct(v)))
+                return name(v, i)
             return esc(pct(v)) if v >= 0.1 else "&nbsp;"
 
         if rich:   # a table, which mail clients lay out: each part as wide as its share, 2px apart, its label above it
@@ -129,13 +130,13 @@ def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: flo
                              f'{SPLIT_COLORS[i % len(SPLIT_COLORS)]};border-radius:2px">&nbsp;</td>' for i, wd in enumerate(widths))
             bar = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
                    f'style="max-width:420px;margin:8px 0 4px;border-collapse:collapse"><tr>{labels}</tr><tr>{cells}</tr></table>')
-    lines = [esc(w["head"]), f"- {split}" + bar, f"- {esc(w['l3'])}"] + ([esc(w["tz"])] if parts else [])
+    lines = [esc(w["head"]), f"- {split}" + bar, f"- {esc(w['l3'])}"] + ([esc(w["tz"])] if len(parts) == 1 else [])   # only the one-part line names a date
     return "\n".join(lines).replace("</table>\n", "</table>") + "\n"   # the table already breaks the line
 
 
 def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
     """The order dialog's terms for a `length` ticket starting at `starts_at`, as one block for the buyer's emails:
-    how it splits across Anthropic's weeks (each piece with the date it runs until), else the general line without
+    how it splits across Anthropic's weeks (each piece's share), else the general line without
     quota data; then the 5-hour line."""
     return _terms(conn, cfg, lang, length, starts_at, now, rich=False)
 
@@ -216,16 +217,12 @@ def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int
 
 def order_split(conn, cfg: Config, starts_at: float, now: float | None = None) -> dict | None:
     """What a buyer is told before ordering: per length, the fraction of the ticket each Anthropic week holds if it
-    starts at `starts_at`, and the first weekly reset after that start. Informational, like week_split: boundaries
-    project forward in 7-day steps. None without a known weekly reset."""
+    starts at `starts_at`. No reset time: that is the account's, not the buyer's. Informational, like week_split:
+    boundaries project forward in 7-day steps. None without a known weekly reset."""
     now = _now(now)
-    week = week_bounds(conn, cfg, now)
-    if week is None:
+    if week_bounds(conn, cfg, now) is None:
         return None
-    first = week[1]
-    while first <= starts_at:
-        first += 7 * DAY
-    out = {"starts_at": starts_at, "first_reset": first}
+    out = {"starts_at": starts_at}
     for length, days in LENGTHS.items():
         parts = week_split(conn, cfg, 7 / days, int(starts_at), int(starts_at) + days * DAY, now) or []
         out[length] = parts   # share 7/days per week makes the pieces fractions of the whole ticket
