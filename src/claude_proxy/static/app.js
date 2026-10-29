@@ -1766,6 +1766,9 @@ function setupClerk() {
     const step = { emailCode: { subtitle: t("login.clerk_email_code") }, phoneCode: { subtitle: t("login.clerk_phone_code") }, emailLink: { subtitle: t("login.clerk_email_link") } };
     const merge = (a, b) => Object.fromEntries(Object.keys(b).map((k) => [k, { ...a?.[k], ...b[k] }]));
     const localization = { ...base, signIn: { ...base?.signIn, ...merge(base?.signIn, step) }, signUp: { ...base?.signUp, ...merge(base?.signUp, step) } };
+    // Clerk's Persian leaves the new password's placeholder in English and words the length rule "15 or more characters" badly.
+    if (base) Object.assign(localization, { formFieldInputPlaceholder__signUpPassword: t("login.clerk_signup_password"),
+      unstable__errors: { ...base.unstable__errors, passwordComplexity: { ...base.unstable__errors?.passwordComplexity, minimumLength: t("login.clerk_min_length") } } });
     await window.Clerk.load({ ui: { ClerkUI: window.__internal_ClerkUICtor }, localization });
     window.Clerk.addListener(({ session }) => { if (session && !S.user && !$("#login").classList.contains("hidden")) clerkExchange(); });
     return window.Clerk;
@@ -1801,6 +1804,11 @@ function mountClerk() {
     withSignUp: true, routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href,
     appearance: clerkAppearance(),
   });
+  // Our heading stands in for Clerk's on the first step, so it follows Clerk into sign-up ("Create your account").
+  S.clerkTitle ??= new MutationObserver(() => {
+    $(".signin-box > h2").textContent = t($("#clerk-signin [class*=cl-signUp-]") ? "login.signup_title" : "login.title");
+  });
+  S.clerkTitle.observe($("#clerk-signin"), { childList: true, subtree: true });
 }
 const ADMIN_PAGE = location.pathname === "/admin";
 async function showClerk() {
