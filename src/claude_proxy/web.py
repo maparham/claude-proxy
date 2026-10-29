@@ -1834,9 +1834,9 @@ def _days_hours_minutes(s: int) -> str:
 def _ticket_weeks_text(weeks: dict, est: str) -> str:
     """`57% of first week · 0% of second week · 30% used (expires in 3d:5h:12m)`; a week that is over reads
     `First week ended`, since gclaude warns on the highest percentage on the line and a used-up past week would read as a
-    limit reached. A ticket within one week: the ticket's part only."""
+    limit reached. A ticket within one week, or a day pass: the ticket's part only."""
     ticket = f"{weeks['ticket_pct']:.0f}%{est} used (expires in {_days_hours_minutes(weeks['ends_in'])})"
-    if len(weeks["weeks"]) == 1:
+    if len(weeks["weeks"]) == 1 or weeks.get("length") == "day":
         return ticket
     nth = tickets.TERMS["en"]["nth"]
     name = lambda i: nth[i] if i < len(nth) else f"{i + 1}th"   # noqa: E731  (a month spans at most 5 weeks)

@@ -436,6 +436,15 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
     assert "First week ended · " in limits_line(conn, cfg, ids, later)
 
 
+def test_status_line_gives_a_day_pass_across_the_reset_only_its_whole_use():
+    """A day pass that crosses Anthropic's weekly reset is not split into weeks on the line; a week pass is."""
+    from claude_proxy.web import _ticket_weeks_text
+    weeks = {"weeks": [{"pct": 100.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 60.0,
+             "ends_in": 23 * 3600, "length": "day"}
+    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
+    assert _ticket_weeks_text(weeks | {"length": "week"}, "").startswith("100% of first week · 0% of second week · ")
+
+
 def test_days_and_hours():
     from claude_proxy.web import _days_hours_minutes
     assert [_days_hours_minutes(s) for s in (3 * DAY + 5 * 3600 + 59, DAY, 2 * 3600, 2400)] == ["3d:5h:0m", "1d:0h:0m", "0d:2h:0m", "0d:0h:40m"]

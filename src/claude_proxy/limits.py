@@ -339,8 +339,8 @@ def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None 
 
 def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None) -> dict | None:
     """For the statusline: the serving pass's use of each Anthropic week it spans and of the whole pass, e.g.
-    {"weeks": [{"pct": 57.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 30.0, "ends_in": 3600}
-    (seconds until the pass ends). Each week's piece is measured as share_7d measures the current one (`current`,
+    {"weeks": [{"pct": 57.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 30.0, "ends_in": 3600,
+    "length": "week"} (seconds until the pass ends). Each week's piece is measured as share_7d measures the current one (`current`,
     that state, is reused for it), at today's rate and capacity. None without a pass, a known week or a rate."""
     t = serving(conn, cfg, user_id, now)[0]
     week = tickets.week_bounds(conn, cfg, now)
@@ -369,7 +369,8 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
         weeks.append({"pct": 100.0 * used / limit if limit else 100.0, "state": state})
         used_all, limit_all = used_all + used, limit_all + limit
         start = end
-    return {"weeks": weeks, "ticket_pct": 100.0 * used_all / limit_all if limit_all else 100.0, "ends_in": max(0, int(t_end - now))}
+    return {"weeks": weeks, "ticket_pct": 100.0 * used_all / limit_all if limit_all else 100.0, "ends_in": max(0, int(t_end - now)),
+            "length": t["length"]}
 
 
 def ticket_states(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> list[LimitState]:
