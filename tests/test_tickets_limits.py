@@ -437,12 +437,17 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
 
 
 def test_status_line_gives_a_day_pass_across_the_reset_only_its_whole_use():
-    """A day pass that crosses Anthropic's weekly reset is not split into weeks on the line; a week pass is."""
+    """A day pass that crosses Anthropic's weekly reset is not split into weeks on the line, but a part near its limit
+    shows, so gclaude warns; a week pass is split."""
     from claude_proxy.web import _ticket_weeks_text
     weeks = {"weeks": [{"pct": 100.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 60.0,
              "ends_in": 23 * 3600, "length": "day"}
-    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
     assert _ticket_weeks_text(weeks | {"length": "week"}, "").startswith("100% of first week · 0% of second week · ")
+    assert _ticket_weeks_text(weeks, "") == "100% of first part · 60% used (expires in 0d:23h:0m)"   # the part is used up
+    weeks["weeks"][0]["pct"] = 79.0
+    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
+    weeks["weeks"] = [{"pct": 100.0, "state": "past"}, {"pct": 85.0, "state": "current"}]
+    assert _ticket_weeks_text(weeks, "") == "85% of second part · 60% used (expires in 0d:23h:0m)"
 
 
 def test_days_and_hours():
