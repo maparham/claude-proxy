@@ -173,7 +173,7 @@ const I18N = {
     "utip.kind:cost_total": "<span class=\"th\">Credit</span><p>Your one-time starting credit, at API prices. When it is used up, requests stop until the gateway admin gives you more.</p>",
     "utip.kind:5h_limit": "<span class=\"th\">5-hour limit</span><p>How much of your 5-hour allowance you have used. At 100%, Claude requests are refused until it resets.</p>",
     "utip.kind:weekly_limit": "<span class=\"th\">Weekly limit</span><p>How much of your weekly allowance you have used. At 100%, Claude requests are refused until it resets.</p>",
-    "utip.kind:ticket_limit": "<span class=\"th\">Pass usage</span><p>How much of your whole pass you have used. At 100%, Claude requests are refused until your next pass.</p>",
+    "utip.kind:ticket_limit": "<span class=\"th\">Pass usage</span><p>How much of your whole pass you have used. At 100%, Claude requests are refused.</p>",
     "utip.err:usage_limit": "A usage limit was reached. Requests work again once it resets.",
     "utip.err:gateway_unavailable": "The gateway couldn't serve Claude requests at that moment. Try again later, or ask the admin.",
     "utip.err:upstream_request_scoped": "The provider refused this one request (429).",
@@ -218,14 +218,14 @@ const I18N = {
     "app.what_is_this": "What is this?",
     "lim.eg": "e.g. {v}",
     "lim.resets_in": " · resets in {d}",
+    "lim.resets_in_only": "resets in {d}",
+    "app.hm": "{h}H:{m}M",
     "lim.not_measured": "not measured right now",
     "lim.used_pct": "{v}% used",
     "lim.pct": "{v}%",
-    "lim.week_used": "{pct} of {n} week",
-    "lim.week_ended": "{n} week ended",
+    "lim.pass_left": "expires in {left}",
     "lim.ticket_used": "{pct} of pass ({left} left)",
     "lim.sep": " · ",
-    "lim.est_no_live": " · estimated without live data",
     "lim.skipped": "skipped · {why}",
     "lim.pts": "{v} pts",
     "lim.est_nolive_prefix": "est. (no live data) ",
@@ -407,6 +407,11 @@ const I18N = {
     "ov.no_ticket_sub": "Your usage and limits show here once you have a pass. Pick one below.",
     "ov.ticket_sub": "You can use up to a set amount in every 5 hours. Each week you also get a share of your pass to use whenever you like; whatever is left at the weekly reset is lost, and next week's share starts.",
     "ov.ticket_sub_one": "You can use up to a set amount in every 5 hours, and the whole pass whenever you like until it ends.",
+    "ov.ticket_sub_parts": "You can use up to a set amount in every 5 hours. Your pass moves into its {part} on {date}; whatever is left of the {prev} then is lost.",
+    "ov.part_n": "{n} part", "ov.week_n": "{n} week",
+    "ov.part_starts_in": "The {part} starts in {d}",
+    "ov.part_starts": "The {part} starts {date}",
+    "ov.ends_in": "Ends in {d}",
     "ov.limits_sub": "Resets a window-length after the first request; {served}.",
     "ov.served": "the request that crosses a limit is still served",
     "price.a_day": "a day",
@@ -1146,7 +1151,7 @@ const I18N = {
     "utip.kind:cost_total": "<span class=\"th\">اعتبار</span><p>اعتبار آغازین یک‌باره شما، با تعرفه‌های رسمی. وقتی تمام شود، درخواست‌ها تا وقتی ادمین اعتبار بیشتری بدهد متوقف می‌شوند.</p>",
     "utip.kind:5h_limit": "<span class=\"th\">محدودیت ۵ ساعته</span><p>چه مقدار از سهمیه ۵ ساعته خود را مصرف کرده‌اید. در ۱۰۰٪، درخواست‌های کلاد تا شروع دوباره آن رد می‌شوند.</p>",
     "utip.kind:weekly_limit": "<span class=\"th\">محدودیت هفتگی</span><p>چه مقدار از سهمیه هفتگی خود را مصرف کرده‌اید. در ۱۰۰٪، درخواست‌های کلاد تا شروع دوباره آن رد می‌شوند.</p>",
-    "utip.kind:ticket_limit": "<span class=\"th\">مصرف بسته</span><p>چه مقدار از کل بسته خود را مصرف کرده‌اید. در ۱۰۰٪، درخواست‌های کلاد تا بسته بعدی رد می‌شوند.</p>",
+    "utip.kind:ticket_limit": "<span class=\"th\">مصرف بسته</span><p>چه مقدار از کل بسته خود را مصرف کرده‌اید. در ۱۰۰٪، درخواست‌های کلاد رد می‌شوند.</p>",
     "utip.err:usage_limit": "به یکی از محدودیت‌های مصرف رسیدید. پس از شروع دوباره آن، درخواست‌ها دوباره کار می‌کنند.",
     "utip.err:gateway_unavailable": "سرویس در آن لحظه نتوانست درخواست‌های کلاد را انجام دهد. بعداً دوباره تلاش کنید یا از ادمین بپرسید.",
     "utip.err:upstream_request_scoped": "ارائه‌دهنده فقط همین درخواست را رد کرد (429).",
@@ -1191,14 +1196,14 @@ const I18N = {
     "app.what_is_this": "این چیست؟",
     "lim.eg": "مثلاً {v}",
     "lim.resets_in": " · {d} مانده تا ریست",
+    "lim.resets_in_only": "{d} مانده تا ریست",
+    "app.hm": "{h}س:{m}د",
     "lim.not_measured": "فعلاً سنجیده نمی‌شود",
     "lim.used_pct": "{v}٪ مصرف‌شده",
     "lim.pct": "{v}٪",
-    "lim.week_used": "{pct} از هفته {n}",
-    "lim.week_ended": "هفته {n} تمام شد",
+    "lim.pass_left": "{left} مانده تا انقضا",
     "lim.ticket_used": "{pct} از بسته ({left} مانده)",
     "lim.sep": " · ",
-    "lim.est_no_live": " · تخمین بدون داده زنده",
     "lim.skipped": "اعمال نشد · {why}",
     "lim.pts": "{v} واحد درصد",
     "lim.est_nolive_prefix": "تخمینی (بدون داده زنده) ",
@@ -1380,6 +1385,11 @@ const I18N = {
     "ov.no_ticket_sub": "مصرف و محدودیت‌های شما وقتی بسته داشته باشید اینجا نمایش داده می‌شود. یکی را از پایین انتخاب کنید.",
     "ov.ticket_sub": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید. هر هفته هم سهمی از بسته‌تان دارید که هر وقت خواستید مصرفش می‌کنید؛ هر چه تا ریست هفتگی مصرف نشود از بین می‌رود و سهم هفته بعد شروع می‌شود.",
     "ov.ticket_sub_one": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید، و کل بسته را هر وقت خواستید تا پایانش.",
+    "ov.ticket_sub_parts": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید. بسته شما در {date} وارد {part} می‌شود؛ هر چه از {prev} تا آن زمان مصرف نشود از بین می‌رود.",
+    "ov.part_n": "قسمت {n}", "ov.week_n": "هفته {n}",
+    "ov.part_starts_in": "{part} {d} دیگر شروع می‌شود",
+    "ov.part_starts": "{part} از {date} شروع می‌شود",
+    "ov.ends_in": "{d} تا پایان",
     "ov.limits_sub": "یک بازه بعد از اولین درخواست صفر می‌شود؛ {served}.",
     "ov.served": "درخواستی که از محدودیت بگذرد همچنان انجام می‌شود",
     "price.a_day": "یک روز",
@@ -1989,8 +1999,10 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 // second part) with its share. Whole percents: "rough" is the promise. "" without quota data. Never a weekly reset's
 // date: that is the account's, not the buyer's. Several pieces are also drawn as a bar, each segment as long as its
 // share, labelled with its name and percent (a narrow one with the percent only, a sliver with neither: the sentence
-// has them all), with only the ticket's start and end marked with their date and time.
-function splitTerms(ws, len, days) {
+// has them all), with only the ticket's start and end marked with their date and time. `use` (a running pass's,
+// {pcts, cur, label, resets}): each piece's use in percent filled into its segment, `label` written in the segment in
+// use, and each split marked with its time (`resets`), a split near an end with its time a row lower.
+function splitTerms(ws, len, days, use) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
   const pct = (v) => (v > 0 && v < 0.01 ? `<${new Intl.NumberFormat(LOC, { style: "percent" }).format(0.01)}`
@@ -2003,14 +2015,36 @@ function splitTerms(ws, len, days) {
   const pieces = parts.map(name);
   const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
   const label = (v, i) => (v >= 0.2 ? name(v, i) : v >= 0.1 ? pct(v) : "&nbsp;");
-  const bar = parts.map((v, i) => `<span style="flex-grow:${v}"><b>${label(v, i)}</b><i style="background:var(--s${i % 5 + 1})"></i></span>`).join("");
+  const fill = (i) => {
+    if (!use) return "";
+    const f = Math.min(100, Math.max(0, use.pcts[i] || 0));
+    // Past the fill's end, or inside it, end-aligned, once it nears the segment's end; none in a segment too narrow for it.
+    const text = i !== use.cur || parts[i] < 0.15 ? "" : f > 70 ? `<q class="in" style="inset-inline-end:calc(${(100 - f).toFixed(1)}% + 6px)">${use.label}</q>`
+      : `<q style="inset-inline-start:calc(${f.toFixed(1)}% + 6px)">${use.label}</q>`;
+    return `<u style="width:${f.toFixed(1)}%"></u>${text}`;
+  };
+  const bar = parts.map((v, i) => `<span style="flex-grow:${v}"><b>${label(v, i)}</b><i style="--c:var(--s${i % 5 + 1})">${fill(i)}</i></span>`).join("");
   const short = (ts) => {   // date over time
     const d = new Date(ts * 1000);
     return `${d.toLocaleDateString(LOC, { weekday: "short", month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`;
   };
-  const mark = (at, ts, cls) => `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${short(ts)}</small></em>`;
-  const ends = mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end");
-  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar" aria-hidden="true">${bar}${ends}</span>`;
+  const mark = (at, ts, cls, timeOnly) => `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${timeOnly
+    ? new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" }) : short(ts)}</small></em>`;
+  const day = (ts) => new Date(ts * 1000).toDateString();
+  let at = 0;
+  const splits = !use || !use.resets ? "" : parts.slice(0, -1).map((v, i) => {
+    at += v;
+    // A split on the start's or end's day gives its time only: the date is already there.
+    const r = use.resets[i];
+    // Near an end, its time goes under that end's, aligned with it, and the tick stays at the split.
+    if (!r) return "";
+    const only = day(r) === day(ws.starts_at) || day(r) === day(end);
+    if (at >= 0.15 && at <= 0.85) return mark(at, r, "", only);
+    const edge = at < 0.15 ? "start" : "end";
+    return `<em class="tick" style="inset-inline-start:${(at * 100).toFixed(2)}%"></em>${mark(edge === "start" ? 0 : 1, r, `low notick edge-${edge}`, only)}`;
+  }).join("");
+  const ends = mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end") + splits;
+  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${use ? " use" : ""}" aria-hidden="true">${bar}${ends}</span>`;
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"

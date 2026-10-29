@@ -142,7 +142,11 @@ input.search { width: 18rem; max-width: 100%; }
 .meter > span { display: block; height: 100%; border-radius: 3px; background: var(--s1); }
 .meter.warn > span { background: var(--warning); }
 .meter.over > span { background: var(--critical); }
+/* A meter with its figure under the fill's end: start-aligned there, or end-aligned once the fill nears the end. */
+.meter-at { position: relative; padding-bottom: 16px; }
+.meter-at small { position: absolute; top: 12px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .limit-row { display: grid; grid-template-columns: 1fr auto; gap: 2px 8px; font-size: 12px; margin-bottom: 6px; }
+.limit-row.mid { grid-template-columns: 1fr auto 1fr; }   /* a user's own limits: the reading centred over its meter */
 
 .stack { display: flex; height: 22px; border-radius: 6px; overflow: hidden; background: var(--grid); gap: 2px; }
 .stack > span { height: 100%; min-width: 2px; }
@@ -379,14 +383,24 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .split-bar { display: flex; gap: 2px; position: relative; margin: 8px 0 4px; padding-bottom: 36px; }
 .split-bar span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; }
 .split-bar b { font-size: 12px; line-height: 16px; margin-bottom: 2px; color: var(--ink); white-space: nowrap; text-align: center; }
-.split-bar i { display: block; height: 10px; border-radius: 2px; }
+.split-bar i { display: block; height: 10px; border-radius: 2px; background: var(--c); }
+/* A running pass's: each segment a pale track filled as far as its piece is used, the part in use's figure written in it. */
+.split-bar.use i { position: relative; height: 18px; background: color-mix(in srgb, var(--c) 20%, transparent); overflow: hidden; }
+.split-bar.use u { position: absolute; inset-block: 0; inset-inline-start: 0; background: var(--c); }
+/* The taller bar: ticks 2px past it on both sides, each time just under its tick's end, a split's not crossed by it. */
+.split-bar.use { padding-bottom: 42px; } .split-bar.use em { top: 16px; } .split-bar.use em::before { height: 22px; }
+.split-bar.use em small { margin-top: 24px; }
+/* A split near an end: its time under the end's two lines (date, time), not beside them. */
+.split-bar.use:has(em.low) { padding-bottom: 72px; } .split-bar.use em.low small { margin-top: 54px; }
+.split-bar em.notick::before { content: none; }
+.split-bar q { position: absolute; top: 0; line-height: 18px; font-size: 11px; font-style: normal; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.split-bar q::before, .split-bar q::after { content: none; } .split-bar q.in { color: #fff; }
 /* The ticket's start, each weekly reset and its end: a tick through the bar and its date under it, centred on the
    tick (start- or end-aligned near an edge so it stays inside; a reset near an end drops to a second row). Zero-wide, so the alignment holds in RTL too. */
 .split-bar em { position: absolute; top: 16px; width: 0; display: flex; justify-content: center; font-style: normal; }
 .split-bar em.edge-start { justify-content: flex-start; } .split-bar em.edge-end { justify-content: flex-end; }
 .split-bar em::before { content: ""; position: absolute; top: 0; inset-inline-start: -1px; width: 2px; height: 18px; background: var(--ink); }
-.split-bar em small { margin-top: 20px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: center; font-variant-numeric: tabular-nums; }
-.split-bar em.edge-start small { text-align: start; } .split-bar em.edge-end small { text-align: end; }
+.split-bar em small { margin-top: 20px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; text-align: start; font-variant-numeric: tabular-nums; }   /* each line from the reading side */
 /* Live passes over time (passTimeline): a row per pass, its name beside a bar from its start to its end; ticks and
    dates under the bars. */
 .pass-tl-wrap { margin: 4px 0 16px; }

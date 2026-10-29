@@ -427,6 +427,7 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
     assert [w["state"] for w in weeks["weeks"]] == ["current", "future"]
     assert weeks["weeks"][0]["pct"] == pytest.approx(weekly.pct) and weeks["weeks"][1]["pct"] == 0
     assert weeks["ticket_pct"] == pytest.approx(weekly.pct * (3 * DAY + 300) / (7 * DAY))   # this week holds 3d + 300s of 7d
+    assert [w["share"] for w in weeks["weeks"]] == pytest.approx([(3 * DAY + 300) / (7 * DAY), 1 - (3 * DAY + 300) / (7 * DAY)])
     line = _status_line(user(conn, ids["alice"]), sts, None, weeks)
     assert line.startswith(f"alice · {weekly.pct:.0f}% of first week · 0% of second week · {weeks['ticket_pct']:.0f}% used "
                          "(expires in 6d:23h:55m)")   # granted 300 s ago

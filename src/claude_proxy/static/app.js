@@ -375,9 +375,34 @@ function wireSegs(root, rerender) {
   }));
 }
 
-function meter(pct) {
+// `at`: the figure written under the fill's end, {fill, label}, filling to `fill` while the colour stays `pct`'s.
+function meter(pct, at) {
   const cls = pct >= 100 ? "over" : pct >= 80 ? "warn" : "";
-  return `<div class="meter ${cls}"><span style="width:${Math.min(100, Math.max(0, pct || 0)).toFixed(1)}%"></span></div>`;
+  const v = Math.min(100, Math.max(0, (at ? at.fill : pct) || 0));
+  const bar = `<div class="meter ${cls}"><span style="width:${v.toFixed(1)}%"></span></div>`;
+  if (!at || !at.label) return bar;
+  const pos = v > 70 ? `inset-inline-end:${(100 - v).toFixed(1)}%` : `inset-inline-start:${v.toFixed(1)}%`;
+  return `<div class="meter-at">${bar}<small style="${pos}">${at.label}</small></div>`;
+}
+// `13H:32M`: hours (past 24 when it must be) and minutes, rounded down; the user card's compact time left.
+function fmtHm(s) {
+  const m = Math.max(0, Math.floor(s / 60));
+  return t("app.hm", { h: nf0.format(Math.floor(m / 60)), m: new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2 }).format(m % 60) });
+}
+// A pass's use by part, for its split bar: each part's percent, and the part in use's written in it.
+// `resets`: when each part after the first starts, marked under the split.
+function partUse(w, resets) {
+  const cur = w.weeks.findIndex((x) => x.state === "current");
+  return { pcts: w.weeks.map((x) => x.pct), cur, label: cur < 0 ? "" : t("lim.used_pct", { v: nf0.format(Math.floor(w.weeks[cur].pct)) }), resets };
+}
+const passParts = (l) => (l.weeks && l.weeks.weeks.length > 1 ? l.weeks : null);   // a pass in several parts
+// The figure a limit row writes on its meter instead of in its text: a pass in parts, its whole use (its meter colours
+// by the part in use, which is what blocks); a 5-hour limit's use.
+function meterFigure(l) {
+  const w = passParts(l);
+  if (w) return { fill: w.ticket_pct, label: t("lim.used_pct", { v: nf0.format(Math.floor(w.ticket_pct)) }) };
+  if (l.kind === "5h_limit" && !l.weeks && l.current != null) return { fill: l.pct, label: t("lim.used_pct", { v: nf0.format(l.current) }) };
+  return null;
 }
 // A label for a value the server names (a limit kind, unit, bucket, role): its translation, or the value itself, readable,
 // when the dictionaries don't know it yet.
@@ -386,26 +411,25 @@ function limitLabel(l) {
   const scope = l.scope && l.scope !== "*" ? ` [${l.scope}]` : "";
   return `${labelOf("kname.", l.kind)}${scope}`;
 }
-function limitValue(l) {
+// `onMeter`: the row writes its figure on the meter (meterFigure), so the text leaves it out.
+function limitValue(l, onMeter) {
   if (l.kind === "allowed_models") return l.value;
   const reset = l.reset_in ? t("lim.resets_in", { d: fmtDur(l.reset_in) }) : "";
   if (USER_LIMIT_KINDS.includes(l.kind) || l.kind === "ticket_limit") {
     if (l.skipped || l.current == null) return t("lim.not_measured");
-    if (l.weeks) return weeksValue(l.weeks) + (l.no_live_data ? t("lim.est_no_live") : "");
-    return `${t("lim.used_pct", { v: nf0.format(l.current) })}${l.no_live_data ? t("lim.est_no_live") : ""}${reset}`;
+    if (l.weeks) return weeksValue(l.weeks);
+    if (onMeter && meterFigure(l)) return l.reset_in ? t("lim.resets_in_only", { d: fmtHm(l.reset_in) }) : "";   // its use is on the meter
+    return `${t("lim.used_pct", { v: nf0.format(l.current) })}${reset}`;
   }
   if (l.skipped) return t("lim.skipped", { why: iso(l.skipped) });
   const f = l.unit === "usd" ? fmtUsd : l.unit === "pct" ? (v) => t("lim.pts", { v: nfFix(1).format(v) }) : fmtNum;
   return `${l.no_live_data ? t("lim.est_nolive_prefix") : l.estimated ? t("lim.est_prefix") : ""}${f(l.current || 0)} / ${f(l.limit)}${reset}`;
 }
-// A ticket's weekly limit, as the statusline gives it: each Anthropic week's use, then the whole ticket's and its time left.
+// A ticket's weekly limit: the whole ticket's use and its time left; a pass in parts, only its time left, its figures
+// being on the bars (the part in use's on the split bar, the whole pass's on its meter).
 function weeksValue(w) {
-  const pct = (v) => t("lim.pct", { v: nf0.format(Math.floor(v)) });
-  const nth = (i) => t(`ord.nth.${i}`);
-  const ticket = t("lim.ticket_used", { pct: pct(w.ticket_pct), left: fmtDur(w.ends_in) });
-  if (w.weeks.length === 1) return ticket;
-  return [...w.weeks.map((x, i) => (x.state === "past" ? t("lim.week_ended", { n: nth(i + 1) }) : t("lim.week_used", { pct: pct(x.pct), n: nth(i + 1).toLowerCase() }))), ticket]
-    .join(t("lim.sep"));
+  if (w.weeks.length === 1) return t("lim.ticket_used", { pct: t("lim.pct", { v: nf0.format(Math.floor(w.ticket_pct)) }), left: fmtDur(w.ends_in) });
+  return t("lim.pass_left", { left: w.ends_in < 86400 ? fmtHm(w.ends_in) : fmtDur(w.ends_in) });
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";
@@ -416,11 +440,12 @@ function limitValueTip(l) {
   if (!l.reset_in) return "";
   return t("lim.tip_resets");
 }
-// `oneWeek`: the user's ticket ends before the weekly reset, so its weekly limit is simply the whole ticket's.
-function limitsBlock(ls, oneWeek) {
+// `oneWeek`: the user's ticket ends before the weekly reset (or is a day pass), so its weekly limit reads as the ticket's.
+// `own` (the user's own card): each reading centred over its meter, a figure written on the meter (meterFigure).
+function limitsBlock(ls, oneWeek, own) {
   if (!ls.length) return `<span class="muted">${t("lim.none")}</span>`;
-  return ls.map((l) => oneWeek && l.kind === "weekly_limit" ? { ...l, kind: "ticket_limit" } : l).map((l) => `<div class="limit-row"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l)), limitValueTip(l))}</span>
-    <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div></div>`).join("");
+  return ls.map((l) => oneWeek && l.kind === "weekly_limit" ? { ...l, kind: "ticket_limit" } : l).map((l) => `<div class="limit-row${own ? " mid" : ""}"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l, own)), limitValueTip(l))}</span>
+    <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct, own ? meterFigure(l) : null)}</div></div>`).join("");
 }
 
 // The pass in use, as compact as the other cards: each limit's percent and bar, the full reading behind its "?".
@@ -428,8 +453,11 @@ function limitsCompact(ls, oneWeek) {
   if (!ls.length) return `<span class="muted">${t("lim.none")}</span>`;
   return ls.map((l) => oneWeek && l.kind === "weekly_limit" ? { ...l, kind: "ticket_limit" } : l).map((l) => {
     const tip = [esc(limitValue(l)), limitValueTip(l)].filter(Boolean).join("<br>");
-    const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(l.pct))}${PCT}`;
-    return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct)}</div>`;
+    // A pass in parts: the whole pass's use, coloured by the part in use's (its own use is on the split bar).
+    const w = passParts(l);
+    const shown = w ? w.ticket_pct : l.pct;
+    const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(shown))}${PCT}`;
+    return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct, w ? { fill: shown } : null)}</div>`;
   }).join("");
 }
 
@@ -693,6 +721,24 @@ function userLimitsCard(me, tk, order) {
   // A ticket over before the weekly reset (a day ticket, say) has nothing weekly about it for its holder: no refill
   // date, no weekly wording, just the ticket's own use.
   const oneWeek = !!c && c.week_known && (c.serving_end || c.effective_end) <= c.week_end;
+  // A pass across a reset is in parts: how it splits, as the order dialog drew it, each part's use filled in, so a
+  // used-up part reads as such. Nothing about it is weekly for its holder (the account's week is not theirs): its limit
+  // reads as the pass's use, and each split as the next part's start.
+  const tw = ((me.limits || []).find((l) => l.kind === "weekly_limit" && l.weeks) || {}).weeks;
+  // The pass the parts are of: the one serving requests (the one in use, with several), as tw measures it.
+  const sp = (c && c.passes && c.passes.length > 1 && c.passes.find((p) => p.serving)) || c;
+  const inParts = !!sp && !!tw && tw.weeks.length > 1;
+  const days = sp ? (sp.effective_end - sp.starts_at) / 86400 : 0;
+  const cur = inParts ? tw.weeks.findIndex((x) => x.state === "current") : -1;
+  // Each split's time: the current part ends at the week's end, the others a week apart from it.
+  const resets = inParts ? tw.weeks.slice(0, -1).map((x, i) => c.week_end + (i - cur) * 7 * 86400) : [];
+  const partName = (i) => t(days < 7 ? "ov.part_n" : "ov.week_n", { n: t(`ord.nth.${i + 1}`).toLowerCase() });   // as splitTerms names them
+  const nextPart = inParts && cur >= 0 && cur < tw.weeks.length - 1 ? { name: partName(cur + 1), prev: partName(cur), at: resets[cur] } : null;
+  const split = inParts ? `<div class="muted">${splitTerms({ p: tw.weeks.map((x) => x.share), starts_at: sp.starts_at }, "p", days, partUse(tw, resets))}</div>` : "";
+  const noWeek = oneWeek || inParts;
+  // A day pass's end and second part read as time from now: its dates are hours away.
+  const short = !!c && c.effective_end - c.starts_at <= 2 * 86400;
+  const fromNow = (ts) => fmtDur(Math.max(0, ts - Date.now() / 1000 - (S.tkSkew || 0)));
   const open = !!order && (order.status === "new" || order.status === "contacted");
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
   const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
@@ -707,20 +753,21 @@ function userLimitsCard(me, tk, order) {
   const no = passNumbers(c);
   const hero = inUse ? `<div class="pass-hero" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
       <span class="badge state-active">${t("pass.serving")}</span><span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
-      ${limitsCompact(me.limits, oneWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
+      ${split}${limitsCompact(me.limits, noWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
       <div class="ticket-head"><div class="muted">${t("pass.list")}</div><div class="row-actions">${renew}</div></div>
       ${hero}${passList(c, no)}${extras}</div>`
     : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
-      <div class="muted">${t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${oneWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
-      ${extras}
+      <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${short ? t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) }) : t("ov.part_starts", { part: nextPart.name, date: fmtDate(nextPart.at) })}`
+        : oneWeek || inParts ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
+      ${split}${extras}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${multi ? t("ov.your_passes") : c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
-    <p class="sub">${c ? t(oneWeek ? "ov.ticket_sub_one" : "ov.ticket_sub") : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
-    ${ticket}${passTimeline(tk, inUseAt, no)}${inUse ? "" : limitsBlock(me.limits, oneWeek)}</div>`;
+    <p class="sub">${c ? (nextPart ? t("ov.ticket_sub_parts", { part: nextPart.name, prev: nextPart.prev, date: fmtDate(nextPart.at) }) : t(noWeek ? "ov.ticket_sub_one" : "ov.ticket_sub")) : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
+    ${ticket}${passTimeline(tk, inUseAt, no)}${inUse ? "" : limitsBlock(me.limits, noWeek, true)}</div>`;
 }
 // The user's live passes over time, when there is more than one: a row per pass, numbered as its card is, with a bar
 // from its start (or now) to its end; the one in use is named in bold. A queued pass's bar is hatched. Where passes overlap, their rows run side by side.
