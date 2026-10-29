@@ -384,11 +384,6 @@ function meter(pct, at) {
   const pos = v > 70 ? `inset-inline-end:${(100 - v).toFixed(1)}%` : `inset-inline-start:${v.toFixed(1)}%`;
   return `<div class="meter-at">${bar}<small style="${pos}">${at.label}</small></div>`;
 }
-// `13H:32M`: hours (past 24 when it must be) and minutes, rounded down; the user card's compact time left.
-function fmtHm(s) {
-  const m = Math.max(0, Math.floor(s / 60));
-  return t("app.hm", { h: nf0.format(Math.floor(m / 60)), m: new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2 }).format(m % 60) });
-}
 // A pass's use by part, for its split bar: each part's percent, and the part in use's written in it.
 // `resets`: when each part after the first starts, marked under the split.
 function partUse(w, resets) {
@@ -418,7 +413,7 @@ function limitValue(l, onMeter) {
   if (USER_LIMIT_KINDS.includes(l.kind) || l.kind === "ticket_limit") {
     if (l.skipped || l.current == null) return t("lim.not_measured");
     if (l.weeks) return weeksValue(l.weeks);
-    if (onMeter && meterFigure(l)) return l.reset_in ? t("lim.resets_in_only", { d: fmtHm(l.reset_in) }) : "";   // its use is on the meter
+    if (onMeter && meterFigure(l)) return l.reset_in ? t("lim.resets_in_only", { d: fmtDur(l.reset_in) }) : "";   // its use is on the meter
     return `${t("lim.used_pct", { v: nf0.format(l.current) })}${reset}`;
   }
   if (l.skipped) return t("lim.skipped", { why: iso(l.skipped) });
@@ -429,7 +424,7 @@ function limitValue(l, onMeter) {
 // being on the bars (the part in use's on the split bar, the whole pass's on its meter).
 function weeksValue(w) {
   if (w.weeks.length === 1) return t("lim.ticket_used", { pct: t("lim.pct", { v: nf0.format(Math.floor(w.ticket_pct)) }), left: fmtDur(w.ends_in) });
-  return t("lim.pass_left", { left: w.ends_in < 86400 ? fmtHm(w.ends_in) : fmtDur(w.ends_in) });
+  return t("lim.pass_left", { left: fmtDur(w.ends_in) });
 }
 function limitValueTip(l) {
   if (l.kind === "allowed_models") return "";
@@ -1739,12 +1734,12 @@ function machinesCard(keys, install, owner) {
     <td class="muted nowrap">${k.client_version ? bdi(k.client_version) : "—"}</td>
     <td><button class="btn small danger" data-key-remove="${k.id}" data-label="${esc(k.label)}">${t("lim.remove")}</button></td></tr>`).join("");
   return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? t("pc.computers") : t("pc.your_computers")}</h3>
+    ${keys.length ? `<table class="data"><thead><tr><th>${t("pc.computer")}</th><th>${t("pc.key")}</th><th>${t("pc.authorized")}</th><th>${t("pc.last_used")}</th><th>gclaude${tipI("gclaude_version", t("pc.about_version"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
+      : `<p class="muted">${owner ? t("pc.none_owner") : t("pc.none_yet")}</p>`}
     ${install ? `<p class="sub">${t("pc.setup")}</p>
       ${[[t("login.os_unix"), install.unix], [t("pc.windows_ps"), install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
         `<p class="muted install-os">${os}</p>
-      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`).join("")}` : ""}
-    ${keys.length ? `<table class="data"><thead><tr><th>${t("pc.computer")}</th><th>${t("pc.key")}</th><th>${t("pc.authorized")}</th><th>${t("pc.last_used")}</th><th>gclaude${tipI("gclaude_version", t("pc.about_version"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
-      : `<p class="muted">${owner ? t("pc.none_owner") : t("pc.none_yet")}</p>`}</div>`;
+      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`).join("")}` : ""}</div>`;
 }
 function wireMachines(root) {
   root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
