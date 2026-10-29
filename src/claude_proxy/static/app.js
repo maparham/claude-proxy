@@ -1796,20 +1796,24 @@ function clerkAppearance() {
                 footer: { background: "transparent" } },
   };
 }
-// Mounted afresh each time the sign-in shows, so its colours follow a theme picked since.
-function mountClerk() {
-  if (S.clerkMounted) window.Clerk.unmountSignIn($("#clerk-signin"));
-  S.clerkMounted = true;
-  window.Clerk.mountSignIn($("#clerk-signin"), {
-    withSignUp: true, routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href,
-    appearance: clerkAppearance(),
-  });
-  // Our heading stands in for Clerk's on the first step, so it follows Clerk into sign-up ("Create your account").
+// Mounted afresh each time the sign-in shows, so its colours follow a theme picked since. signUp mounts Clerk's sign-up instead.
+function mountClerk(signUp = false) {
+  if (S.clerkMounted) window.Clerk[S.clerkMounted === "signUp" ? "unmountSignUp" : "unmountSignIn"]($("#clerk-signin"));
+  S.clerkMounted = signUp ? "signUp" : "signIn";
+  const opts = { routing: "virtual", forceRedirectUrl: location.href, signUpForceRedirectUrl: location.href, signInForceRedirectUrl: location.href,
+                 appearance: clerkAppearance() };
+  if (signUp) window.Clerk.mountSignUp($("#clerk-signin"), opts);
+  else window.Clerk.mountSignIn($("#clerk-signin"), { ...opts, withSignUp: true });
+  // Our heading stands in for Clerk's on the first step, so it follows Clerk into sign-up ("Create your account"), as does the link under it.
   S.clerkTitle ??= new MutationObserver(() => {
-    $(".signin-box > h2").textContent = t($("#clerk-signin [class*=cl-signUp-]") ? "login.signup_title" : "login.title");
+    const up = !!$("#clerk-signin [class*=cl-signUp-]");
+    $(".signin-box > h2").textContent = t(up ? "login.signup_title" : "login.title");
+    $("#clerk-switch-q").textContent = t(up ? "login.have_account" : "login.no_account");
+    $("#clerk-switch").textContent = t(up ? "login.submit" : "login.signup");
   });
   S.clerkTitle.observe($("#clerk-signin"), { childList: true, subtree: true });
 }
+$("#clerk-switch").onclick = () => mountClerk(!$("#clerk-signin [class*=cl-signUp-]"));
 const ADMIN_PAGE = location.pathname === "/admin";
 async function showClerk() {
   // The other forms wait until the page knows whether Clerk is on, so they don't flash before its sign-in.
@@ -1821,7 +1825,7 @@ async function showClerk() {
   if (clerk.session) clerkExchange();   // signed in to Clerk already, e.g. back from Google: just trade it in
   else mountClerk();
 }
-matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.clerkMounted && !$("#login").classList.contains("hidden")) mountClerk(); });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { if (S.clerkMounted && !$("#login").classList.contains("hidden")) mountClerk(S.clerkMounted === "signUp"); });
 $("#other-ways").onclick = (e) => {
   e.preventDefault();
   S.otherWays = !S.otherWays;

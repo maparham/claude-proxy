@@ -251,6 +251,10 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
 .signin-more { margin-top: 20px; padding: 0; border: 0; background: none; cursor: pointer; font-size: 13px; color: var(--ink-2);
                text-decoration: underline; text-decoration-color: var(--axis); text-underline-offset: 3px; }
 .signin-more:hover { color: var(--ink); text-decoration-color: currentColor; }
+/* "Don't have an account? Sign up" under Clerk's form; Clerk's own footer link is off in its combined flow. */
+.clerk-switch { margin: 16px 0 0; font-size: 13px; color: var(--ink-2); }
+.clerk-switch .signin-more { margin-top: 0; color: var(--ink); }
+#clerk-signin .cl-footerAction { display: none; }
 #classic { margin-top: 16px; }
 #clerk-area:not(.hidden) + #classic { padding-top: 16px; border-top: 1px solid var(--border); }
 #classic form { display: grid; gap: 10px; margin-top: 12px; }
