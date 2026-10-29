@@ -103,8 +103,6 @@ function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
   document.getElementById("currency-select").value = currency;
-  document.getElementById("rate-note").textContent = currency !== "USD" && data.rate_set_at
-    ? t("home.rate_note", { date: new Date(data.rate_set_at * 1000).toLocaleDateString(LOC) }) : "";
 }
 function tick() {
   if (reloaded) return;

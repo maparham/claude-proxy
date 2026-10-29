@@ -102,7 +102,7 @@ def test_the_privacy_page_offers_the_switch_and_marks_its_text():
 
 
 # Elements whose text is filled by *.js at runtime (via t()), not by applyStatic()'s data-i18n pass.
-_HOME_DYNAMIC_IDS = {"cards", "rate-note", "privacy-retention"}
+_HOME_DYNAMIC_IDS = {"cards", "privacy-retention"}
 _HOME_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
 
 
