@@ -235,6 +235,8 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
 #clerk-signin .cl-formFieldInput:is([name=identifier], [name=emailAddress], [name=password], [name=confirmPassword]) { direction: ltr; }
 /* Clerk keeps room for the show-password button at the inline end, which LTR moves away from the button (left in Persian). */
 [dir=rtl] #clerk-signin .cl-formFieldInput:is([name=password], [name=confirmPassword]) { padding-left: 2.5rem; }
+/* An empty field keeps the page's direction, so a Persian placeholder sits on the right; typed text still runs LTR. */
+[dir=rtl] #clerk-signin .cl-formFieldInput:is([name=identifier], [name=emailAddress], [name=password], [name=confirmPassword]):placeholder-shown { direction: rtl; }
 #clerk-signin .cl-card { margin: 0; }
 #clerk-signin .cl-socialButtonsBlockButton, #clerk-signin .cl-formFieldInput, #clerk-signin .cl-formButtonPrimary { height: 40px; max-height: none; box-shadow: none; }
 #clerk-signin .cl-socialButtonsBlockButton, #clerk-signin .cl-formFieldInput { border: 1px solid var(--axis); background: var(--surface); }
