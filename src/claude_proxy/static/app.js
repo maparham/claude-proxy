@@ -700,13 +700,15 @@ function passList(c, no) {
     : full(p) ? `<span class="badge state-queued">${p.back_at ? t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) }) : t("pass.at_limit")}</span>`
     : `<span class="badge">${t("pass.ready")}</span>`;
   const use = (label, v) => `<div class="pass-use"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(v)}</div>`;
+  // A pass over before the weekly reset (a day pass, say): its weekly limit is simply the whole pass's use.
+  const oneWeek = (p) => c.week_known && p.effective_end <= c.week_end;
   const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving).sort((a, b) => no[a.i] - no[b.i]);
   const bought = (p) => (p.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(p.bought_at) })}</div>` : "");
   if (!others.length) return "";
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
-      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("pass.use_7d"), p.pct_7d)}`}
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t(oneWeek(p) ? "kname.ticket_limit" : "pass.use_7d"), p.pct_7d)}`}
       ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${bought(p)}</div>`).join("")}</div>`;
 }
