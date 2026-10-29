@@ -464,7 +464,9 @@ def user_view(st: LimitState) -> dict:
     """A limit as a non-admin sees it. Share limits become the user's own allowance (0-100% of it used),
     with nothing about the account they are a share of."""
     d = st.to_dict()
-    d.pop("resets_at", None)   # an account-side reset time; reset_in (already relative) is what a non-admin gets
+    d.pop("resets_at", None)   # an account-side reset time; reset_in (already relative) is what a non-admin gets,
+    if st.kind == "share_7d":  # but not for the weekly one: Anthropic's weekly reset is never shown (the 429 still says when to retry)
+        d["reset_in"] = None
     if st.kind not in SHARE_LABELS:
         return d
     used = None if st.skipped or st.current is None else st.pct

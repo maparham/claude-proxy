@@ -1872,7 +1872,7 @@ def _status_line(user, states, account, weeks: dict | None = None, ticket: str |
             elif period == "7d" and s.tier is not None and weeks:   # a ticket's weekly piece
                 parts.insert(head, _ticket_weeks_text(weeks, est))
             else:
-                parts.append(f"{label} {s.pct:.0f}%{est}{_resets(s)}")
+                parts.append(f"{label} {s.pct:.0f}%{est}{'' if period == '7d' else _resets(s)}")   # never the account's weekly reset
             continue
         if base == "share":
             label = f"{_SHARE_PERIOD.get(period, period)} share"
