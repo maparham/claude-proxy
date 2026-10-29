@@ -819,8 +819,7 @@ function myOrderCard(o) {
 function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
-  const payBtn = payL && !payL.sold_out
-    ? `<button class="btn primary" type="button" id="order-pay">${t("pay.button", { amount: esc(money(payL.amount, pay.currency)) })}</button>` : "";
+  const payBtn = pay ? `<button class="btn primary" type="button" id="order-pay">${payLabel(payL, pay)}</button>` : "";
   return `<h3>${t("ord.title", { what: t("ord.what", { label: tierName(tier.tier, tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
@@ -836,13 +835,17 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
         ${orderButtons(manual, payBtn)}</div>
     </form>`;
 }
+// Without a Toman price (no IRT rate yet) the button has no amount; the server says why paying fails.
+function payLabel(payL, pay) {
+  return payL ? t("pay.button", { amount: esc(money(payL.amount, pay.currency)) }) : t("pay.button_plain");
+}
 // An unpaid order (Submit) only while the admin's Payment selector allows one.
 function orderButtons(manual, payBtn) {
   const send = manual ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
   return `${send}${send && payBtn ? `<p class="pay-or muted">${t("pay.or")}</p>` : ""}${payBtn}`;
 }
 function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
-  const payL = pay && pay.prices.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
+  const payL = pay && pay.prices?.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
   const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay, manual, start));
   const f = $("#f-order", d);
   const now = () => !!start && f.start.value === "now";
@@ -869,7 +872,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
     try {
       const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, start_now: now(), ...(f.email ? { email: f.email.value } : {}) } });
       location.href = r.url;
-    } catch (err) { pb.disabled = false; pb.textContent = t("pay.button", { amount: esc(money(payL.amount, pay.currency)) }); $("#order-err", d).textContent = err.message; }
+    } catch (err) { pb.disabled = false; pb.textContent = payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
   };
 }
 function wireOrdering(root, tk, order) {

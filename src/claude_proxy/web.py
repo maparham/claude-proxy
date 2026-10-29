@@ -1338,7 +1338,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
         # No ticket ids: they number every sale on the account.
         # `manual`: whether the order dialog offers an unpaid order beside ZarinPal.
-        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(conn, cfg)}
+        mode = payments.pay_mode(conn, cfg)
+        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(mode)}
         cur = st["current"]
         if cur:
             ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
@@ -1402,9 +1403,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out["timeline"] = tickets.timeline(conn, cfg, user["id"], now)   # the card's chart, with more than one live ticket
         out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
         out["terms_version"] = tickets.TERMS_VERSION
-        # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
-        out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY)}
-                      if payments.online(conn, cfg) else None)
+        # Online payment (payments design, section 4): offered by the Payment selector alone. The Toman prices are None
+        # without an IRT rate (the button then has no amount), and may be stale: paying is refused then.
+        out["pay"] = ({"currency": payments.CURRENCY, "prices": payments.prices(conn, cfg, now)}
+                      if payments.online(mode) else None)
         return out
 
     # ---------- order requests (design 2026-10-04) ----------
@@ -1420,7 +1422,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     def place_order(body: dict, **kw) -> dict:
         # An unpaid order only while the admin's Payment selector allows it.
-        if not payments.manual_orders(conn, cfg):
+        if not payments.manual_orders(payments.pay_mode(conn, cfg)):
             fail(409, "Ordering without paying online is off; pay with ZarinPal.")
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
                         currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""),
@@ -1562,7 +1564,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         e = cfg.email
         servers = None if e is None or e.alt is None else [
             {"id": k, "label": s.name(), "first": (k == "alt") == mail.alt_first(conn)} for k, s in (("main", e), ("alt", e.alt))]
-        return {"orders": rows, "new": orders.new_count(conn), "pay_mode": payments.pay_mode(conn) if cfg.zarinpal is not None else None,
+        return {"orders": rows, "new": orders.new_count(conn), "pay_mode": payments.pay_mode(conn, cfg),
                 "zarinpal_down": not payments.ready(conn, cfg), "mail_servers": servers}
 
     @app.post("/api/admin/orders/mail_server")

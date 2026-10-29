@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 
 CURRENCY = "IRT"
 EXPIRE_S = 3600
-PAUSED = "Online payment is paused; try again later or send an order request."
+PAUSED = "Online payment is paused; try again later."
 MANUAL_ONLY = "Online payment is off for now; send an order request instead."
-UNAVAILABLE = "ZarinPal is not available right now; try again or send an order request."
+UNAVAILABLE = "ZarinPal is not available right now; try again later."
 
 
 class PaymentError(orders.OrderError):
@@ -66,8 +66,11 @@ MODES = ("zarinpal", "manual", "both")
 LEGACY_KEY = "manual_orders"  # the old on/off switch: "1" read as "both" until the selector is first set
 
 
-def pay_mode(conn: sqlite3.Connection) -> str:
-    """The admin's Payment selector: ZarinPal only (the default), manual (unpaid orders) only, or both side by side."""
+def pay_mode(conn: sqlite3.Connection, cfg: Config) -> str | None:
+    """The admin's Payment selector: ZarinPal only (the default), manual (unpaid orders) only, or both side by side.
+    None without a [zarinpal] section: no selector then, and unpaid orders are the only way to buy."""
+    if cfg.zarinpal is None:
+        return None
     row = conn.execute("SELECT value FROM settings WHERE key=?", (MODE_KEY,)).fetchone()
     if row is not None and row[0] in MODES:
         return row[0]
@@ -80,10 +83,17 @@ def set_pay_mode(conn: sqlite3.Connection, actor: int, mode: str) -> None:
     db.audit(conn, actor, "pay_mode", mode)
 
 
-def online(conn: sqlite3.Connection, cfg: Config) -> bool:
-    """Whether the order dialog offers ZarinPal: a [zarinpal] section and the selector. A missing merchant ID or a
-    stale Toman rate doesn't hide it; start() refuses then, and the Orders tab says why (ready())."""
-    return cfg.zarinpal is not None and pay_mode(conn) != "manual"
+def online(mode: str | None) -> bool:
+    """Whether the order dialog offers ZarinPal, given pay_mode(). A missing merchant ID or a stale Toman rate doesn't
+    hide it; start() refuses then, and the Orders tab says why (ready())."""
+    return mode in ("zarinpal", "both")
+
+
+def prices(conn: sqlite3.Connection, cfg: Config, now: float) -> dict | None:
+    """The Toman price list for the Pay button, None without an IRT currency or rate (price_table would quote USD)."""
+    if CURRENCY not in cfg.tickets.currencies or tickets.current_rate(conn, CURRENCY) is None:
+        return None
+    return tickets.price_table(conn, cfg, now, CURRENCY)
 
 
 def ready(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
@@ -91,10 +101,9 @@ def ready(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bo
     return on(cfg) and rate_ok(conn, now)
 
 
-def manual_orders(conn: sqlite3.Connection, cfg: Config) -> bool:
-    """Whether a buyer may order without paying online: the selector, ZarinPal down or not. Without a [zarinpal]
-    section the selector doesn't apply and unpaid orders are the only way to buy."""
-    return cfg.zarinpal is None or pay_mode(conn) != "zarinpal"
+def manual_orders(mode: str | None) -> bool:
+    """Whether a buyer may order without paying online, given pay_mode(): the selector, ZarinPal down or not."""
+    return mode != "zarinpal"
 
 
 def get(conn: sqlite3.Connection, pid: int) -> dict:
@@ -120,12 +129,12 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
     `start_now`: the ticket starts beside the running one (orders.create).
     Returns the payment id and the StartPay address the browser goes to."""
     now = _now(now)
+    if pay_mode(conn, cfg) == "manual":
+        raise PaymentError(409, MANUAL_ONLY)
     if not on(cfg):
         raise PaymentError(404, "Online payment is not set up on this gateway.")
     if not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
-    if pay_mode(conn) == "manual":
-        raise PaymentError(409, MANUAL_ONLY)
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
                       user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang,
                       start_now=start_now)
