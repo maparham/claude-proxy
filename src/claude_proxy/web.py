@@ -652,6 +652,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         weekly = next((s for s in states if s.kind == "share_7d" and s.tier is not None), None)
         weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly) if weekly is not None and account is None else None
         line = _status_line(user, states, account, weeks, _ticket_name(conn, cfg, user["id"], now))
+        if account is None and (note := _account_blocked(conn, now)):
+            # Their own figures can show room left while every request gets the 429; say why up front, after the name.
+            n = len(user["name"])
+            line = f"{line[:n]} · {note}{line[n:]}"
         if format == "text":
             return PlainTextResponse(line + "\n")
         views = [v | {"weeks": weeks} if weeks and v["kind"] == "weekly_limit" else v for v in limit_views(user, states)]
@@ -1748,6 +1752,21 @@ def _exhaustion(conn, now: float) -> dict | None:
     resets = rows[-1]["resets_at"]
     return {"pct_per_hour": rate * 3600, "eta_s": eta,
             "before_reset": bool(resets and now + eta < resets)}
+
+
+def _account_blocked(conn, now: float) -> str | None:
+    """`gateway limit reached (resets in 2.1 h)` while the shared subscription's latest 5-hour or weekly figure says it
+    is used up (100%, or Anthropic's `rejected`) and that window has not reset yet; else None. A used-up week gives no
+    time: the account's weekly reset is not the user's to see."""
+    blocked = {}
+    for b in BUCKETS:
+        r = conn.execute("SELECT utilization_pct, resets_at, status FROM quota_snapshots WHERE bucket=? "
+                         "ORDER BY observed_at DESC LIMIT 1", (b,)).fetchone()
+        if r and r["resets_at"] and r["resets_at"] > now and (r["utilization_pct"] >= 100 or r["status"] == "rejected"):
+            blocked[b] = r["resets_at"] - now
+    if not blocked:
+        return None
+    return "gateway limit reached" + ("" if "7d" in blocked else f" (resets in {limits.human(int(blocked['5h']))})")
 
 
 def _fmt_pct(v) -> str:

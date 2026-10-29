@@ -219,6 +219,26 @@ async def test_status_line_says_when_each_limit_resets(env):
     assert re.fullmatch(r"bob · daily 1/5 req \(resets in 24\.0 h\) · 5h \d+% \(resets in (59|60) min\) · weekly .*\n", r.text), r.text
 
 
+async def test_status_line_says_when_the_shared_subscription_is_used_up(env):
+    gw, conn, ids, keys = env
+    now = time.time()
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, status) VALUES(?,?,?,?,?,?)",
+                 (now, "header", "5h", 100, now + 7500, "rejected"))
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
+        admin = await c.get("/api/me/status?format=text", headers=bearer(keys["admin"]))
+    assert r.text == "bob · gateway limit reached (resets in 2.1 h)\n"
+    assert "gateway limit" not in admin.text   # admins see the plan's own figures
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, status) VALUES(?,?,?,?,?,?)",
+                 (now + 1, "header", "5h", 100, now - 1, "rejected"))   # that window has reset
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))).text == "bob\n"
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, status) VALUES(?,?,?,?,?,?)",
+                 (now + 2, "header", "7d", 100, now + 3 * 86400, "rejected"))   # a used-up week keeps its reset to itself
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))).text == "bob · gateway limit reached\n"
+
+
 async def test_delete_only_revoked_users_and_anonymize_their_history(env):
     gw, conn, ids, keys = env
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "requests_daily", "*", "5", "count"))
