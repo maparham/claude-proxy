@@ -1400,7 +1400,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
         out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY)}
-                      if payments.on(cfg) and payments.rate_ok(conn, now) else None)
+                      if payments.online(conn, cfg, now) else None)
         return out
 
     # ---------- order requests (design 2026-10-04) ----------
@@ -1415,7 +1415,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return m | {"label": tier_label(m["tier"])} if m else None
 
     def place_order(body: dict, **kw) -> dict:
-        # An unpaid order only while the admin's switch is on or ZarinPal cannot take the payment.
+        # An unpaid order only while the admin's Payment selector allows it or ZarinPal cannot take the payment.
         if not payments.manual_orders(conn, cfg):
             fail(409, "Ordering without paying online is off; pay with ZarinPal.")
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
@@ -1553,12 +1553,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             pay = conn.execute("SELECT status, amount, ref_id, card_pan FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1",
                                (o["id"],)).fetchone()
             o["payment"] = dict(pay) if pay else None
-        # `manual`: the switch itself; `manual_forced`: unpaid orders are open anyway, ZarinPal being unavailable.
+        # `pay_mode`: the Payment selector itself; `manual_forced`: unpaid orders are open anyway, ZarinPal being unavailable.
         # `mail_servers`: with [email.alt], the two SMTP servers, the one tried first marked.
         e = cfg.email
         servers = None if e is None or e.alt is None else [
             {"id": k, "label": s.name(), "first": (k == "alt") == mail.alt_first(conn)} for k, s in (("main", e), ("alt", e.alt))]
-        return {"orders": rows, "new": orders.new_count(conn), "manual": payments.manual_switch(conn),
+        return {"orders": rows, "new": orders.new_count(conn), "pay_mode": payments.pay_mode(conn),
                 "manual_forced": not (payments.on(cfg) and payments.rate_ok(conn)), "mail_servers": servers}
 
     @app.post("/api/admin/orders/mail_server")
@@ -1573,15 +1573,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         mail.set_alt_first(conn, actor["id"], body["server"] == "alt")
         return {"ok": True, "server": body["server"]}
 
-    @app.post("/api/admin/orders/manual")
-    async def orders_manual(request: Request):
+    @app.post("/api/admin/orders/pay_mode")
+    async def orders_pay_mode(request: Request):
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
-        if not isinstance(body.get("on"), bool):
-            fail(400, "on must be true or false.")
-        payments.set_manual_switch(conn, actor["id"], body["on"])
-        return {"ok": True, "manual": body["on"]}
+        if body.get("mode") not in payments.MODES:
+            fail(400, "mode must be zarinpal, manual or both.")
+        payments.set_pay_mode(conn, actor["id"], body["mode"])
+        return {"ok": True, "pay_mode": body["mode"]}
 
     @app.post("/api/admin/orders/{oid}")
     async def order_action(request: Request, oid: int):

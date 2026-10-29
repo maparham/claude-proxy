@@ -162,24 +162,41 @@ async def test_mail_once_per_payment(env, monkeypatch):
     assert sorted(sent) == ["admin@example.com", "alice@example.com"]
 
 
-async def test_unpaid_orders_only_with_the_admin_switch_or_zarinpal_unavailable(env):
+async def test_payment_mode_selects_zarinpal_manual_or_both(env):
     gw, conn, cfg, ids, keys, zp = env
     order = {"tier": "lite", "length": "week", "currency": "EUR", "terms_version": "v1"}
-    async with client(gw) as c:
-        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["manual"] is False
+    pay = {"tier": "lite", "length": "week", "terms_version": "v1"}
+    me = lambda c: c.get("/api/me/tickets", headers=bearer(keys["alice"]))  # noqa: E731
+    async with client(gw) as c:   # default: ZarinPal only
+        r = (await me(c)).json()
+        assert r["manual"] is False and r["pay"] is not None
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)
         assert r.status_code == 409 and "ZarinPal" in r.json()["error"]
     async with admin_client(gw) as c:
-        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "manual": False, "manual_forced": False, "mail_servers": None}
-        assert (await c.post("/api/admin/orders/manual", json={"on": "yes"})).status_code == 400
-        assert (await c.post("/api/admin/orders/manual", json={"on": True})).json() == {"ok": True, "manual": True}
-    async with client(gw) as c:
-        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["manual"] is True
+        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "pay_mode": "zarinpal", "manual_forced": False, "mail_servers": None}
+        assert (await c.post("/api/admin/orders/pay_mode", json={"mode": "yes"})).status_code == 400
+        assert (await c.post("/api/admin/orders/pay_mode", json={"mode": "manual"})).json() == {"ok": True, "pay_mode": "manual"}
+    async with client(gw) as c:   # manual only: no ZarinPal in the dialog, and the endpoint refuses
+        r = (await me(c)).json()
+        assert r["manual"] is True and r["pay"] is None
+        assert (await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json=pay)).status_code == 409
         assert (await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)).status_code == 200
-    assert conn.execute("SELECT action, target FROM audit_log WHERE action='manual_orders'").fetchall()[0][1] == "on"
-    payments.set_manual_switch(conn, ids["admin"], False)
+    assert conn.execute("SELECT target FROM audit_log WHERE action='pay_mode'").fetchall()[0][0] == "manual"
+    payments.set_pay_mode(conn, ids["admin"], "both")
+    async with client(gw) as c:
+        r = (await me(c)).json()
+        assert r["manual"] is True and r["pay"] is not None
+    payments.set_pay_mode(conn, ids["admin"], "zarinpal")
     conn.execute("UPDATE fx_rates SET set_at=? WHERE currency='IRT'", (int(time.time()) - 40 * 3600,))   # ZarinPal can't quote
     assert payments.manual_orders(conn, cfg) is True
     async with admin_client(gw) as c:
         r = (await c.get("/api/admin/orders")).json()
-        assert (r["manual"], r["manual_forced"]) == (False, True)
+        assert (r["pay_mode"], r["manual_forced"]) == ("zarinpal", True)
+
+
+def test_pay_mode_reads_the_old_manual_switch(env):
+    gw, conn, cfg, ids, keys, zp = env
+    conn.execute("INSERT INTO settings(key, value) VALUES('manual_orders', '1')")
+    assert payments.pay_mode(conn) == "both"
+    payments.set_pay_mode(conn, ids["admin"], "zarinpal")
+    assert payments.pay_mode(conn) == "zarinpal"

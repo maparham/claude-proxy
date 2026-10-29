@@ -130,7 +130,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api", "manual_orders", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -836,7 +836,7 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
         ${orderButtons(manual, payBtn)}</div>
     </form>`;
 }
-// An unpaid order (Submit) only while the server allows one: the admin's switch, or ZarinPal unavailable.
+// An unpaid order (Submit) only while the server allows one: the admin's Payment selector, or ZarinPal unavailable.
 function orderButtons(manual, payBtn) {
   const send = manual || !payBtn ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
   return `${send}${send && payBtn ? `<p class="pay-or muted">${t("pay.or")}</p>` : ""}${payBtn}`;
@@ -1192,23 +1192,24 @@ function bonusDialog(tk, list) {
 const ORDER_STATUSES = ["open", "new", "contacted", "done", "declined", "withdrawn", "all"];
 const isOpenOrder = (o) => o.status === "new" || o.status === "contacted";
 
+const PAY_MODES = ["zarinpal", "manual", "both"];
 async function renderOrders(main) {
   const status = ORDER_STATUSES.includes(S.prefs.orderStatus) ? S.prefs.orderStatus : "open";
-  const [{ orders, new: fresh, manual, manual_forced: forced, mail_servers: servers }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
+  const [{ orders, new: fresh, pay_mode: mode, manual_forced: forced, mail_servers: servers }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
   if (S.tickets && S.tickets.orders_new !== fresh) { S.tickets.orders_new = fresh; renderTabs(); }
   main.innerHTML = `<section class="view"><h2>${t("tab.orders")}</h2>
     <p class="lede">${t("ord.lede")}</p>
     <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select>
-      <span class="spacer"></span><label class="check"><input type="checkbox" id="manual-orders"${manual ? " checked" : ""}> ${t("ord.manual")}</label>${tipI("manual_orders")}
+      <span class="spacer"></span><label for="pay-mode">${t("ord.pay_mode")}</label><select id="pay-mode">${PAY_MODES.map((k) => `<option value="${k}"${k === mode ? " selected" : ""}>${t(`ord.pay_mode_${k}`)}</option>`).join("")}</select>${tipI("pay_mode")}
       ${servers ? `<label for="mail-server">${t("ord.mail_via")}</label><select id="mail-server">${servers.map((m) => `<option value="${m.id}"${m.first ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select>${tipI("mail_server")}` : ""}</div>
-    ${forced ? `<p class="sub">${t("ord.manual_forced")}</p>` : ""}
+    ${forced && mode === "zarinpal" ? `<p class="sub">${t("ord.manual_forced")}</p>` : ""}
     <div class="card table-wrap"><table class="data orders"><thead><tr><th>${t("ord.age")}</th><th>${t("ord.buyer")}</th><th>${t("ord.ticket")}</th><th class="r">${t("ord.quoted_col")}</th><th>${t("ord.message_col")}</th><th>${t("errs.status")}</th><th>${t("pay.col")}</th><th>${t("ord.email_col")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
       <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="10" class="muted">${t(`ord.none_${status}`)}</td></tr>`}</tbody></table></div>
   </section>`;
   $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
-  $("#manual-orders").onchange = async (e) => {
-    try { await api("/api/admin/orders/manual", { method: "POST", body: { on: e.target.checked } }); }
-    catch (err) { e.target.checked = !e.target.checked; alertInline(err.message); }
+  $("#pay-mode").onchange = async (e) => {
+    try { await api("/api/admin/orders/pay_mode", { method: "POST", body: { mode: e.target.value } }); render(); }
+    catch (err) { e.target.value = mode; alertInline(err.message); }
   };
   if (servers) $("#mail-server").onchange = async (e) => {
     try { await api("/api/admin/orders/mail_server", { method: "POST", body: { server: e.target.value } }); }

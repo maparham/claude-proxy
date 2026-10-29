@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 CURRENCY = "IRT"
 EXPIRE_S = 3600
 PAUSED = "Online payment is paused; try again later or send an order request."
+MANUAL_ONLY = "Online payment is off for now; send an order request instead."
 UNAVAILABLE = "ZarinPal is not available right now; try again or send an order request."
 
 
@@ -60,24 +61,34 @@ def rate_ok(conn: sqlite3.Connection, now: float | None = None) -> bool:
     return rate is not None and not tickets.rate_is_stale(rate, _now(now))
 
 
-MANUAL_KEY = "manual_orders"   # settings row: "1" while the admin's Manual orders switch is on
+MODE_KEY = "pay_mode"         # settings row: the admin's Payment selector on the Orders tab
+MODES = ("zarinpal", "manual", "both")
+LEGACY_KEY = "manual_orders"  # the old on/off switch: "1" read as "both" until the selector is first set
 
 
-def manual_switch(conn: sqlite3.Connection) -> bool:
-    """The admin's switch on the Orders tab: orders paid outside ZarinPal, for while it is down. Off by default."""
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (MANUAL_KEY,)).fetchone()
-    return row is not None and row[0] == "1"
+def pay_mode(conn: sqlite3.Connection) -> str:
+    """The admin's Payment selector: ZarinPal only (the default), manual (unpaid orders) only, or both side by side."""
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (MODE_KEY,)).fetchone()
+    if row is not None and row[0] in MODES:
+        return row[0]
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (LEGACY_KEY,)).fetchone()
+    return "both" if row is not None and row[0] == "1" else "zarinpal"
 
 
-def set_manual_switch(conn: sqlite3.Connection, actor: int, value: bool) -> None:
-    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (MANUAL_KEY, "1" if value else "0"))
-    db.audit(conn, actor, "manual_orders", "on" if value else "off")
+def set_pay_mode(conn: sqlite3.Connection, actor: int, mode: str) -> None:
+    conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (MODE_KEY, mode))
+    db.audit(conn, actor, "pay_mode", mode)
+
+
+def online(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
+    """Whether a buyer may pay with ZarinPal: set up, a fresh Toman rate, and not switched to manual only."""
+    return on(cfg) and rate_ok(conn, now) and pay_mode(conn) != "manual"
 
 
 def manual_orders(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
-    """Whether a buyer may order without paying online: the admin's switch, or online payment unavailable (not set up,
-    or a stale Toman rate), when an unpaid order is the only way to buy."""
-    return manual_switch(conn) or not (on(cfg) and rate_ok(conn, now))
+    """Whether a buyer may order without paying online: the admin's selector allows it, or online payment is
+    unavailable (not set up, or a stale Toman rate), when an unpaid order is the only way to buy."""
+    return pay_mode(conn) != "zarinpal" or not (on(cfg) and rate_ok(conn, now))
 
 
 def get(conn: sqlite3.Connection, pid: int) -> dict:
@@ -107,6 +118,8 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
         raise PaymentError(404, "Online payment is not set up on this gateway.")
     if not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
+    if pay_mode(conn) == "manual":
+        raise PaymentError(409, MANUAL_ONLY)
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
                       user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang,
                       start_now=start_now)
