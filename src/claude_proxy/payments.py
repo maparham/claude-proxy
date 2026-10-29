@@ -80,15 +80,21 @@ def set_pay_mode(conn: sqlite3.Connection, actor: int, mode: str) -> None:
     db.audit(conn, actor, "pay_mode", mode)
 
 
-def online(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
-    """Whether a buyer may pay with ZarinPal: set up, a fresh Toman rate, and not switched to manual only."""
-    return on(cfg) and rate_ok(conn, now) and pay_mode(conn) != "manual"
+def online(conn: sqlite3.Connection, cfg: Config) -> bool:
+    """Whether the order dialog offers ZarinPal: a [zarinpal] section and the selector. A missing merchant ID or a
+    stale Toman rate doesn't hide it; start() refuses then, and the Orders tab says why (ready())."""
+    return cfg.zarinpal is not None and pay_mode(conn) != "manual"
 
 
-def manual_orders(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
-    """Whether a buyer may order without paying online: the admin's selector allows it, or online payment is
-    unavailable (not set up, or a stale Toman rate), when an unpaid order is the only way to buy."""
-    return pay_mode(conn) != "zarinpal" or not (on(cfg) and rate_ok(conn, now))
+def ready(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> bool:
+    """Whether ZarinPal can take a payment now: set up and a fresh Toman rate."""
+    return on(cfg) and rate_ok(conn, now)
+
+
+def manual_orders(conn: sqlite3.Connection, cfg: Config) -> bool:
+    """Whether a buyer may order without paying online: the selector, ZarinPal down or not. Without a [zarinpal]
+    section the selector doesn't apply and unpaid orders are the only way to buy."""
+    return cfg.zarinpal is None or pay_mode(conn) != "zarinpal"
 
 
 def get(conn: sqlite3.Connection, pid: int) -> dict:

@@ -836,9 +836,9 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
         ${orderButtons(manual, payBtn)}</div>
     </form>`;
 }
-// An unpaid order (Submit) only while the server allows one: the admin's Payment selector, or ZarinPal unavailable.
+// An unpaid order (Submit) only while the admin's Payment selector allows one.
 function orderButtons(manual, payBtn) {
-  const send = manual || !payBtn ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
+  const send = manual ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
   return `${send}${send && payBtn ? `<p class="pay-or muted">${t("pay.or")}</p>` : ""}${payBtn}`;
 }
 function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
@@ -1195,19 +1195,19 @@ const isOpenOrder = (o) => o.status === "new" || o.status === "contacted";
 const PAY_MODES = ["zarinpal", "manual", "both"];
 async function renderOrders(main) {
   const status = ORDER_STATUSES.includes(S.prefs.orderStatus) ? S.prefs.orderStatus : "open";
-  const [{ orders, new: fresh, pay_mode: mode, manual_forced: forced, mail_servers: servers }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
+  const [{ orders, new: fresh, pay_mode: mode, zarinpal_down: down, mail_servers: servers }, { users }] = await Promise.all([api(`/api/admin/orders?status=${status}`), api("/api/users")]);
   if (S.tickets && S.tickets.orders_new !== fresh) { S.tickets.orders_new = fresh; renderTabs(); }
   main.innerHTML = `<section class="view"><h2>${t("tab.orders")}</h2>
     <p class="lede">${t("ord.lede")}</p>
     <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select>
-      <span class="spacer"></span><label for="pay-mode">${t("ord.pay_mode")}</label><select id="pay-mode">${PAY_MODES.map((k) => `<option value="${k}"${k === mode ? " selected" : ""}>${t(`ord.pay_mode_${k}`)}</option>`).join("")}</select>${tipI("pay_mode")}
+      <span class="spacer"></span>${mode ? `<label for="pay-mode">${t("ord.pay_mode")}</label><select id="pay-mode">${PAY_MODES.map((k) => `<option value="${k}"${k === mode ? " selected" : ""}>${t(`ord.pay_mode_${k}`)}</option>`).join("")}</select>${tipI("pay_mode")}` : ""}
       ${servers ? `<label for="mail-server">${t("ord.mail_via")}</label><select id="mail-server">${servers.map((m) => `<option value="${m.id}"${m.first ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select>${tipI("mail_server")}` : ""}</div>
-    ${forced && mode === "zarinpal" ? `<p class="sub">${t("ord.manual_forced")}</p>` : ""}
+    ${mode && down && mode !== "manual" ? `<p class="sub">${t("ord.zarinpal_down")}</p>` : ""}
     <div class="card table-wrap"><table class="data orders"><thead><tr><th>${t("ord.age")}</th><th>${t("ord.buyer")}</th><th>${t("ord.ticket")}</th><th class="r">${t("ord.quoted_col")}</th><th>${t("ord.message_col")}</th><th>${t("errs.status")}</th><th>${t("pay.col")}</th><th>${t("ord.email_col")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
       <tbody>${orders.map(orderRow).join("") || `<tr><td colspan="10" class="muted">${t(`ord.none_${status}`)}</td></tr>`}</tbody></table></div>
   </section>`;
   $("#order-status").onchange = (e) => { S.prefs.orderStatus = e.target.value; savePrefs(); render(); };
-  $("#pay-mode").onchange = async (e) => {
+  if (mode) $("#pay-mode").onchange = async (e) => {
     try { await api("/api/admin/orders/pay_mode", { method: "POST", body: { mode: e.target.value } }); render(); }
     catch (err) { e.target.value = mode; alertInline(err.message); }
   };

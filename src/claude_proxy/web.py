@@ -1334,7 +1334,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
         # No ticket ids: they number every sale on the account.
         # `manual`: whether the order dialog offers an unpaid order beside ZarinPal.
-        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(conn, cfg, now)}
+        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(conn, cfg)}
         cur = st["current"]
         if cur:
             ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
@@ -1400,7 +1400,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): the Toman prices, only while the IRT rate is fresh.
         out["pay"] = ({"currency": payments.CURRENCY, "prices": tickets.price_table(conn, cfg, now, payments.CURRENCY)}
-                      if payments.online(conn, cfg, now) else None)
+                      if payments.online(conn, cfg) else None)
         return out
 
     # ---------- order requests (design 2026-10-04) ----------
@@ -1415,7 +1415,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return m | {"label": tier_label(m["tier"])} if m else None
 
     def place_order(body: dict, **kw) -> dict:
-        # An unpaid order only while the admin's Payment selector allows it or ZarinPal cannot take the payment.
+        # An unpaid order only while the admin's Payment selector allows it.
         if not payments.manual_orders(conn, cfg):
             fail(409, "Ordering without paying online is off; pay with ZarinPal.")
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
@@ -1553,13 +1553,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             pay = conn.execute("SELECT status, amount, ref_id, card_pan FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1",
                                (o["id"],)).fetchone()
             o["payment"] = dict(pay) if pay else None
-        # `pay_mode`: the Payment selector itself; `manual_forced`: unpaid orders are open anyway, ZarinPal being unavailable.
+        # `pay_mode`: the Payment selector itself, None without a [zarinpal] section (no selector then); `zarinpal_down`: ZarinPal can't take a payment now (not set up, or a stale Toman rate).
         # `mail_servers`: with [email.alt], the two SMTP servers, the one tried first marked.
         e = cfg.email
         servers = None if e is None or e.alt is None else [
             {"id": k, "label": s.name(), "first": (k == "alt") == mail.alt_first(conn)} for k, s in (("main", e), ("alt", e.alt))]
-        return {"orders": rows, "new": orders.new_count(conn), "pay_mode": payments.pay_mode(conn),
-                "manual_forced": not (payments.on(cfg) and payments.rate_ok(conn)), "mail_servers": servers}
+        return {"orders": rows, "new": orders.new_count(conn), "pay_mode": payments.pay_mode(conn) if cfg.zarinpal is not None else None,
+                "zarinpal_down": not payments.ready(conn, cfg), "mail_servers": servers}
 
     @app.post("/api/admin/orders/mail_server")
     async def orders_mail_server(request: Request):
@@ -1838,8 +1838,9 @@ def _status_line(user, states, account, weeks: dict | None = None, ticket: str |
     used/limit, each with when its window resets, then, for an admin (`account` given), the shared subscription's quota
     and the estimated part their requests used. A non-admin's share limits read as their own allowance: `5h 30% (resets in 2.1 h)`;
     with a ticket's `weeks` (limits.ticket_weeks), its weekly limit reads as each week's use and the whole ticket's.
-    `ticket` (_ticket_name) follows the name."""
+    `ticket` (_ticket_name) follows the name, then the ticket's use."""
     parts = [user["name"]] + ([ticket] if ticket else [])
+    head = len(parts)
     for s in states:
         if s.kind == "allowed_models":
             continue
@@ -1850,7 +1851,7 @@ def _status_line(user, states, account, weeks: dict | None = None, ticket: str |
             if s.skipped or s.current is None:
                 parts.append(f"{label} n/a")
             elif period == "7d" and s.tier is not None and weeks:   # a ticket's weekly piece
-                parts.append(_ticket_weeks_text(weeks, est))
+                parts.insert(head, _ticket_weeks_text(weeks, est))
             else:
                 parts.append(f"{label} {s.pct:.0f}%{est}{_resets(s)}")
             continue

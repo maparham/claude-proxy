@@ -284,7 +284,7 @@ async def test_admin_list_actions_and_audit(env, ts):
         assert (o["status"], o["ip"], o["admin_note"]) == ("declined", None, "called her")
         assert (await c.post(f"/api/admin/orders/{oid}", json={"action": "bogus"})).status_code == 400
         assert (await c.post("/api/admin/orders/999", json={"action": "contacted"})).status_code == 404
-        assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0, "pay_mode": "zarinpal", "manual_forced": True, "mail_servers": None}
+        assert (await c.get("/api/admin/orders")).json() == {"orders": [], "new": 0, "pay_mode": None, "zarinpal_down": True, "mail_servers": None}
         assert len((await c.get("/api/admin/orders?status=all")).json()["orders"]) == 1
         assert len((await c.get("/api/admin/orders?status=declined")).json()["orders"]) == 1
         assert (await c.get("/api/admin/orders?status=nope")).status_code == 400

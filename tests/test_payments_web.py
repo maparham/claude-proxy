@@ -69,10 +69,12 @@ async def test_pay_needs_sign_in_and_payments_on(env, monkeypatch):
         monkeypatch.delenv("ZARINPAL_MERCHANT_ID")
         r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         assert r.status_code == 404
-        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"] is None
+        # ZarinPal only stays offered without the merchant ID: paying fails, no unpaid order instead
+        r = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
+        assert r["pay"] is not None and r["manual"] is False
 
 
-async def test_pay_prices_offered_only_with_a_fresh_rate(env):
+async def test_pay_prices_offered_even_with_a_stale_rate(env):
     gw, conn, cfg, ids, keys, zp = env
     async with client(gw) as c:
         pay = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"]
@@ -80,7 +82,9 @@ async def test_pay_prices_offered_only_with_a_fresh_rate(env):
         lite = next(t for t in pay["prices"]["tiers"] if t["tier"] == "lite")
         assert lite["lengths"]["week"]["amount"] == 1250000
         conn.execute("UPDATE fx_rates SET set_at=? WHERE currency='IRT'", (int(time.time()) - 40 * 3600,))
-        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"] is None
+        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"] is not None
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
+        assert r.status_code == 409
 
 
 async def test_callback_unknown_and_cancel(env):
@@ -173,7 +177,7 @@ async def test_payment_mode_selects_zarinpal_manual_or_both(env):
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)
         assert r.status_code == 409 and "ZarinPal" in r.json()["error"]
     async with admin_client(gw) as c:
-        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "pay_mode": "zarinpal", "manual_forced": False, "mail_servers": None}
+        assert (await c.get("/api/admin/orders")).json() | {"orders": []} == {"orders": [], "new": 0, "pay_mode": "zarinpal", "zarinpal_down": False, "mail_servers": None}
         assert (await c.post("/api/admin/orders/pay_mode", json={"mode": "yes"})).status_code == 400
         assert (await c.post("/api/admin/orders/pay_mode", json={"mode": "manual"})).json() == {"ok": True, "pay_mode": "manual"}
     async with client(gw) as c:   # manual only: no ZarinPal in the dialog, and the endpoint refuses
@@ -188,10 +192,14 @@ async def test_payment_mode_selects_zarinpal_manual_or_both(env):
         assert r["manual"] is True and r["pay"] is not None
     payments.set_pay_mode(conn, ids["admin"], "zarinpal")
     conn.execute("UPDATE fx_rates SET set_at=? WHERE currency='IRT'", (int(time.time()) - 40 * 3600,))   # ZarinPal can't quote
-    assert payments.manual_orders(conn, cfg) is True
+    async with client(gw) as c:   # ZarinPal only stays ZarinPal only: the button shows, paying fails, no unpaid order
+        r = (await me(c)).json()
+        assert r["manual"] is False and r["pay"] is not None
+        assert (await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json=pay)).status_code == 409
+        assert (await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=order)).status_code == 409
     async with admin_client(gw) as c:
         r = (await c.get("/api/admin/orders")).json()
-        assert (r["pay_mode"], r["manual_forced"]) == ("zarinpal", True)
+        assert (r["pay_mode"], r["zarinpal_down"]) == ("zarinpal", True)
 
 
 def test_pay_mode_reads_the_old_manual_switch(env):
