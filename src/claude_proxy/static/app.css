@@ -194,11 +194,10 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .signin {
   min-height: 100vh; min-height: 100dvh; display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(400px, 38%);
-  grid-template-rows: auto 1fr auto 1fr auto;
-  grid-template-areas: "brand panel" ". panel" "intro panel" ". panel" "foot panel";
+  grid-template-rows: 1fr auto 1fr;
+  grid-template-areas: ". panel" "intro panel" ". panel";
   column-gap: clamp(32px, 6vw, 96px); padding-inline-start: clamp(24px, 7vw, 112px);
 }
-.signin-brand { grid-area: brand; margin: 28px 0 0; font-weight: 650; font-size: 15px; letter-spacing: -0.01em; }
 .signin-intro { grid-area: intro; max-width: 34rem; }
 .signin-intro h1 { font-size: clamp(30px, 3.6vw, 44px); line-height: 1.08; letter-spacing: -0.028em; font-weight: 680;
                    margin: 0 0 14px; text-wrap: balance; }
@@ -219,9 +218,6 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
   .subnav button { white-space: nowrap; border-inline-start: 0; border-bottom: 2px solid transparent; border-radius: 0; margin-bottom: -1px; }
   .subnav button[aria-selected="true"] { border-bottom-color: var(--ink); background: none; }
 }
-.signin-foot { grid-area: foot; margin: 32px 0 28px; font-size: 13px; }
-.signin-foot a { color: var(--muted); }
-.signin-foot a:hover { color: var(--ink); }
 .signin-panel { grid-area: panel; background: var(--surface); border-inline-start: 1px solid var(--border);
                 display: flex; align-items: center; justify-content: center; padding: 48px clamp(24px, 4vw, 56px); }
 .signin-box { width: 100%; max-width: 360px; }
@@ -254,18 +250,16 @@ h1 .h1-sub { display: block; margin-top: 0.3em; font-size: 0.5em; font-weight: 5
 #classic form { display: grid; gap: 10px; margin-top: 12px; }
 #classic form input { padding: 9px 10px; border-color: var(--axis); }
 #classic form .btn { padding: 9px 12px; font-weight: 600; }
-.signin:not(.for-authorize) { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 1fr auto; grid-template-areas: "brand" "panel" "foot";
+.signin:not(.for-authorize) { grid-template-columns: minmax(0, 1fr); grid-template-rows: 1fr; grid-template-areas: "panel";
                               padding-inline: clamp(20px, 7vw, 112px); }
 .signin:not(.for-authorize) .signin-intro { display: none; }
 .signin:not(.for-authorize) .signin-panel { background: none; border: 0; padding: 32px 0; }
-.signin:not(.for-authorize) :is(.signin-brand, .signin-foot) { padding: 0; }   /* the page's own inset already holds them */
 .signin .error { margin-top: 12px; }
 
 @media (max-width: 880px) {
   .signin { grid-template-columns: minmax(0, 1fr); grid-template-rows: none; padding-inline-start: 0;
-            grid-template-areas: "brand" "intro" "panel" "foot"; }
-  .signin-brand, .signin-intro, .signin-foot { padding: 0 20px; }
-  .signin-brand { margin-top: 20px; }
+            grid-template-areas: "intro" "panel"; }
+  .signin-intro { padding: 0 20px; }
   .signin-intro { margin-top: 28px; }
   .signin-intro h1 { font-size: 28px; }
   .signin-lede { font-size: 15px; }

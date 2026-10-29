@@ -83,7 +83,7 @@ def test_app_js_holds_no_persian():
 
 def test_the_page_offers_the_switch_and_marks_its_text():
     html = (STATIC / "index.html").read_text()
-    assert 'id="lang-toggle"' in html and 'id="lang-signin"' in html
+    assert 'id="lang-toggle"' in html
     assert html.count("data-i18n") >= 20
 
 

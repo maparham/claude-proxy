@@ -16,7 +16,7 @@ const tzOffset = () => -new Date().getTimezoneOffset() * 60;
 // The page's own text in the chosen language (i18n.js), and the switch between Persian and English.
 applyStatic();
 document.title = t("app.title");
-$("#lang-toggle").onclick = $("#lang-signin").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
+$("#lang-toggle").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
 
 function loadPrefs() {
   const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open", source: "cli" };
@@ -2370,6 +2370,7 @@ function showLogin() {
   $("#authorize-hint").classList.toggle("hidden", !code);
   $("#login").classList.toggle("for-authorize", !!code);
   $("#authorize-code").textContent = code || "";
+  if (POPUP) document.title = t("login.title");   // the popup's title bar names the step, not the product
   showClerk();
 }
 async function boot() {

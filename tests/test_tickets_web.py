@@ -427,12 +427,11 @@ async def test_dashboard_links_the_pricing_page_only_while_tickets_are_on(env):
     gw, conn, cfg, ids, keys = env
     async with asgi_client(create_dashboard_app(gw)) as c:
         page = (await c.get("/dashboard")).text
-        assert page.count('href="/#pricing"') == 1                # the sign-in page's foot: signed out, / is the home page
         assert page.count('href="/?home#pricing"') == 1           # the header: admins preview it, users get their own list
         assert "pricing-link hidden" not in page
         cfg.tickets.enabled = False
         page = (await c.get("/dashboard")).text
-        assert page.count("pricing-link hidden") == 2
+        assert page.count("pricing-link hidden") == 1
 
 
 async def test_me_tickets_shows_the_note_of_an_extra_days_bonus(env):
