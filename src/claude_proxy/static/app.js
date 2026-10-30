@@ -633,7 +633,7 @@ function startCountdowns(root) {
     root.querySelectorAll(".countdown").forEach((el) => {
       const s = Math.max(0, Math.floor(+el.dataset.ends - Date.now() / 1000 - S.tkSkew));
       if (!s && !S.discountsEnded.has(el.dataset.ends)) { S.discountsEnded.add(el.dataset.ends); ended = true; }
-      el.textContent = s ? t("price.offer_ends", { d: nf0.format(Math.floor(s / 86400)), h: p2.format(Math.floor((s % 86400) / 3600)), m: p2.format(Math.floor((s % 3600) / 60)), s: p2.format(s % 60) }) : t("price.offer_ended");
+      el.textContent = s ? t(s >= 86400 ? "price.offer_ends" : "price.offer_ends_short", { d: nf0.format(Math.floor(s / 86400)), h: p2.format(Math.floor((s % 86400) / 3600)), m: p2.format(Math.floor((s % 3600) / 60)), s: p2.format(s % 60) }) : t("price.offer_ended");
     });
     if (ended) { clearInterval(S.countdown); if (root.open) root.close(); render(); }   // once per end: the regular price returns
   };
@@ -811,7 +811,12 @@ function passTimeline(tk, inUseAt = -1, no = []) {
   });
   const ticks = labels.map((l) => `<em class="${l.x < 0.08 ? "edge-start" : l.x > 0.92 ? "edge-end" : ""}" style="inset-inline-start:${(l.x * 100).toFixed(2)}%"><small>${l.lines.join("<br>")}</small></em>`).join("");
   const tall = Math.max(...labels.map((l) => l.lines.length));
-  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="gantt">${rows}
+  // A faint line down every row and the axis at each start and end, so the bars read as spans on a calendar, not as
+  // meters; the line at now is drawn over the bars (CSS).
+  const side = document.documentElement.dir === "rtl" ? "left" : "right";
+  const lines = points.slice(1).map((ts) => { const x = Math.min(at(ts), 99.9).toFixed(2);
+    return `linear-gradient(to ${side}, transparent ${x}%, var(--grid) ${x}%, var(--grid) calc(${x}% + 1px), transparent calc(${x}% + 1px))`; }).join(",");
+  return `<div class="pass-tl-wrap"><p class="sub">${t("tl.sub")}</p><div class="gantt" style="--tl-grid:${lines || "none"}">${rows}
     <div></div><div class="pass-axis" style="height:${10 + tall * 14}px" aria-hidden="true">${ticks}</div></div></div>`;
 }
 // "You picked Lite for a week." for a tier and length the price list still offers; anything else says nothing.
