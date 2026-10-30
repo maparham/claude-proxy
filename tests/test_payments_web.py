@@ -219,3 +219,25 @@ async def test_pay_without_a_toman_rate_has_no_prices_and_manual_only_says_so_fi
         payments.set_pay_mode(conn, ids["admin"], "manual")
         r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json=pay)
         assert r.status_code == 409 and r.json()["error"] == payments.MANUAL_ONLY
+
+async def test_the_price_shown_is_the_price_charged_discount_included(env):
+    gw, conn, cfg, ids, keys, zp = env
+    now = int(time.time())
+    payments.set_pay_mode(conn, ids["admin"], "both")
+    tickets.create_discount(conn, cfg, "lite", "week", 6.4, now - 10, now + 86400, ids["admin"], now=now - 10)
+    body = {"tier": "lite", "length": "week", "terms_version": "v1"}
+    lite_week = lambda table: next(t for t in table["tiers"] if t["tier"] == "lite")["lengths"]["week"]  # noqa: E731
+    async with client(gw) as c:
+        shown = (await c.get("/api/pricing")).json()
+        assert (shown["currency"], lite_week(shown)["usd"], lite_week(shown)["amount"]) == ("EUR", 6.4, 6.0)   # 5.888 to the half euro
+        r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=body | {"currency": "EUR"})
+        assert r.status_code == 200, r.text
+        o = r.json()["order"]
+        assert (o["currency"], o["quoted_amount"]) == ("EUR", lite_week(shown)["amount"])
+        assert (await c.post(f"/api/me/orders/{o['id']}/withdraw", headers=bearer(keys["alice"]))).status_code == 200
+        pay = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"]
+        assert (pay["currency"], lite_week(pay["prices"])["amount"]) == ("IRT", 1000000)   # $6.40 at 156,250
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json=body)
+        assert r.status_code == 200, r.text
+    o = conn.execute("SELECT o.quoted_amount, p.amount FROM orders o JOIN payments p ON p.order_id=o.id").fetchone()
+    assert zp.requests[-1]["amount"] == int(o["quoted_amount"]) == o["amount"] == lite_week(pay["prices"])["amount"]

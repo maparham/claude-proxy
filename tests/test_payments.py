@@ -7,6 +7,7 @@ import pytest
 
 from claude_proxy import orders, payments, tickets, zarinpal
 from claude_proxy.config import Currency, ZarinpalConfig
+from claude_proxy.db import create_user
 from tests.tickets_helpers import seeded, user
 
 MID = "00000000-0000-0000-0000-000000000000"
@@ -510,3 +511,37 @@ async def test_cli_reconcile_survives_a_failure(monkeypatch, caplog):
     monkeypatch.setattr(payments, "reconcile", boom)
     await cli._reconcile_once(None, Config())
     assert "reconciling payments failed" in caplog.text
+
+
+def full_at_alices_end(conn, cfg, ids):
+    """Alice's lite week runs now; bob's standard week is queued from its end. A ceiling of 28 has room now (10) but
+    none for another 5 at alice's end (25)."""
+    now = int(time.time())
+    cfg.tickets.max_sold_pct = 28
+    bob, _ = create_user(conn, "bob")
+    a = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now, terms_version="v1")
+    tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "week", "USD", now=now, terms_version="v1")
+    q = tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "standard", "week", "USD", now=now, terms_version="v1")
+    assert q["starts_at"] == a["ends_at"]
+    assert not tickets.sold_out(conn, cfg, "lite", "week", now)
+    return a
+
+
+async def test_paid_order_for_a_queued_pass_that_does_not_fit_is_unfulfilled(env):
+    conn, cfg, ids, zp = env
+    a = full_at_alices_end(conn, cfg, ids)
+    r = await start(conn, cfg, ids)
+    p = await payments.callback(conn, cfg, payments.get(conn, r["payment_id"])["authority"], "OK")
+    assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and "Not enough capacity" in p["error"]
+    assert orders.get(conn, p["order_id"])["status"] == "new"
+    assert [t["id"] for t in tickets.user_tickets(conn, ids["alice"])] == [a["id"]]
+
+
+@pytest.mark.xfail(strict=True, reason="orders.create judges sold out for a pass starting now, but a paid order is granted at "
+                                       "last_end: the buyer is charged for a queued pass known not to fit")
+async def test_a_queued_pass_that_does_not_fit_is_refused_before_paying(env):
+    conn, cfg, ids, zp = env
+    full_at_alices_end(conn, cfg, ids)
+    with pytest.raises(orders.OrderError):
+        await start(conn, cfg, ids)
+    assert zp.requests == []

@@ -490,3 +490,57 @@ def test_ungate_with_end_live_cancels_the_live_tickets_and_their_bonuses(db):
     assert {r[0] for r in conn.execute("SELECT cancelled_at FROM tickets WHERE id IN (?,?)", (a["id"], b["id"]))} == {NOW + 60}
     assert conn.execute("SELECT cancelled_at FROM ticket_bonuses").fetchone()[0] == NOW + 60
     assert not conn.in_transaction
+
+
+def test_another_users_bonus_starting_mid_period_refuses_a_grant_that_fits_at_its_start(db):
+    conn, cfg, ids = seeded(db)
+    add_user(conn, ids, "bob")
+    b = grant(conn, cfg, ids, who="bob", length="month")                                         # 5%
+    tickets.add_bonus(conn, cfg, ids["admin"], b["id"], share_pct=70, starts_at=NOW + 3 * DAY, ends_at=NOW + 4 * DAY, now=NOW)
+    assert tickets.sold_at(conn, 1, NOW) == 5 and tickets.sold_at(conn, 1, NOW + 3 * DAY) == 75
+    tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 3 * DAY)                                  # over before the bonus: fits
+    with pytest.raises(tickets.CapacityError, match="75% is sold"):
+        tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 7 * DAY)
+    with pytest.raises(tickets.CapacityError):
+        grant(conn, cfg, ids, tier="standard", length="week")
+    assert grant(conn, cfg, ids, tier="lite", length="week")["share_pct"] == 5                   # 75 + 5 = 80
+
+
+def test_same_second_starts_and_a_bonus_start_all_count_up_to_exactly_the_ceiling(db):
+    conn, cfg, ids = seeded(db)
+    for n in ("bob", "carol", "dave"):
+        add_user(conn, ids, n)
+    at = NOW + DAY
+    d = grant(conn, cfg, ids, who="dave", length="month", currency="USD")                       # 5% from NOW
+    tickets.add_bonus(conn, cfg, ids["admin"], d["id"], share_pct=10, starts_at=at, ends_at=at + DAY, now=NOW)
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=at, currency="USD")
+    grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=at, currency="USD")
+    assert tickets.sold_at(conn, 1, at) == 65
+    assert tickets.sold_at(conn, 1, at - 1) == 5
+    tickets.check_capacity(conn, cfg, 1, 15, at - DAY, at + DAY)                                 # 65 + 15 = 80: fits
+    with pytest.raises(tickets.CapacityError):
+        tickets.check_capacity(conn, cfg, 1, 15.01, at - DAY, at + DAY)
+
+
+@pytest.mark.parametrize("share,fits", [(26.67, 2), (80 / 3, 3)])
+def test_fractional_shares_against_the_ceiling(db, share, fits):
+    conn, cfg, ids = seeded(db)
+    tickets.set_share(conn, cfg, "lite", share, ids["admin"])
+    for n in range(3):
+        add_user(conn, ids, f"u{n}")
+        if n < fits:
+            grant(conn, cfg, ids, who=f"u{n}")
+        else:
+            with pytest.raises(tickets.CapacityError):                                           # 3 x 26.67 = 80.01
+                grant(conn, cfg, ids, who=f"u{n}")
+    assert tickets.sold_at(conn, 1, NOW) == pytest.approx(fits * share)
+
+
+def test_grant_at_a_discounts_start_takes_it_and_at_its_end_the_list_price(db):
+    conn, cfg, ids = seeded(db)
+    add_user(conn, ids, "bob")
+    d = tickets.create_discount(conn, cfg, "lite", "week", 6, NOW + DAY, NOW + 2 * DAY, ids["admin"], now=NOW)
+    t = grant(conn, cfg, ids, now=NOW + DAY, currency="USD")
+    assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 6, d["id"], 6)
+    t = grant(conn, cfg, ids, who="bob", now=NOW + 2 * DAY, currency="USD")
+    assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 8, None, 8)

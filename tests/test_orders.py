@@ -694,3 +694,17 @@ def test_mail_send_goes_only_to_the_given_address(monkeypatch):
     monkeypatch.setattr(mail.smtplib, "SMTP", Fake)
     mail.send(EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com"), "v@x.com", "s", "b")
     assert got["to"] == ["v@x.com"]
+
+
+def test_grant_from_an_order_after_its_discount_ended_charges_the_list_price(env):
+    """The order's quote is for reference only: the grant re-prices, and a form showing the old quote is refused."""
+    conn, cfg, ids = env
+    tickets.create_discount(conn, cfg, "lite", "week", 6, NOW - 10, NOW + 30, ids["admin"], now=NOW - 10)
+    o = signed_in(conn, cfg, ids["alice"], currency="USD")
+    assert o["quoted_usd"] == 6
+    with pytest.raises(tickets.QuoteChanged, match=r"now \$8, not \$6"):
+        tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", order_id=o["id"], now=NOW + 60,
+                      expect_usd=o["quoted_usd"])
+    assert orders.get(conn, o["id"])["status"] == "new"
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", order_id=o["id"], now=NOW + 60)
+    assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 8, None, 8)

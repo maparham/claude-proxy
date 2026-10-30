@@ -108,3 +108,20 @@ def test_bonus_days_after_an_upgrade_run_at_the_upgraded_tier(core):
     assert end == t["effective_end"] + 2 * DAY
     assert tickets.bonus_share(conn, t["id"], end - 60) == 20      # the extra days still carry the upgrade
     assert tickets.sold_at(conn, 1, end - 60) == 25
+
+
+@pytest.mark.xfail(strict=True, reason="upgrade_quote prorates over effective_end - now but divides by the length alone: "
+                                       "bonus extra days push the quote above the full price difference")
+def test_quote_with_bonus_days_never_exceeds_the_full_price_difference(core):
+    conn, cfg, ids, t = core
+    tickets.add_bonus(conn, cfg, ids["admin"], t["id"], extra_days=7, now=NOW)
+    q = tickets.upgrade_quote(conn, cfg, tickets.get(conn, t["id"]), "standard", "USD", NOW + 3600)
+    assert q["ends_at"] == NOW + 14 * DAY
+    assert q["usd"] <= 35 - 8
+
+
+def test_quote_uses_the_target_tiers_discount(core):
+    conn, cfg, ids, t = core
+    tickets.create_discount(conn, cfg, "standard", "week", 20, NOW, NOW + 7 * DAY, ids["admin"], now=NOW)
+    q = tickets.upgrade_quote(conn, cfg, tickets.get(conn, t["id"]), "standard", "USD", NOW + 3.5 * DAY)
+    assert (q["usd"], q["amount"]) == (6, 6)   # ($20 - $8) / 2

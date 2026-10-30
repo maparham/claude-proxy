@@ -1,7 +1,8 @@
 import pytest
 
 from claude_proxy import tickets
-from tests.tickets_helpers import DAY, NOW, seeded, tcfg
+from claude_proxy.config import Currency
+from tests.tickets_helpers import DAY, NOW, seeded, tcfg, user
 
 
 @pytest.mark.parametrize("usd,rate,step,expected", [
@@ -118,3 +119,25 @@ def test_regular_price_lowered_below_a_discount_charges_the_lower_with_no_strike
     assert tickets.price_now(conn, "lite", "week", NOW + 20) == {"list_usd": 5, "usd": 5, "discount_id": None, "discount_ends_at": None}
     tickets.set_price(conn, cfg, "lite", "week", 6, ids["admin"], now=NOW + 30)   # equal: no discount shown either
     assert tickets.price_now(conn, "lite", "week", NOW + 40)["discount_id"] is None
+
+
+@pytest.mark.parametrize("usd,rate,step,expected", [
+    (8, 156250, 1000, 1250000),            # Toman: $8 at 156,250
+    (35, 1_234_567.89, 1000, 43210000),    # 43,209,876.15 -> nearest thousand
+    (12.5, 999_999_999, 1, 12_499_999_988),   # 12,499,999,987.5: the tie rounds up
+    (0.01, 999_999_999, 0.5, 10000000.0),  # 9,999,999.99 -> nearest half
+])
+def test_round_local_with_large_rates(usd, rate, step, expected):
+    assert tickets.round_local(usd, rate, step) == expected
+
+
+def test_a_rate_is_fresh_at_exactly_36_hours_and_stale_a_second_later(db):
+    from claude_proxy import payments
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
+    tickets.set_rate(conn, cfg, "IRT", 156250, ids["admin"], now=NOW)
+    tickets.set_rate(conn, cfg, "EUR", 0.92, ids["admin"], now=NOW)
+    for at, stale in ((NOW + tickets.STALE_RATE_S, False), (NOW + tickets.STALE_RATE_S + 1, True)):
+        for cur in ("EUR", "IRT"):
+            assert tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "week", cur, at)["stale_rate"] is stale
+        assert payments.rate_ok(conn, at) is not stale
