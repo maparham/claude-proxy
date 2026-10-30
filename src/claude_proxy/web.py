@@ -1830,8 +1830,9 @@ def _account_line(conn, user) -> str:
 
 
 def _days_hours_minutes(s: int) -> str:
-    """`3d:5h:12m`, whole minutes rounded down."""
-    return f"{s // 86400}d:{s % 86400 // 3600}h:{s % 3600 // 60}m"
+    """`3d:5h:12m`, whole minutes rounded down; no day part under a day (`5h:12m`)."""
+    hm = f"{s % 86400 // 3600}h:{s % 3600 // 60}m"
+    return f"{s // 86400}d:{hm}" if s >= 86400 else hm
 
 
 def _ticket_weeks_text(weeks: dict, est: str) -> str:

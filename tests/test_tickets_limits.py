@@ -456,17 +456,17 @@ def test_status_line_gives_a_day_pass_across_the_reset_only_its_whole_use():
     assert _ticket_weeks_text(weeks | {"length": "week"}, "").startswith("100% of first part · 0% of second part · ")
     # It borrows its next part as it needs it (2026-10-30), so it is one allowance: never a part on the line.
     weeks["weeks"] = [{"pct": 85.0, "state": "current"}, {"pct": 0.0, "state": "future"}]
-    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
+    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 23h:0m)"
     weeks["weeks"] = [{"pct": 100.0, "state": "past"}, {"pct": 85.0, "state": "current"}]
-    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
+    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 23h:0m)"
     # Stopped before the reset (no room to borrow): said, with a 100% figure gclaude warns on.
     weeks["weeks"] = [{"pct": 100.0, "state": "current"}, {"pct": 0.0, "state": "future"}]
-    assert _ticket_weeks_text(weeks, "") == "used up for now (100%) · 60% used (expires in 0d:23h:0m)"
+    assert _ticket_weeks_text(weeks, "") == "used up for now (100%) · 60% used (expires in 23h:0m)"
 
 
 def test_days_and_hours():
     from claude_proxy.web import _days_hours_minutes
-    assert [_days_hours_minutes(s) for s in (3 * DAY + 5 * 3600 + 59, DAY, 2 * 3600, 2400)] == ["3d:5h:0m", "1d:0h:0m", "0d:2h:0m", "0d:0h:40m"]
+    assert [_days_hours_minutes(s) for s in (3 * DAY + 5 * 3600 + 59, DAY, 2 * 3600, 2400)] == ["3d:5h:0m", "1d:0h:0m", "2h:0m", "0h:40m"]
 
 
 def limits_line(conn, cfg, ids, weeks):
@@ -745,7 +745,7 @@ def test_status_line_caps_use_at_100_percent():
     from claude_proxy.web import _ticket_weeks_text
     weeks = {"weeks": [{"pct": 104.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 103.0,
              "ends_in": 3600, "length": "week"}
-    assert _ticket_weeks_text(weeks, "") == "100% of first part · 0% of second part · 100% used (expires in 0d:1h:0m)"
+    assert _ticket_weeks_text(weeks, "") == "100% of first part · 0% of second part · 100% used (expires in 1h:0m)"
 
 
 def test_usage_data_unavailable_says_try_again_shortly(db):
