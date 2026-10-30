@@ -325,3 +325,12 @@ def test_a_reset_time_that_shifts_a_little_keeps_one_borrow_record_and_the_last_
     assert check(conn, cfg, ids["alice"], now=AT + 100) is None
     rows = conn.execute("SELECT week_end FROM pass_borrows").fetchall()
     assert len(rows) == 1
+
+
+def test_a_pass_that_ended_earlier_this_week_holds_nothing_back(env):
+    conn, cfg, ids, t = env
+    bob, _ = create_user(conn, "bob")
+    set_limit(conn, ids["admin"], "share_7d", 93.6, "pct")
+    grant(conn, cfg, ids, bob, start=START - 2 * DAY)     # a day pass over a day ago, its part all unused
+    use(conn, ids["alice"], t, 100, 1.1)
+    assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + (100 - 1.1 - 93.6 - 5))

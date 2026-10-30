@@ -312,7 +312,7 @@ def _free_room(conn, cfg, t, week, att, rate, capacity, now) -> float | None:
     week_start, week_end = week
     others = [dict(r) for r in conn.execute(
         f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL AND t.id!=? "
-        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (t["account_id"], t["id"], week_end, week_start))]
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (t["account_id"], t["id"], week_end, now))]   # running or queued: an ended one draws nothing more
     owed = 0.0
     if others:
         ids = [p["id"] for p in others]
