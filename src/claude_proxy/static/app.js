@@ -724,7 +724,9 @@ function userLimitsCard(me, tk, order) {
   const tw = ((me.limits || []).find((l) => l.kind === "weekly_limit" && l.weeks) || {}).weeks;
   // The pass the parts are of: the one serving requests (the one in use, with several), as tw measures it.
   const sp = (c && c.passes && c.passes.length > 1 && c.passes.find((p) => p.serving)) || c;
-  const inParts = !!sp && !!tw && tw.weeks.length > 1;
+  // A day pass across a reset borrows its next part as it needs it (2026-10-30), so it reads as one allowance: no split.
+  const dayAcross = !!sp && !!tw && tw.weeks.length > 1 && sp.length === "day";
+  const inParts = !!sp && !!tw && tw.weeks.length > 1 && !dayAcross;
   const days = sp ? (sp.effective_end - sp.starts_at) / 86400 : 0;
   const cur = inParts ? tw.weeks.findIndex((x) => x.state === "current") : -1;
   // Each split's time: the current part ends at the week's end, the others a week apart from it.
@@ -732,7 +734,7 @@ function userLimitsCard(me, tk, order) {
   const partName = (i) => t(days < 7 ? "ov.part_n" : "ov.week_n", { n: t(`ord.nth.${i + 1}`).toLowerCase() });   // as splitTerms names them
   const nextPart = inParts && cur >= 0 && cur < tw.weeks.length - 1 ? { name: partName(cur + 1), prev: partName(cur), at: resets[cur] } : null;
   const split = inParts ? `<div class="muted">${splitTerms({ p: tw.weeks.map((x) => x.share), starts_at: sp.starts_at }, "p", days, partUse(tw, resets))}</div>` : "";
-  const noWeek = oneWeek || inParts;
+  const noWeek = oneWeek || inParts || dayAcross;
   // A day pass's end and second part read as time from now: its dates are hours away.
   const short = !!c && c.effective_end - c.starts_at <= 2 * 86400;
   const fromNow = (ts) => fmtDur(Math.max(0, ts - Date.now() / 1000 - (S.tkSkew || 0)));
@@ -757,7 +759,7 @@ function userLimitsCard(me, tk, order) {
     : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
       <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${short ? t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) }) : t("ov.part_starts", { part: nextPart.name, date: fmtDate(nextPart.at) })}`
-        : oneWeek || inParts ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
+        : noWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
       ${split}${extras}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`

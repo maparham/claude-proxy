@@ -1350,7 +1350,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             # as a percent of the ticket's own allowance (+2 points on a 5% ticket: +40%).
             share_5h = cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"]
             now_tier = tickets.tier_now(conn, cur)
-            out["current"] = {"tier": now_tier, "label": label({"tier": now_tier}), "starts_at": cur["starts_at"],
+            out["current"] = {"tier": now_tier, "label": label({"tier": now_tier}), "starts_at": cur["starts_at"], "length": cur["length"],
                               "upgraded_from": {"tier": cur["tier"], "label": label(cur)} if ups else None,
                               "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                               "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
