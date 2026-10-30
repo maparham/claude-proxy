@@ -681,9 +681,12 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         wk = next((st for st in sts if st.kind == "share_7d"), None)
         if wk is not None and wk.rate and wk.limit > wk.own:
             # Borrowing from its next part: what it takes is measured after the reset at today's rate and own limit (§3).
+            # One row per week however Anthropic's reported reset time wavers: the one within the tolerance is that week's.
+            row = conn.execute("SELECT week_end FROM pass_borrows WHERE ticket_id=? AND ABS(week_end - ?)<=? LIMIT 1",
+                               (t["id"], wk.resets_at, quota.RESET_TOLERANCE_S)).fetchone()
             conn.execute("INSERT INTO pass_borrows(ticket_id, week_end, own_pts, rate, updated_at) VALUES(?,?,?,?,?) "
                          "ON CONFLICT(ticket_id, week_end) DO UPDATE SET own_pts=excluded.own_pts, rate=excluded.rate, "
-                         "updated_at=excluded.updated_at", (t["id"], wk.resets_at, wk.own_pts, wk.rate, now))
+                         "updated_at=excluded.updated_at", (t["id"], row[0] if row else wk.resets_at, wk.own_pts, wk.rate, now))
         if served is not None:
             served["ticket_id"] = t["id"]
     return None

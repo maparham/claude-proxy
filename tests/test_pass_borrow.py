@@ -314,3 +314,14 @@ def test_borrow_margin_pct_is_a_number_from_0_to_100(tmp_path, value, ok):
     else:
         with pytest.raises(ConfigError, match="borrow_margin_pct"):
             Config.load(str(p))
+
+
+def test_a_reset_time_that_shifts_a_little_keeps_one_borrow_record_and_the_last_write_counts(env):
+    conn, cfg, ids, t = env
+    use(conn, ids["alice"], t, 300, 1.3)
+    assert check(conn, cfg, ids["alice"]) is None
+    req(conn, ids["alice"], AT + 50, i=100, ticket=t["id"])
+    at(conn, AT + 60, 1.4, resets=RESET7 - 30)            # Anthropic reports the reset 30 s earlier now
+    assert check(conn, cfg, ids["alice"], now=AT + 100) is None
+    rows = conn.execute("SELECT week_end FROM pass_borrows").fetchall()
+    assert len(rows) == 1
