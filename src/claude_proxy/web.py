@@ -1366,12 +1366,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             # Passes running side by side, each with limits of its own (2026-10-28): which one serves now, which the
             # user pinned, and how much of each limit it has used. Its place in the list names one to pin (no ticket ids).
             run = tickets.running(conn, user["id"], now)
-            serving = limits.serving(conn, cfg, user["id"], now, run)[0]
+            serving, serving_sts = limits.serving(conn, cfg, user["id"], now, run)
             pin = conn.execute("SELECT pass_pin FROM users WHERE id=?", (user["id"],)).fetchone()[0]
             def pass_use(t) -> dict:
                 """A running pass's use of each limit, and at one: when it is back (`back_at`, the last of its limits
                 to refill), or `used_up` when that is after it ends."""
-                sts = limits.pass_states(conn, cfg, t, now)
+                # The serving pass as it serves, which may be borrowing from its next part (2026-10-30 spec, §4).
+                sts = serving_sts if serving is not None and t["id"] == serving["id"] else limits.pass_states(conn, cfg, t, now)
                 out = {f"pct_{s.kind[6:]}": s.pct for s in sts}
                 hit = [s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded]
                 if hit:
@@ -1843,7 +1844,7 @@ def _ticket_weeks_text(weeks: dict, est: str) -> str:
     name = lambda i: nth[i] if i < len(nth) else f"{i + 1}th"   # noqa: E731  (a month spans at most 5 weeks)
     if weeks.get("length") == "day":
         near = [f"{w['pct']:.0f}%{est} of {name(i).lower()} part" for i, w in enumerate(weeks["weeks"])
-                if w["state"] == "current" and w["pct"] >= 80]
+                if w["state"] == "current" and w.get("own_pct", w["pct"]) >= 80]   # its own part: what it borrows may vanish
         return " · ".join(near + [ticket])
     parts = [f"{name(i)} week ended" if w["state"] == "past" else f"{w['pct']:.0f}%{est} of {name(i).lower()} week"
              for i, w in enumerate(weeks["weeks"])]

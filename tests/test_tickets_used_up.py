@@ -3,6 +3,7 @@ once; only a ticket not used yet, running on its own, can be upgraded."""
 import pytest
 
 from claude_proxy import limits, orders, tickets
+from claude_proxy.db import create_user
 from tests.test_tickets_limits import check, fresh, req
 from tests.tickets_helpers import DAY, NOW, seeded, user
 
@@ -61,6 +62,7 @@ def test_a_ticket_with_time_and_use_left_queues_as_before(env):
 def test_a_week_piece_used_up_before_the_reset_is_not_the_ticket_used_up(db):
     """A month ticket's weekly piece refills at the reset: it waits, it is not replaced."""
     conn, cfg, ids = seeded(db)
+    cfg.tickets.borrow_margin_pct = 100   # no borrowing from the next week: its own piece is used up
     fresh(conn, NOW - 600)
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)
@@ -163,3 +165,54 @@ def test_a_used_up_pool_hands_over_to_a_pass_queued_before_a_side_pass_ends(env)
     assert limits.used_up(conn, cfg, ids["alice"], NOW - 100)
     assert limits.hand_over(conn, cfg, ids["alice"], NOW - 100)
     assert tickets.get(conn, q["id"])["starts_at"] == NOW - 100
+
+
+def test_replacing_a_used_up_pass_at_the_ceiling_frees_its_share_and_cuts_its_bonus(db):
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.max_sold_pct = 30
+    fresh(conn, NOW - 600)
+    req(conn, ids["alice"], NOW - 500, i=1000)
+    fresh(conn, NOW - 400, util5=1, util7=1)
+    t = day(conn, cfg, ids, NOW - 300, tier="standard")                                     # 25%
+    b = tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=5, now=NOW - 250)["bonus"]   # 30%: the ceiling
+    req(conn, ids["alice"], NOW - 200, i=5000)                                               # 5 points: past ~4.3
+    assert limits.used_up(conn, cfg, ids["alice"], NOW - 100)
+    p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "standard", "day", "USD", NOW - 100)
+    assert (p["replaces"], p["available"]) == ([t["id"]], True)
+    nxt = day(conn, cfg, ids, NOW - 100, tier="standard")
+    assert nxt["starts_at"] == NOW - 100
+    assert tickets.sold_at(conn, 1, NOW - 100) == 25
+    assert conn.execute("SELECT ends_at FROM ticket_bonuses WHERE id=?", (b["id"],)).fetchone()[0] == NOW - 100
+    assert tickets.active_bonuses(conn, t["id"], NOW - 50) == []
+
+
+def test_hand_over_changes_nothing_when_the_queued_pass_no_longer_fits(env):
+    """Moved up to now, the queued pass's bonus would land beside bob's pass: over the ceiling."""
+    conn, cfg, ids, t = env
+    cfg.tickets.max_sold_pct = 30
+    bob, _ = create_user(conn, "bob")
+    tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "standard", "day", "USD", now=NOW - 300, terms_version="v1")   # ends with t
+    q = day(conn, cfg, ids, NOW - 250)
+    tickets.add_bonus(conn, cfg, ids["admin"], q["id"], share_pct=20, starts_at=q["starts_at"], ends_at=q["starts_at"] + 3600,
+                      now=NOW - 240)
+    use_up(conn, ids)
+    assert limits.used_up(conn, cfg, ids["alice"], NOW - 100)
+    assert tickets.hand_over(conn, cfg, ids["alice"], NOW - 100) is False
+    assert tickets.get(conn, t["id"])["used_up_at"] is None
+    assert tickets.get(conn, q["id"])["starts_at"] == t["ends_at"]
+    assert check(conn, cfg, ids["alice"], now=NOW - 100).kind == "share_7d"
+
+
+def test_requests_spill_to_the_next_pass_and_come_back_when_the_first_refills_at_the_reset(db):
+    from tests.test_tickets_limits import RESET7, week_snap
+    conn, cfg, ids = seeded(db)
+    fresh(conn, NOW - 600)
+    req(conn, ids["alice"], NOW - 500, i=1000)
+    fresh(conn, NOW - 400, util5=1, util7=1)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW - 300, terms_version="v1")
+    req(conn, ids["alice"], NOW - 200, i=3000)   # 3 points: past its ~2.1 piece of this week
+    t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
+                       terms_version="v1", start_now=True)
+    assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t2["id"]
+    week_snap(conn, RESET7 + 3600, 1)
+    assert limits.serving(conn, cfg, ids["alice"], RESET7 + 3600)[0]["id"] == t["id"]

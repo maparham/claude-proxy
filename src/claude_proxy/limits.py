@@ -14,7 +14,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import quota, tickets
+from . import db, quota, tickets
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 from .usage import SUMS, Totals, price_totals, priced_sql
@@ -65,6 +65,9 @@ class LimitState:
     no_live_data: bool = False    # estimated from the user's weighted tokens because account snapshots are stale
     resets_at: float | None = None
     tier: str | None = None       # the ticket's tier label, for messages
+    own: float | None = None      # a pass's weekly limit without borrowing (2026-10-30 spec); `limit` adds what it may borrow
+    own_pts: float | None = None  # that limit before the floor at 0: below 0 is debt carried to the next week
+    rate: float | None = None     # the 7-day rate its use was measured at
 
     @property
     def pct(self) -> float | None:
@@ -268,12 +271,76 @@ def _pass_cap(conn, t, start, end, now) -> float:
     return cap
 
 
-def _ticket_7d(conn, cfg, t, now) -> LimitState:
+def _debt(conn, cfg, t, week_start, capacity, now) -> float:
+    """What the pass borrowed from the week starting at `week_start` in the week before (2026-10-30 spec, §3), in
+    points: measured as it was recorded then (pass_borrows), so the reset's new capacity and rate don't move it. With
+    no record, any debt the week before could not hold carries on."""
+    prev = week_start - 7 * DAY
+    if t["starts_at"] >= week_start - quota.RESET_TOLERANCE_S:
+        return 0.0
+    row = conn.execute("SELECT week_end, own_pts, rate FROM pass_borrows WHERE ticket_id=? AND week_end<=? ORDER BY week_end DESC "
+                       "LIMIT 1", (t["id"], week_start + quota.RESET_TOLERANCE_S)).fetchone()
+    if row is None:   # it never borrowed before this week: the usual case, answered without walking back week by week
+        return 0.0
+    if abs(row["week_end"] - week_start) <= quota.RESET_TOLERANCE_S:
+        used = _weighted_since(conn, cfg, t["user_id"], max(prev, t["starts_at"]), row["week_end"], t["id"]) / row["rate"]
+        return max(0.0, used - row["own_pts"])
+    own = _pass_cap(conn, t, max(prev, t["starts_at"]), week_start, week_start - 1) * capacity / 100 \
+        - _debt(conn, cfg, t, prev, capacity, now)
+    return max(0.0, -own)
+
+
+def _week_use(conn, cfg, ticket_ids, since, now) -> dict[int, float]:
+    """Each pass's weighted Anthropic tokens that ended in (since, now], in one query, weighed as _weighted_since weighs them."""
+    if not ticket_ids:
+        return {}
+    span = (f"ticket_id IN ({','.join('?' * len(ticket_ids))}) AND provider='anthropic' AND rejected_by IS NULL AND path!=? "
+            "AND api_key_id IS NULL AND ended_at>? AND ended_at<=?")
+    params = (*ticket_ids, COUNT_TOKENS_PATH, since, now)
+    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
+    w, args = quota.weighted_sql(cfg.pricing, models)
+    return {r[0]: float(r[1]) for r in conn.execute(f"SELECT ticket_id, COALESCE(SUM({w}), 0) FROM requests WHERE {span} "
+                                                    "GROUP BY ticket_id", (*args, *params))}
+
+
+def _free_room(conn, cfg, t, week, att, rate, capacity, now) -> float | None:
+    """The points of the current week no one is owed (2026-10-30 spec, §1): 100 less the account's use, what the other
+    passes and the hand-set weekly shares may still draw, and the margin. None without live data to say so."""
+    if cfg.tickets.borrow_margin_pct >= 100 or att["utilization_pct"] is None or att["stale"] or not att["resets_at"] \
+            or att["resets_at"] <= now:
+        return None
+    week_start, week_end = week
+    others = [dict(r) for r in conn.execute(
+        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL AND t.id!=? "
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (t["account_id"], t["id"], week_end, week_start))]
+    owed = 0.0
+    if others:
+        ids = [p["id"] for p in others]
+        uses = _week_use(conn, cfg, ids, week_start, now)
+        bonuses: dict[int, list] = {}
+        for b in conn.execute(f"SELECT ticket_id, share_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id IN "
+                              f"({','.join('?' * len(ids))}) AND cancelled_at IS NULL AND share_pct>0", ids):
+            bonuses.setdefault(b["ticket_id"], []).append(b)
+        for p in others:
+            span = lambda s, e: max(0.0, min(week_end, e) - max(week_start, s)) / DAY / 7   # noqa: E731
+            part = p["share_pct"] * span(p["starts_at"], p["effective_end"])
+            part += sum(b["share_pct"] * span(b["starts_at"], b["ends_at"]) for b in bonuses.get(p["id"], []))
+            own = part * capacity / 100 - _debt(conn, cfg, p, week_start, capacity, now)
+            owed += max(0.0, own - uses.get(p["id"], 0.0) / rate)
+    for r in conn.execute("SELECT user_id, value FROM limits WHERE kind='share_7d'"):
+        if not _gated(conn, cfg, r["user_id"]):
+            owed += max(0.0, float(r["value"]) * capacity / 100 - att["shares"].get(r["user_id"], 0.0))
+    return max(0.0, 100.0 - att["utilization_pct"] - owed - cfg.tickets.borrow_margin_pct)
+
+
+def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     """One pass's prorated piece of Anthropic's current weekly window (2026-10-13 spec, §1; per pass since 2026-10-28).
 
     Cap = its share × days of this week it covers ÷ 7 + active bonus pieces (_pass_cap), scaled to the gateway's
-    capacity (2026-10-18 spec). Measured from the weighted tokens of the requests it served since max(week_start, its
-    start) at the 7d observed rate. Unknown week (no resets_at ever) → NO_RATE."""
+    capacity (2026-10-18 spec), less what it borrowed from this week in the last (_debt). Measured from the weighted
+    tokens of the requests it served since max(week_start, its start) at the 7d observed rate. Unknown week (no
+    resets_at ever) → NO_RATE. With `borrow`, a pass running past the reset may go over its own limit into its next
+    part, as far as the old week's free room goes (2026-10-30 spec, §2)."""
     label = _label(conn, cfg, t)
     week = tickets.week_bounds(conn, cfg, now)
     if week is None:
@@ -284,8 +351,10 @@ def _ticket_7d(conn, cfg, t, now) -> LimitState:
     piece_start = max(week_start, t["starts_at"])
     cap = _pass_cap(conn, t, piece_start, week_end, now)
     att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
-    st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=cap * _capacity(att, now) / 100, estimated=True, tier=label,
-                    resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)))
+    capacity = _capacity(att, now)
+    own = cap * capacity / 100 - _debt(conn, cfg, t, week_start, capacity, now)
+    st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=max(0.0, own), estimated=True, tier=label,
+                    resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)), own=max(0.0, own), own_pts=own)
     # Measured from the pass's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since
     # the piece began would read 0 for most of a week and then jump. The cheap staleness check only decides the "no live data" mark.
@@ -304,7 +373,12 @@ def _ticket_7d(conn, cfg, t, now) -> LimitState:
     if rate is None:
         st.skipped, st.no_live_data = NO_RATE, False
         return st
-    st.current = used / rate
+    st.current, st.rate = used / rate, rate
+    if borrow and t["effective_end"] > week_end and st.current >= st.own and not st.no_live_data:
+        free = _free_room(conn, cfg, t, week, att, rate, capacity, now)
+        if free is not None:
+            nxt = _pass_cap(conn, t, week_end, week_end + 7 * DAY, now) * capacity / 100
+            st.limit = min(st.own + nxt, max(st.own, st.current + free))
     return _finish(st)
 
 
@@ -326,14 +400,22 @@ def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None 
     usage data is returned as it is (evaluate answers 503 then). (None, the limits that free up soonest) when every
     pass is at a limit; (None, []) without a pass."""
     run = run if run is not None else tickets.running(conn, user_id, now)
-    best = None
+    best, at_limit = None, []
     for t in pass_order(conn, user_id, run):
         sts = pass_states(conn, cfg, t, now)
         if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):
             return t, sts
-        wait = max(st.reset_in or 60 for st in sts if st.exceeded)
+        at_limit.append((t, sts))
+    # Every pass is at its own limits: one running past the weekly reset may borrow from its next part (2026-10-30 spec,
+    # §4), the first in pass_order that can. Only then, so no pass borrows while another still has room of its own.
+    for t, (s5, s7) in at_limit:
+        if not s5.exceeded:
+            s7 = _ticket_7d(conn, cfg, t, now, borrow=True)
+            if not s7.exceeded:
+                return t, [s5, s7]
+        wait = max(st.reset_in or 60 for st in (s5, s7) if st.exceeded)
         if best is None or wait < best[0]:
-            best = (wait, sts)
+            best = (wait, [s5, s7])
     return None, best[1] if best else []
 
 
@@ -366,11 +448,18 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
             used = _weighted_since(conn, cfg, user_id, ps, min(pe, now), t["id"]) / rate
         else:
             return None
-        weeks.append({"pct": 100.0 * used / limit if limit else 100.0, "state": state, "limit": limit})
+        # What it borrowed from this week in the last (2026-10-30 spec, §3); a future week, what the current one has taken.
+        debt = _debt(conn, cfg, t, start, capacity, now) if state != "future" else weeks[-1]["took"] if weeks else 0.0
+        own = max(0.0, limit - debt)
+        took = max(0.0, used - own) if end < t_end else 0.0
+        meter = current.limit if state == "current" and current is not None and current.limit else own + took
+        weeks.append({"pct": 100.0 * used / meter if meter else 100.0, "state": state, "limit": limit, "debt": debt, "took": took})
+        if state == "current":
+            weeks[-1]["own_pct"] = 100.0 * used / own if own else 100.0
         used_all, limit_all = used_all + used, limit_all + limit
         start = end
-    for w in weeks:   # each piece's part of the pass's whole limit, for the dashboard's split
-        w["share"] = w.pop("limit") / limit_all if limit_all else 0.0
+    for w in weeks:   # each part as it is spent: its own piece, less what the week before took from it, plus what it took
+        w["share"] = max(0.0, w.pop("limit") - w.pop("debt") + w.pop("took")) / limit_all if limit_all else 0.0
     return {"weeks": weeks, "ticket_pct": 100.0 * used_all / limit_all if limit_all else 100.0, "ends_in": max(0, int(t_end - now)),
             "length": t["length"]}
 
@@ -588,6 +677,13 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             return Decision(429, FREE_CAP, {"type": "error", "error": {"type": "rate_limit_error", "message":
                             f"The gateway's free credit is used up for today across all new accounts. {ask} the "
                             "gateway admin to upgrade your account."}}, wait or 3600)
-    if t is not None and served is not None:
-        served["ticket_id"] = t["id"]
+    if t is not None:
+        wk = next((st for st in sts if st.kind == "share_7d"), None)
+        if wk is not None and wk.rate and wk.limit > wk.own:
+            # Borrowing from its next part: what it takes is measured after the reset at today's rate and own limit (§3).
+            conn.execute("INSERT INTO pass_borrows(ticket_id, week_end, own_pts, rate, updated_at) VALUES(?,?,?,?,?) "
+                         "ON CONFLICT(ticket_id, week_end) DO UPDATE SET own_pts=excluded.own_pts, rate=excluded.rate, "
+                         "updated_at=excluded.updated_at", (t["id"], wk.resets_at, wk.own_pts, wk.rate, now))
+        if served is not None:
+            served["ticket_id"] = t["id"]
     return None

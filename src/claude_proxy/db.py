@@ -347,6 +347,15 @@ SCHEMA = [
         updated_at INTEGER NOT NULL,
         updated_by INTEGER
     )""",
+    # A pass borrowing from its next part (2026-10-30 spec, §3): how to measure, after the reset, what it took.
+    """CREATE TABLE IF NOT EXISTS pass_borrows (
+        ticket_id INTEGER NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+        week_end INTEGER NOT NULL,          -- the Anthropic week it borrowed in: its reset time then
+        own_pts REAL NOT NULL,              -- its own limit that week, in account points; below 0: debt carried in
+        rate REAL NOT NULL,                 -- the observed 7-day rate it was measured at, weighted tokens per point
+        updated_at INTEGER NOT NULL,
+        PRIMARY KEY (ticket_id, week_end)
+    )""",
 
 ]
 

@@ -90,6 +90,7 @@ def test_share_5h_measured_as_today_and_exceeded_is_the_usual_429(env):
 def test_share_7d_counts_the_weekly_bucket_since_the_piece_began(env):
     """800 input tokens at the observed rate of 1000 per point: 0.8 points against a ~2.145 piece."""
     conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)   # history: 1000 weighted tokens per point (before the ticket: not counted)
     req(conn, ids["alice"], NOW - 200, i=800)
@@ -103,6 +104,7 @@ def test_share_7d_counts_the_weekly_bucket_since_the_piece_began(env):
 
 def test_share_7d_exceeded_is_a_429_with_the_full_week_retry_after(env):
     conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)
     req(conn, ids["alice"], NOW - 200, i=2500)
@@ -252,6 +254,7 @@ def test_spending_past_a_dead_bonus_blocks_the_rest_of_the_week(db):
     """Bonus-period spend stays drawn after the bonus ends: the narrower ticket-only piece stays exceeded,
     and the bar reads over 100% until the reset."""
     conn, cfg, ids = seeded(db)
+    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     fresh(conn, NOW - 600)
     t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
     base = by_kind(conn, cfg, ids["alice"])["share_7d"].limit
@@ -273,6 +276,7 @@ def test_spending_past_a_dead_bonus_blocks_the_rest_of_the_week(db):
 def test_use_before_a_bonus_eats_into_the_bonus_piece(db):
     """Pre-bonus spend counts against the widened cap once the bonus activates."""
     conn, cfg, ids = seeded(db)
+    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     fresh(conn, NOW - 600)
     t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
     base = by_kind(conn, cfg, ids["alice"])["share_7d"].limit
@@ -667,3 +671,44 @@ def test_set_compare_rejects_bad_values(db):
             tickets.set_compare(conn, cfg, "lite", plan, ratio, ids["admin"])
     with pytest.raises(tickets.TicketError):
         tickets.set_compare(conn, cfg, "nope", "Claude Pro", 2, ids["admin"])
+
+
+def week_snap(conn, t, k):
+    """Fresh snapshots at t in the k-th week after the current one: its 7d reset is RESET7 + k weeks."""
+    snap(conn, t - 100, 0, "5h", t + 3500)
+    snap(conn, t - 100, 0, "7d", RESET7 + k * 7 * DAY)
+
+
+def test_month_pass_enforces_each_weeks_piece(db):
+    conn, cfg, ids = seeded(db)
+    fresh(conn, NOW - 600)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "month", "USD", now=NOW - 300, terms_version="v1")
+    parts = tickets.week_split(conn, cfg, 5, t["starts_at"], t["ends_at"], now=NOW)
+    assert len(parts) == 5 and sum(parts) == pytest.approx(piece(5, 30 * DAY))
+    limits_seen = []
+    for k in range(5):
+        at = NOW if k == 0 else RESET7 + (k - 1) * 7 * DAY + 3600
+        if k:
+            week_snap(conn, at, k)
+        limits_seen.append(by_kind(conn, cfg, ids["alice"], now=at)["share_7d"].limit)
+    assert limits_seen == pytest.approx(parts)
+
+
+def test_week_pass_second_part_after_the_reset(env):
+    conn, cfg, ids, t = env
+    first = by_kind(conn, cfg, ids["alice"])["share_7d"].limit
+    week_snap(conn, RESET7 + 3600, 1)
+    second = by_kind(conn, cfg, ids["alice"], now=RESET7 + 3600)["share_7d"].limit
+    assert second == pytest.approx(piece(5, t["ends_at"] - RESET7))
+    assert first + second == pytest.approx(5)
+
+
+def test_bonus_across_the_reset_adds_its_piece_to_each_week(env):
+    conn, cfg, ids, t = env
+    base = by_kind(conn, cfg, ids["alice"])["share_7d"].limit
+    tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=2, starts_at=RESET7 - DAY, ends_at=RESET7 + DAY, now=NOW)
+    before = by_kind(conn, cfg, ids["alice"], now=RESET7 - 3600)["share_7d"].limit
+    assert before == pytest.approx(base + piece(2, DAY))
+    week_snap(conn, RESET7 + 3600, 1)
+    after = by_kind(conn, cfg, ids["alice"], now=RESET7 + 3600)["share_7d"].limit
+    assert after == pytest.approx(piece(5, t["ends_at"] - RESET7) + piece(2, DAY))
