@@ -1835,17 +1835,14 @@ def _days_hours_minutes(s: int) -> str:
 def _ticket_weeks_text(weeks: dict, est: str) -> str:
     """`57% of first week · 0% of second week · 30% used (expires in 3d:5h:12m)`; a week that is over reads
     `First week ended`, since gclaude warns on the highest percentage on the line and a used-up past week would read as a
-    limit reached. A ticket within one week: the ticket's part only. A day pass across a reset: the ticket's part, and
-    the current part's once it is at 80%, so gclaude still warns before that part runs out: `85% of first part · 60% used`."""
+    limit reached. A ticket within one week, or a day pass across a reset: the ticket's part only."""
     ticket = f"{weeks['ticket_pct']:.0f}%{est} used (expires in {_days_hours_minutes(weeks['ends_in'])})"
     if len(weeks["weeks"]) == 1:
         return ticket
     nth = tickets.TERMS["en"]["nth"]
     name = lambda i: nth[i] if i < len(nth) else f"{i + 1}th"   # noqa: E731  (a month spans at most 5 weeks)
-    if weeks.get("length") == "day":
-        near = [f"{w['pct']:.0f}%{est} of {name(i).lower()} part" for i, w in enumerate(weeks["weeks"])
-                if w["state"] == "current" and w.get("own_pct", w["pct"]) >= 80]   # its own part: what it borrows may vanish
-        return " · ".join(near + [ticket])
+    if weeks.get("length") == "day":   # it borrows its next part as it needs it (2026-10-30): one allowance
+        return ticket
     parts = [f"{name(i)} week ended" if w["state"] == "past" else f"{w['pct']:.0f}%{est} of {name(i).lower()} week"
              for i, w in enumerate(weeks["weeks"])]
     return " · ".join(parts + [ticket])

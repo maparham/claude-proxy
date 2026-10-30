@@ -258,7 +258,7 @@ def test_a_pass_at_its_5_hour_limit_does_not_borrow(env):
     assert check(conn, cfg, ids["alice"]).kind == "share_5h"
 
 
-def test_split_bar_and_warning_follow_what_was_borrowed(env):
+def test_split_bar_follows_what_was_borrowed(env):
     from claude_proxy.web import _ticket_weeks_text
     conn, cfg, ids, t = env
     use(conn, ids["alice"], t, 400, 1.4)
@@ -268,7 +268,7 @@ def test_split_bar_and_warning_follow_what_was_borrowed(env):
     assert [w["share"] for w in weeks["weeks"]] == pytest.approx([0.4 / whole, (NEXT - (0.4 - OWN)) / whole])
     assert weeks["weeks"][0]["pct"] == pytest.approx(100 * 0.4 / whole)    # the meter: use of what it may use now
     assert weeks["ticket_pct"] == pytest.approx(100 * 0.4 / whole)
-    assert _ticket_weeks_text(weeks, "").startswith(f"{100 * 0.4 / whole:.0f}% of first part · ")   # past 80% of its own part
+    assert _ticket_weeks_text(weeks, "").startswith(f"{100 * 0.4 / whole:.0f}% used")   # one allowance: no part named
 
 
 def test_serving_pass_card_is_not_marked_at_its_limit_while_borrowing(env):

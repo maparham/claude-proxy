@@ -454,8 +454,6 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
         took = max(0.0, used - own) if end < t_end else 0.0
         meter = current.limit if state == "current" and current is not None and current.limit else own + took
         weeks.append({"pct": 100.0 * used / meter if meter else 100.0, "state": state, "limit": limit, "debt": debt, "took": took})
-        if state == "current":
-            weeks[-1]["own_pct"] = 100.0 * used / own if own else 100.0
         used_all, limit_all = used_all + used, limit_all + limit
         start = end
     for w in weeks:   # each part as it is spent: its own piece, less what the week before took from it, plus what it took

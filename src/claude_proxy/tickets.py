@@ -225,6 +225,8 @@ def order_split(conn, cfg: Config, starts_at: float, now: float | None = None) -
     out = {"starts_at": starts_at}
     for length, days in LENGTHS.items():
         parts = week_split(conn, cfg, 7 / days, int(starts_at), int(starts_at) + days * DAY, now) or []
+        if length == "day" and parts:
+            parts = [1.0]   # it borrows its next part as it needs it (2026-10-30): one allowance, whatever reset it crosses
         out[length] = parts   # share 7/days per week makes the pieces fractions of the whole ticket
     return out
 

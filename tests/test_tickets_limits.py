@@ -442,17 +442,15 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
 
 
 def test_status_line_gives_a_day_pass_across_the_reset_only_its_whole_use():
-    """A day pass that crosses Anthropic's weekly reset is not split into weeks on the line, but a part near its limit
-    shows, so gclaude warns; a week pass is split."""
+    """A day pass that crosses Anthropic's weekly reset is one allowance on the line; a week pass is split."""
     from claude_proxy.web import _ticket_weeks_text
     weeks = {"weeks": [{"pct": 100.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 60.0,
              "ends_in": 23 * 3600, "length": "day"}
     assert _ticket_weeks_text(weeks | {"length": "week"}, "").startswith("100% of first week · 0% of second week · ")
-    assert _ticket_weeks_text(weeks, "") == "100% of first part · 60% used (expires in 0d:23h:0m)"   # the part is used up
-    weeks["weeks"][0]["pct"] = 79.0
+    # It borrows its next part as it needs it (2026-10-30), so it is one allowance: never a part on the line.
     assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
     weeks["weeks"] = [{"pct": 100.0, "state": "past"}, {"pct": 85.0, "state": "current"}]
-    assert _ticket_weeks_text(weeks, "") == "85% of second part · 60% used (expires in 0d:23h:0m)"
+    assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
 
 
 def test_days_and_hours():
@@ -629,7 +627,7 @@ def test_terms_text_is_the_order_dialogs_terms(db):
         "شرایط بسته:\n- استفاده شما از بسته در دو قسمت محدود خواهد بود: هفته اول: ۱۴٪ و هفته دوم: ۸۶٪."
         "\n- به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.\n")
     assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY, now=NOW)
-    assert "قسمت اول: ۵۰٪ و قسمت دوم: ۵۰٪" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY / 2, now=NOW)   # under a week
+    assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY / 2, now=NOW)   # across the reset too
 
 
 def test_buyer_mail_html_draws_the_split(db):
@@ -712,3 +710,11 @@ def test_bonus_across_the_reset_adds_its_piece_to_each_week(env):
     week_snap(conn, RESET7 + 3600, 1)
     after = by_kind(conn, cfg, ids["alice"], now=RESET7 + 3600)["share_7d"].limit
     assert after == pytest.approx(piece(5, t["ends_at"] - RESET7) + piece(2, DAY))
+
+
+def test_a_day_pass_across_the_reset_is_offered_as_one_part(db):
+    """It borrows its next part as it needs it (2026-10-30), so the order terms don't split it."""
+    conn, cfg, ids = seeded(db)
+    fresh(conn, NOW - 600)
+    assert tickets.order_split(conn, cfg, RESET7 - 2 * 3600, now=NOW)["day"] == pytest.approx([1.0])
+    assert "usable until" in tickets.terms_text(conn, cfg, "en", "day", RESET7 - 2 * 3600, now=NOW)
