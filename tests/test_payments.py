@@ -527,18 +527,19 @@ def full_at_alices_end(conn, cfg, ids):
     return a
 
 
-async def test_paid_order_for_a_queued_pass_that_does_not_fit_is_unfulfilled(env):
+async def test_paid_order_for_a_queued_pass_that_stopped_fitting_while_paying_is_unfulfilled(env):
     conn, cfg, ids, zp = env
     a = full_at_alices_end(conn, cfg, ids)
+    bobs = conn.execute("SELECT id FROM tickets WHERE tier='standard'").fetchone()[0]
+    conn.execute("UPDATE tickets SET cancelled_at=starts_at WHERE id=?", (bobs,))   # room at alice's end when she starts paying
     r = await start(conn, cfg, ids)
+    conn.execute("UPDATE tickets SET cancelled_at=NULL WHERE id=?", (bobs,))        # and taken while she pays
     p = await payments.callback(conn, cfg, payments.get(conn, r["payment_id"])["authority"], "OK")
     assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and "Not enough capacity" in p["error"]
     assert orders.get(conn, p["order_id"])["status"] == "new"
     assert [t["id"] for t in tickets.user_tickets(conn, ids["alice"])] == [a["id"]]
 
 
-@pytest.mark.xfail(strict=True, reason="orders.create judges sold out for a pass starting now, but a paid order is granted at "
-                                       "last_end: the buyer is charged for a queued pass known not to fit")
 async def test_a_queued_pass_that_does_not_fit_is_refused_before_paying(env):
     conn, cfg, ids, zp = env
     full_at_alices_end(conn, cfg, ids)

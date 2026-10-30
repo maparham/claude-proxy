@@ -857,11 +857,14 @@ def capacity(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:
             "max_sold_pct": cfg.tickets.max_sold_pct}
 
 
-def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float) -> bool:
-    """A tier and length is sold out when a ticket starting now would fail the capacity rule."""
+def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float, starts_at: float | None = None,
+             exclude=None) -> bool:
+    """A tier and length is sold out when a ticket starting now, or at `starts_at`, would fail the capacity rule.
+    `exclude`: the used-up tickets it would replace (next_start), as grant leaves them out."""
     now = _now(now)
+    start = now if starts_at is None else int(starts_at)
     try:
-        check_capacity(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), now, now + LENGTHS[length] * DAY)
+        check_capacity(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), start, start + LENGTHS[length] * DAY, exclude)
     except CapacityError:
         return True
     return False
@@ -1088,7 +1091,9 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     has_5h = (ticket["share_5h_pct"] if ticket["share_5h_pct"] is not None else ticket["share_pct"]) + sum(
         u["share_5h_pct"] if u["share_5h_pct"] is not None else u["share_pct"] for u in ups)
     share, share_5h = effective_share(conn, cfg, tier) - has, effective_share_5h(conn, cfg, tier) - has_5h
-    whole = LENGTHS[ticket["length"]] * DAY
+    # Prorated over the pass's whole span, its bonus days included: they run at the new tier too, and the quote never
+    # comes to more than the full price difference.
+    whole = ticket["effective_end"] - ticket["starts_at"]
     usd = round((price_now(conn, tier, ticket["length"], now)["usd"] - price_now(conn, frm, ticket["length"], now)["usd"]) * left / whole, 2)
     if share <= 0 or usd <= 0:
         raise TicketError(f"{cfg.tickets.tiers[tier].label} is not above this pass's tier.")

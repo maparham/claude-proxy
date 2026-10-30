@@ -149,6 +149,11 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
         # Judged as the price list judges it: for a ticket starting now (spec section 2, Sold out).
         if tickets.sold_out(conn, cfg, tier, length, now):
             raise OrderError(409, "That pass is sold out.")
+        if user_id is not None:
+            # And where the grant will put it: after the buyer's last pass, so no one pays for a pass that cannot start then.
+            starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now)
+            if starts_at > now and tickets.sold_out(conn, cfg, tier, length, now, starts_at, [t["id"] for t in replaces]):
+                raise OrderError(409, "That pass is sold out for when your current pass ends.")
         if rate is None:
             raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
         usd = tickets.price_now(conn, tier, length, now)["usd"]
