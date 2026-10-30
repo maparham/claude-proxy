@@ -1713,7 +1713,8 @@ function deleteMeDialog() {
     e.preventDefault();
     try { await api("/api/me/delete", { method: "POST", body: { confirm: new FormData(e.target).get("confirm") } }); }
     catch (err) { $("#delme-err", d).textContent = err.message; return; }
-    if (window.Clerk?.session) await window.Clerk.signOut().catch(() => {});   // or the sign-in page would sign them up again
+    const clerk = await setupClerk();   // not loaded yet on a visit that came in on a cookie
+    if (clerk?.session) await clerk.signOut().catch(() => {});   // or the sign-in page would sign them up again
     location.href = "/";
   };
 }
@@ -2487,7 +2488,10 @@ if (ADMIN_PAGE) {
 $("#logout").onclick = async () => {
   await api("/api/logout", { method: "POST", body: {} }).catch(() => {});
   S.user = null;
-  if (window.Clerk?.session) await window.Clerk.signOut().catch(() => {});   // or the sign-in page would trade it in again
+  // Clerk loads only with the sign-in page, so a visit that came in on a cookie has to load it here to end its session,
+  // or the sign-in page would trade that session in again.
+  const clerk = await setupClerk();
+  if (clerk?.session) await clerk.signOut().catch(() => {});
   showLogin();
 };
 $("#who").onclick = () => nameDialog();
