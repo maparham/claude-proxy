@@ -782,15 +782,20 @@ function passTimeline(tk, inUseAt = -1, no = []) {
   const span = tl.end - tl.start;
   const at = (ts) => (Math.max(0, ts - tl.start) / span) * 100;
   const colors = passColors(tl);
+  const cps = (tk.current && tk.current.passes) || [];   // the cards' passes, in the timeline's order
   const order = tl.passes.map((_, i) => i).sort((a, b) => (no[a] || a + 1) - (no[b] || b + 1));
   const rows = order.map((i) => {
     const p = tl.passes[i];
     const from = Math.max(p.starts_at, tl.start);
     const name = `${nf0.format(no[i] || i + 1)}. ${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`;
-    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)}`;
+    // A bar names the time it spans (where that fits, see fitBarLabels); a used-up pass's bar is dimmed.
+    const cp = cps[i] && !cps[i].queued ? cps[i] : null;
+    const len = fmtDur(p.ends_at - from);
+    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)} · ${len}`;
+    const cls = [p.starts_at > tl.start ? "later" : "", cp && cp.used_up ? "spent" : ""].filter(Boolean).join(" ");
     return `<div class="gantt-name${i === inUseAt ? " in-use" : ""}" data-pass="${i}">${esc(name)}</div><div class="gantt-track" data-pass="${i}">
-      <i class="${p.starts_at > tl.start ? "later" : ""}" style="${colors[i]};inset-inline-start:${at(from).toFixed(2)}%;width:${(at(p.ends_at) - at(from)).toFixed(2)}%"
-        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"></i></div>`;
+      <i class="${cls}" style="${colors[i]};inset-inline-start:${at(from).toFixed(2)}%;width:${(at(p.ends_at) - at(from)).toFixed(2)}%"
+        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><span>${esc(len)}</span></i></div>`;
   }).join("");
   // A timestamp at now and at each start and end, all on one line. One close to the label before, on the same day,
   // adds its time under that label; on another day it is left out. A bar's hover names its own times.
@@ -929,7 +934,21 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
     } catch (err) { pb.disabled = false; pb.textContent = payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
   };
 }
+// A timeline bar's label shows only when it fits inside the bar, checked again as the timeline's width changes.
+function fitBarLabels(root) {
+  root.querySelectorAll(".gantt").forEach((g) => {
+    const fit = () => g.querySelectorAll(".gantt-track i").forEach((bar) => {
+      const label = bar.querySelector("span");
+      if (!label) return;
+      label.hidden = false;   // a hidden label measures nothing
+      label.hidden = label.scrollWidth + 8 > bar.clientWidth;
+    });
+    fit();
+    if (window.ResizeObserver) new ResizeObserver(fit).observe(g);
+  });
+}
 function wireOrdering(root, tk, order) {
+  fitBarLabels(root);
   // Pointing at a pass's card or at one of its stretches on the timeline lights up the others of that pass.
   root.querySelectorAll(".card").forEach((card) => {
     if (!card.querySelector("[data-pass]")) return;

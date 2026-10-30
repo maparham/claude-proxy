@@ -408,7 +408,10 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .gantt-name { font-size: 12px; color: var(--ink-2); white-space: nowrap; }
 .gantt-name.in-use { font-weight: 600; color: var(--ink); }
 .gantt-track { position: relative; height: 16px; background: var(--wash); border-radius: 4px; }
-.gantt-track i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 4px; }
+.gantt-track i { position: absolute; top: 0; bottom: 0; min-width: 3px; border-radius: 4px; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.gantt-track i span { font-size: 11px; font-style: normal; line-height: 1; white-space: nowrap; }
+.gantt-track i span[hidden] { display: none; }
+.gantt-track i.spent { opacity: .4; }
 .gantt-track i.later { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.45) 0 3px, transparent 3px 7px) !important; }
 .pass-axis { position: relative; height: 38px; }
 .pass-axis em { position: absolute; top: 2px; width: 0; display: flex; justify-content: center; font-style: normal; }
