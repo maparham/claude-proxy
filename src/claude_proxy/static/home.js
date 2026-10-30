@@ -137,7 +137,7 @@ function orderFormHtml(d, t_, len, c = currency || d.currency) {
   const l = t_.lengths[len];
   return `<h3 id="order-h">${t("ord.title", { what: t("ord.what", { label: tierName(t_), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(money(c === "USD" ? l.usd : l.amount, c))}</b></p>
-    <div class="terms"><ul class="muted"><li>${splitTerms(d.week_split, len, l.days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul></div>
+    <div class="terms"><ul class="muted"><li>${splitOrGeneral(d.week_split, len, l.days)}</li><li>${t("ord.terms_l3")}</li></ul></div>
     <p class="muted">${t("home.sign_in_to_order")}</p>
     <p class="order-alt"><a class="btn primary" data-signin href="${esc(signInHref(t_, len))}">${t("home.continue_sign_in")}</a> <button type="button" class="btn" data-close>${t("app.cancel")}</button></p>`;
 }

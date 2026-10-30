@@ -1374,6 +1374,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 # The serving pass as it serves, which may be borrowing from its next part (2026-10-30 spec, §4).
                 sts = serving_sts if serving is not None and t["id"] == serving["id"] else limits.pass_states(conn, cfg, t, now)
                 out = {f"pct_{s.kind[6:]}": s.pct for s in sts}
+                whole = limits.pass_weeks(conn, cfg, t, now, next((s for s in sts if s.kind == "share_7d"), None))
+                out["pct_pass"] = whole["ticket_pct"] if whole else out.get("pct_7d")   # the whole pass's use, as its card reads
                 hit = [s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded]
                 if hit:
                     back = None if None in hit else max(hit)
@@ -1836,14 +1838,14 @@ def _ticket_weeks_text(weeks: dict, est: str) -> str:
     """`57% of first week · 0% of second week · 30% used (expires in 3d:5h:12m)`; a week that is over reads
     `First week ended`, since gclaude warns on the highest percentage on the line and a used-up past week would read as a
     limit reached. A ticket within one week, or a day pass across a reset: the ticket's part only."""
-    ticket = f"{weeks['ticket_pct']:.0f}%{est} used (expires in {_days_hours_minutes(weeks['ends_in'])})"
+    ticket = f"{min(weeks['ticket_pct'], 100):.0f}%{est} used (expires in {_days_hours_minutes(weeks['ends_in'])})"
     if len(weeks["weeks"]) == 1:
         return ticket
     nth = tickets.TERMS["en"]["nth"]
     name = lambda i: nth[i] if i < len(nth) else f"{i + 1}th"   # noqa: E731  (a month spans at most 5 weeks)
     if weeks.get("length") == "day":   # it borrows its next part as it needs it (2026-10-30): one allowance
         return ticket
-    parts = [f"{name(i)} week ended" if w["state"] == "past" else f"{w['pct']:.0f}%{est} of {name(i).lower()} week"
+    parts = [f"{name(i)} week ended" if w["state"] == "past" else f"{min(w['pct'], 100):.0f}%{est} of {name(i).lower()} week"
              for i, w in enumerate(weeks["weeks"])]
     return " · ".join(parts + [ticket])
 
@@ -1871,13 +1873,13 @@ def _status_line(user, states, account, weeks: dict | None = None, ticket: str |
         base, _, period = s.kind.partition("_")
         if base == "share" and account is None:
             label = _SHARE_PERIOD.get(period, period)
-            est = " est." if s.no_live_data else ""
+            est = ""   # an estimate is still the user's use as best known: no "est." for them
             if s.skipped or s.current is None:
                 parts.append(f"{label} n/a")
             elif period == "7d" and s.tier is not None and weeks:   # a ticket's weekly piece
                 parts.insert(head, _ticket_weeks_text(weeks, est))
             else:
-                parts.append(f"{label} {s.pct:.0f}%{est}{'' if period == '7d' else _resets(s)}")   # never the account's weekly reset
+                parts.append(f"{label} {min(s.pct, 100):.0f}%{est}{'' if period == '7d' else _resets(s)}")   # the request past it is served   # never the account's weekly reset
             continue
         if base == "share":
             label = f"{_SHARE_PERIOD.get(period, period)} share"

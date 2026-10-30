@@ -223,6 +223,7 @@ const I18N = {
     "lim.used_pct": "{v}% used",
     "lim.pct": "{v}%",
     "lim.pass_left": "expires in {left}",
+    "lim.back_in": "used up for now · back in {d}",
     "lim.ticket_used": "{pct} of pass ({left} left)",
     "lim.sep": " · ",
     "lim.skipped": "skipped · {why}",
@@ -406,10 +407,10 @@ const I18N = {
     "ov.no_ticket_sub": "Your usage and limits show here once you have a pass. Pick one below.",
     "ov.ticket_sub": "You can use up to a set amount in every 5 hours. Each week you also get a share of your pass to use whenever you like; whatever is left at the weekly reset is lost, and next week's share starts.",
     "ov.ticket_sub_one": "You can use up to a set amount in every 5 hours, and the whole pass whenever you like until it ends.",
-    "ov.ticket_sub_parts": "You can use up to a set amount in every 5 hours. Your pass moves into its {part} on {date}; whatever is left of the {prev} then is lost.",
-    "ov.part_n": "{n} part", "ov.week_n": "{n} week",
+    "ov.ticket_sub_parts": "You can use up to a set amount in every 5 hours. Your pass moves into its {part} in {d}; whatever is left of the {prev} then is lost.",
+    "ov.part_n": "{n} part",
+    "ov.in_d": "in {d}",
     "ov.part_starts_in": "The {part} starts in {d}",
-    "ov.part_starts": "The {part} starts {date}",
     "ov.ends_in": "Ends in {d}",
     "ov.limits_sub": "Resets a window-length after the first request; {served}.",
     "ov.served": "the request that crosses a limit is still served",
@@ -671,14 +672,13 @@ const I18N = {
     "pass.list": "Each pass has limits of its own. Requests use the oldest pass first and move to the next when one reaches a limit.",
     "pass.usable_in": "Usable in {d}",
     "pass.at_limit": "At limit",
-    "pass.back_in": "Limited until: {d}",
+    "pass.back_in": "Back in {d}",
     "pass.left": "{d} left",
     "pass.left_d": "{n}d", "pass.left_h": "{n}h", "pass.left_m": "{n}m", "pass.left_join": ":",
     "pass.used_up": "Used up",
     "pass.ready": "Ready",
     "pass.bought": "Bought {date}",
     "pass.use_5h": "5-hour limit",
-    "pass.use_7d": "Weekly",
     "pass.serving": "In use",
     "pass.others": "Your other passes",
     "pass.pin": "Use first",
@@ -712,16 +712,15 @@ const I18N = {
     "ord.email": "Your email",
     "ord.message": "Message (optional)",
     "ord.message_ph": "Anything the admin should know",
-    "ord.terms_l1": "Your allowance is split across weekly windows by the days each one covers; each piece is spendable at your own pace and expires at its window's reset.",
-    "ord.split": "Your use of the pass will be limited in {n} parts: {pieces}.",
+    "ord.terms_l1": "Your pass is usable at your own pace until it ends. Your allowance renews on a fixed weekly schedule, so a pass that runs past it is used in parts; whatever is left of a part when the next one starts is lost.",
+    "ord.split": "Your allowance renews on a fixed weekly schedule, so your pass is used in {n} parts: {pieces}. Whatever is left of a part when the next one starts is lost.",
     "ord.split_one": "Your whole pass is usable until {date}.",
+    "ord.split_open": "Your whole pass is usable until it ends.",
     "ord.split_and": " and ",
-    "ord.split_week": "{n} week: {pct}",
-    "ord.split_before": "First part: {pct}",
-    "ord.split_after": "Second part: {pct}",
+    "ord.split_week": "{n} part: {pct}",
     "ord.nth.1": "First", "ord.nth.2": "Second", "ord.nth.3": "Third", "ord.nth.4": "Fourth", "ord.nth.5": "Fifth",
     "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
-    "ord.terms_l3": "Anthropic also applies its own 5-hour limit.",
+    "ord.terms_l3": "You can use up to a set amount in every 5 hours.",
     "ord.terms_accept": "I accept the terms",
     "ord.terms_needed": "Please accept the pass terms to order.",
     "ord.send": "Submit order",
@@ -1200,6 +1199,7 @@ const I18N = {
     "lim.used_pct": "{v}٪ مصرف‌شده",
     "lim.pct": "{v}٪",
     "lim.pass_left": "{left} مانده تا انقضا",
+    "lim.back_in": "فعلاً تمام شده · {d} دیگر دوباره قابل استفاده",
     "lim.ticket_used": "{pct} از بسته ({left} مانده)",
     "lim.sep": " · ",
     "lim.skipped": "اعمال نشد · {why}",
@@ -1383,10 +1383,10 @@ const I18N = {
     "ov.no_ticket_sub": "مصرف و محدودیت‌های شما وقتی بسته داشته باشید اینجا نمایش داده می‌شود. یکی را از پایین انتخاب کنید.",
     "ov.ticket_sub": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید. هر هفته هم سهمی از بسته‌تان دارید که هر وقت خواستید مصرفش می‌کنید؛ هر چه تا ریست هفتگی مصرف نشود از بین می‌رود و سهم هفته بعد شروع می‌شود.",
     "ov.ticket_sub_one": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید، و کل بسته را هر وقت خواستید تا پایانش.",
-    "ov.ticket_sub_parts": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید. بسته شما در {date} وارد {part} می‌شود؛ هر چه از {prev} تا آن زمان مصرف نشود از بین می‌رود.",
-    "ov.part_n": "قسمت {n}", "ov.week_n": "هفته {n}",
+    "ov.ticket_sub_parts": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید. بسته شما {d} دیگر وارد {part} می‌شود؛ هر چه از {prev} تا آن زمان مصرف نشود از بین می‌رود.",
+    "ov.part_n": "قسمت {n}",
+    "ov.in_d": "{d} دیگر",
     "ov.part_starts_in": "{part} {d} دیگر شروع می‌شود",
-    "ov.part_starts": "{part} از {date} شروع می‌شود",
     "ov.ends_in": "{d} تا پایان",
     "ov.limits_sub": "یک بازه بعد از اولین درخواست صفر می‌شود؛ {served}.",
     "ov.served": "درخواستی که از محدودیت بگذرد همچنان انجام می‌شود",
@@ -1643,19 +1643,18 @@ const I18N = {
     "renew.sub": "یک بسته انتخاب کنید. در مرحله بعد زمان شروعش را انتخاب می‌کنید: همین حالا، که به سهمیه فعلی شما اضافه می‌شود، یا وقتی بسته فعلی‌تان در {date} تمام شود.",
     "ord.start": "از چه زمانی شروع شود؟",
     "ord.start_after": "وقتی بسته‌های فعلی تمام شوند، در {date}",
-    "ord.start_now": "همین حالا، اضافه بر ظرفیت بسته فعلی",
+    "ord.start_now": "همین حالا، کنار بسته فعلی، با سقف مصرف جداگانه",
     "ord.starts_now": "شروع فوری، کنار بسته فعال",
     "pass.list": "هر بسته سقف مصرف خودش را دارد. درخواست‌ها اول از قدیمی‌ترین بسته استفاده می‌کنند و وقتی به سقف رسید، سراغ بعدی می‌روند.",
     "pass.usable_in": "تا شروع: {d}",
     "pass.at_limit": "به سقف رسیده",
-    "pass.back_in": "محدود تا: {d}",
+    "pass.back_in": "{d} دیگر دوباره قابل استفاده",
     "pass.left": "{d} مانده",
     "pass.left_d": "{n} روز", "pass.left_h": "{n} ساعت", "pass.left_m": "{n} دقیقه", "pass.left_join": " و ",
     "pass.used_up": "تمام شده",
     "pass.ready": "آماده",
     "pass.bought": "خرید: {date}",
     "pass.use_5h": "سقف ۵ ساعته",
-    "pass.use_7d": "هفتگی",
     "pass.serving": "در حال استفاده",
     "pass.others": "بسته‌های دیگر شما",
     "pass.pin": "اول از این استفاده شود",
@@ -1689,16 +1688,15 @@ const I18N = {
     "ord.email": "ایمیل شما",
     "ord.message": "پیام (اختیاری)",
     "ord.message_ph": "هر چه ادمین باید بداند",
-    "ord.terms_l1": "سهم شما به نسبت روزهایی که هر بازه هفتگی پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
-    "ord.split": "بسته شما در {n} قسمت قابل استفاده است: {pieces}.",
+    "ord.terms_l1": "بسته‌تان را تا پایانش با سرعت خودتان مصرف می‌کنید. سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته‌ای که از آن زمان بگذرد در چند قسمت مصرف می‌شود؛ هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
+    "ord.split": "سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در {n} قسمت قابل استفاده است: {pieces}. هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
     "ord.split_one": "کل بسته شما تا {date} قابل استفاده است.",
+    "ord.split_open": "کل بسته شما تا پایانش قابل استفاده است.",
     "ord.split_and": " و ",
-    "ord.split_week": "هفته {n}: {pct}",
-    "ord.split_before": "قسمت اول: {pct}",
-    "ord.split_after": "قسمت دوم: {pct}",
+    "ord.split_week": "قسمت {n}: {pct}",
     "ord.nth.1": "اول", "ord.nth.2": "دوم", "ord.nth.3": "سوم", "ord.nth.4": "چهارم", "ord.nth.5": "پنجم",
     "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
-    "ord.terms_l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.",
+    "ord.terms_l3": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید.",
     "ord.terms_accept": "شرایط را می‌پذیرم",
     "ord.terms_needed": "برای سفارش، شرایط بسته را بپذیرید.",
     "ord.send": "ارسال سفارش",
@@ -2000,6 +1998,8 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 // has them all), with only the ticket's start and end marked with their date and time. `use` (a running pass's,
 // {pcts, cur, label, resets}): each piece's use in percent filled into its segment, `label` written in the segment in
 // use, and each split marked with its time (`resets`), a split near an end with its time a row lower.
+// The terms' first line: the split, else (no quota data) a day pass is one allowance and anything longer the general line.
+function splitOrGeneral(ws, len, days) { return splitTerms(ws, len, days) || t(len === "day" ? "ord.split_open" : "ord.terms_l1"); }
 function splitTerms(ws, len, days, use) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
@@ -2009,7 +2009,7 @@ function splitTerms(ws, len, days, use) {
   const end = ws.starts_at + days * 86400;
   if (parts.length === 1) return t("ord.split_one", { date: when(end) });
   // A ticket under a week crosses one reset at most: its two parts are named first and second, not as weeks.
-  const name = (v, i) => (days < 7 ? t(i ? "ord.split_after" : "ord.split_before", { pct: pct(v) }) : t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) }));
+  const name = (v, i) => t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) });   // parts, never weeks: the buyer bought a length
   const pieces = parts.map(name);
   const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
   const label = (v, i) => (v >= 0.2 ? name(v, i) : v >= 0.1 ? pct(v) : "&nbsp;");
@@ -2026,8 +2026,8 @@ function splitTerms(ws, len, days, use) {
     const d = new Date(ts * 1000);
     return `${d.toLocaleDateString(LOC, { weekday: "short", month: "short", day: "numeric" })}<br>${d.toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" })}`;
   };
-  const mark = (at, ts, cls, timeOnly) => `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${timeOnly
-    ? new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" }) : short(ts)}</small></em>`;
+  const mark = (at, ts, cls, timeOnly, text) => `<em class="${cls}" style="inset-inline-start:${(at * 100).toFixed(2)}%"><small>${text || (timeOnly
+    ? new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" }) : short(ts))}</small></em>`;
   const day = (ts) => new Date(ts * 1000).toDateString();
   let at = 0;
   const splits = !use || !use.resets ? "" : parts.slice(0, -1).map((v, i) => {
@@ -2037,9 +2037,10 @@ function splitTerms(ws, len, days, use) {
     // Near an end, its time goes under that end's, aligned with it, and the tick stays at the split.
     if (!r) return "";
     const only = day(r) === day(ws.starts_at) || day(r) === day(end);
-    if (at >= 0.15 && at <= 0.85) return mark(at, r, "", only);
+    const rel = use.rel && use.rel[i];   // a running pass's split as time from now: the account's clock time means nothing to its holder
+    if (at >= 0.15 && at <= 0.85) return mark(at, r, "", only, rel);
     const edge = at < 0.15 ? "start" : "end";
-    return `<em class="tick" style="inset-inline-start:${(at * 100).toFixed(2)}%"></em>${mark(edge === "start" ? 0 : 1, r, `low notick edge-${edge}`, only)}`;
+    return `<em class="tick" style="inset-inline-start:${(at * 100).toFixed(2)}%"></em>${mark(edge === "start" ? 0 : 1, r, `low notick edge-${edge}`, only, rel)}`;
   }).join("");
   const ends = mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end") + splits;
   return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${use ? " use" : ""}" aria-hidden="true">${bar}${ends}</span>`;

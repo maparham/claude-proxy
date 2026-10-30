@@ -511,7 +511,17 @@ def test_buyer_mail_carries_nothing_the_buyer_typed(mailing):
     assert "Mallory" not in body and "Buy now" not in body and "spam" not in body and "<script>" not in body
     assert "7.50 EUR" in body and cfg.tickets.how_to_buy not in body   # no bank transfer: online payment, else the admin
     assert "Your order is not paid yet. The admin will contact you about the next step." in body
-    assert tickets.terms_text(conn, cfg, "en", "week", o["created_at"]) in body
+    assert tickets.terms_text(conn, cfg, "en", "week", None) in body   # it starts when granted: nothing dated yet
+
+
+def test_buyer_mail_for_a_day_pass_has_no_dates_and_no_1_days(mailing):
+    conn, cfg, ids = mailing
+    o = visitor(conn, cfg, length="day")
+    body = orders.buyer_mail_text(conn, cfg, o)[1]
+    assert "a Lite pass for one day." in body and "(1 days)" not in body
+    assert "Your whole pass is usable until it ends." in body
+    fa = orders.buyer_mail_text(conn, cfg, visitor(conn, cfg, length="day", lang="fa", email="b@example.com"))[1]
+    assert "بسته اقتصادی برای ۱ روز." in fa and "کل بسته شما تا پایانش قابل استفاده است." in fa
 
 
 @pytest.mark.parametrize("lang,stored", [("fa", "fa"), ("en", "en"), ("", "en"), ("de", "en")])
@@ -527,7 +537,7 @@ def test_buyer_mail_in_persian_for_an_order_from_the_persian_page(mailing):
     assert subject == "سفارش شما: اقتصادی، ۱ هفته"
     assert "بسته اقتصادی برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
     assert "ادمین برای مرحله بعد با شما تماس می‌گیرد" in body and cfg.tickets.how_to_buy not in body
-    assert tickets.terms_text(conn, cfg, "fa", "week", o["created_at"]) in body and "شرایط بسته:" in body
+    assert tickets.terms_text(conn, cfg, "fa", "week", None) in body and "شرایط بسته:" in body
     assert "Pass terms" not in body
 
 

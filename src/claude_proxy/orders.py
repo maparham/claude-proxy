@@ -299,22 +299,31 @@ def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple
     label = _label(cfg, order)
     up = order.get("upgrade_of")
     lines = [f"Your order: an upgrade of your pass to {label} for the rest of it." if up else
-             f"Your order: a {label} pass for one {order['length']} ({LENGTHS.get(order['length'], '?')} days).",
+             f"Your order: a {label} pass for one {order['length']}{_days(order['length'])}.",
              f"Price at today's rate: {_amount(order)}.", ""]
     if not up:   # an upgrade keeps its ticket's weeks: the terms the buyer got with it still hold
-        lines.append(tickets.terms_text(conn, cfg, "en", order["length"], order["created_at"]))
+        lines.append(tickets.terms_text(conn, cfg, "en", order["length"], None))   # it starts when granted: no dates yet
     lines.append("Your order is not paid yet. The admin will contact you about the next step.")
     return f"Your order: {label} {'upgrade' if up else order['length']}", "\n".join(lines) + "\n"
+
+
+def _days(length: str) -> str:
+    """` (7 days)` after a length, but nothing after a day: "one day (1 days)" says nothing."""
+    return "" if length == "day" else f" ({LENGTHS.get(length, '?')} days)"
+
+
+def _days_fa(length: str) -> str:
+    return "" if length == "day" else f" ({fa_num(LENGTHS.get(length, '?'))} روز)"
 
 
 def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[str, str]:
     label, length = fa_label(cfg, order["tier"]), FA_LENGTHS.get(order["length"], order["length"])
     up = order.get("upgrade_of")
     lines = [f"سفارش شما: ارتقای بسته شما به {label} برای باقی‌مانده آن." if up else
-             f"سفارش شما: بسته {label} برای ۱ {length} ({fa_num(LENGTHS.get(order['length'], '?'))} روز).",
+             f"سفارش شما: بسته {label} برای ۱ {length}{_days_fa(order['length'])}.",
              f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
     if not up:
-        lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], order["created_at"]))
+        lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], None))
     lines.append("سفارش شما هنوز پرداخت نشده است. ادمین برای مرحله بعد با شما تماس می‌گیرد.")
     return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
@@ -328,7 +337,7 @@ def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket
         what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
         return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n\n{terms}"
-    what = f"{_label(cfg, order)}, {order['length']} ({LENGTHS.get(order['length'], '?')} days)"
+    what = f"{_label(cfg, order)}, {order['length']}{_days(order['length'])}"
     span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
     return (f"Your pass is granted: {_label(cfg, order)} {order['length']}",
             f"Your order is done.\n\nPass: {what}, {span}.\n\n{terms}")

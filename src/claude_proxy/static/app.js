@@ -388,7 +388,8 @@ function meter(pct, at) {
 // `resets`: when each part after the first starts, marked under the split.
 function partUse(w, resets) {
   const cur = w.weeks.findIndex((x) => x.state === "current");
-  return { pcts: w.weeks.map((x) => x.pct), cur, label: cur < 0 ? "" : t("lim.used_pct", { v: nf0.format(Math.floor(w.weeks[cur].pct)) }), resets };
+  const rel = resets.map((r) => (r > Date.now() / 1000 ? t("ov.in_d", { d: fmtDur(r - Date.now() / 1000 - (S.tkSkew || 0)) }) : ""));
+  return { pcts: w.weeks.map((x) => x.pct), cur, label: cur < 0 ? "" : t("lim.used_pct", { v: nf0.format(Math.floor(w.weeks[cur].pct)) }), resets, rel };
 }
 const passParts = (l) => (l.weeks && l.weeks.weeks.length > 1 ? l.weeks : null);   // a pass in several parts
 // The figure a limit row writes on its meter instead of in its text: a pass in parts, its whole use (its meter colours
@@ -412,7 +413,7 @@ function limitValue(l, onMeter) {
   const reset = l.reset_in ? t("lim.resets_in", { d: fmtDur(l.reset_in) }) : "";
   if (USER_LIMIT_KINDS.includes(l.kind) || l.kind === "ticket_limit") {
     if (l.skipped || l.current == null) return t("lim.not_measured");
-    if (l.weeks) return weeksValue(l.weeks);
+    if (l.weeks) return l.exceeded && l.reset_in ? t("lim.back_in", { d: fmtDur(l.reset_in) }) : weeksValue(l.weeks);
     if (onMeter && meterFigure(l)) return l.reset_in ? t("lim.resets_in_only", { d: fmtDur(l.reset_in) }) : "";   // its use is on the meter
     return `${t("lim.used_pct", { v: nf0.format(l.current) })}${reset}`;
   }
@@ -440,8 +441,12 @@ function limitValueTip(l) {
 function limitsBlock(ls, oneWeek, own) {
   if (!ls.length) return `<span class="muted">${t("lim.none")}</span>`;
   return ls.map((l) => oneWeek && l.kind === "weekly_limit" ? { ...l, kind: "ticket_limit" } : l).map((l) => `<div class="limit-row${own ? " mid" : ""}"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(esc(limitValue(l, own)), limitValueTip(l))}</span>
-    <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct, own ? meterFigure(l) : null)}</div></div>`).join("");
+    <div style="grid-column:1/-1">${l.kind === "allowed_models" || l.skipped ? "" : meterShown(l, own ? meterFigure(l) : null)}</div></div>`).join("");
 }
+
+// A limit's meter, coloured by the figure it shows (a pass's whole use, not the part behind it), and red while the
+// user is stopped by it, whatever that figure.
+function meterShown(l, at) { return meter(l.exceeded ? 100 : at ? at.fill : l.pct, at); }
 
 // The pass in use, as compact as the other cards: each limit's percent and bar, the full reading behind its "?".
 function limitsCompact(ls, oneWeek) {
@@ -451,8 +456,9 @@ function limitsCompact(ls, oneWeek) {
     // A pass in parts: the whole pass's use, coloured by the part in use's (its own use is on the split bar).
     const w = passParts(l);
     const shown = w ? w.ticket_pct : l.pct;
-    const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(shown))}${PCT}`;
-    return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meter(l.pct, w ? { fill: shown } : null)}</div>`;
+    const back = l.exceeded && l.reset_in ? ` · ${esc(t("lim.back_in", { d: fmtDur(l.reset_in) }))}` : "";
+    const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(Math.min(100, shown)))}${PCT}${back}`;
+    return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meterShown(l, w ? { fill: shown } : null)}</div>`;
   }).join("");
 }
 
@@ -699,7 +705,7 @@ function passList(c, no) {
     : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
     : full(p) ? `<span class="badge state-queued">${p.back_at ? t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) }) : t("pass.at_limit")}</span>`
     : `<span class="badge">${t("pass.ready")}</span>`;
-  const use = (label, v) => `<div class="pass-use"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(v)}</div>`;
+  const use = (label, v, over) => `<div class="pass-use"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;
   // A pass over before the weekly reset (a day pass, say): its weekly limit is simply the whole pass's use.
   const oneWeek = (p) => c.week_known && p.effective_end <= c.week_end;
   const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving).sort((a, b) => no[a.i] - no[b.i]);
@@ -708,7 +714,7 @@ function passList(c, no) {
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
-      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t(oneWeek(p) ? "kname.ticket_limit" : "pass.use_7d"), p.pct_7d)}`}
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100)}`}
       ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${bought(p)}</div>`).join("")}</div>`;
 }
@@ -731,7 +737,7 @@ function userLimitsCard(me, tk, order) {
   const cur = inParts ? tw.weeks.findIndex((x) => x.state === "current") : -1;
   // Each split's time: the current part ends at the week's end, the others a week apart from it.
   const resets = inParts ? tw.weeks.slice(0, -1).map((x, i) => c.week_end + (i - cur) * 7 * 86400) : [];
-  const partName = (i) => t(days < 7 ? "ov.part_n" : "ov.week_n", { n: t(`ord.nth.${i + 1}`).toLowerCase() });   // as splitTerms names them
+  const partName = (i) => t("ov.part_n", { n: t(`ord.nth.${i + 1}`).toLowerCase() });   // as splitTerms names them
   const nextPart = inParts && cur >= 0 && cur < tw.weeks.length - 1 ? { name: partName(cur + 1), prev: partName(cur), at: resets[cur] } : null;
   const split = inParts ? `<div class="muted">${splitTerms({ p: tw.weeks.map((x) => x.share), starts_at: sp.starts_at }, "p", days, partUse(tw, resets))}</div>` : "";
   const noWeek = oneWeek || inParts || dayAcross;
@@ -758,14 +764,14 @@ function userLimitsCard(me, tk, order) {
       ${hero}${passList(c, no)}${extras}</div>`
     : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
-      <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${short ? t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) }) : t("ov.part_starts", { part: nextPart.name, date: fmtDate(nextPart.at) })}`
+      <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) })}`
         : noWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
       ${split}${extras}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${multi ? t("ov.your_passes") : c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
-    <p class="sub">${c ? (nextPart ? t("ov.ticket_sub_parts", { part: nextPart.name, prev: nextPart.prev, date: fmtDate(nextPart.at) }) : t(noWeek ? "ov.ticket_sub_one" : "ov.ticket_sub")) : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
+    <p class="sub">${c ? (nextPart ? t("ov.ticket_sub_parts", { part: nextPart.name, prev: nextPart.prev, d: fromNow(nextPart.at) }) : t(noWeek ? "ov.ticket_sub_one" : "ov.ticket_sub")) : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
     ${ticket}${passTimeline(tk, inUseAt, no)}${inUse ? "" : limitsBlock(me.limits, noWeek, true)}</div>`;
 }
 // The user's live passes over time, when there is more than one: a row per pass, numbered as its card is, with a bar
@@ -875,7 +881,7 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
       ${start ? `<div class="wide"><p class="sub">${t("ord.start")}</p>
         <label class="check"><input type="radio" name="start" value="after" checked> ${t("ord.start_after", { date: fmtDate(start.date) })}</label>
         <label class="check"><input type="radio" name="start" value="now"> ${t("ord.start_now")}</label></div>` : ""}
-      <div class="terms wide"><ul class="muted"><li id="order-split">${splitTerms(p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul></div>
+      <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li></ul></div>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>
@@ -899,7 +905,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   const now = () => !!start && f.start.value === "now";
   // The terms follow the choice: a ticket starting now splits across the weeks from now.
   if (start) f.querySelectorAll('input[name="start"]').forEach((r) => (r.onchange = () => {
-    $("#order-split", d).innerHTML = splitTerms(now() ? start.splitNow : p.week_split, len, tier.lengths[len].days) || t("ord.terms_l1");
+    $("#order-split", d).innerHTML = splitOrGeneral(now() ? start.splitNow : p.week_split, len, tier.lengths[len].days);
   }));
   f.onsubmit = async (e) => {
     e.preventDefault();

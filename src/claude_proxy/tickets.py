@@ -33,22 +33,28 @@ TERMS_VERSION = "v1"
 # The order dialog's terms (i18n.js ord.split*, ord.terms_l1, ord.terms_l3), repeated in the buyer's emails in the
 # language of the page they ordered from. Dates in Tehran time: the dialog shows the buyer's own clock.
 TERMS = {
-    "en": {"head": "Pass terms:", "split": "Your use of the pass will be limited in {n} parts: {pieces}.",
-           "split_one": "Your whole pass is usable until {date}.", "sep": ", ", "and": " and ",
-           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "{n} week: {pct}",
+    "en": {"head": "Pass terms:",
+           "split": "Your allowance renews on a fixed weekly schedule, so your pass is used in {n} parts: {pieces}. "
+                    "Whatever is left of a part when the next one starts is lost.",
+           "split_one": "Your whole pass is usable until {date}.", "open": "Your whole pass is usable until it ends.",
+           "sep": ", ", "and": " and ",
+           "nums": {2: "two", 3: "three", 4: "four", 5: "five", 6: "six"}, "week": "{n} part: {pct}",
            "halves": ("First part: {pct}", "Second part: {pct}"),
            "nth": ("First", "Second", "Third", "Fourth", "Fifth"),
-           "l1": "Your allowance is split across weekly windows by the days each one covers; each piece is "
-                 "spendable at your own pace and expires at its window's reset.",
-           "l3": "Anthropic also applies its own 5-hour limit.", "tz": "Times are Tehran time."},
-    "fa": {"head": "شرایط بسته:", "split": "استفاده شما از بسته در {n} قسمت محدود خواهد بود: {pieces}.",
-           "split_one": "کل بسته شما تا {date} قابل استفاده است.", "sep": "، ", "and": " و ",
-           "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "هفته {n}: {pct}",
+           "l1": "Your pass is usable at your own pace until it ends. Your allowance renews on a fixed weekly schedule, so a "
+                 "pass that runs past it is used in parts; whatever is left of a part when the next one starts is lost.",
+           "l3": "You can use up to a set amount in every 5 hours.", "tz": "Times are Tehran time."},
+    "fa": {"head": "شرایط بسته:",
+           "split": "سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در {n} قسمت قابل استفاده است: {pieces}. "
+                    "هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
+           "split_one": "کل بسته شما تا {date} قابل استفاده است.", "open": "کل بسته شما تا پایانش قابل استفاده است.",
+           "sep": "، ", "and": " و ",
+           "nums": {2: "دو", 3: "سه", 4: "چهار", 5: "پنج", 6: "شش"}, "week": "قسمت {n}: {pct}",
            "halves": ("قسمت اول: {pct}", "قسمت دوم: {pct}"),
            "nth": ("اول", "دوم", "سوم", "چهارم", "پنجم"),
-           "l1": "سهم شما به نسبت روزهایی که هر بازه هفتگی پوشش می‌دهد بین آن‌ها تقسیم می‌شود؛ هر قسمت را با سرعت "
-                 "خودتان مصرف می‌کنید و با ریست همان بازه منقضی می‌شود.",
-           "l3": "به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.", "tz": "ساعت‌ها به وقت تهران است."},
+           "l1": "بسته‌تان را تا پایانش با سرعت خودتان مصرف می‌کنید. سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین "
+                 "بسته‌ای که از آن زمان بگذرد در چند قسمت مصرف می‌شود؛ هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
+           "l3": "در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید.", "tz": "ساعت‌ها به وقت تهران است."},
 }
 TEHRAN = ZoneInfo("Asia/Tehran")
 FA_DIGITS = str.maketrans("0123456789,.", "۰۱۲۳۴۵۶۷۸۹٬٫")
@@ -90,9 +96,10 @@ def terms_date(ts: float, lang: str) -> str:
 SPLIT_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")   # app.css --s1..--s5, light: a month spans up to 5 weeks
 
 
-def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None, rich: bool) -> str:
+def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float | None, now: float | None, rich: bool) -> str:
+    """`starts_at` None: not known yet (an order waiting for its grant), so nothing dated, no split."""
     w = TERMS["fa" if lang == "fa" else "en"]
-    ws = order_split(conn, cfg, starts_at, now)
+    ws = order_split(conn, cfg, starts_at, now) if starts_at is not None else None
     parts, days = (ws or {}).get(length) or [], LENGTHS[length]
     esc = html.escape if rich else str
 
@@ -101,14 +108,12 @@ def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: flo
         return fa_num(s).replace("%", "٪") if lang == "fa" else s
 
     bar = ""
-    if not parts:
-        split = esc(w["l1"])
+    if not parts:   # no quota data, or no start yet: a day pass is one allowance whatever it crosses (2026-10-30)
+        split = esc(w["open"] if length == "day" else w["l1"])
     elif len(parts) == 1:
         split = esc(w["split_one"].format(date=terms_date(starts_at + days * DAY, lang)))
     else:
-        def name(v, i):   # a ticket under a week crosses one reset at most: its parts are first and second
-            if days < 7:
-                return esc(w["halves"][i].format(pct=pct(v)))
+        def name(v, i):   # parts, never weeks: the buyer bought a length, not Anthropic's weeks
             return esc(w["week"].format(n=w["nth"][i] if i < len(w["nth"]) else i + 1, pct=pct(v)))
 
         pieces = [name(v, i) for i, v in enumerate(parts)]   # never a weekly reset's date: that is the account's
@@ -134,7 +139,7 @@ def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float, now: flo
     return "\n".join(lines).replace("</table>\n", "</table>") + "\n"   # the table already breaks the line
 
 
-def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
+def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float | None, now: float | None = None) -> str:
     """The order dialog's terms for a `length` ticket starting at `starts_at`, as one block for the buyer's emails:
     how it splits across Anthropic's weeks (each piece's share), else the general line without
     quota data; then the 5-hour line."""

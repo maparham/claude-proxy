@@ -334,3 +334,21 @@ def test_a_pass_that_ended_earlier_this_week_holds_nothing_back(env):
     grant(conn, cfg, ids, bob, start=START - 2 * DAY)     # a day pass over a day ago, its part all unused
     use(conn, ids["alice"], t, 100, 1.1)
     assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + (100 - 1.1 - 93.6 - 5))
+
+
+def test_a_pass_stopped_for_now_tells_the_user_when_it_is_back(env):
+    conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 100                  # no room to borrow: its first part is used up
+    use(conn, ids["alice"], t, 100, 1.1)
+    view = next(limits.user_view(s) for s in limits.states(conn, cfg, ids["alice"], now=AT) if s.kind == "share_7d")
+    assert view["exceeded"] and view["reset_in"] == RESET7 - AT   # relative: never the account's reset time
+    cfg.tickets.borrow_margin_pct = 5
+    view = next(limits.user_view(s) for s in limits.states(conn, cfg, ids["alice"], now=AT) if s.kind == "share_7d")
+    assert not view["exceeded"] and view["reset_in"] is None
+
+
+def test_every_pass_card_shows_its_whole_use(env):
+    conn, cfg, ids, t = env
+    use(conn, ids["alice"], t, 100, 1.1)
+    w = limits.pass_weeks(conn, cfg, t, AT)
+    assert w["ticket_pct"] == pytest.approx(100 * 0.1 / (OWN + NEXT))

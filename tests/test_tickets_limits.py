@@ -84,7 +84,7 @@ def test_share_5h_measured_as_today_and_exceeded_is_the_usual_429(env):
     fresh(conn, NOW - 100, util5=6)             # alice alone: +6 points of the 5-hour bucket
     d = check(conn, cfg, ids["alice"])
     assert (d.status, d.kind, d.retry_after) == (429, "share_5h", 3500)
-    assert "5-hour limit" in d.body["error"]["message"]
+    assert d.body["error"]["message"] == "Your Lite pass's 5-hour allowance is used up; you can continue in 58 min."
 
 
 def test_share_7d_counts_the_weekly_bucket_since_the_piece_began(env):
@@ -110,8 +110,19 @@ def test_share_7d_exceeded_is_a_429_with_the_full_week_retry_after(env):
     req(conn, ids["alice"], NOW - 200, i=2500)
     d = check(conn, cfg, ids["alice"])
     assert (d.status, d.kind, d.retry_after) == (429, "share_7d", RESET7 - NOW)
-    assert d.body["error"]["message"] == ("Weekly share of your Lite pass is used up. "
-                                          "It resets at 2027-01-18 08:00 UTC.")
+    # Its own allowance for now, and when it is back: never "weekly", a UTC time or the account's reset.
+    assert d.body["error"]["message"] == "Your Lite pass's allowance is used up for now; you can continue in 3 days."
+
+
+def test_a_pass_used_up_before_it_refills_says_so_and_how_to_go_on(env):
+    conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 100
+    conn.execute("UPDATE tickets SET ends_at=? WHERE id=?", (NOW + DAY, t["id"]))   # it ends before the next refill
+    req(conn, ids["alice"], NOW - 500, i=1000)
+    fresh(conn, NOW - 400, util5=1, util7=1)
+    req(conn, ids["alice"], NOW - 200, i=2500)
+    assert check(conn, cfg, ids["alice"]).body["error"]["message"] == (
+        "Your Lite pass is used up. Buy another pass on your dashboard to continue.")
 
 
 def test_last_weeks_use_is_gone_after_the_reset(env):
@@ -380,7 +391,7 @@ def test_ticket_user_gets_503_when_no_rate_was_ever_observed(db):
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
     d = check(conn, cfg, ids["alice"], now=NOW + 10)                           # no snapshots at all
     assert (d.status, d.kind, d.retry_after) == (503, "ticket_no_data", 60)
-    assert d.body["error"] == {"type": "api_error", "message": "Usage data is unavailable. Please retry in a minute."}
+    assert d.body["error"] == {"type": "api_error", "message": "Your pass's use can't be checked right now. Please try again in a few minutes."}
     assert by_kind(conn, cfg, ids["alice"], now=NOW + 10)["share_7d"].skipped == limits.NO_RATE
     assert check(conn, cfg, ids["alice"], now=NOW + 10, path="/v1/messages/count_tokens") is None   # consumes no quota
 
@@ -463,14 +474,14 @@ def limits_line(conn, cfg, ids, weeks):
     return _ticket_weeks_text(weeks, "")
 
 
-def test_status_line_marks_shares_estimated_without_live_data(env):
+def test_status_line_never_marks_shares_estimated(env):
     from claude_proxy.web import _status_line
     conn, cfg, ids, t = env
     req(conn, ids["alice"], NOW - 200, i=1000)
     fresh(conn, NOW - 100, util5=1, util7=1)
     sts = limits.states(conn, cfg, ids["alice"], now=NOW + 2000)   # stale: estimated from weighted tokens
     line = _status_line(user(conn, ids["alice"]), sts, None)
-    assert " · 5h 20% est. (resets in" in line and line.endswith(" · week 47% est.")
+    assert " · 5h 20% (resets in" in line and line.endswith(" · week 47%")   # no "est.": a guess is still their use
 
 
 def test_share_7d_counts_the_users_own_tokens_while_snapshots_are_fresh(env):
@@ -617,15 +628,20 @@ def test_terms_text_is_the_order_dialogs_terms(db):
     then the 5-hour line."""
     conn, cfg, ids = seeded(db)
     assert tickets.terms_text(conn, cfg, "en", "week", NOW, now=NOW) == (   # no weekly reset known: the general line
-        "Pass terms:\n- " + tickets.TERMS["en"]["l1"] + "\n- Anthropic also applies its own 5-hour limit.\n")
+        "Pass terms:\n- " + tickets.TERMS["en"]["l1"] + "\n- You can use up to a set amount in every 5 hours.\n")
+    assert "usable until it ends" in tickets.terms_text(conn, cfg, "en", "day", NOW, now=NOW)   # a day pass: one allowance
+    assert "usable until it ends" in tickets.terms_text(conn, cfg, "en", "day", None)          # no start yet: nothing dated
     fresh(conn, NOW - 600)
-    # RESET7 - DAY is 2027-01-17 11:30 Tehran; the reset a day later, the ticket's end a week after its start
+    # Parts, never weeks; why there are parts; and that a part's rest is lost.
     assert tickets.terms_text(conn, cfg, "en", "week", RESET7 - DAY, now=NOW) == (
-        "Pass terms:\n- Your use of the pass will be limited in two parts: First week: 14% and Second week: 86%."
-        "\n- Anthropic also applies its own 5-hour limit.\n")
+        "Pass terms:\n- Your allowance renews on a fixed weekly schedule, so your pass is used in two parts: First part: 14% "
+        "and Second part: 86%. Whatever is left of a part when the next one starts is lost."
+        "\n- You can use up to a set amount in every 5 hours.\n")
     assert tickets.terms_text(conn, cfg, "fa", "week", RESET7 - DAY, now=NOW) == (
-        "شرایط بسته:\n- استفاده شما از بسته در دو قسمت محدود خواهد بود: هفته اول: ۱۴٪ و هفته دوم: ۸۶٪."
-        "\n- به علاوه، محدودیت‌های ۵ ساعته هم از طرف آنتروپیک اعمال می‌شود.\n")
+        "شرایط بسته:\n- سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در دو قسمت قابل استفاده است: "
+        "قسمت اول: ۱۴٪ و قسمت دوم: ۸۶٪. هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود."
+        "\n- در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید.\n")
+    assert "week" not in tickets.terms_text(conn, cfg, "en", "week", None).replace("weekly", "")
     assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY, now=NOW)
     assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY / 2, now=NOW)   # across the reset too
 
@@ -639,7 +655,7 @@ def test_buyer_mail_html_draws_the_split(db):
     h = tickets.mail_html(conn, cfg, "fa", "week", RESET7 - DAY, body)
     assert h.startswith('<div dir="rtl"') and "&lt;b&gt;" in h and "پایان" in h
     assert h.count('width="14.3%"') == 2 and h.count('width="85.7%"') == 2   # a label cell and a bar cell per part
-    assert ">۱۴٪</td>" in h and ">هفته دوم: ۸۶٪</td>" in h   # 14% is too narrow for its week
+    assert ">۱۴٪</td>" in h and ">قسمت دوم: ۸۶٪</td>" in h   # 14% is too narrow for its name
     assert "border-radius:2px\">&nbsp;</td>" in h
     assert tickets.mail_html(conn, cfg, "en", "week", RESET7 - DAY, "Hi\n").startswith('<div dir="ltr"')
 
@@ -718,3 +734,23 @@ def test_a_day_pass_across_the_reset_is_offered_as_one_part(db):
     fresh(conn, NOW - 600)
     assert tickets.order_split(conn, cfg, RESET7 - 2 * 3600, now=NOW)["day"] == pytest.approx([1.0])
     assert "usable until" in tickets.terms_text(conn, cfg, "en", "day", RESET7 - 2 * 3600, now=NOW)
+
+
+def test_human_waits():
+    assert [limits.human_wait(s) for s in (45, 3480, 2 * 3600 + 18 * 60, 3 * DAY, 2 * DAY + 5 * 3600 + 59)] == [
+        "45 seconds", "58 min", "2 h 18 min", "3 days", "2 days 5 h"]
+
+
+def test_status_line_caps_use_at_100_percent():
+    from claude_proxy.web import _ticket_weeks_text
+    weeks = {"weeks": [{"pct": 104.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 103.0,
+             "ends_in": 3600, "length": "week"}
+    assert _ticket_weeks_text(weeks, "") == "100% of first week · 0% of second week · 100% used (expires in 0d:1h:0m)"
+
+
+def test_usage_data_unavailable_says_try_again_shortly(db):
+    conn, cfg, ids = seeded(db)
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW - 300, terms_version="v1")
+    d = check(conn, cfg, ids["alice"])
+    assert d.status == 503 and d.body["error"]["message"] == (
+        "Your pass's use can't be checked right now. Please try again in a few minutes.")

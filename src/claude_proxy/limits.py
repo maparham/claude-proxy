@@ -68,6 +68,7 @@ class LimitState:
     own: float | None = None      # a pass's weekly limit without borrowing (2026-10-30 spec); `limit` adds what it may borrow
     own_pts: float | None = None  # that limit before the floor at 0: below 0 is debt carried to the next week
     rate: float | None = None     # the 7-day rate its use was measured at
+    pass_end: float | None = None # a pass's end, so a used-up pass that won't refill before it ends can say so
 
     @property
     def pct(self) -> float | None:
@@ -354,7 +355,8 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     capacity = _capacity(att, now)
     own = cap * capacity / 100 - _debt(conn, cfg, t, week_start, capacity, now)
     st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=max(0.0, own), estimated=True, tier=label,
-                    resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)), own=max(0.0, own), own_pts=own)
+                    resets_at=week_end, reset_in=max(1, math.ceil(week_end - now)), own=max(0.0, own), own_pts=own,
+                    pass_end=t["effective_end"])
     # Measured from the pass's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since
     # the piece began would read 0 for most of a week and then jump. The cheap staleness check only decides the "no live data" mark.
@@ -425,9 +427,16 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
     "ticket_pct": 30.0, "ends_in": 3600, "length": "week"} (seconds until the pass ends; share: the piece's part of the pass). Each week's piece is measured as share_7d measures the current one (`current`,
     that state, is reused for it), at today's rate and capacity. None without a pass, a known week or a rate."""
     t = serving(conn, cfg, user_id, now)[0]
+    return pass_weeks(conn, cfg, t, now, current) if t is not None else None
+
+
+def pass_weeks(conn, cfg: Config, t: dict, now: float, current: LimitState | None = None) -> dict | None:
+    """ticket_weeks for one pass, `t`: each Anthropic week it spans and its whole use. `current`: its share_7d state now,
+    else measured from its tokens. None without a known week or a rate."""
     week = tickets.week_bounds(conn, cfg, now)
-    if t is None or week is None:
+    if week is None:
         return None
+    user_id = t["user_id"]
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
     capacity = _capacity(quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s), now)
     t_start, t_end = t["starts_at"], t["effective_end"]
@@ -535,11 +544,15 @@ def _describe(st: LimitState) -> str:
     # their own allowance, used up.
     scope = f" for models {st.scope}" if st.scope != "*" else ""
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
-    if st.kind == "share_7d":
-        return (f"Weekly share of your {st.tier} pass is used up. It resets at "
-                f"{_date(st.resets_at) if st.resets_at else 'the next weekly reset'}.")
     if st.kind in SHARE_LABELS:
-        return f"Gateway {SHARE_LABELS[st.kind]}{scope} reached: {st.pct or 0:.0f}% used{wait}."
+        if st.tier is not None and st.kind == "share_7d" and st.pass_end is not None and st.resets_at is not None \
+                and st.pass_end <= st.resets_at:   # it ends before it refills: no point in waiting
+            return f"Your {st.tier} pass is used up. Buy another pass on your dashboard to continue."
+        whose = f"Your {st.tier} pass's" if st.tier is not None else "Your"
+        what = {"share_5h": "5-hour allowance", "share_7d": "allowance"}[st.kind] if st.tier is not None else \
+            {"share_5h": "5-hour allowance", "share_7d": "weekly allowance"}[st.kind]
+        when = f"; you can continue in {human_wait(st.reset_in)}" if st.reset_in else ""
+        return f"{whose} {what}{scope} is used up{' for now' if st.kind == 'share_7d' and st.tier is not None else ''}{when}."
     if st.kind in TOTALS:
         return (f"Your gateway credit{scope} is used up (${st.current:.2f} of ${st.limit:.2f}). "
                 "Ask the gateway admin for more.")
@@ -555,7 +568,7 @@ def user_view(st: LimitState) -> dict:
     with nothing about the account they are a share of."""
     d = st.to_dict()
     d.pop("resets_at", None)   # an account-side reset time; reset_in (already relative) is what a non-admin gets,
-    if st.kind == "share_7d":  # but not for the weekly one: Anthropic's weekly reset is never shown (the 429 still says when to retry)
+    if st.kind == "share_7d" and not st.exceeded:  # nor the weekly one's, unless it is what the user waits for: when they are back
         d["reset_in"] = None
     if st.kind not in SHARE_LABELS:
         return d
@@ -572,6 +585,20 @@ def human(s: int) -> str:
     if s < 172800:
         return f"{s / 3600:.1f} h"
     return f"{s / 86400:.1f} days"
+
+
+def human_wait(s: int) -> str:
+    """A wait as a person says it, for a message: `45 seconds`, `58 min`, `2 h 18 min`, `3 days`, `2 days 5 h`."""
+    s = int(s)
+    if s < 120:
+        return f"{s} seconds"
+    if s < 7200:
+        return f"{s // 60} min"
+    if s < 172800:
+        h, m = divmod(s // 60, 60)
+        return f"{h} h {m} min" if m else f"{h} h"
+    d, h = divmod(s // 3600, 24)
+    return f"{d} days {h} h" if h else f"{d} days"
 
 
 def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tuple[float, int | None]:
@@ -662,7 +689,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         for st in sts:
             if st.skipped == NO_RATE:
                 return Decision(503, TICKET_NO_DATA, {"type": "error", "error": {"type": "api_error", "message":
-                                "Usage data is unavailable. Please retry in a minute."}}, 60)
+                                "Your pass's use can't be checked right now. Please try again in a few minutes."}}, 60)
             if st.exceeded:
                 return Decision(429, st.kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                                 st.reset_in or 60)

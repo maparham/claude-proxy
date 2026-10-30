@@ -143,4 +143,4 @@ async def test_share_limit_rejection_speaks_of_the_users_own_limit(env):
         r = await c.post("/v1/messages", json=MSG, headers=bearer(key))
     assert r.status_code == 429
     msg = r.json()["error"]["message"]
-    assert msg.startswith("Gateway 5-hour limit reached") and not [w for w in ACCOUNT_WORDS if w in msg.lower()]
+    assert msg.startswith("Your 5-hour allowance is used up; you can continue in") and not [w for w in ACCOUNT_WORDS if w in msg.lower()]
