@@ -579,7 +579,6 @@ async function renderOverview(main) {
     if (up.overloaded) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.up_overloaded", { failed: fmtNum(up.failed), total: fmtNum(up.total), since: esc(fmtTime(up.since)) })}${incidents ? ` ${incidents}` : ""}</span></div>`);
     else if (incidents) banners.push(`<div class="banner"><span class="icon">i</span><span>${incidents}</span></div>`);
   }
-  const unpriced = tot.unpriced_models || [];
   // A buyer with no ticket and no use yet: no zero tiles or empty limit bars, just the order and the price list.
   const idle = !!tk && !tk.current && !tk.queued && !(ov.totals["30d"] || tot).requests;
   const open = !!order && (order.status === "new" || order.status === "contacted");
@@ -590,15 +589,7 @@ async function renderOverview(main) {
       ${isAdmin() ? `<p class="lede">${t("ov.lede_admin")}</p>` : ""}
       ${banners.join("")}
       ${tk ? myOrderCard(order) : ""}
-      ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `<div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
-      <div class="tiles">
-        <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
-        <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
-        <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
-        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : apiView() ? t("ov.api_charged") : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
-        ${isAdmin() ? `<div class="card tile"><div class="label">${t("ov.active_users")}${tipI("active_users")}</div><div class="value">${nfFull.format(ov.active_users_24h)}</div><div class="foot">${t("ov.last_24h")}</div></div>` : ""}
-        <div class="card tile"><div class="label">${t("ov.burn_rate")}${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">${t("ov.burn_foot")}</div></div>
-      </div>
+      ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `${isAdmin() ? usageTiles(ov) : ""}
       <div class="grid${isAdmin() ? " cols-2" : ""}">
         ${isAdmin() ? `<div class="card"><h3>${t("ov.quota_title")}${tipI("quota")}</h3>
           <p class="sub">${t("ov.quota_sub", { share: tipT(t("ov.est_share"), "share"), unattributed: tipT(t("ov.not_attributed"), "unattributed") })}</p>
@@ -624,6 +615,20 @@ async function renderOverview(main) {
     const id = S.paymentId; S.paymentId = null;
     api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
+}
+// The usage totals over 24 h / 7 d / 30 d as tiles: on the admin's overview, and atop everyone else's usage history.
+function usageTiles(ov) {
+  const tot = ov.totals[S.prefs.period] || ov.totals["24h"];
+  const unpriced = tot.unpriced_models || [];
+  return `<div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
+    <div class="tiles">
+      <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
+      <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
+      <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
+      <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : apiView() ? t("ov.api_charged") : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
+      ${isAdmin() ? `<div class="card tile"><div class="label">${t("ov.active_users")}${tipI("active_users")}</div><div class="value">${nfFull.format(ov.active_users_24h)}</div><div class="foot">${t("ov.last_24h")}</div></div>` : ""}
+      <div class="card tile"><div class="label">${t("ov.burn_rate")}${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">${t("ov.burn_foot")}</div></div>
+    </div>`;
 }
 // Discount countdowns in `root` (the overview, or the Renew dialog), on the server's clock; one ticker at a time.
 function startCountdowns(root) {
@@ -696,7 +701,7 @@ function passNumbers(c) {
 }
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
 function passList(c, no) {
-  const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(v))}${PCT}`);
+  const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(Math.min(100, v)))}${PCT}`);   // the request past a limit is still served: never above 100
   // Every pass says where it stands: in use, usable in a while (queued), used up, back in a while (at a limit, requests go on to the next
   // meanwhile), or ready behind the one in use.
   const full = (p) => p.used_up != null;
@@ -1032,9 +1037,10 @@ async function renderUsage(main) {
   const days = { "1d": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365 }[p.range] || 7;
   const tooCoarse = (g) => days / { hour: 1 / 24, day: 1, week: 7 }[g] < 4;
   const gran = tooCoarse(p.granularity) ? "hour" : p.granularity;
-  const d = await api(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`);
+  const [d, ov] = await Promise.all([api(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`), isAdmin() ? null : api("/api/overview")]);
   main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
     <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
+    ${ov ? usageTiles(ov) : ""}
     <div class="controls">
       ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range)}
       ${seg("granularity", ["hour", "day", "week"].map((g) => [g, t(`gran.${g}`), null, tooCoarse(g)]), gran)}

@@ -820,3 +820,27 @@ def test_home_shows_toman_as_whole_numbers(tmp_path):
     data = _prices(_tier(week={"amount": 1250000.4, "list_amount": 1250000.4})) | {"currency": "IRT"}
     r = _run_home(tmp_path, data)
     assert "1,250,000 Toman" in r["cards"]["week"] and "IRT" not in r["cards"]["week"]
+
+
+def test_other_pass_cards_never_read_above_100_percent(tmp_path):
+    """The request that crosses a limit is still served, so use can pass 100%; the card says 100%, as the others do."""
+    import json
+    stubs = """
+var esc = (v) => String(v ?? "");
+var PCT = "%";
+var nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
+var passNo = (n) => `${n}. `;
+var tierName = (tier, label) => label;
+var lengthName = (l) => l;
+var meter = (pct, at) => `<meter data-pct="${pct}" data-fill="${at ? at.fill : ""}"></meter>`;
+var fmtDurLong = (s) => `${s}s`;
+var fmtShort = (t_) => `T${t_}`;
+var Date = { now: () => 0 };
+"""
+    c = {"week_known": True, "week_end": 1000, "passes": [
+        {"tier": "lite", "label": "Lite", "length": "day", "starts_at": 0, "effective_end": 500, "serving": True, "bought_at": 1},
+        {"tier": "lite", "label": "Lite", "length": "day", "starts_at": 0, "effective_end": 500, "serving": False, "pinned": False,
+         "bought_at": 2, "pct_5h": 107.4, "pct_7d": 90, "pct_pass": 90, "back_at": 300, "used_up": False}]}
+    out = _app_fn(tmp_path, ["passList"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
+    import re
+    assert re.findall(r'class="muted num">([^<]*)<', out) == ["100%", "90%"]   # the real meter clamps its fill itself
