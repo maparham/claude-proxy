@@ -398,12 +398,19 @@ def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None 
     limit, so requests spill to the next pass when one is at a limit and come back once it refills. A pass without
     usage data is returned as it is (evaluate answers 503 then). (None, the limits that free up soonest) when every
     pass is at a limit; (None, []) without a pass."""
+    t, sts, serves = _pick(conn, cfg, user_id, now, run)
+    return (t if serves else None), sts
+
+
+def _pick(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> tuple[dict | None, list[LimitState], bool]:
+    """serving's choice, with the pass kept when none serves: (the pass, its limits, whether it serves). With every pass
+    at a limit, the one that frees up soonest, so a stopped user's status line still has a pass to describe."""
     run = run if run is not None else tickets.running(conn, user_id, now)
     best, at_limit = None, []
     for t in pass_order(conn, user_id, run):
         sts = pass_states(conn, cfg, t, now)
         if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):
-            return t, sts
+            return t, sts, True
         at_limit.append((t, sts))
     # Every pass is at its own limits: a day pass running past the weekly reset may borrow from its next part (2026-10-30
     # spec, §4), the first in pass_order that can. Only then, so no pass borrows while another still has room of its own.
@@ -411,11 +418,11 @@ def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None 
         if not s5.exceeded:
             s7 = _ticket_7d(conn, cfg, t, now, borrow=True)
             if not s7.exceeded:
-                return t, [s5, s7]
+                return t, [s5, s7], True
         wait = max(st.reset_in or 60 for st in (s5, s7) if st.exceeded)
         if best is None or wait < best[0]:
-            best = (wait, [s5, s7])
-    return None, best[1] if best else []
+            best = (wait, t, [s5, s7])
+    return (best[1], best[2], False) if best else (None, [], False)
 
 
 def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None) -> dict | None:
@@ -423,7 +430,7 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
     {"weeks": [{"pct": 57.0, "state": "current", "share": 0.43}, {"pct": 0.0, "state": "future", "share": 0.57}],
     "ticket_pct": 30.0, "ends_in": 3600, "length": "week"} (seconds until the pass ends; share: the piece's part of the pass). Each week's piece is measured as share_7d measures the current one (`current`,
     that state, is reused for it), at today's rate and capacity. None without a pass, a known week or a rate."""
-    t = serving(conn, cfg, user_id, now)[0]
+    t = _pick(conn, cfg, user_id, now)[0]   # the serving pass, or the stopped one that frees up soonest
     return pass_weeks(conn, cfg, t, now, current) if t is not None else None
 
 
@@ -457,7 +464,7 @@ def pass_weeks(conn, cfg: Config, t: dict, now: float, current: LimitState | Non
         # What it borrowed from this week in the last (2026-10-30 spec, §3); a future week, what the current one has taken.
         debt = _debt(conn, cfg, t, start, capacity, now) if state != "future" else weeks[-1]["took"] if weeks else 0.0
         own = max(0.0, limit - debt)
-        took = max(0.0, used - own) if end < t_end else 0.0
+        took = max(0.0, used - own) if t["length"] == "day" and end < t_end else 0.0   # only a day pass borrows
         meter = current.limit if state == "current" and current is not None and current.limit else own + took
         weeks.append({"pct": 100.0 * used / meter if meter else 100.0, "state": state, "limit": limit, "debt": debt, "took": took})
         used_all, limit_all = used_all + used, limit_all + limit

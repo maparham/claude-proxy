@@ -346,3 +346,26 @@ def test_a_used_up_pass_that_ends_before_it_refills_is_not_back_in_a_while(env):
     use(conn, ids["alice"], t, 100, 1.1)
     view = next(limits.user_view(s) for s in limits.states(conn, cfg, ids["alice"], now=AT) if s.kind == "share_7d")
     assert view["exceeded"] and view["reset_in"] is None and view["used_up"]
+
+
+def test_status_line_of_a_stopped_day_pass_says_used_up_for_now(env):
+    """No room to borrow: every pass is at its limit, so none serves, but the line still gives the pass's figures."""
+    from claude_proxy.web import _status_line
+    conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 100
+    use(conn, ids["alice"], t, 100, 1.1)
+    sts = limits.states(conn, cfg, ids["alice"], now=AT)
+    weeks = limits.ticket_weeks(conn, cfg, ids["alice"], AT, next(s for s in sts if s.kind == "share_7d"))
+    assert weeks is not None and weeks["weeks"][0]["pct"] >= 100
+    assert " · used up for now (100%) · " in _status_line(user(conn, ids["alice"]), sts, None, weeks)
+
+
+def test_a_week_pass_over_its_part_shows_no_phantom_debt_on_the_next(db):
+    conn, cfg, ids = seeded(db)
+    at(conn, START - 1000, 0)
+    req(conn, ids["alice"], START - 900, i=1000)
+    at(conn, START - 800, 1)
+    t = grant(conn, cfg, ids, ids["alice"], length="week")
+    use(conn, ids["alice"], t, 200, 1.2)                  # over its 2-hour part (a race, say): it waits, it borrows nothing
+    w = limits.pass_weeks(conn, cfg, t, AT, week(conn, cfg, ids["alice"]))
+    assert [x["share"] for x in w["weeks"]] == pytest.approx([2 * 3600 / (7 * DAY), 1 - 2 * 3600 / (7 * DAY)])
