@@ -598,9 +598,9 @@ async function renderOverview(main) {
         </div>` : ""}
         ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order)}
       </div>`}
-      ${machinesCard(keys.keys, S.install)}
       ${tk && !tk.current ? priceListCard(tk, order) : ""}
       ${tk ? pastCard(tk) : ""}
+      ${machinesCard(keys.keys, S.install)}
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
@@ -819,7 +819,7 @@ function passTimeline(tk, inUseAt = -1, no = []) {
   const ticks = labels.map((l) => `<em class="${l.x < 0.08 ? "edge-start" : l.x > 0.92 ? "edge-end" : ""}" style="inset-inline-start:${(l.x * 100).toFixed(2)}%"><small>${l.lines.join("<br>")}</small></em>`).join("");
   const tall = Math.max(...labels.map((l) => l.lines.length));
   // A faint line down every row and the axis at each start and end, so the bars read as spans on a calendar, not as
-  // meters; the line at now is drawn over the bars (CSS).
+  // meters; now is only a tick on the axis.
   const side = document.documentElement.dir === "rtl" ? "left" : "right";
   const lines = points.slice(1).map((ts) => { const x = Math.min(at(ts), 99.9).toFixed(2);
     return `linear-gradient(to ${side}, transparent ${x}%, var(--grid) ${x}%, var(--grid) calc(${x}% + 1px), transparent calc(${x}% + 1px))`; }).join(",");

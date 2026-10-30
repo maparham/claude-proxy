@@ -1885,7 +1885,7 @@ const I18N = {
     "pc.your_computers": "محیط‌های شما",
     "pc.setup": "برای وصل کردن یک کامپیوتر، این دستور را در ترمینالش اجرا کنید. همین صفحه برای تأیید باز می‌شود و بعد ابزار خودش راه می‌افتد.",
     "pc.windows_ps": "Windows (PowerShell)",
-    "pc.computer": "کامپیوتر",
+    "pc.computer": "نام",
     "pc.key": "کلید",
     "pc.authorized": "تأیید‌شده",
     "pc.last_used": "آخرین استفاده",
