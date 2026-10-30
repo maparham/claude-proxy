@@ -413,7 +413,7 @@ function limitValue(l, onMeter) {
   const reset = l.reset_in ? t("lim.resets_in", { d: fmtDur(l.reset_in) }) : "";
   if (USER_LIMIT_KINDS.includes(l.kind) || l.kind === "ticket_limit") {
     if (l.skipped || l.current == null) return t("lim.not_measured");
-    if (l.weeks) return l.exceeded && l.reset_in ? t("lim.back_in", { d: fmtDur(l.reset_in) }) : weeksValue(l.weeks);
+    if (l.weeks) return l.used_up ? t("pass.used_up") : l.exceeded && l.reset_in ? t("lim.back_in", { d: fmtDur(l.reset_in) }) : weeksValue(l.weeks);
     if (onMeter && meterFigure(l)) return l.reset_in ? t("lim.resets_in_only", { d: fmtDur(l.reset_in) }) : "";   // its use is on the meter
     return `${t("lim.used_pct", { v: nf0.format(l.current) })}${reset}`;
   }
@@ -456,7 +456,7 @@ function limitsCompact(ls, oneWeek) {
     // A pass in parts: the whole pass's use, coloured by the part in use's (its own use is on the split bar).
     const w = passParts(l);
     const shown = w ? w.ticket_pct : l.pct;
-    const back = l.exceeded && l.reset_in ? ` · ${esc(t("lim.back_in", { d: fmtDur(l.reset_in) }))}` : "";
+    const back = l.used_up ? ` · ${esc(t("pass.used_up"))}` : l.exceeded && l.reset_in ? ` · ${esc(t("lim.back_in", { d: fmtDur(l.reset_in) }))}` : "";
     const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(Math.min(100, shown)))}${PCT}${back}`;
     return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meterShown(l, w ? { fill: shown } : null)}</div>`;
   }).join("");

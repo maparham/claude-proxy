@@ -539,14 +539,18 @@ NO_RATE = "no usage rate observed yet"
 PAUSED = "Passes are paused; ask the admin."   # a ticket-gated user while [tickets] is switched off
 
 
+def _ends_first(st: LimitState) -> bool:
+    """A pass's weekly limit that would refill only after the pass has ended."""
+    return st.pass_end is not None and st.resets_at is not None and st.pass_end <= st.resets_at
+
+
 def _describe(st: LimitState) -> str:
     # Sent to the user, who never learns about the account behind the gateway: a share limit reads as
     # their own allowance, used up.
     scope = f" for models {st.scope}" if st.scope != "*" else ""
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
     if st.kind in SHARE_LABELS:
-        if st.tier is not None and st.kind == "share_7d" and st.pass_end is not None and st.resets_at is not None \
-                and st.pass_end <= st.resets_at:   # it ends before it refills: no point in waiting
+        if st.tier is not None and st.kind == "share_7d" and _ends_first(st):   # it ends before it refills: no point in waiting
             return f"Your {st.tier} pass is used up. Buy another pass on your dashboard to continue."
         whose = f"Your {st.tier} pass's" if st.tier is not None else "Your"
         what = {"share_5h": "5-hour allowance", "share_7d": "allowance"}[st.kind] if st.tier is not None else \
@@ -568,8 +572,10 @@ def user_view(st: LimitState) -> dict:
     with nothing about the account they are a share of."""
     d = st.to_dict()
     d.pop("resets_at", None)   # an account-side reset time; reset_in (already relative) is what a non-admin gets,
-    if st.kind == "share_7d" and not st.exceeded:  # nor the weekly one's, unless it is what the user waits for: when they are back
-        d["reset_in"] = None
+    if st.kind == "share_7d":   # nor the weekly one's, unless it is what the user waits for: when they are back
+        d["used_up"] = st.exceeded and _ends_first(st)
+        if not st.exceeded or d["used_up"]:
+            d["reset_in"] = None
     if st.kind not in SHARE_LABELS:
         return d
     used = None if st.skipped or st.current is None else st.pct

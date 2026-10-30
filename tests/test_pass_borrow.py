@@ -352,3 +352,12 @@ def test_every_pass_card_shows_its_whole_use(env):
     use(conn, ids["alice"], t, 100, 1.1)
     w = limits.pass_weeks(conn, cfg, t, AT)
     assert w["ticket_pct"] == pytest.approx(100 * 0.1 / (OWN + NEXT))
+
+
+def test_a_used_up_pass_that_ends_before_it_refills_is_not_back_in_a_while(env):
+    conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 100
+    conn.execute("UPDATE tickets SET ends_at=? WHERE id=?", (START + 3600 * 1.5, t["id"]))   # over before the reset
+    use(conn, ids["alice"], t, 100, 1.1)
+    view = next(limits.user_view(s) for s in limits.states(conn, cfg, ids["alice"], now=AT) if s.kind == "share_7d")
+    assert view["exceeded"] and view["reset_in"] is None and view["used_up"]
