@@ -718,3 +718,16 @@ def test_grant_from_an_order_after_its_discount_ended_charges_the_list_price(env
     assert orders.get(conn, o["id"])["status"] == "new"
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", order_id=o["id"], now=NOW + 60)
     assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 8, None, 8)
+
+
+async def test_order_received_html_copy_carries_the_same_undated_terms(mailing, monkeypatch):
+    """The pass starts when granted, so neither copy of the order-received email dates or draws its parts."""
+    from tests.test_tickets_limits import fresh
+    conn, cfg, ids = mailing
+    fresh(conn, NOW - 600)                                # quota data: a week from now would split across the reset
+    htmls = []
+    monkeypatch.setattr(orders.mail, "send", lambda email, to, subject, body, html=None: htmls.append(html))
+    o = visitor(conn, cfg)
+    await orders.dispatch(conn, cfg, o["id"])
+    h = htmls[-1]
+    assert tickets.terms_html(conn, cfg, "en", "week", None) in h and "<table" not in h

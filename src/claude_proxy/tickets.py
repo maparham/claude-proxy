@@ -152,7 +152,7 @@ def terms_html(conn, cfg: Config, lang: str, length: str, starts_at: float, now:
     return _terms(conn, cfg, lang, length, starts_at, now, rich=True)
 
 
-def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float, body: str) -> str:
+def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float | None, body: str) -> str:
     """A buyer email's HTML copy: the plain `body`, its terms block (for that ticket) swapped for the drawn one, right
     to left for Persian."""
     lang = "fa" if lang == "fa" else "en"

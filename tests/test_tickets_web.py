@@ -509,7 +509,7 @@ async def test_my_status_gives_the_weekly_limits_week_breakdown(env):
         me = (await c.get("/api/me/status", headers=bearer(keys["alice"]))).json()
     weekly = next(v for v in me["limits"] if v["kind"] == "weekly_limit")
     assert [w["state"] for w in weekly["weeks"]["weeks"]] == ["current", "future"] and weekly["weeks"]["ticket_pct"] == 0
-    assert "0% of first week · 0% of second week · 0% used (expires in 6d:23h:59m)" in me["line"]
+    assert "0% of first part · 0% of second part · 0% used (expires in 6d:23h:59m)" in me["line"]
     assert me["line"].startswith("alice · Lite week pass · ")   # the statusline names the ticket it runs on
 
 

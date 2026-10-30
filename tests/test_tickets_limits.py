@@ -444,24 +444,28 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
     assert weeks["ticket_pct"] == pytest.approx(weekly.pct * (3 * DAY + 300) / (7 * DAY))   # this week holds 3d + 300s of 7d
     assert [w["share"] for w in weeks["weeks"]] == pytest.approx([(3 * DAY + 300) / (7 * DAY), 1 - (3 * DAY + 300) / (7 * DAY)])
     line = _status_line(user(conn, ids["alice"]), sts, None, weeks)
-    assert line.startswith(f"alice · {weekly.pct:.0f}% of first week · 0% of second week · {weeks['ticket_pct']:.0f}% used "
+    assert line.startswith(f"alice · {weekly.pct:.0f}% of first part · 0% of second part · {weeks['ticket_pct']:.0f}% used "
                          "(expires in 6d:23h:55m)")   # granted 300 s ago
-    assert "First week ended" not in line and line.count("resets in") == 1   # only the 5-hour limit's
+    assert "First part ended" not in line and line.count("resets in") == 1   # only the 5-hour limit's
     later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)   # into the second week: the first is over
     assert [w["state"] for w in later["weeks"]] == ["past", "current"]
-    assert "First week ended · " in limits_line(conn, cfg, ids, later)
+    assert "First part ended · " in limits_line(conn, cfg, ids, later)
 
 
 def test_status_line_gives_a_day_pass_across_the_reset_only_its_whole_use():
-    """A day pass that crosses Anthropic's weekly reset is one allowance on the line; a week pass is split."""
+    """A day pass that crosses Anthropic's weekly reset is one allowance on the line; a week pass is in parts."""
     from claude_proxy.web import _ticket_weeks_text
     weeks = {"weeks": [{"pct": 100.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 60.0,
              "ends_in": 23 * 3600, "length": "day"}
-    assert _ticket_weeks_text(weeks | {"length": "week"}, "").startswith("100% of first week · 0% of second week · ")
+    assert _ticket_weeks_text(weeks | {"length": "week"}, "").startswith("100% of first part · 0% of second part · ")
     # It borrows its next part as it needs it (2026-10-30), so it is one allowance: never a part on the line.
+    weeks["weeks"] = [{"pct": 85.0, "state": "current"}, {"pct": 0.0, "state": "future"}]
     assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
     weeks["weeks"] = [{"pct": 100.0, "state": "past"}, {"pct": 85.0, "state": "current"}]
     assert _ticket_weeks_text(weeks, "") == "60% used (expires in 0d:23h:0m)"
+    # Stopped before the reset (no room to borrow): said, with a 100% figure gclaude warns on.
+    weeks["weeks"] = [{"pct": 100.0, "state": "current"}, {"pct": 0.0, "state": "future"}]
+    assert _ticket_weeks_text(weeks, "") == "used up for now (100%) · 60% used (expires in 0d:23h:0m)"
 
 
 def test_days_and_hours():
@@ -745,7 +749,7 @@ def test_status_line_caps_use_at_100_percent():
     from claude_proxy.web import _ticket_weeks_text
     weeks = {"weeks": [{"pct": 104.0, "state": "current"}, {"pct": 0.0, "state": "future"}], "ticket_pct": 103.0,
              "ends_in": 3600, "length": "week"}
-    assert _ticket_weeks_text(weeks, "") == "100% of first week · 0% of second week · 100% used (expires in 0d:1h:0m)"
+    assert _ticket_weeks_text(weeks, "") == "100% of first part · 0% of second part · 100% used (expires in 0d:1h:0m)"
 
 
 def test_usage_data_unavailable_says_try_again_shortly(db):

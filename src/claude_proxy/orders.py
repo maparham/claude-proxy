@@ -432,7 +432,7 @@ async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None
     if o["buyer_mail"] == "pending":
         jobs.append(("buyer_mail", o["email"], *buyer_mail_text(conn, cfg, o)))
     for which, to, subject, body in jobs:
-        rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], o["created_at"], body) if which == "buyer_mail" else None
+        rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], None, body) if which == "buyer_mail" else None   # as its text: undated
         try:
             await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), to, subject, body, rich)
             state = "sent"
