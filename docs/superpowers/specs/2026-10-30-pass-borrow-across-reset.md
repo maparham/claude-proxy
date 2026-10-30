@@ -1,7 +1,7 @@
 # A pass across the weekly reset borrows from its next part
 
 - **Date:** 2026-10-30
-- **Status:** draft for review (revision 2, after the first review).
+- **Status:** accepted (revision 3, after two reviews).
 - **Builds on:** `2026-10-13-ticket-weekly-pieces.md` (§1.1, the prorated piece), `2026-10-18-gateway-capacity.md`
   (capacity scaling), and the per-pass limits of 2026-10-28 (`limits._ticket_7d`, `limits.serving`).
 - **Overrides:** 10-13 §1.1 says a pass's weekly pieces "cannot be borrowed from". This spec allows borrowing in one
@@ -71,14 +71,29 @@ change, and a re-measured debt would drift either way. Instead, while a pass is 
 to measure the debt, in the old week's terms:
 
 - **Table `pass_borrows`:** `(ticket_id, week_end, own_pts, rate, updated_at)`, primary key `(ticket_id, week_end)`.
-- **When it is written:** whenever `_ticket_7d` gives a limit above the own limit and the request is let through,
-  it upserts the row. `own_pts` is the own limit (capacity-scaled, already reduced by any earlier debt). `rate` is
-  the observed 7-day rate used for `u`. The last write before the reset is the one that counts.
-- **The debt for the week that ends at `week_end`:** `max(0, the pass's weighted tokens in that week ÷ rate − own_pts)`.
-  Tokens are counted by `ended_at`, as `_weighted_since` counts them. They are fixed once the week is over, so the
-  debt is fixed too. A pass with no row has no debt.
+- **When it is written:** in `limits.evaluate`, after every other check has passed (including the free-credit cap),
+  next to `served["ticket_id"] = t["id"]`. It is written only when the serving pass's `share_7d` state is borrowing
+  (its limit is above its own limit). Display callers (`states`, `ticket_weeks`, the dashboard cards) run the same
+  code and never write. `_ticket_7d` returns `own_pts` and `rate` on the state for `evaluate` to store:
+  - `own_pts` is the own limit: capacity-scaled, already reduced by any earlier debt, and not floored (see the
+    carry below);
+  - `rate` is the observed 7-day rate used for `u`.
+
+  The last write before the reset is the one that counts.
+- **Finding the row:** Anthropic's `resets_at` can shift a little from one report to the next. The row for the week
+  that has just ended is therefore the one whose `week_end` is within `quota.RESET_TOLERANCE_S` of the current
+  `week_start`, not an exact match.
+- **The debt for that week:** `max(0, the pass's weighted tokens with ended_at in (the part's start, stored week_end] ÷ rate − own_pts)`.
+  Tokens are counted as `_weighted_since` counts them, at lookup time, so requests that finished after the last write
+  are included. Once the week is over the tokens are fixed, so the debt is fixed too.
+- **A pass with no row:** its debt is any carry left from the week before: `max(0, −own_pts)` of the previous week's
+  own limit. Otherwise it is 0.
 - **Debt carries forward:** each week's `own_pts` already has the previous debt taken off. A week or month pass that
-  borrows in two weeks in a row is charged both times, so its total use never exceeds the sum of its parts.
+  borrows in two weeks in a row is charged both times. Debt larger than the next part, which requests in flight or
+  a rate change can cause, makes `own_pts` negative, and that carries into the week after. A pass's total use never
+  exceeds the sum of its parts, except for overshoot in the pass's last week.
+- **Batched lookups:** the owed calculation needs every pass's debt and bonuses. It gets them with one query for the
+  debt rows and one for the bonuses, not one query per pass.
 
 ## 4. Several passes per user
 
@@ -86,11 +101,17 @@ to measure the debt, in the old week's terms:
 
 1. Every running pass in `pass_order`, limited to its own limit. The first one with room serves the request, as
    today.
-2. Only if none has room: every pass again in the same order, now with §2 borrowing. The first one with room serves.
+2. Only if none has room: every pass again in the same order, now with §2 borrowing. "Room" still means that
+   neither limit is exceeded: round two reuses round one's `share_5h` state and recomputes only `share_7d`. The first
+   pass with room serves.
 
 So a pinned pass never borrows from next week while another of the user's passes still has room this week. That
 room would otherwise be held back from the borrowing as owed. When every pass is at its limit, the "frees up soonest"
-answer is unchanged.
+answer is built from round two's states, so a borrowing limit that refills sooner counts.
+
+**Cards:** the dashboard pass cards (`web.py` around line 1374) show the serving pass with the states `serving`
+returned, including any borrowing, so they don't mark a pass as at its limit while it is serving. The other passes
+show `pass_states` (without borrowing), as today.
 
 ## 5. Display
 
@@ -100,11 +121,12 @@ answer is unchanged.
 - **Split bar:** each part is drawn as its part, adjusted by debt. A past part grows by the debt it ran up, and the
   part after it shrinks by the same amount. The current part grows by what it has borrowed so far
   (`max(0, u − own limit)`), and the next part shrinks by that. Unused borrowable room is not drawn, because it may
-  disappear. The parts still add up to the whole pass.
+  disappear. Each part is clamped at 0 or above. The parts still add up to the whole pass.
 - **Whole-pass figure (`ticket_pct`):** unchanged. It is total use ÷ the sum of the parts.
-- **Status-line 80% warning** (`web._ticket_weeks_text`): measured against the own limit, not the borrowing limit,
-  because the borrowing limit can shrink suddenly. Past the own limit the warning stays on. It reads the same, so
-  no new wording is needed.
+- **Status-line 80% warning** (`web._ticket_weeks_text`): it turns on when use reaches 80% of the own limit, because
+  the borrowing limit can shrink suddenly. It stays on past the own limit. The figure it prints is the current
+  part's meter (use ÷ the §2 limit), which never goes past 100%. The wording is the same, so nothing new needs
+  translating.
 - **429 message:** unchanged. The `share_7d` description never prints the share, and it still says when to retry.
 
 `used_up` and `hand_over` are unaffected. A pass that crosses the reset is never "used up" before it, because its next
@@ -120,9 +142,11 @@ part refills.
   so `serving` runs the query once per call, not once per pass.
 - `limits._free_room(conn, cfg, t, week, uses, now) -> float | None`: `F` from §1, or None when a §2 no-borrowing case
   holds.
-- `limits._ticket_7d(…, borrow: bool)`: the own limit, with the debt taken off; with `borrow`, the §2 limit and the
-  §3 upsert. `pass_states` and `used_up` call it without `borrow`.
+- `limits._ticket_7d(…, borrow: bool)`: the own limit, with the debt taken off; with `borrow`, the §2 limit. It sets
+  `own_pts` and `rate` on the state, and never writes. `pass_states` and `used_up` call it without `borrow`.
 - `limits.serving`: the two rounds of §4.
+- `limits.evaluate`: the §3 upsert, for the pass that serves, only when it is borrowing.
+- `web` pass cards: §4.
 - `limits.ticket_weeks` and `web._ticket_weeks_text`: §5.
 
 ## 7. Tests (`tests/test_tickets_limits.py`)
@@ -147,3 +171,10 @@ part refills.
 9. Two passes on one user: the second pass's own room is used before the first one borrows.
 10. `ticket_weeks`: the split bar moves by the debt and by what has been borrowed, the parts add up to the whole,
     `ticket_pct` is unchanged, and the 80% warning follows the own limit.
+11. `resets_at` moved by 60 seconds after the reset: the debt row is still found.
+12. Only `evaluate` writes `pass_borrows`. Calling `states`, `ticket_weeks` or rendering the dashboard leaves the
+    table empty, and so does a request refused by another limit.
+13. Debt larger than the next part: the remainder is charged in the week after.
+14. Round two: a pass at its 5-hour limit doesn't serve even though it could borrow. With every pass at its limit,
+    the retry time comes from round two.
+15. The dashboard card of a borrowing pass that is serving isn't marked as at its limit.
