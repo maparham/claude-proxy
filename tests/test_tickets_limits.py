@@ -90,7 +90,6 @@ def test_share_5h_measured_as_today_and_exceeded_is_the_usual_429(env):
 def test_share_7d_counts_the_weekly_bucket_since_the_piece_began(env):
     """800 input tokens at the observed rate of 1000 per point: 0.8 points against a ~2.145 piece."""
     conn, cfg, ids, t = env
-    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)   # history: 1000 weighted tokens per point (before the ticket: not counted)
     req(conn, ids["alice"], NOW - 200, i=800)
@@ -104,7 +103,6 @@ def test_share_7d_counts_the_weekly_bucket_since_the_piece_began(env):
 
 def test_share_7d_exceeded_is_a_429_with_the_full_week_retry_after(env):
     conn, cfg, ids, t = env
-    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)
     req(conn, ids["alice"], NOW - 200, i=2500)
@@ -265,7 +263,6 @@ def test_spending_past_a_dead_bonus_blocks_the_rest_of_the_week(db):
     """Bonus-period spend stays drawn after the bonus ends: the narrower ticket-only piece stays exceeded,
     and the bar reads over 100% until the reset."""
     conn, cfg, ids = seeded(db)
-    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     fresh(conn, NOW - 600)
     t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
     base = by_kind(conn, cfg, ids["alice"])["share_7d"].limit
@@ -287,7 +284,6 @@ def test_spending_past_a_dead_bonus_blocks_the_rest_of_the_week(db):
 def test_use_before_a_bonus_eats_into_the_bonus_piece(db):
     """Pre-bonus spend counts against the widened cap once the bonus activates."""
     conn, cfg, ids = seeded(db)
-    cfg.tickets.borrow_margin_pct = 100   # no borrowing: the pass crosses the reset, but this is about its own piece
     fresh(conn, NOW - 600)
     t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
     base = by_kind(conn, cfg, ids["alice"])["share_7d"].limit

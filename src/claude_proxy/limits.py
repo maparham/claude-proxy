@@ -66,7 +66,7 @@ class LimitState:
     resets_at: float | None = None
     tier: str | None = None       # the ticket's tier label, for messages
     own: float | None = None      # a pass's weekly limit without borrowing (2026-10-30 spec); `limit` adds what it may borrow
-    own_pts: float | None = None  # that limit before the floor at 0: below 0 is debt carried to the next week
+    own_pts: float | None = None  # that limit as recorded for the debt it runs up
     rate: float | None = None     # the 7-day rate its use was measured at
     pass_end: float | None = None # a pass's end, so a used-up pass that won't refill before it ends can say so
 
@@ -274,21 +274,16 @@ def _pass_cap(conn, t, start, end, now) -> float:
 
 def _debt(conn, cfg, t, week_start, capacity, now) -> float:
     """What the pass borrowed from the week starting at `week_start` in the week before (2026-10-30 spec, §3), in
-    points: measured as it was recorded then (pass_borrows), so the reset's new capacity and rate don't move it. With
-    no record, any debt the week before could not hold carries on."""
-    prev = week_start - 7 * DAY
+    points: measured as it was recorded then (pass_borrows), so the reset's new capacity and rate don't move it. A
+    day pass is the only one that borrows, and it has no third part, so nothing ever carries further."""
     if t["starts_at"] >= week_start - quota.RESET_TOLERANCE_S:
         return 0.0
-    row = conn.execute("SELECT week_end, own_pts, rate FROM pass_borrows WHERE ticket_id=? AND week_end<=? ORDER BY week_end DESC "
-                       "LIMIT 1", (t["id"], week_start + quota.RESET_TOLERANCE_S)).fetchone()
-    if row is None:   # it never borrowed before this week: the usual case, answered without walking back week by week
+    row = conn.execute("SELECT week_end, own_pts, rate FROM pass_borrows WHERE ticket_id=? AND ABS(week_end - ?)<=? "
+                       "ORDER BY ABS(week_end - ?) LIMIT 1", (t["id"], week_start, quota.RESET_TOLERANCE_S, week_start)).fetchone()
+    if row is None:
         return 0.0
-    if abs(row["week_end"] - week_start) <= quota.RESET_TOLERANCE_S:
-        used = _weighted_since(conn, cfg, t["user_id"], max(prev, t["starts_at"]), row["week_end"], t["id"]) / row["rate"]
-        return max(0.0, used - row["own_pts"])
-    own = _pass_cap(conn, t, max(prev, t["starts_at"]), week_start, week_start - 1) * capacity / 100 \
-        - _debt(conn, cfg, t, prev, capacity, now)
-    return max(0.0, -own)
+    used = _weighted_since(conn, cfg, t["user_id"], max(week_start - 7 * DAY, t["starts_at"]), row["week_end"], t["id"]) / row["rate"]
+    return max(0.0, used - row["own_pts"])
 
 
 def _week_use(conn, cfg, ticket_ids, since, now) -> dict[int, float]:
@@ -340,8 +335,8 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     Cap = its share × days of this week it covers ÷ 7 + active bonus pieces (_pass_cap), scaled to the gateway's
     capacity (2026-10-18 spec), less what it borrowed from this week in the last (_debt). Measured from the weighted
     tokens of the requests it served since max(week_start, its start) at the 7d observed rate. Unknown week (no
-    resets_at ever) → NO_RATE. With `borrow`, a pass running past the reset may go over its own limit into its next
-    part, as far as the old week's free room goes (2026-10-30 spec, §2)."""
+    resets_at ever) → NO_RATE. With `borrow`, a day pass running past the reset may go over its own limit into its
+    next part, as far as the old week's free room goes (2026-10-30 spec, §2)."""
     label = _label(conn, cfg, t)
     week = tickets.week_bounds(conn, cfg, now)
     if week is None:
@@ -376,7 +371,9 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
         st.skipped, st.no_live_data = NO_RATE, False
         return st
     st.current, st.rate = used / rate, rate
-    if borrow and t["effective_end"] > week_end and st.current >= st.own and not st.no_live_data:
+    # Only a day pass borrows: it is one allowance to its holder, however the reset cuts it. A week or month pass keeps
+    # each week's share, so one week's use never eats the next's.
+    if borrow and t["length"] == "day" and t["effective_end"] > week_end and st.current >= st.own and not st.no_live_data:
         free = _free_room(conn, cfg, t, week, att, rate, capacity, now)
         if free is not None:
             nxt = _pass_cap(conn, t, week_end, week_end + 7 * DAY, now) * capacity / 100
@@ -408,8 +405,8 @@ def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None 
         if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):
             return t, sts
         at_limit.append((t, sts))
-    # Every pass is at its own limits: one running past the weekly reset may borrow from its next part (2026-10-30 spec,
-    # §4), the first in pass_order that can. Only then, so no pass borrows while another still has room of its own.
+    # Every pass is at its own limits: a day pass running past the weekly reset may borrow from its next part (2026-10-30
+    # spec, §4), the first in pass_order that can. Only then, so no pass borrows while another still has room of its own.
     for t, (s5, s7) in at_limit:
         if not s5.exceeded:
             s7 = _ticket_7d(conn, cfg, t, now, borrow=True)

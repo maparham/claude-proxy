@@ -62,7 +62,6 @@ def test_a_ticket_with_time_and_use_left_queues_as_before(env):
 def test_a_week_piece_used_up_before_the_reset_is_not_the_ticket_used_up(db):
     """A month ticket's weekly piece refills at the reset: it waits, it is not replaced."""
     conn, cfg, ids = seeded(db)
-    cfg.tickets.borrow_margin_pct = 100   # no borrowing from the next week: its own piece is used up
     fresh(conn, NOW - 600)
     req(conn, ids["alice"], NOW - 500, i=1000)
     fresh(conn, NOW - 400, util5=1, util7=1)

@@ -126,23 +126,19 @@ def test_what_one_pass_borrows_is_gone_for_the_next(env):
     assert st.limit == pytest.approx(0.1) and st.exceeded  # nothing left for bob to borrow
 
 
-@pytest.mark.parametrize("case", ["stale", "margin", "no_rate", "reset_passed"])
+@pytest.mark.parametrize("case", ["stale", "margin", "no_rate"])
 def test_nothing_is_borrowed_without_live_data_or_room(db, case):
     conn, cfg, ids = seeded(db)
     at(conn, START - 1000, 0)
     if case != "no_rate":                                 # no rise ever: a young account, measured by attribution
         req(conn, ids["alice"], START - 900, i=1000)
         at(conn, START - 800, 1)
-    t = grant(conn, cfg, ids, ids["alice"], length="month" if case == "reset_passed" else "day")
+    t = grant(conn, cfg, ids, ids["alice"])
     req(conn, ids["alice"], AT - 150, i=100, ticket=t["id"])
     now, own = AT, OWN
     if case == "stale":
         now = AT + cfg.quota.stale_after_s + 1000         # still before the reset
         assert now < RESET7
-    elif case == "reset_passed":
-        now, own = RESET7 + 600, 5                        # the month pass's whole second week
-        req(conn, ids["alice"], now - 100, i=6000, ticket=t["id"])
-        at(conn, now - 60, 1)                             # fresh, but still naming the old week's reset
     else:
         cfg.tickets.borrow_margin_pct = 100 if case == "margin" else cfg.tickets.borrow_margin_pct
         at(conn, AT - 100, 1.1 if case == "margin" else 0)
@@ -207,39 +203,28 @@ def test_only_an_allowed_request_records_the_borrowing(env):
     assert conn.execute("SELECT COUNT(*) FROM pass_borrows").fetchone()[0] == 0
 
 
-def test_a_week_pass_borrowing_twice_is_charged_both_times(db):
+def test_only_a_day_pass_borrows(db):
+    """A week or month pass keeps each week's share: used up before the reset, it waits, room or no room."""
     conn, cfg, ids = seeded(db)
     at(conn, START - 1000, 0)
     req(conn, ids["alice"], START - 900, i=1000)
     at(conn, START - 800, 1)
-    t = grant(conn, cfg, ids, ids["alice"], length="month")
-    parts = tickets.week_split(conn, cfg, 5, START, START + 30 * DAY, now=AT)
-    use(conn, ids["alice"], t, 400, 1.4)                  # week 1: borrows 0.4 - parts[0]
-    assert check(conn, cfg, ids["alice"], served={}) is None
-    w2 = RESET7 + 600
-    own2 = parts[1] - (0.4 - parts[0])
-    req(conn, ids["alice"], w2 - 100, i=int((own2 + 1) * 1000), ticket=t["id"])   # week 2: a point past its own limit
-    at(conn, w2, 0, resets=RESET7 + 7 * DAY)
-    assert check(conn, cfg, ids["alice"], now=w2 + 60, served={}) is None
-    w3 = RESET7 + 7 * DAY + 600
-    at(conn, w3 - 60, 0, resets=RESET7 + 14 * DAY)
-    assert week(conn, cfg, ids["alice"], now=w3).limit == pytest.approx(parts[2] - 1, abs=1e-3)
+    t = grant(conn, cfg, ids, ids["alice"], length="week")
+    use(conn, ids["alice"], t, 200, 1.2)                  # 0.2 points, past its 2-hour part of the week
+    st = week(conn, cfg, ids["alice"])
+    assert st.limit == pytest.approx(OWN) and st.exceeded
+    assert check(conn, cfg, ids["alice"]).kind == "share_7d"
+    assert conn.execute("SELECT COUNT(*) FROM pass_borrows").fetchone()[0] == 0
 
 
-def test_debt_larger_than_the_next_part_carries_into_the_week_after(db):
-    conn, cfg, ids = seeded(db)
-    at(conn, START - 1000, 0)
-    req(conn, ids["alice"], START - 900, i=1000)
-    at(conn, START - 800, 1)
-    t = grant(conn, cfg, ids, ids["alice"], length="month")
-    req(conn, ids["alice"], AT, i=6000, ticket=t["id"])  # 6 points before the reset, recorded against an own part of 0
+def test_debt_larger_than_the_second_part_leaves_nothing_and_carries_nowhere(env):
+    conn, cfg, ids, t = env
     conn.execute("INSERT INTO pass_borrows(ticket_id, week_end, own_pts, rate, updated_at) VALUES(?,?,?,?,?)",
-                 (t["id"], RESET7, 0.0, 1000.0, AT))
-    w2, w3 = RESET7 + 600, RESET7 + 7 * DAY + 600
-    at(conn, w2 - 60, 0, resets=RESET7 + 7 * DAY)
-    assert week(conn, cfg, ids["alice"], now=w2).limit == 0   # 6 points of debt against a 5-point week
-    at(conn, w3 - 60, 0, resets=RESET7 + 14 * DAY)
-    assert week(conn, cfg, ids["alice"], now=w3).limit == pytest.approx(5 - 1)
+                 (t["id"], RESET7, OWN, 1000.0, AT))
+    req(conn, ids["alice"], AT, i=int((OWN + NEXT + 1) * 1000), ticket=t["id"])   # a point more than the whole pass, in flight at the reset
+    after = RESET7 + 600
+    at(conn, after - 60, 0, resets=RESET7 + 7 * DAY)
+    assert week(conn, cfg, ids["alice"], now=after).limit == 0
 
 
 def test_a_users_other_pass_serves_before_one_borrows(env):

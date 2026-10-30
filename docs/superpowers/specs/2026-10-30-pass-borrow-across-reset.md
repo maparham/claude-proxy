@@ -1,15 +1,17 @@
 # A pass across the weekly reset borrows from its next part
 
 - **Date:** 2026-10-30
-- **Status:** accepted (revision 3, after two reviews).
+- **Status:** accepted (revision 4: day passes only, 2026-10-30).
 - **Builds on:** `2026-10-13-ticket-weekly-pieces.md` (§1.1, the prorated piece), `2026-10-18-gateway-capacity.md`
   (capacity scaling), and the per-pass limits of 2026-10-28 (`limits._ticket_7d`, `limits.serving`).
-- **Overrides:** 10-13 §1.1 says a pass's weekly pieces "cannot be borrowed from". This spec allows borrowing in one
-  direction only: the current part takes from the next one. Everything else in 10-13 stays.
+- **Overrides:** 10-13 §1.1 says a pass's weekly pieces "cannot be borrowed from". This spec allows borrowing for a
+  **day pass only**, in one direction: the part before the reset takes from the part after it. A week or month pass
+  keeps each week's share, as 10-13 has it. Everything else in 10-13 stays.
 - **Problem:** a pass's weekly allowance is split between the Anthropic weeks it covers in proportion to its hours in
   each. A day pass bought 2 hours before the reset gets 2/24 of its allowance before the reset. That part runs out
-  early, before the user has done much work, and they then wait hours for the reset. The same applies to any pass
-  whose first part is short, for example a week pass that starts an hour before the reset.
+  early, before the user has done much work, and they then wait hours for the reset. A week or month pass is sold
+  by the week, so its parts are each week's share; a day pass is one day's allowance to its holder, however the
+  reset cuts it.
 - **Goal:** the part before the reset can use more than its share, taking it from the next part, as long as the old
   week has room that no one else is owed. That room disappears at the reset anyway. A pass never uses more than its
   total, and no other user is pushed into Anthropic's block.
@@ -39,7 +41,7 @@ All amounts are percentage points of Anthropic's 7-day bucket, scaled to the gat
 
 ## 2. The current part's limit
 
-For a pass whose effective end is after the current week's end:
+For a **day pass** whose effective end is after the current week's end (any other pass: its own limit, always):
 
 ```
 limit = min(own limit + next part, max(own limit, u + F))
@@ -54,14 +56,14 @@ away what the pass already has: when the account is full, the pass still gets it
   draw, so a pass using borrowed room can be blocked partway through. That is intended: the room was never reserved.
   Two passes borrowing at once both see the same `F`. Any overshoot is bounded by the requests in flight, which `M`
   covers.
-- **Only the next part is borrowed from.** A month pass never draws more than one week ahead.
+- **A day pass has two parts at most**, so only the second part is ever borrowed from.
 - **Computed only when needed:** only when `u ≥ own limit`. Below that, the limit is the own limit and free room is
   not computed at all.
 - **No borrowing:** the limit is the own limit in any of these cases:
   - the latest 7-day snapshot is stale, its `utilization_pct` is None, or its `resets_at` is not in the future (a
     fresh snapshot from the old week after the reset);
   - there is no observed 7-day rate, including the young-account path where `_ticket_7d` uses `attributed_since`;
-  - the pass ends inside the current week.
+  - the pass ends inside the current week, or is not a day pass.
 - **The 5-hour limit is unchanged.** It still caps any burst at the pass's 5-hour share.
 
 ## 3. Debt: what was borrowed, recorded at the time
@@ -86,12 +88,9 @@ to measure the debt, in the old week's terms:
 - **The debt for that week:** `max(0, the pass's weighted tokens with ended_at in (the part's start, stored week_end] ÷ rate − own_pts)`.
   Tokens are counted as `_weighted_since` counts them, at lookup time, so requests that finished after the last write
   are included. Once the week is over the tokens are fixed, so the debt is fixed too.
-- **A pass with no row:** its debt is any carry left from the week before: `max(0, −own_pts)` of the previous week's
-  own limit. Otherwise it is 0.
-- **Debt carries forward:** each week's `own_pts` already has the previous debt taken off. A week or month pass that
-  borrows in two weeks in a row is charged both times. Debt larger than the next part, which requests in flight or
-  a rate change can cause, makes `own_pts` negative, and that carries into the week after. A pass's total use never
-  exceeds the sum of its parts, except for overshoot in the pass's last week.
+- **A pass with no row** has no debt.
+- **Nothing carries further:** a day pass has no third part. Debt larger than the second part, which requests in
+  flight or a rate change can cause, leaves that part at 0; the overshoot is bounded by the requests in flight.
 - **Batched lookups:** the owed calculation needs every pass's debt and bonuses. It gets them with one query for the
   debt rows and one for the bonuses, not one query per pass.
 
@@ -167,14 +166,14 @@ part refills.
    - `borrow_margin_pct = 100`.
 7. Debt after the reset: the next part's own limit is its part minus the recorded debt. Capacity jumping at the
    reset and a bonus that ended before it don't change the debt. A pass that never borrowed has its full next part.
-8. A week pass borrowing in two weeks in a row: its total use stays within the sum of its parts.
+8. A week pass across the reset never borrows, room or no room; nothing is recorded for it.
 9. Two passes on one user: the second pass's own room is used before the first one borrows.
 10. `ticket_weeks`: the split bar moves by the debt and by what has been borrowed, the parts add up to the whole,
     `ticket_pct` is unchanged, and the 80% warning follows the own limit.
 11. `resets_at` moved by 60 seconds after the reset: the debt row is still found.
 12. Only `evaluate` writes `pass_borrows`. Calling `states`, `ticket_weeks` or rendering the dashboard leaves the
     table empty, and so does a request refused by another limit.
-13. Debt larger than the next part: the remainder is charged in the week after.
+13. Debt larger than the second part leaves it at 0 and carries nowhere.
 14. Round two: a pass at its 5-hour limit doesn't serve even though it could borrow. With every pass at its limit,
     the retry time comes from round two.
 15. The dashboard card of a borrowing pass that is serving isn't marked as at its limit.
