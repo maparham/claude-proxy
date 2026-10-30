@@ -616,7 +616,7 @@ async function renderOverview(main) {
     api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
 }
-// The usage totals as tiles: on the admin's overview over 24 h / 7 d / 30 d, with their own switch; atop everyone else's
+// The usage totals as tiles: on the admin's overview over 24 h / 7 d / 30 d, with their own switch; under everyone else's
 // usage history, `tot` is the chart's range summed, so the chart's range switch drives both.
 function usageTiles(ov, tot) {
   const own = !tot;
@@ -1051,7 +1051,6 @@ async function renderUsage(main) {
   const [d, ov] = await Promise.all([api(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`), isAdmin() ? null : api("/api/overview")]);
   main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
     <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
-    ${ov ? usageTiles(ov, sumPoints(d.points)) : ""}
     <div class="controls">
       ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range)}
       ${seg("granularity", ["hour", "day", "week"].map((g) => [g, t(`gran.${g}`), null, tooCoarse(g)]), gran)}
@@ -1059,7 +1058,8 @@ async function renderUsage(main) {
       ${seg("metric", Object.entries(METRICS).map(([k, v]) => [k, v, `metric:${k}`]), p.metric)}
     </div>
     <div class="card"><h3>${t(`usage.per_${gran}`, { metric: esc(METRICS[p.metric]) })}</h3><p class="sub" id="usage-hint">${t("usage.zoom")}</p>
-      <div class="chart tall" id="usage-chart"></div><div id="usage-table"></div></div></section>`;
+      <div class="chart tall" id="usage-chart"></div><div id="usage-table"></div></div>
+    ${ov ? `<div style="margin-top:16px">${usageTiles(ov, sumPoints(d.points))}</div>` : ""}</section>`;
   wireSegs(main, render);
   if (!d.points.length) { $("#usage-chart").outerHTML = `<p class="muted">${t("usage.none")}</p>`; return; }
   const { keys, times, series } = stackedTime($("#usage-chart"), d.points, p.metric, p.split, gran);
