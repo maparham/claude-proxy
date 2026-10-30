@@ -1,103 +1,149 @@
 # A pass across the weekly reset borrows from its next part
 
 - **Date:** 2026-10-30
-- **Status:** draft for review.
-- **Builds on:** `2026-10-13-ticket-weekly-pieces.md` (§1.1, the prorated piece; everything not redefined here stays),
-  `2026-10-18-gateway-capacity.md` (capacity scaling), the per-pass limits of 2026-10-28 (`limits._ticket_7d`).
+- **Status:** draft for review (revision 2, after the first review).
+- **Builds on:** `2026-10-13-ticket-weekly-pieces.md` (§1.1, the prorated piece), `2026-10-18-gateway-capacity.md`
+  (capacity scaling), and the per-pass limits of 2026-10-28 (`limits._ticket_7d`, `limits.serving`).
+- **Overrides:** 10-13 §1.1 says a pass's weekly pieces "cannot be borrowed from". This spec allows borrowing in one
+  direction only: the current part takes from the next one. Everything else in 10-13 stays.
 - **Problem:** a pass's weekly allowance is split between the Anthropic weeks it covers in proportion to its hours in
   each. A day pass bought 2 hours before the reset gets 2/24 of its allowance before the reset. That part runs out
   early, before the user has done much work, and they then wait hours for the reset. The same applies to any pass
   whose first part is short, for example a week pass that starts an hour before the reset.
-- **Goal:** the part before the reset can use more than its own share, taking it from the next part, as long as the
-  old week has room that no one else is owed. That room disappears at the reset anyway. The pass's total never
-  grows, and no other user is pushed into Anthropic's block.
+- **Goal:** the part before the reset can use more than its share, taking it from the next part, as long as the old
+  week has room that no one else is owed. That room disappears at the reset anyway. A pass never uses more than its
+  total, and no other user is pushed into Anthropic's block.
 
 ## 1. Terms
 
-All amounts are in percentage points of Anthropic's 7-day bucket, after capacity scaling (`_capacity`), as
+All amounts are percentage points of Anthropic's 7-day bucket, scaled to the gateway's capacity (`_capacity`), as
 `share_7d` limits are today.
 
-- **Part:** a pass's piece of one Anthropic week (`_pass_cap` over the span it covers in that week), scaled to
-  capacity. Parts are named by their position: the **current part** is in the week that contains `now`, and the
-  **next part** is in the week that follows it.
-- **Owed(p):** for a pass `p` other than the one being checked, with time in the current week (running *or* not yet
-  started, so passes queued to start later this week are counted): `max(0, its current part − what it has used of it)`.
-  Use is measured as `_ticket_7d` measures it (weighted tokens since the part's start ÷ the observed 7d rate). A pass
-  owes nothing when it is cancelled.
-- **Free room:** `100 − U − Σ owed(p) − M`, floored at 0. Here `U` is the account's current 7-day utilization from the
-  latest snapshot, which already includes the checked pass's own use and the use the gateway cannot pin on users.
-  `M` is a 1-point margin: Anthropic reports utilization in whole percent, so `U` can be up to a point low.
+- **Part:** a pass's piece of one Anthropic week: `_pass_cap` over the span it covers in that week, scaled to
+  capacity. The **current part** is in the week that contains `now`, and the **next part** is in the week after it.
+- **Own limit:** the current part minus the **debt** carried from the previous week (§3), floored at 0. When nothing
+  was borrowed, it is today's `share_7d` limit.
+- **Use (u):** what the pass has used since the current part began, measured as `_ticket_7d` measures it today.
+- **Owed:** what others may still draw from the current week:
+  - For every other non-cancelled pass on the account with time in the current week (running, or queued to start
+    later in it): `max(0, its own limit − its use)`. For owed, its part counts every bonus that overlaps the week,
+    not only the bonuses active now (`_pass_cap` counts only active ones).
+  - For every user who isn't gated by passes and has a hand-set `share_7d` row: `max(0, limit − current)`, as
+    `_share_state` computes them.
+- **Free room (F):** `100 − U − Σ owed − M`, floored at 0.
+  - `U` is the account's 7-day utilization from the latest snapshot. It already includes this pass's use, the
+    owner's direct use, and the use the gateway cannot pin on a user.
+  - `M` is a new setting, `tickets.borrow_margin_pct`, default 5. It covers requests still in flight (`U` moves only
+    when they finish), error in the observed rate behind owed, and whole-percent rounding in `U`. A value of 100
+    turns borrowing off.
 
 ## 2. The current part's limit
 
 For a pass whose effective end is after the current week's end:
 
 ```
-extra  = min(next part, max(0, free room − max(0, own current part − own use so far)))
-limit  = own current part + extra
+limit = min(own limit + next part, max(own limit, u + F))
 ```
 
-The own unused part is subtracted from the free room because, until the pass uses it, it is counted in neither `U`
-nor `owed`. Without that subtraction the pass would be counted twice: once for its own share, and again as free room.
+`F` already counts the pass's unused own limit as free, because nothing else counts it. `u + F` is therefore the
+most this pass can have used, after this request, without eating into what others are owed. The first `min` caps
+the borrowing at the next part, so the pass never draws more than its total. The `max` means borrowing never takes
+away what the pass already has: when the account is full, the pass still gets its own limit, as it does today.
 
-Notes:
-
-- **Recomputed on every request,** like every other limit. `extra` shrinks as the account fills up or as other passes
-  start, so a pass that was over its own part can become blocked again partway through. That is intended: the room
-  was never reserved.
-- **Only the next part is borrowed from.** A month pass never draws three weeks ahead.
-- **No borrowing (`extra = 0`)** when any of these holds: there is no fresh 7-day snapshot (`stale`, or
-  `utilization_pct` is None); there is no observed 7-day rate (owed amounts can't be measured); or the pass ends
-  inside the current week.
+- **Recomputed on every request,** like every other limit. `F` shrinks as the account fills up or as other passes
+  draw, so a pass using borrowed room can be blocked partway through. That is intended: the room was never reserved.
+  Two passes borrowing at once both see the same `F`. Any overshoot is bounded by the requests in flight, which `M`
+  covers.
+- **Only the next part is borrowed from.** A month pass never draws more than one week ahead.
+- **Computed only when needed:** only when `u ≥ own limit`. Below that, the limit is the own limit and free room is
+  not computed at all.
+- **No borrowing:** the limit is the own limit in any of these cases:
+  - the latest 7-day snapshot is stale, its `utilization_pct` is None, or its `resets_at` is not in the future (a
+    fresh snapshot from the old week after the reset);
+  - there is no observed 7-day rate, including the young-account path where `_ticket_7d` uses `attributed_since`;
+  - the pass ends inside the current week.
 - **The 5-hour limit is unchanged.** It still caps any burst at the pass's 5-hour share.
 
-## 3. The next part's limit
+## 3. Debt: what was borrowed, recorded at the time
 
-Once the reset has passed, the part that was the next part is now the current part. Its limit is reduced by what
-the pass borrowed:
+Debt is not re-measured after the reset. After the reset, capacity, the observed rate and the active bonuses all
+change, and a re-measured debt would drift either way. Instead, while a pass is borrowing, the gateway records how
+to measure the debt, in the old week's terms:
 
-```
-borrowed = max(0, use in the previous part − own previous part)
-limit    = max(0, own current part − borrowed) + extra (§2, borrowed again from the part after it, if there is one)
-```
+- **Table `pass_borrows`:** `(ticket_id, week_end, own_pts, rate, updated_at)`, primary key `(ticket_id, week_end)`.
+- **When it is written:** whenever `_ticket_7d` gives a limit above the own limit and the request is let through,
+  it upserts the row. `own_pts` is the own limit (capacity-scaled, already reduced by any earlier debt). `rate` is
+  the observed 7-day rate used for `u`. The last write before the reset is the one that counts.
+- **The debt for the week that ends at `week_end`:** `max(0, the pass's weighted tokens in that week ÷ rate − own_pts)`.
+  Tokens are counted by `ended_at`, as `_weighted_since` counts them. They are fixed once the week is over, so the
+  debt is fixed too. A pass with no row has no debt.
+- **Debt carries forward:** each week's `own_pts` already has the previous debt taken off. A week or month pass that
+  borrows in two weeks in a row is charged both times, so its total use never exceeds the sum of its parts.
 
-Use in the previous part is measured over that span at today's 7d rate, as `ticket_weeks` measures past parts.
-`own previous part` is the part without `extra`. Over its whole life, a pass uses at most the sum of its own parts.
-The only exception is rounding in the measured rate, which the current split also has.
+## 4. Several passes per user
 
-## 4. Display
+`serving` picks the pass for the next request in two rounds:
+
+1. Every running pass in `pass_order`, limited to its own limit. The first one with room serves the request, as
+   today.
+2. Only if none has room: every pass again in the same order, now with §2 borrowing. The first one with room serves.
+
+So a pinned pass never borrows from next week while another of the user's passes still has room this week. That
+room would otherwise be held back from the borrowing as owed. When every pass is at its limit, the "frees up soonest"
+answer is unchanged.
+
+## 5. Display
 
 `ticket_weeks` (status line and dashboard split bar):
 
-- **Current part's meter:** use ÷ the §2 limit. The limit includes `extra`, so the meter shows what can be used now.
-- **Split bar:** each part is sized as its own part, adjusted by what has actually been borrowed so far: the current
-  part grows by `borrowed`, and the next part shrinks by it. Unused `extra` is not drawn, because it may disappear.
-  The parts still add up to the whole pass.
-- **Whole-pass figure (`ticket_pct`):** unchanged. It is total use ÷ the sum of the own parts.
-- **No new wording.** The meter already reads "used of what's available before the reset". When borrowing makes the
-  first part larger than its share, the bar shows it.
+- **Current part's meter:** use ÷ the §2 limit, so it shows what can be used now.
+- **Split bar:** each part is drawn as its part, adjusted by debt. A past part grows by the debt it ran up, and the
+  part after it shrinks by the same amount. The current part grows by what it has borrowed so far
+  (`max(0, u − own limit)`), and the next part shrinks by that. Unused borrowable room is not drawn, because it may
+  disappear. The parts still add up to the whole pass.
+- **Whole-pass figure (`ticket_pct`):** unchanged. It is total use ÷ the sum of the parts.
+- **Status-line 80% warning** (`web._ticket_weeks_text`): measured against the own limit, not the borrowing limit,
+  because the borrowing limit can shrink suddenly. Past the own limit the warning stays on. It reads the same, so
+  no new wording is needed.
+- **429 message:** unchanged. The `share_7d` description never prints the share, and it still says when to retry.
 
-`used_up` and `hand_over` are unaffected. A pass that crosses the reset is never "used up" before the reset, because
-its next part refills.
+`used_up` and `hand_over` are unaffected. A pass that crosses the reset is never "used up" before it, because its next
+part refills.
 
-## 5. Where it lives
+## 6. Where it lives
 
-- `limits._free_room(conn, cfg, t, week, now) -> float`: §1 free room minus the pass's own unused part, or 0 when any
-  §2 no-borrowing case holds. It iterates over the passes of the pass's account with time in the week, excluding `t`.
-- `limits._ticket_7d`: adds `extra` (§2) and the `borrowed` reduction (§3). `LimitState.value` stays as the own part,
-  so the 429 message still states the pass's share. `limit` carries the total.
-- `limits.ticket_weeks`: §4.
+- `config.TicketsConfig.borrow_margin_pct: float = 5`.
+- `db`: table `pass_borrows` (§3).
+- `limits._debt(conn, cfg, t, week_start) -> float`: the §3 debt for the week that ends at `week_start`.
+- `limits._week_use(conn, cfg, account_id, week_start, now) -> dict[ticket_id, weighted]`: one grouped
+  `SUM(weighted) … GROUP BY ticket_id` query for the account's passes, for owed. `_free_room` takes it as an argument,
+  so `serving` runs the query once per call, not once per pass.
+- `limits._free_room(conn, cfg, t, week, uses, now) -> float | None`: `F` from §1, or None when a §2 no-borrowing case
+  holds.
+- `limits._ticket_7d(…, borrow: bool)`: the own limit, with the debt taken off; with `borrow`, the §2 limit and the
+  §3 upsert. `pass_states` and `used_up` call it without `borrow`.
+- `limits.serving`: the two rounds of §4.
+- `limits.ticket_weeks` and `web._ticket_weeks_text`: §5.
 
-## 6. Tests (`tests/test_tickets_limits.py`)
+## 7. Tests (`tests/test_tickets_limits.py`)
 
-1. A day pass with 2 hours left before the reset, an empty account, and its own part used up: not exceeded. Its limit
-   is its own part plus the whole next part.
-2. The same pass with the account at `100 − M`: no extra. It is blocked at its own part, as today.
-3. Another running pass with an unused part: that amount is held back. `extra` = free room minus that amount.
-4. A pass queued to start later in the current week is counted as owed.
-5. No fresh snapshot, or no rate: `extra = 0`.
-6. After the reset: the next part's limit is its own part minus what was borrowed before the reset. A pass that used
-   less than its own part before the reset gets its full next part.
-7. A pass ending inside the current week: unchanged from today.
-8. `ticket_weeks`: the split bar moves by `borrowed`, the parts add up to the whole pass, and `ticket_pct` is
-   unchanged.
+1. A day pass with 2 hours left before the reset, an empty account, and its own limit used up: not exceeded. Its
+   limit is its own part plus the next part.
+2. Use rises past the own limit while `U` rises with it: the pass is blocked at `u = u₀ + F₀`, not halfway there.
+3. The account is at `100 − M`: no borrowing, and the pass is blocked at its own limit.
+4. Another running pass with unused room: that amount is held back. The same holds for a queued pass starting later
+   this week, a bonus starting later this week, and an ungated user with a `share_7d` row.
+5. Two passes borrowing at once: together they stay within `F`.
+6. Cases where nothing is borrowed:
+   - a stale snapshot;
+   - no rate;
+   - the young-account path;
+   - a fresh snapshot whose `resets_at` has already passed;
+   - a pass that ends inside the current week;
+   - `borrow_margin_pct = 100`.
+7. Debt after the reset: the next part's own limit is its part minus the recorded debt. Capacity jumping at the
+   reset and a bonus that ended before it don't change the debt. A pass that never borrowed has its full next part.
+8. A week pass borrowing in two weeks in a row: its total use stays within the sum of its parts.
+9. Two passes on one user: the second pass's own room is used before the first one borrows.
+10. `ticket_weeks`: the split bar moves by the debt and by what has been borrowed, the parts add up to the whole,
+    `ticket_pct` is unchanged, and the 80% warning follows the own limit.
