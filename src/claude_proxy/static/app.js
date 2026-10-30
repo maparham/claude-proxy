@@ -711,7 +711,7 @@ function passList(c, no) {
   const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving).sort((a, b) => no[a.i] - no[b.i]);
   const bought = (p) => (p.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(p.bought_at) })}</div>` : "");
   if (!others.length) return "";
-  return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}" data-pass="${p.i}">
+  return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100)}`}
