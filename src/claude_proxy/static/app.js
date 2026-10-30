@@ -616,11 +616,13 @@ async function renderOverview(main) {
     api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
 }
-// The usage totals over 24 h / 7 d / 30 d as tiles: on the admin's overview, and atop everyone else's usage history.
-function usageTiles(ov) {
-  const tot = ov.totals[S.prefs.period] || ov.totals["24h"];
+// The usage totals as tiles: on the admin's overview over 24 h / 7 d / 30 d, with their own switch; atop everyone else's
+// usage history, `tot` is the chart's range summed, so the chart's range switch drives both.
+function usageTiles(ov, tot) {
+  const own = !tot;
+  if (own) tot = ov.totals[S.prefs.period] || ov.totals["24h"];
   const unpriced = tot.unpriced_models || [];
-  return `<div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>
+  return `${own ? `<div class="controls">${seg("period", [["24h", t("period.24h")], ["7d", t("period.7d")], ["30d", t("period.30d")]], S.prefs.period)}</div>` : ""}
     <div class="tiles">
       <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
       <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
@@ -1028,6 +1030,15 @@ function quotaBar(q) {
   </div>`;
 }
 
+// A series' points added up: the totals over its whole range.
+function sumPoints(points) {
+  const tot = { requests: 0, weighted: 0, raw: 0, cache_read: 0, cost_usd: 0, unpriced_models: [] };
+  for (const pt of points) {
+    for (const k of ["requests", "weighted", "raw", "cache_read", "cost_usd"]) tot[k] += pt[k];
+    tot.unpriced_models.push(...pt.unpriced_models.filter((m) => !tot.unpriced_models.includes(m)));
+  }
+  return tot;
+}
 async function renderUsage(main) {
   const p = S.prefs;
   const splits = isAdmin() ? [["user", t("usage.by_user")], ["model", t("usage.by_model")], ["provider", t("usage.by_provider"), "split:provider"]] : [["model", t("usage.by_model")], ["provider", t("usage.by_provider"), "split:provider"]];
@@ -1040,7 +1051,7 @@ async function renderUsage(main) {
   const [d, ov] = await Promise.all([api(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`), isAdmin() ? null : api("/api/overview")]);
   main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
     <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
-    ${ov ? usageTiles(ov) : ""}
+    ${ov ? usageTiles(ov, sumPoints(d.points)) : ""}
     <div class="controls">
       ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range)}
       ${seg("granularity", ["hour", "day", "week"].map((g) => [g, t(`gran.${g}`), null, tooCoarse(g)]), gran)}
