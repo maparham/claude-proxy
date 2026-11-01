@@ -195,6 +195,7 @@ class EmailConfig:
 class ZarinpalConfig:
     """[zarinpal] (payments design, section 2). The merchant ID is a secret: ZARINPAL_MERCHANT_ID in the environment."""
     sandbox: bool = False
+    vat_percent: float = 0   # VAT already inside every Toman price; receipts carve it out ("includes … VAT")
 
     def merchant_id(self) -> str | None:
         return os.environ.get("ZARINPAL_MERCHANT_ID") or None
@@ -492,9 +493,12 @@ class Config:
             cfg.email = _load_email(toml_path, data["email"])
         if "zarinpal" in data:
             z = data["zarinpal"]
-            if set(z) - {"sandbox"} or not isinstance(z.get("sandbox", False), bool):
-                raise ConfigError(f"{toml_path}: [zarinpal] takes only sandbox = true/false; the merchant ID is "
+            if set(z) - {"sandbox", "vat_percent"} or not isinstance(z.get("sandbox", False), bool):
+                raise ConfigError(f"{toml_path}: [zarinpal] takes only sandbox = true/false and vat_percent; the merchant ID is "
                                   "ZARINPAL_MERCHANT_ID in the environment")
-            cfg.zarinpal = ZarinpalConfig(sandbox=z.get("sandbox", False))
+            vat = z.get("vat_percent", 0)
+            if isinstance(vat, bool) or not isinstance(vat, (int, float)) or not 0 <= vat < 100:
+                raise ConfigError(f"{toml_path}: [zarinpal] vat_percent must be a number from 0 to under 100")
+            cfg.zarinpal = ZarinpalConfig(sandbox=z.get("sandbox", False), vat_percent=float(vat))
         cfg.config_file = toml_path
         return cfg

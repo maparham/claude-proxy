@@ -85,3 +85,4 @@ rpm = 60                    # requests per minute per account
 # 3.139.146.5. Off until ZARINPAL_MERCHANT_ID is in gateway.env.
 [zarinpal]
 sandbox = false
+vat_percent = 10

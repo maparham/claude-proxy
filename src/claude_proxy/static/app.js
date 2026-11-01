@@ -898,7 +898,7 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
       ${start ? `<div class="wide"><p class="sub">${t("ord.start")}</p>
         <label class="check"><input type="radio" name="start" value="after" checked> ${t("ord.start_after", { date: fmtDate(start.date) })}</label>
         <label class="check"><input type="radio" name="start" value="now"> ${t("ord.start_now")}</label></div>` : ""}
-      <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li></ul></div>
+      <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li>${pay?.vat_percent ? `<li>${t("pay.vat", { pct: fmtNum(pay.vat_percent) })}</li>` : ""}</ul></div>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>

@@ -1408,7 +1408,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out["terms_version"] = tickets.TERMS_VERSION
         # Online payment (payments design, section 4): offered by the Payment selector alone. The Toman prices are None
         # without an IRT rate (the button then has no amount), and may be stale: paying is refused then.
-        out["pay"] = ({"currency": payments.CURRENCY, "prices": payments.prices(conn, cfg, now)}
+        out["pay"] = ({"currency": payments.CURRENCY, "prices": payments.prices(conn, cfg, now), "vat_percent": cfg.zarinpal.vat_percent}
                       if payments.online(mode) else None)
         return out
 

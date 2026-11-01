@@ -111,3 +111,4 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # (round_to = 1000) with a rate set on the Pricing tab, and [listener] home_url (the callback's domain).
 # [zarinpal]
 # sandbox = false
+# vat_percent = 10   # VAT inside the Toman prices; receipts and the order dialog say so

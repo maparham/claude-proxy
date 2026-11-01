@@ -215,7 +215,7 @@ async def test_pay_without_a_toman_rate_has_no_prices_and_manual_only_says_so_fi
     conn.execute("DELETE FROM fx_rates WHERE currency='IRT'")
     pay = {"tier": "lite", "length": "week", "terms_version": "v1"}
     async with client(gw) as c:
-        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"] == {"currency": "IRT", "prices": None}
+        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"] == {"currency": "IRT", "prices": None, "vat_percent": 0}
         payments.set_pay_mode(conn, ids["admin"], "manual")
         r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json=pay)
         assert r.status_code == 409 and r.json()["error"] == payments.MANUAL_ONLY

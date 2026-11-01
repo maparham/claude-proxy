@@ -317,6 +317,27 @@ def _toman(n) -> str:
     return f"{int(round(n)):,} Toman"
 
 
+def vat(cfg: Config, amount) -> int:
+    """The VAT inside a Toman amount: prices include it, so it is amount × p / (100 + p)."""
+    p = cfg.zarinpal.vat_percent if cfg.zarinpal else 0
+    return int(round(amount * p / (100 + p))) if p else 0
+
+
+def _pct(p: float) -> str:
+    return f"{p:g}%"
+
+
+def _vat_line(cfg: Config, amount, lang: str) -> str:
+    """'Includes … VAT.' for a receipt, or nothing without a VAT rate."""
+    v = vat(cfg, amount)
+    if not v:
+        return ""
+    p = cfg.zarinpal.vat_percent
+    if lang == "fa":
+        return f"این مبلغ شامل {orders.fa_amount(v, 'IRT')} مالیات بر ارزش افزوده ({orders.fa_num(_pct(p))}) است.\n"
+    return f"Includes {_toman(v)} VAT ({_pct(p)}).\n"
+
+
 def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict | None, reason: str | None) -> list[tuple[str, str, str]]:
     """(to, subject, body) for a payment that just became paid or paid_unfulfilled (section 5)."""
     if cfg.email is None:
@@ -324,6 +345,8 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
     up = o.get("upgrade_of")
     what = f"upgrade of pass #{up} to {_label(cfg, o['tier'])}" if up else f"{_label(cfg, o['tier'])}, {o['length']} ({LENGTHS.get(o['length'], '?')} days)"
     head = f"Paid: {what}, {_toman(p['amount'])}, ZarinPal reference {p['ref_id']}, by {o['name']} <{o['email']}>."
+    if vat(cfg, p["amount"]):
+        head += f"\n{_vat_line(cfg, p['amount'], 'en').strip()}"
     link = f"\n\nOrders: {cfg.listener.dashboard_url.rstrip('/')}/dashboard#orders" if cfg.listener.dashboard_url else ""
     if p["status"] == "paid_unfulfilled":
         return [(cfg.email.admin_to, f"Paid, pass NOT granted: order #{o['id']}",
@@ -331,19 +354,19 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
     out = [(cfg.email.admin_to, f"Paid: {_label(cfg, o['tier'])} {'upgrade' if up else o['length']}",
             f"{head}\nThe {'upgrade' if up else 'pass'} is live.{link}\n")]
     if ticket is not None and up:
-        paid = (f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد. کد پیگیری زرین‌پال: {p['ref_id']}\n\n"
-                if o.get("lang") == "fa" else f"Thank you. Your payment of {_toman(p['amount'])} went through. ZarinPal reference: {p['ref_id']}\n\n")
+        paid = (f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد. کد پیگیری زرین‌پال: {p['ref_id']}\n{_vat_line(cfg, p['amount'], 'fa')}\n"
+                if o.get("lang") == "fa" else f"Thank you. Your payment of {_toman(p['amount'])} went through. ZarinPal reference: {p['ref_id']}\n{_vat_line(cfg, p['amount'], 'en')}\n")
         return out + [(o["email"], *orders.upgraded_mail_text(cfg, o, ticket, paid))]
     if ticket is not None and o.get("lang") == "fa":   # the buyer's mail in the language of the page they paid from
         what_fa = f"{orders.fa_label(cfg, o['tier'])}، ۱ {orders.FA_LENGTHS.get(o['length'], o['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
         out.append((o["email"], f"پرداخت شما: {what_fa}",
-                    f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n\nبسته: {what_fa}، {span}.\n"
+                    f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n{_vat_line(cfg, p['amount'], 'fa')}\nبسته: {what_fa}، {span}.\n"
                     f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'fa', o['length'], ticket['starts_at'])}"))
     elif ticket is not None:
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
-                    f"Thank you. Your payment of {_toman(p['amount'])} went through.\n\nPass: {what}, {span}.\n"
+                    f"Thank you. Your payment of {_toman(p['amount'])} went through.\n{_vat_line(cfg, p['amount'], 'en')}\nPass: {what}, {span}.\n"
                     f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'en', o['length'], ticket['starts_at'])}"))
     return out
 

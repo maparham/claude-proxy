@@ -455,6 +455,22 @@ async def test_mails(env):
     assert tickets.terms_text(conn, cfg, "fa", "week", t["starts_at"]) in m[1][2]
 
 
+
+async def test_mails_carve_out_vat(env):
+    conn, cfg, ids, zp = env
+    from claude_proxy.config import EmailConfig
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    _, p = await paid_flow(conn, cfg, ids)
+    o = orders.get(conn, p["order_id"])
+    t = dict(conn.execute("SELECT * FROM tickets WHERE id=?", (o["ticket_id"],)).fetchone())
+    assert "VAT" not in payments.mails(conn, cfg, p, o, t, None)[1][2]   # no rate: no VAT line
+    cfg.zarinpal.vat_percent = 10
+    assert payments.vat(cfg, 1_100_000) == 100_000   # included in the price, not added on top
+    m = payments.mails(conn, cfg, p, o, t, None)
+    assert "Includes 113,636 Toman VAT (10%)." in m[0][2] and "Includes 113,636 Toman VAT (10%)." in m[1][2]
+    m = payments.mails(conn, cfg, p, o | {"lang": "fa"}, t, None)
+    assert "۱۱۳٬۶۳۶ تومان مالیات بر ارزش افزوده" in m[1][2]
+
 def test_startup_warning_names_what_is_missing(env, monkeypatch, caplog):
     conn, cfg, ids, zp = env
     assert payments.missing(cfg) == []
