@@ -10,7 +10,6 @@ port = 8080
 dashboard_host = "127.0.0.1"
 dashboard_port = 8081
 secure_cookies = false      # true when the dashboard is served over HTTPS (e.g. behind Caddy)
-# verify_files = ["58309081.txt"]   # empty files at the site root, for services that verify a domain
 
 [upstream]
 base_url = "https://api.anthropic.com"

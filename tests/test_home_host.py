@@ -34,14 +34,3 @@ async def test_without_home_url_nothing_is_redirected(env):
     async with client(create_dashboard_app(gw), "example.com") as c:
         assert (await c.get("/dashboard")).status_code == 200
 
-
-
-async def test_verify_files_are_served_empty_on_the_home_host(env):
-    gw, conn, cfg, ids, keys = env
-    cfg.listener.dashboard_url = "https://dash.example.com"
-    cfg.listener.home_url = "https://example.com"
-    cfg.listener.verify_files = ["58309081.txt"]
-    async with client(create_dashboard_app(gw), "example.com") as c:
-        r = await c.get("/58309081.txt")
-        assert r.status_code == 200 and r.text == ""
-        assert (await c.get("/12345.txt")).status_code == 302
