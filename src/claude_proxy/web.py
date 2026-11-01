@@ -132,13 +132,13 @@ class HomeHost(BaseHTTPMiddleware):
     """On [listener] home_url's host only the home page and what it uses are served; the rest is the dashboard's."""
     PUBLIC = ("/", "/privacy", "/api/pricing", "/api/orders", "/pay/callback")
 
-    def __init__(self, app, home_host: str, dashboard: str):
+    def __init__(self, app, home_host: str, dashboard: str, extra: tuple[str, ...] = ()):
         super().__init__(app)
-        self.home_host, self.dashboard = home_host, dashboard
+        self.home_host, self.dashboard, self.public = home_host, dashboard, self.PUBLIC + extra
 
     async def dispatch(self, request, call_next):
         path = request.url.path
-        if request.url.hostname == self.home_host and path not in self.PUBLIC and not path.startswith("/static/"):
+        if request.url.hostname == self.home_host and path not in self.public and not path.startswith("/static/"):
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"{self.dashboard}{path}{query}", status_code=302)
         return await call_next(request)
@@ -162,7 +162,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                        turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
     if cfg.listener.home_url and cfg.listener.dashboard_url:
         app.add_middleware(HomeHost, home_host=urlsplit(cfg.listener.home_url).hostname,
-                           dashboard=cfg.listener.dashboard_url.rstrip("/"))
+                           dashboard=cfg.listener.dashboard_url.rstrip("/"),
+                           extra=tuple(f"/{name}" for name in cfg.listener.verify_files))
     app.state.gw = gw
     app.state.clerk = verifier
     limiter = LoginLimiter()
@@ -1663,6 +1664,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if cfg.tickets.enabled:   # the header and the sign-in page link the public price list, signed in or not
             html = html.replace("pricing-link hidden", "pricing-link")
         return HTMLResponse(html, headers=PAGE_HEADERS)
+
+    for name in cfg.listener.verify_files:
+        app.add_api_route(f"/{name}", lambda: PlainTextResponse(""), methods=["GET", "HEAD"], include_in_schema=False)
 
     @app.get("/privacy")
     async def privacy():

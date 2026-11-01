@@ -45,6 +45,8 @@ class ListenerConfig:
     # Optional: another host (e.g. the apex domain) that serves the public home page; its sign-in links and install
     # commands go on to dashboard_url, since Clerk's tokens are made for that origin only.
     home_url: str = ""
+    # Empty files served at the site root (e.g. ["58309081.txt"]), for services that verify a domain by fetching one.
+    verify_files: list[str] = field(default_factory=list)
 
 
 @dataclass

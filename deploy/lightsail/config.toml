@@ -11,6 +11,7 @@ secure_cookies = true
 public_url = "https://claude.rahkar.pro"
 dashboard_url = "https://dash.rahkar.pro"
 home_url = "https://rahkar.pro"                 # the home page; sign-in links go on to dashboard_url
+verify_files = ["58309081.txt"]                 # enamad.ir domain check (with the enamad meta tag on the home page)
 
 [db]
 path = "/data/claude_proxy.db"
