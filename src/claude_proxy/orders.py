@@ -157,7 +157,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
         if rate is None:
             raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
         usd = tickets.price_now(conn, tier, length, now)["usd"]
-        amount = tickets.round_local(usd, rate["rate"], steps[currency], tickets.vat_percent(cfg, currency))
+        amount = tickets.round_local(usd, rate["rate"], steps[currency], tickets.vat_percent(cfg))
         if cfg.email is None or not notify:   # notify=False: a payment order, mailed when paid instead (payments design, section 5)
             admin_mail = buyer_mail = "off"
         else:

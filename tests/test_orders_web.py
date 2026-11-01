@@ -796,7 +796,7 @@ def test_a_discount_ending_waits_for_the_order_dialog_to_close(tmp_path):
         pytest.skip("no node here")
     harness = tmp_path / "home_tick.js"
     harness.write_text(HOME_TICK_HARNESS)
-    data = _prices(_tier(week={"usd": 6, "amount": 6, "discount_ends_at": 1000})) | {"now": 2000}
+    data = _prices(_tier(week={"usd": 6, "usd_total": 6, "amount": 6, "discount_ends_at": 1000})) | {"now": 2000}
     out = subprocess.run(["node", str(harness), str(STATIC / "home.js"), json.dumps(data)], capture_output=True, text=True, timeout=30, check=True).stdout
     r = json.loads(out)
     assert r["whileOpen"] == 0 and r["text"] == "Offer ended"           # the dialog stays open

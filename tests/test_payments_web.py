@@ -237,9 +237,9 @@ async def test_the_price_shown_is_the_price_charged_discount_included(env):
         assert (await c.post(f"/api/me/orders/{o['id']}/withdraw", headers=bearer(keys["alice"]))).status_code == 200
         pay = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"]
         assert (pay["currency"], lite_week(pay["prices"])["amount"]) == ("IRT", 1000000)   # $6.40 at 156,250
-        cfg.zarinpal.vat_percent = 10   # on top of the Toman prices only: the EUR list neither adds nor mentions it
+        cfg.zarinpal.vat_percent = 10   # on top of every currency's prices
         shown = (await c.get("/api/pricing")).json()
-        assert (shown["vat_percent"], lite_week(shown)["amount"]) == (0, 6.0)
+        assert (shown["vat_percent"], lite_week(shown)["amount"], lite_week(shown)["usd_total"]) == (10, 6.5, 7.04)   # 6.4768 to the half euro
         vat_pay = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"]["prices"]
         assert (vat_pay["vat_percent"], lite_week(vat_pay)["amount"]) == (10, 1100000)
         cfg.zarinpal.vat_percent = 0

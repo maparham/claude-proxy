@@ -889,7 +889,7 @@ function myOrderCard(o) {
 // `start`: with a running ticket, the choice of starting now beside it or after the last one ({ date, splitNow }).
 function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
   const l = tier.lengths[len];
-  const price = (c) => (c === "USD" ? money(l.usd, "USD") : money(l.amount, c));
+  const price = (c) => (c === "USD" ? money(l.usd_total, "USD") : money(l.amount, c));
   const payBtn = pay ? `<button class="btn primary" type="button" id="order-pay">${payLabel(payL, pay)}</button>` : "";
   return `<h3>${t("ord.title", { what: t("ord.what", { label: tierName(tier.tier, tier.label), len: lengthName(len) }) })}</h3>
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b></p>

@@ -227,7 +227,8 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     assert p["currency"] == "EUR" and p["rate_set_at"] is not None and p["how_to_buy"].startswith("Send")
     lite = next(t for t in p["tiers"] if t["tier"] == "lite")
     assert (lite["compare"], lite["compare_pct"]) == ("Claude Pro", 30) and lite["lengths"]["month"] == {
-        "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5, "sold_out": True}   # 25 sold: nothing fits today
+        "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5,
+        "usd_total": 15.0, "list_usd_total": 20.0, "sold_out": True}   # 25 sold: nothing fits today
     assert lite["lengths"]["week"]["sold_out"] is True and lite["lengths"]["week"]["discount_ends_at"] is None
     standard = next(t for t in p["tiers"] if t["tier"] == "standard")
     assert (standard["compare"], standard["compare_pct"]) == ("", None)   # no comparison set: the line is hidden
@@ -565,7 +566,8 @@ setTimeout(() => {
 
 
 def _tier(tier="lite", label="Lite", compare="Claude Pro", **lengths):
-    base = {k: {"days": d, "usd": u, "list_usd": u, "amount": u, "list_amount": u, "discount_ends_at": None, "sold_out": False}
+    base = {k: {"days": d, "usd": u, "list_usd": u, "usd_total": u, "list_usd_total": u, "amount": u, "list_amount": u,
+                "discount_ends_at": None, "sold_out": False}
             for k, d, u in (("day", 1, 3), ("week", 7, 8), ("month", 30, 20))}
     for k, v in lengths.items():
         base[k] = None if v is None else {**base[k], **v}   # None: no price, off sale

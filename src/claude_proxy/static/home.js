@@ -50,7 +50,7 @@ function savePct(t_, len) {
 }
 // A tier's price in the chosen currency: USD's own fields, or the page currency's converted ones.
 function priceIn(l, currency) {
-  return currency === "USD" ? { amount: l.usd, list_amount: l.list_usd } : { amount: l.amount, list_amount: l.list_amount };
+  return currency === "USD" ? { amount: l.usd_total, list_amount: l.list_usd_total } : { amount: l.amount, list_amount: l.list_amount };
 }
 // "60% of Claude Pro's weekly usage": compare_pct, worked out by the server, the same for every length.
 function shareOfPlan(t_, len) {
@@ -101,7 +101,7 @@ function initCurrencySelect(d) {
 function lede(d) { document.getElementById("hero-lede").innerHTML = t("home.hero_lede", { lengths: lengthsList(d && d.tiers, "home.hero_len_", t("home.hero_list")) }); }
 function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
-  const vat = document.getElementById("vat-note"), pct = currency === "IRT" && data && data.vat_percent;   // only the Toman prices carry VAT
+  const vat = document.getElementById("vat-note"), pct = data && data.vat_percent;
   vat.hidden = !pct;
   if (pct) vat.textContent = t("pay.vat", { pct: new Intl.NumberFormat(LOC).format(pct) });
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
@@ -134,12 +134,12 @@ function offerEnded() {
   if (!ordering) return;
   const dlg = orderDialog(), l = ordering.t.lengths[ordering.len], c = ordering.currency;
   const p = dlg.querySelector("#order-price");
-  if (p) p.textContent = money(c === "USD" ? l.list_usd : l.list_amount, c);
+  if (p) p.textContent = money(c === "USD" ? l.list_usd_total : l.list_amount, c);
 }
 function orderFormHtml(d, t_, len, c = currency || d.currency) {
   const l = t_.lengths[len];
   return `<h3 id="order-h">${t("ord.title", { what: t("ord.what", { label: tierName(t_), len: lengthName(len) }) })}</h3>
-    <p class="order-price"><b id="order-price">${esc(money(c === "USD" ? l.usd : l.amount, c))}</b></p>
+    <p class="order-price"><b id="order-price">${esc(money(c === "USD" ? l.usd_total : l.amount, c))}</b></p>
     <div class="terms"><ul class="muted"><li>${splitOrGeneral(d.week_split, len, l.days)}</li><li>${t("ord.terms_l3")}</li></ul></div>
     <p class="muted">${t("home.sign_in_to_order")}</p>
     <p class="order-alt"><a class="btn primary" data-signin href="${esc(signInHref(t_, len))}">${t("home.continue_sign_in")}</a> <button type="button" class="btn" data-close>${t("app.cancel")}</button></p>`;

@@ -288,9 +288,9 @@ def round_local(usd: float, rate: float, round_to: float, vat_pct: float = 0) ->
     return float(steps * step)
 
 
-def vat_percent(cfg: Config, currency: str) -> float:
-    """[zarinpal] vat_percent, added on top of the Toman prices only: the amount shown, quoted and charged includes it."""
-    return cfg.zarinpal.vat_percent if currency == "IRT" and cfg.zarinpal else 0
+def vat_percent(cfg: Config) -> float:
+    """[zarinpal] vat_percent, added on top of every price in every currency: what is shown, quoted and charged includes it."""
+    return cfg.zarinpal.vat_percent if cfg.zarinpal else 0
 
 
 def currencies(cfg: Config) -> dict[str, float]:
@@ -771,7 +771,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "length": length, "days": LENGTHS[length], "share_pct": share,
             "share_5h_pct": share_5h, **p,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
-            "amount": round_local(p["usd"], rate["rate"], steps[currency], vat_percent(cfg, currency)), "vat_percent": vat_percent(cfg, currency),
+            "amount": round_local(p["usd"], rate["rate"], steps[currency], vat_percent(cfg)), "vat_percent": vat_percent(cfg),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
             "replaces": [t["id"] for t in replaces], "start_now": bool(start_now),
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available,
@@ -1117,7 +1117,7 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
         sold = True
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "from_tier": frm, "length": ticket["length"], "share_pct": share,
             "share_5h_pct": max(0.0, share_5h), "starts_at": now, "ends_at": ticket["effective_end"], "usd": usd, "currency": currency,
-            "rate": rate["rate"], "amount": round_local(usd, rate["rate"], steps[currency], vat_percent(cfg, currency)), "sold_out": sold}
+            "rate": rate["rate"], "amount": round_local(usd, rate["rate"], steps[currency], vat_percent(cfg)), "sold_out": sold}
 
 
 def upgrade(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, ticket_id: int, tier: str, currency: str, note: str = "",
@@ -1233,7 +1233,7 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
     rate = current_rate(conn, currency)
     if rate is None:
         currency, rate = "USD", current_rate(conn, "USD")
-    step, vat = currencies(cfg)[currency], vat_percent(cfg, currency)   # the price lists say the VAT is in, under the prices
+    step, vat = currencies(cfg)[currency], vat_percent(cfg)   # the price lists say the VAT is in, under the prices
     tiers = []
     eff = effective_tiers(conn, cfg)
     for tid, t in cfg.tickets.tiers.items():
@@ -1246,6 +1246,8 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                 continue
             lengths[length] = {"days": LENGTHS[length], "list_usd": p["list_usd"], "usd": p["usd"], "discount_ends_at": p["discount_ends_at"],
                                "amount": round_local(p["usd"], rate["rate"], step, vat), "list_amount": round_local(p["list_usd"], rate["rate"], step, vat),
+                               # the USD price with VAT, for a page showing USD beside its own currency
+                               "usd_total": round_local(p["usd"], 1, USD_ROUND_TO, vat), "list_usd_total": round_local(p["list_usd"], 1, USD_ROUND_TO, vat),
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
         compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
         tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
