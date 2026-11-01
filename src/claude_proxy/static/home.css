@@ -47,3 +47,4 @@ html[dir="rtl"] .home-top { justify-content: flex-start; }
 .order-dialog .turnstile:empty { display: none; }
 .order-dialog .order-alt { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; font-size: 14px; }
 @media (max-width: 400px) { .order-dialog { padding: 16px; } }
+#vat-note { margin: 12px 0 0; text-align: center; }

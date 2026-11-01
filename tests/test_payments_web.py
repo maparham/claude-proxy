@@ -237,6 +237,10 @@ async def test_the_price_shown_is_the_price_charged_discount_included(env):
         assert (await c.post(f"/api/me/orders/{o['id']}/withdraw", headers=bearer(keys["alice"]))).status_code == 200
         pay = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"]
         assert (pay["currency"], lite_week(pay["prices"])["amount"]) == ("IRT", 1000000)   # $6.40 at 156,250
+        cfg.zarinpal.vat_percent = 10   # inside the Toman prices only: the EUR list says nothing of it
+        assert (await c.get("/api/pricing")).json()["vat_percent"] == 0
+        assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["pay"]["prices"]["vat_percent"] == 10
+        cfg.zarinpal.vat_percent = 0
         r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json=body)
         assert r.status_code == 200, r.text
     o = conn.execute("SELECT o.quoted_amount, p.amount FROM orders o JOIN payments p ON p.order_id=o.id").fetchone()

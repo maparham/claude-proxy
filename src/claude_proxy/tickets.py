@@ -1243,6 +1243,8 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                "sold_out": sold_out(conn, cfg, tid, length, now)}
         compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
         tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
-    return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers,
+    # VAT is inside the Toman prices ([zarinpal] vat_percent): the price lists say so under the prices.
+    vat = cfg.zarinpal.vat_percent if currency == "IRT" and cfg.zarinpal else 0
+    return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers, "vat_percent": vat,
             "recommended": rec if (rec := recommended(conn, cfg)) and next(x for x in tiers if x["tier"] == rec["tier"])["lengths"][rec["length"]] else None,
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}

@@ -862,7 +862,7 @@ function priceListCard(tk, order, renew) {
   return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t(tk.current && tk.current.used_up ? "new.title" : "renew.title") : t("tab.tickets")}</h3><p class="sub">${renew || `${t("price.sub", { lengths: lengthsList(p.tiers, "price.a_") })}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}`}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${t("price.terms_note")}</p>${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
+    </tbody></table></div><p class="sub">${t("price.terms_note")}${p.vat_percent ? ` ${t("pay.vat", { pct: fmtNum(p.vat_percent) })}` : ""}</p>${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
 }
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------

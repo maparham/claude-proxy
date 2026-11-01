@@ -101,6 +101,9 @@ function initCurrencySelect(d) {
 function lede(d) { document.getElementById("hero-lede").innerHTML = t("home.hero_lede", { lengths: lengthsList(d && d.tiers, "home.hero_len_", t("home.hero_list")) }); }
 function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
+  const vat = document.getElementById("vat-note"), pct = currency === "IRT" && data && data.vat_percent;   // only the Toman prices carry VAT
+  vat.hidden = !pct;
+  if (pct) vat.textContent = t("pay.vat", { pct: new Intl.NumberFormat(LOC).format(pct) });
   document.querySelectorAll("#length-toggle button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.length === length)));
   document.getElementById("currency-select").value = currency;
 }
