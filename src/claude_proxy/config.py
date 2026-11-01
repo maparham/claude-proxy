@@ -195,7 +195,7 @@ class EmailConfig:
 class ZarinpalConfig:
     """[zarinpal] (payments design, section 2). The merchant ID is a secret: ZARINPAL_MERCHANT_ID in the environment."""
     sandbox: bool = False
-    vat_percent: float = 0   # VAT already inside every Toman price; receipts carve it out ("includes … VAT")
+    vat_percent: float = 0   # VAT added on top of every Toman price; receipts carve it out of the total ("includes … VAT")
 
     def merchant_id(self) -> str | None:
         return os.environ.get("ZARINPAL_MERCHANT_ID") or None

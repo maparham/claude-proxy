@@ -131,6 +131,11 @@ def test_round_local_with_large_rates(usd, rate, step, expected):
     assert tickets.round_local(usd, rate, step) == expected
 
 
+def test_round_local_adds_vat_before_rounding():
+    assert tickets.round_local(6.4, 156250, 1000, 10) == 1100000
+    assert tickets.round_local(1.5, 156250, 1000, 10) == 258000   # 257,812.5 up to the next thousand
+
+
 def test_a_rate_is_fresh_at_exactly_36_hours_and_stale_a_second_later(db):
     from claude_proxy import payments
     conn, cfg, ids = seeded(db)
