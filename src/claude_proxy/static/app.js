@@ -1421,7 +1421,7 @@ async function renderPricing(main) {
         <div class="error" id="rates-err"></div>
         </form>
       </div>
-      <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}</p>
+      <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}${p.vat_percent ? ` ${t("pr.vat", { pct: fmtNum(p.vat_percent) })}` : ""}</p>
         <form id="f-prices">
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
         ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>

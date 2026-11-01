@@ -1163,7 +1163,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         return {"tiers": tickets.effective_tiers(conn, cfg),
                 "shares": tickets.tier_shares(conn), "recommended": tickets.recommended(conn, cfg),
-                "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True)}
+                "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True),
+                "vat_percent": cfg.zarinpal.vat_percent if cfg.zarinpal else 0}
 
     @app.post("/api/admin/prices")
     async def set_price(request: Request):
