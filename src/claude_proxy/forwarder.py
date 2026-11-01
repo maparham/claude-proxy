@@ -49,9 +49,9 @@ def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
     return {k: v for k, v in headers.items() if k.lower() not in drop}
 
 
-# What the subscription tells about itself in responses: account quota, reset times, the organization.
-# Only admins get these; to anyone else the gateway is all there is.
-ACCOUNT_HEADER_PREFIXES = ("anthropic-ratelimit-", "anthropic-organization")
+# What the subscription tells about itself in responses: account quota, reset times, the organization and the workspace
+# (anthropic-workspace-id, seen 2026-11-01). Only admins get these; to anyone else the gateway is all there is.
+ACCOUNT_HEADER_PREFIXES = ("anthropic-ratelimit-", "anthropic-organization", "anthropic-workspace")
 
 
 def strip_account_headers(headers: dict[str, str]) -> dict[str, str]:

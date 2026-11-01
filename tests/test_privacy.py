@@ -14,7 +14,8 @@ MSG = {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user
 ACCOUNT_WORDS = ("utilization", "subscription", "quota", "account", "credential", "plan 5h", "share", "ratelimit",
                  "organization", "claude-proxy login", "resets_at", "stale")
 ACCOUNT_HEADERS = {"anthropic-ratelimit-unified-5h-utilization": "0.25", "anthropic-ratelimit-unified-5h-reset": "1790000000",
-                   "anthropic-ratelimit-unified-status": "allowed", "anthropic-organization-id": "org-123"}
+                   "anthropic-ratelimit-unified-status": "allowed", "anthropic-organization-id": "org-123",
+                   "anthropic-workspace-id": "wrkspc_01abc"}
 GET_ROUTES = ["/api/session", "/api/overview", "/api/series?split=model", "/api/series?split=provider", "/api/models",
               "/api/heatmap", "/api/sessions", "/api/errors", "/api/requests", "/api/limits", "/api/me/status",
               "/api/me/status?format=text"]
@@ -87,9 +88,10 @@ async def test_proxy_strips_account_headers_for_users_but_still_records_them(env
         models = await c.get("/v1/models", headers=bearer(key))
     for r in (mine, models):
         assert r.status_code == 200
-        assert not [h for h in r.headers if h.startswith(("anthropic-ratelimit", "anthropic-organization"))]
+        assert not [h for h in r.headers if h.startswith(("anthropic-ratelimit", "anthropic-organization", "anthropic-workspace"))]
     assert admins.headers["anthropic-ratelimit-unified-5h-utilization"] == "0.25"
     assert admins.headers["anthropic-organization-id"] == "org-123"
+    assert admins.headers["anthropic-workspace-id"] == "wrkspc_01abc"
     assert conn.execute("SELECT COUNT(*) FROM quota_snapshots WHERE utilization_pct=25").fetchone()[0] >= 1
 
 
