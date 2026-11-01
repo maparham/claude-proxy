@@ -38,7 +38,13 @@ def forbid_credential(gw, monkeypatch):
 
 @pytest.mark.parametrize("scope,method,path,routed,allowed", [
     ("full", "POST", "/v1/messages", False, True),
-    ("full", "GET", "/v1/anything", False, True),
+    ("full", "POST", "/v1/messages/count_tokens", False, True),
+    ("full", "GET", "/v1/models", False, True),
+    ("full", "GET", "/v1/anything", False, False),       # the account's own storage, shared by every user
+    ("full", "GET", "/v1/files", False, False),
+    ("full", "DELETE", "/v1/files/file_x", False, False),
+    ("full", "GET", "/v1/mcp_servers", False, False),
+    ("full", "GET", "/v1/messages", False, False),
     ("routes", "POST", "/v1/messages", True, True),
     ("routes", "POST", "/v1/messages/count_tokens", True, True),
     ("routes", "GET", "/v1/models", False, True),
@@ -55,6 +61,11 @@ def forbid_credential(gw, monkeypatch):
 ])
 def test_scope_allows(scope, method, path, routed, allowed):
     assert scope_allows(scope, method, path, ROUTE if routed else None) is allowed
+
+
+def test_an_admins_claude_code_key_reaches_all_of_v1():
+    assert scope_allows("full", "GET", "/v1/files", None, admin=True)
+    assert not scope_allows("routes", "GET", "/v1/files", None, admin=True)
 
 
 async def test_claude_on_a_routes_key_is_refused_before_anything_upstream(env, anthropic, monkeypatch):
