@@ -515,6 +515,12 @@ def _perm(message: str) -> dict:
     return {"type": "error", "error": {"type": "permission_error", "message": message}}
 
 
+def _pay(message: str) -> dict:
+    """A refusal that a purchase (or the admin's credit) lifts, sent as 402 Payment Required: Claude Code reads every 401
+    and 403 as its own sign-in failing and prefixes "Please run /login", which no pass holder needs to do."""
+    return {"type": "error", "error": {"type": "billing_error", "message": message}}
+
+
 def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | None = None) -> list[LimitState]:
     now = time.time() if now is None else now
     gated = _gated(conn, cfg, user_id)
@@ -653,19 +659,19 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
     if not cfg.tickets.enabled and tickets.is_gated(conn, user_id):
         # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
-        return Decision(403, TICKET, _perm(PAUSED))
+        return Decision(402, TICKET, _pay(PAUSED))
     gated = _gated(conn, cfg, user_id)
     run, t = None, None
     if gated:
         run = tickets.running(conn, user_id, now)
         if not run:   # every request, the model list included: there is no ticket to serve it on
-            return Decision(403, TICKET, _perm(_no_ticket_message(conn, cfg, user_id, now)))
+            return Decision(402, TICKET, _pay(_no_ticket_message(conn, cfg, user_id, now)))
     rows = _rows(conn, user_id)
     if gated and third_party and not any(r["kind"].startswith("cost_") and (r["scope"] == "*" or fnmatch.fnmatchcase(model or "", r["scope"]))
                                          for r in rows):
         # Third-party models are real money per request, which a ticket does not cover; a cost limit the admin set for
         # this model governs instead (scoped as the loop below scopes rows).
-        return Decision(403, TICKET, _perm("Your pass covers Claude models only."))
+        return Decision(402, TICKET, _pay("Your pass covers Claude models only."))
     for row in rows:
         kind = row["kind"]
         if kind == "allowed_models":
@@ -688,7 +694,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         else:
             continue
         if st.exceeded and kind in TOTALS:   # it never frees up, so nothing for a client to wait for and retry
-            return Decision(403, kind, {"type": "error", "error": {"type": "permission_error", "message": _describe(st)}})
+            return Decision(402, kind, _pay(_describe(st)))
         if st.exceeded:
             return Decision(429, kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                             st.reset_in or 60)

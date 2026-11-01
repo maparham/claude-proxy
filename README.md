@@ -345,7 +345,7 @@ rate, the USD prices and discounts; the home page (`/`, for visitors) shows the 
 "at least N hours of steady use" hint computed once a day from busy hours.
 
 A pass holder is limited to their share of Anthropic's 5-hour window and to one seventh of it per pass day; with no
-active pass their requests get a 403 that quotes `how_to_buy`. Third-party models are not covered unless a cost
+active pass their requests get a 402 that quotes `how_to_buy` (not a 403, which Claude Code shows as "Please run /login"). Third-party models are not covered unless a cost
 limit is set for the user. When the pass ends and the user is not buying again, **Ungate** on the Users page returns
 them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets-design.md`.
 

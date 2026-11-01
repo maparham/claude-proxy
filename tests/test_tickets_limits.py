@@ -306,16 +306,16 @@ def test_bonus_days_extend_the_ticket_period(env):
     assert st["share_7d"].limit == pytest.approx(piece(5, 5 * DAY - 300))   # the extra day counts: past the old end
 
 
-def test_no_active_ticket_is_a_403_with_the_right_message(env):
+def test_no_active_ticket_is_a_402_with_the_right_message(env):
     conn, cfg, ids, t = env
     after = t["ends_at"] + 100
     fresh(conn, after - 50)
     assert check(conn, cfg, ids["alice"], now=after).body["error"]["message"] == f"Your pass ended on {limits._date(t['ends_at'])}."
     cfg.listener.dashboard_url = "https://dash.example/"   # with a dashboard: where to buy the next one
     d = check(conn, cfg, ids["alice"], now=after)
-    assert (d.status, d.kind, d.body["error"]["type"]) == (403, "ticket", "permission_error")
+    assert (d.status, d.kind, d.body["error"]["type"]) == (402, "ticket", "billing_error")   # not 401/403: Claude Code would say to run /login
     assert d.body["error"]["message"] == f"Your pass ended on {limits._date(t['ends_at'])}. Buy one at https://dash.example/dashboard"
-    assert check(conn, cfg, ids["alice"], now=after, model=None, path="/v1/models").status == 403   # every request
+    assert check(conn, cfg, ids["alice"], now=after, model=None, path="/v1/models").status == 402   # every request
     nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=after, terms_version="v1")
     conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (after + DAY, after + 2 * DAY, nxt["id"]))
     d = check(conn, cfg, ids["alice"], now=after + 10)
@@ -333,7 +333,7 @@ def test_cancelled_ticket_message_uses_the_cancel_time(env):
 def test_third_party_models_refused_unless_a_cost_limit_exists(env):
     conn, cfg, ids, t = env
     d = check(conn, cfg, ids["alice"], model="muse-spark")
-    assert (d.status, d.kind, d.body["error"]["message"]) == (403, "ticket", "Your pass covers Claude models only.")
+    assert (d.status, d.kind, d.body["error"]["message"]) == (402, "ticket", "Your pass covers Claude models only.")
     set_limit(conn, ids["alice"], "cost_daily", 1.0, "usd")
     assert check(conn, cfg, ids["alice"], model="muse-spark") is None
     req(conn, ids["alice"], NOW - 60, i=1_000_000, model="muse-spark")        # $1.25 today
@@ -510,7 +510,7 @@ def test_a_cost_limit_for_other_models_does_not_open_third_party_models(env):
     conn, cfg, ids, t = env
     set_limit(conn, ids["alice"], "cost_daily", 1.0, "usd", scope="claude-*")
     d = check(conn, cfg, ids["alice"], model="muse-spark")
-    assert (d.status, d.body["error"]["message"]) == (403, "Your pass covers Claude models only.")
+    assert (d.status, d.body["error"]["message"]) == (402, "Your pass covers Claude models only.")
     set_limit(conn, ids["alice"], "cost_monthly", 5.0, "usd", scope="muse-*")
     assert check(conn, cfg, ids["alice"], model="muse-spark") is None
 
@@ -519,8 +519,8 @@ def test_tickets_switched_off_refuse_gated_users_instead_of_failing_open(env):
     conn, cfg, ids, t = env
     cfg.tickets.enabled = False                 # the grant removed alice's credit: no other limit would hold her
     d = check(conn, cfg, ids["alice"])
-    assert (d.status, d.kind, d.body["error"]["message"]) == (403, "ticket", "Passes are paused; ask the admin.")
-    assert check(conn, cfg, ids["alice"], model=None, path="/v1/models").status == 403
+    assert (d.status, d.kind, d.body["error"]["message"]) == (402, "ticket", "Passes are paused; ask the admin.")
+    assert check(conn, cfg, ids["alice"], model=None, path="/v1/models").status == 402
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW)
     tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 1)
     assert check(conn, cfg, ids["alice"], now=NOW + 2) is None   # ungated: back to hand-set limits
@@ -534,7 +534,7 @@ def test_a_ticket_cancelled_before_it_started_is_like_having_no_ticket(db):
     conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (NOW + DAY, NOW + 2 * DAY, t["id"]))   # queued
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 10)
     d = check(conn, cfg, ids["alice"], now=NOW + 20)
-    assert d.status == 403
+    assert d.status == 402
     assert d.body["error"]["message"] == "You have no pass."
 
 

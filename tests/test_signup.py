@@ -365,8 +365,8 @@ async def test_credit_runs_out_and_upgrade_replaces_it(env):
     conn.execute("UPDATE requests SET started_at=started_at-40*86400")   # a credit has no window: old spending counts
     spend(conn, uid, 1.5)
     d = limits.evaluate(conn, gw.cfg, uid, "claude-sonnet-5", "/v1/messages")
-    assert d.status == 403 and d.kind == "cost_total"   # it never frees up: nothing to retry
-    assert d.body["error"]["type"] == "permission_error"
+    assert d.status == 402 and d.kind == "cost_total"   # it never frees up: nothing to retry; not 403, which Claude Code reads as a login failure
+    assert d.body["error"]["type"] == "billing_error"
     assert d.body["error"]["message"] == "Your gateway credit is used up ($5.50 of $5.00). Ask the gateway admin for more."
     st = limits.states(conn, gw.cfg, uid)[0]
     assert st.reset_in is None and st.exceeded
