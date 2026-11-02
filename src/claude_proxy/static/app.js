@@ -2114,12 +2114,7 @@ async function renderUser(main) {
           </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div>
       </div>
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("tab.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
-      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.recent_requests")}${tipI("recent_requests")} <span class="badge">${nfFull.format(reqs.requests.length)}</span></h3></summary><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
-        ${foldRows(reqs.requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
-          <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
-          <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
-          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`))}
-        </tbody></table>${moreButton(reqs.requests.length)}` : `<p class="muted">${t("user.no_requests")}</p>`}</details>
+      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.recent_requests")}${tipI("recent_requests")} <span class="badge">${nfFull.format(reqs.requests.length)}</span></h3></summary><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? requestsTable(reqs.requests, false) : `<p class="muted">${t("user.no_requests")}</p>`}</details>
       ${machinesCard(keys.keys, null, u.name)}
     </section>`;
   wireSegs(main, render);
@@ -2332,7 +2327,9 @@ function heatmap(el, cells) {
 }
 
 const SESS_PAGE = 50;
+const API_REQ_PAGE = 200;
 async function renderSessions(main) {
+  if (apiView()) return renderApiRequests(main);
   const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.sessQ || "")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
     <div class="controls">${searchBox("sess-q", S.sessQ, t(isAdmin() ? "sess.search_admin" : "sess.search"))}</div>
@@ -2347,6 +2344,13 @@ async function renderSessions(main) {
   });
   wireSearch($("#sess-q"), (v) => { S.sessQ = v; fill(); });
   await fill();
+}
+// API keys are used by SDKs and curl, which send no session id, so the API view lists the requests themselves.
+async function renderApiRequests(main) {
+  const d = await api(`/api/requests?limit=${API_REQ_PAGE}`);
+  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${plural("sess.lede_api", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>
+    <div class="card table-wrap">${d.requests.length ? requestsTable(d.requests, isAdmin()) : `<p class="muted">${t("user.no_requests")}</p>`}</div></section>`;
+  wireMore(main);
 }
 function wireSessMore(list, page, offset) {
   const more = $("#sess-more");
@@ -2385,6 +2389,12 @@ function latest(fn) {
   let n = 0;
   return (...args) => { const mine = ++n; return fn(() => mine === n, ...args); };
 }
+const requestsTable = (requests, showUser) => `<table class="data"><thead><tr><th>${t("errs.when")}</th>${showUser ? `<th>${t("app.user")}</th>` : ""}<th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
+        ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
+          <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
+          <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
+          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`))}
+        </tbody></table>${moreButton(requests.length)}`;
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`;
 function sessionsTable(sessions, showUser, fold = false) {
