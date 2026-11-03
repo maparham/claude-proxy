@@ -773,7 +773,8 @@ def test_payment_notice_escapes_apostrophes_and_ampersands_only_once(tmp_path):
     # infoInline() esc()s the message it's handed, so paymentNoticeMsg() must not esc() ref_id/label/error_shown
     # itself, or a ZarinPal message like "-51: Don't & retry" would show as "Don&amp;#39;t &amp;amp; retry".
     import json
-    stubs = ('var shown = null; var openDialog = (html) => { shown = html; };\n'
+    # A failed payment's notice also offers Pay again, wired on the dialog openDialog() returns.
+    stubs = ('var shown = null; var openDialog = (html) => { shown = html; return {}; }; var $ = () => ({});\n'
              'const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : len);\n'
              + APP_ESC + '\n')
     payment = {"status": "failed", "error_shown": "-51: Don't & retry", "tier": "lite", "label": "Lite", "length": "month", "ref_id": "123"}
@@ -781,6 +782,7 @@ def test_payment_notice_escapes_apostrophes_and_ampersands_only_once(tmp_path):
                   stubs + f"showPaymentNotice({json.dumps(payment)}); var out = shown;")
     assert "Don&#39;t &amp; retry" in out                 # escaped exactly once
     assert "&amp;amp;" not in out and "&amp;#39;" not in out
+    assert 'id="pay-retry"' in out and "Pay again" in out
 
 
 def test_payment_notice_uses_the_payment_title(tmp_path):
