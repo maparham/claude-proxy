@@ -351,7 +351,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 /* The order dialog's start choice, for a buyer with a running pass: two cards, the chosen one in the accent color. */
 .start-choice { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .start-choice legend { font-weight: 600; padding: 0; margin-bottom: 8px; }
-.start-choice label { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; border: 1.5px solid var(--border);
+.start-choice label { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; align-content: start; border: 1.5px solid var(--border);
   border-radius: 10px; padding: 10px 12px; cursor: pointer; }
 .start-choice input { width: 16px; height: 16px; margin: 0; accent-color: var(--s1); }
 .start-choice span { grid-column: 2; font-size: 13px; color: var(--ink-2); }
