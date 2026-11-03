@@ -62,6 +62,9 @@ async def test_blog_is_served_on_the_home_host_and_listed_in_the_sitemap(env):
         post = await c.get("/blog/visa-documents-lite-pass")
         assert post.status_code == 200 and "بسته اقتصادی" in post.text
         assert '<link rel="canonical" href="https://example.com/blog/visa-documents-lite-pass">' in post.text
+        assert '<meta property="og:image" content="https://example.com/static/og.png">' in post.text
+        assert '<meta property="og:image" content="https://example.com/static/og.png">' in (await c.get("/")).text
+        assert (await c.get("/static/og.png")).headers["content-type"] == "image/png"
         assert (await c.get("/blog/no-such-post")).status_code == 404
         assert "<link>https://example.com/blog/visa-documents-lite-pass</link>" in (await c.get("/blog/feed.xml")).text
         sitemap = (await c.get("/sitemap.xml")).text
