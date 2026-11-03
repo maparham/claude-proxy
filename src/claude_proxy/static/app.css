@@ -405,6 +405,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 /* A split near an end: its time under the end's two lines (date, time), not beside them. */
 .split-bar.use:has(em.low) { padding-bottom: 72px; } .split-bar.use em.low small { margin-top: 54px; }
 .split-bar em.notick::before { content: none; }
+/* An order's ends are one word: a split near one goes a line under it. */
+.split-bar:not(.use):has(em.low) { padding-bottom: 52px; } .split-bar:not(.use) em.low small { margin-top: 36px; }
 .split-bar q { position: absolute; top: 0; line-height: 18px; font-size: 11px; font-style: normal; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
 .split-bar q::before, .split-bar q::after { content: none; } .split-bar q.in { color: #fff; }
 /* The ticket's start, each weekly reset and its end: a tick through the bar and its date under it, centred on the

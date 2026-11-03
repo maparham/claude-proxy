@@ -2064,21 +2064,25 @@ function splitTerms(ws, len, days, use) {
     ? new Date(ts * 1000).toLocaleTimeString(LOC, { hour: "2-digit", minute: "2-digit" }) : short(ts))}</small></em>`;
   const day = (ts) => new Date(ts * 1000).toDateString();
   let at = 0;
-  const splits = !use || !use.resets ? "" : parts.slice(0, -1).map((v, i) => {
+  // A running pass's resets, else an order's (the account's weekly resets inside its length).
+  const resets = use ? use.resets : ws.resets && ws.resets.filter((r) => r > ws.starts_at && r < end);
+  const splits = !resets ? "" : parts.slice(0, -1).map((v, i) => {
     at += v;
     // A split on the start's or end's day gives its time only: the date is already there.
-    const r = use.resets[i];
+    const r = resets[i];
     // Near an end, its time goes under that end's, aligned with it, and the tick stays at the split.
     if (!r) return "";
-    const only = day(r) === day(ws.starts_at) || day(r) === day(end);
-    const rel = use.rel && use.rel[i];   // a running pass's split as time from now: the account's clock time means nothing to its holder
-    if (at >= 0.15 && at <= 0.85) return mark(at, r, "", only, rel);
-    const edge = at < 0.15 ? "start" : "end";
+    const only = !!use && (day(r) === day(ws.starts_at) || day(r) === day(end));   // an order's ends show no date
+    const rel = use && use.rel && use.rel[i];   // a running pass's split as time from now: the account's clock time means nothing to its holder
+    const near = use ? 0.15 : 0.12;   // an order's ends are one short word: its split can sit closer to them
+    if (at >= near && at <= 1 - near) return mark(at, r, "", only, rel);
+    const edge = at < near ? "start" : "end";
     return `<em class="tick" style="inset-inline-start:${(at * 100).toFixed(2)}%"></em>${mark(edge === "start" ? 0 : 1, r, `low notick edge-${edge}`, only, rel)}`;
   }).join("");
-  // An order's bar marks its ends by name: its dates hang on when it is approved.
+  // An order's bar marks its ends by name, their dates hanging on when it is approved; its splits are the account's
+  // resets, fixed whenever it starts.
   const ends = use ? mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end") + splits
-    : mark(0, 0, "edge-start", false, t("ord.bar_start")) + mark(1, 0, "edge-end", false, t("ord.bar_end"));
+    : mark(0, 0, "edge-start", false, t("ord.bar_start")) + mark(1, 0, "edge-end", false, t("ord.bar_end")) + splits;
   return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${use ? " use" : ""}" aria-hidden="true">${bar}${ends}</span>`;
 }
 

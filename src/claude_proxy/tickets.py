@@ -222,12 +222,14 @@ def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int
 
 def order_split(conn, cfg: Config, starts_at: float, now: float | None = None) -> dict | None:
     """What a buyer is told before ordering: per length, the fraction of the ticket each Anthropic week holds if it
-    starts at `starts_at`. No reset time: that is the account's, not the buyer's. Informational, like week_split:
-    boundaries project forward in 7-day steps. None without a known weekly reset."""
+    starts at `starts_at`, and `resets`: the weekly resets between its parts, after `starts_at` and within the longest
+    length, so the terms can show when a part ends (asked for 2026-11-03). Informational, like week_split: boundaries
+    project forward in 7-day steps. None without a known weekly reset."""
     now = _now(now)
-    if week_bounds(conn, cfg, now) is None:
+    if (wb := week_bounds(conn, cfg, now)) is None:
         return None
-    out = {"starts_at": starts_at}
+    first = wb[1] + max(0, -(-(starts_at - wb[1]) // (7 * DAY))) * 7 * DAY   # the first reset at or after the start
+    out = {"starts_at": starts_at, "resets": [first + k * 7 * DAY for k in range(6) if first + k * 7 * DAY < starts_at + max(LENGTHS.values()) * DAY]}
     for length, days in LENGTHS.items():
         parts = week_split(conn, cfg, 7 / days, int(starts_at), int(starts_at) + days * DAY, now) or []
         if length == "day" and parts:
