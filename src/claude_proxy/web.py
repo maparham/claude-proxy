@@ -1544,6 +1544,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def order_mine_action(request: Request, oid: int, action: str):
         user = principal(request, write=True)
         need_tickets()
+        if action == "pay":   # the open order paid online at its quote: the browser goes on to the address returned
+            return await payments.pay_order(conn, cfg, user, oid)
         if action == "withdraw":
             ticket_call(orders.withdraw, conn, user["id"], oid)
             if cfg.email is not None:   # the buyer gets a confirmation, after the response

@@ -588,7 +588,7 @@ async function renderOverview(main) {
       <h2>${isAdmin() ? t("ov.title_admin") : t("ov.title_user", { name: bdi(S.user.name) })}</h2>
       ${isAdmin() ? `<p class="lede">${t("ov.lede_admin")}</p>` : ""}
       ${banners.join("")}
-      ${tk ? myOrderCard(order) : ""}
+      ${tk ? myOrderCard(order, tk.pay) : ""}
       ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `${isAdmin() ? usageTiles(ov) : ""}
       <div class="grid${isAdmin() ? " cols-2" : ""}">
         ${isAdmin() ? `<div class="card"><h3>${t("ov.quota_title")}${tipI("quota")}</h3>
@@ -759,7 +759,9 @@ function userLimitsCard(me, tk, order) {
   const fromNow = (ts) => fmtDur(Math.max(0, ts - Date.now() / 1000 - (S.tkSkew || 0)));
   const open = !!order && (order.status === "new" || order.status === "contacted");
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
-  const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(tk.replaces ? "new.button" : "renew.button")}</button>` : "";
+  // With an order open it is greyed out, and pointing at it says why; the wrapper takes the hover a disabled button won't.
+  const renewBtn = `<button class="btn small primary" id="renew-btn"${open ? " disabled" : ""}>${t(tk.replaces ? "new.button" : "renew.button")}</button>`;
+  const renew = !c ? "" : open ? `<span class="blocked"${tipAttr(esc(t("renew.blocked")))}>${renewBtn}</span>` : renewBtn;
   const multi = !!c && !!c.passes && c.passes.length > 1;
   const extras = !c ? "" : `${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
@@ -875,7 +877,8 @@ function priceListCard(tk, order, renew) {
 
 const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : esc(len));
 // The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
-function myOrderCard(o) {
+// `pay`: online payment is offered, so an open Toman order gets a Pay button (sent unpaid, or its payment never came back).
+function myOrderCard(o, pay) {
   if (!o) return "";
   const what = o.upgrade ? t("up.what", { label: tierName(o.tier, o.label) }) : t("ord.what", { label: tierName(o.tier, o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
@@ -885,7 +888,8 @@ function myOrderCard(o) {
     return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
       <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div>
       <ol class="order-steps">${steps}</ol></div>
-      <button class="btn small" data-my-order="withdraw" data-id="${o.id}">${t("ord.withdraw")}</button></div>`;
+      <div class="row-actions">${pay && o.currency === pay.currency ? `<button class="btn small primary" data-my-order="pay" data-id="${o.id}">${t("pay.button", { amount: esc(money(o.quoted_amount, o.currency)) })}</button>` : ""}
+      <button class="btn small" data-my-order="withdraw" data-id="${o.id}">${t("ord.withdraw")}</button></div></div>`;
   }
   const text = o.status === "done" ? t("ord.done") : o.status === "declined" ? t("ord.declined") : "";
   return text ? `<div class="card order-note" id="my-order"><div>${text} <span class="muted">${what}</span></div>
@@ -911,6 +915,11 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         ${orderButtons(manual, payBtn)}</div>
     </form>`;
+}
+// ZarinPal refuses a StartPay without a Referer from the registered domain, and every page here is no-referrer.
+function goPay(url) {
+  const a = Object.assign(document.createElement("a"), { href: url, referrerPolicy: "origin" });
+  document.body.append(a); a.click();
 }
 // Without a Toman price (no IRT rate yet) the button has no amount; the server says why paying fails.
 function payLabel(payL, pay) {
@@ -948,9 +957,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
     pb.disabled = true; pb.textContent = t("pay.going");
     try {
       const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, start_now: now(), ...(f.email ? { email: f.email.value } : {}) } });
-      // ZarinPal refuses a StartPay without a Referer from the registered domain, and every page here is no-referrer.
-      const a = Object.assign(document.createElement("a"), { href: r.url, referrerPolicy: "origin" });
-      document.body.append(a); a.click();
+      goPay(r.url);
     } catch (err) { pb.disabled = false; pb.textContent = payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
   };
 }
@@ -1015,6 +1022,12 @@ function wireOrdering(root, tk, order) {
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
     if (act === "withdraw" && !confirmInline(t("ord.confirm_withdraw"))) return;
+    if (act === "pay") {
+      b.disabled = true;
+      try { goPay((await api(`/api/me/orders/${+b.dataset.id}/pay`, { method: "POST", body: {} })).url); }
+      catch (e) { b.disabled = false; alertInline(e.message); }
+      return;
+    }
     try { await api(`/api/me/orders/${+b.dataset.id}/${act}`, { method: "POST", body: {} }); render(); } catch (e) { alertInline(e.message); }
   }));
 }

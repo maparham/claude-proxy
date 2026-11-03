@@ -138,15 +138,40 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
     o = orders.create(conn, cfg, tier=tier, length=length, currency=CURRENCY, name=user["name"], email=email,
                       user_id=user["id"], notify=False, now=now, terms_version=terms_version, lang=lang,
                       start_now=start_now)
+    return await _open(conn, cfg, user, o, now, withdraw=True)
+
+
+async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, now: float | None = None) -> dict:
+    """Pay online for the buyer's own open Toman order at its quote: one sent unpaid, or one whose payment never came
+    back (still `started` until reconcile; whichever payment verifies first grants, the other is then cancelled
+    unverified). A ZarinPal failure leaves the order open, as it was. Returns what start() does."""
+    now = _now(now)
+    o = orders._own(conn, user["id"], order_id)
+    if o["status"] not in orders.OPEN:
+        raise PaymentError(409, orders.CHANGED)
+    if o["currency"] != CURRENCY:
+        raise PaymentError(409, "Only an order in Toman can be paid online.")
+    if pay_mode(conn, cfg) == "manual":
+        raise PaymentError(409, MANUAL_ONLY)
+    if not on(cfg):
+        raise PaymentError(404, "Online payment is not set up on this gateway.")
+    if not rate_ok(conn, now):
+        raise PaymentError(409, PAUSED)
+    return await _open(conn, cfg, user, o, now, withdraw=False)
+
+
+async def _open(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int, withdraw: bool) -> dict:
+    """A ZarinPal payment for order `o`'s quote; `withdraw`: a refused request withdraws the order (one made for it)."""
     amount = int(round(o["quoted_amount"]))
     try:
         authority = await zarinpal.request(cfg.zarinpal.merchant_id(), amount,
-                                           f"Claude Gateway: {_label(cfg, tier)}, {length}, order #{o['id']}",
+                                           f"Claude Gateway: {_label(cfg, o['tier'])}, {o['length']}, order #{o['id']}",
                                            f"{cfg.listener.home_url.rstrip('/')}/pay/callback", o["email"], o["id"],
                                            cfg.zarinpal.sandbox)
     except (zarinpal.ZarinpalUnavailable, zarinpal.ZarinpalRefused) as e:
         logger.warning("order #%d: ZarinPal payment request failed: %s", o["id"], e)
-        orders.set_status(conn, user["id"], o["id"], "withdrawn")
+        if withdraw:
+            orders.set_status(conn, user["id"], o["id"], "withdrawn")
         raise PaymentError(502, UNAVAILABLE) from e
     cur = conn.execute("INSERT INTO payments(order_id, user_id, created_at, updated_at, amount, authority, status) "
                        "VALUES(?,?,?,?,?,?,'started')", (o["id"], user["id"], now, now, amount, authority))

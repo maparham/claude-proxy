@@ -566,6 +566,17 @@ def test_the_buyer_sees_their_order_and_never_the_admin_note(tmp_path):
     assert out[4] == ""
 
 
+def test_an_open_toman_order_can_be_paid_online(tmp_path):
+    import json
+    from tests.test_tickets_web import _app_fn
+    mine = {"id": 4, "label": "Lite", "tier": "lite", "length": "week", "currency": "IRT", "quoted_amount": 545000, "status": "new"}
+    pay = {"currency": "IRT"}
+    cases = [[mine, pay], [mine, None], [mine | {"currency": "EUR"}, pay], [mine | {"status": "done"}, pay]]
+    out = _app_fn(tmp_path, ["myOrderCard", "tierName"], APP_STUBS + f"var out = {json.dumps(cases)}.map(([o, p]) => myOrderCard(o, p));")
+    assert 'data-my-order="pay" data-id="4"' in out[0] and "with ZarinPal" in out[0] and 'data-my-order="withdraw"' in out[0]
+    assert all('data-my-order="pay"' not in o for o in out[1:])
+
+
 def _price_list(tmp_path, order=None, pick=None, sold_out_week=False):
     import json
     from tests.test_tickets_web import _tier

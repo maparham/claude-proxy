@@ -51,6 +51,17 @@ async def test_pay_redirect_callback_and_result(env):
         assert o["payment"] == {"status": "paid", "amount": 1250000, "ref_id": "201", "card_pan": "502229******5995"}
 
 
+async def test_pay_an_open_order(env):
+    gw, conn, cfg, ids, keys, zp = env
+    async with client(gw) as c:
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
+        oid = payments.get(conn, r.json()["payment_id"])["order_id"]
+        r = await c.post(f"/api/me/orders/{oid}/pay", headers=bearer(keys["alice"]), json={})
+        assert r.status_code == 200, r.text
+        assert r.json()["url"].startswith("https://payment.zarinpal.com/pg/StartPay/")
+        assert payments.get(conn, r.json()["payment_id"])["order_id"] == oid
+
+
 async def test_pay_needs_an_email(env):
     gw, conn, cfg, ids, keys, zp = env
     conn.execute("UPDATE users SET email=NULL WHERE id=?", (ids["alice"],))

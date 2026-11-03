@@ -123,6 +123,63 @@ async def test_order_rules_still_apply(env):
     assert e.value.status == 409
 
 
+def unpaid_order(conn, cfg, ids, currency="IRT"):
+    return orders.create(conn, cfg, tier="lite", length="week", currency=currency, name="Alice", email="alice@example.com",
+                         user_id=ids["alice"], notify=False, terms_version="v1")
+
+
+async def test_pay_order_pays_an_unpaid_order_at_its_quote(env):
+    conn, cfg, ids, zp = env
+    o = unpaid_order(conn, cfg, ids)
+    r = await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    p = payments.get(conn, r["payment_id"])
+    assert (p["order_id"], p["amount"], p["status"]) == (o["id"], int(o["quoted_amount"]), "started")
+    assert zp.requests[0]["order_id"] == o["id"] and r["url"].endswith(p["authority"])
+    await payments.callback(conn, cfg, p["authority"], "OK")
+    assert orders.get(conn, o["id"])["status"] == "done"
+
+
+async def test_pay_order_again_after_a_payment_that_never_came_back(env):
+    # The first payment stays started (the buyer never returned); the second one grants, and reconcile then cancels
+    # the first without verifying it.
+    conn, cfg, ids, zp = env
+    first = payments.get(conn, (await start(conn, cfg, ids))["payment_id"])
+    r = await payments.pay_order(conn, cfg, user(conn, ids["alice"]), first["order_id"])
+    second = payments.get(conn, r["payment_id"])
+    assert second["order_id"] == first["order_id"] and second["authority"] != first["authority"]
+    await payments.callback(conn, cfg, second["authority"], "OK")
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["cancelled"] == 1 and payments.get(conn, first["id"])["status"] == "cancelled"
+    assert len(zp.verifies) == 1
+
+
+async def test_pay_order_failure_keeps_the_order_open(env):
+    conn, cfg, ids, zp = env
+    o = unpaid_order(conn, cfg, ids)
+    zp.request_answer = zarinpal.ZarinpalUnavailable("down")
+    with pytest.raises(payments.PaymentError) as e:
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert e.value.status == 502 and orders.get(conn, o["id"])["status"] == "new"
+
+
+async def test_pay_order_refuses_what_it_cannot_pay(env):
+    conn, cfg, ids, zp = env
+    o = unpaid_order(conn, cfg, ids, currency="USD")
+    with pytest.raises(payments.PaymentError) as e:   # not in Toman
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert e.value.status == 409
+    with pytest.raises(orders.OrderError) as e:   # someone else's
+        await payments.pay_order(conn, cfg, user(conn, create_user(conn, "bob")[0]), o["id"])
+    assert e.value.status == 404
+    orders.withdraw(conn, ids["alice"], o["id"])
+    o = unpaid_order(conn, cfg, ids)
+    orders.withdraw(conn, ids["alice"], o["id"])
+    with pytest.raises(payments.PaymentError) as e:   # closed
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert e.value.status == 409
+    assert zp.requests == []
+
+
 async def paid_flow(conn, cfg, ids):
     r = await start(conn, cfg, ids)
     p = payments.get(conn, r["payment_id"])
