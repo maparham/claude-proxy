@@ -778,7 +778,7 @@ const price = { textContent: "" };
 const dialog = { id: "order-dialog", open: true, innerHTML: "", addEventListener: (ev, fn) => { if (ev === "close") closeFns.push(fn); },
   querySelector: (s) => s === "#order-price" ? price : null };
 const els = { "order-dialog": dialog };
-const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventListener: () => {} });
+const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", classList: { add() {} }, addEventListener: () => {} });
 const ctx = {
   console, Intl, Math, String, Object, Number, JSON, encodeURIComponent, Promise, Date: { now: () => 2000 * 1000 },
   document: { documentElement: { dataset: {} }, getElementById: el, querySelectorAll: (s) => s === ".countdown" ? [countdownEl] : [] },

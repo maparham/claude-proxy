@@ -196,6 +196,7 @@ fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw ne
   if (d.recommended) length = d.recommended.length;   // open on the recommended plan's length
   if (!onSale(d, length)) length = Object.keys(LENGTHS).find((k) => onSale(d, k)) || length;
   document.querySelectorAll("#length-toggle button").forEach((b) => { b.hidden = !onSale(d, b.dataset.length); });
+  document.getElementById("length-toggle").classList.add("ready");
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
   initCurrencySelect(d); lede(d);
   render(); setInterval(tick, 1000);

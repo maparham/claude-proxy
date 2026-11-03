@@ -539,7 +539,7 @@ let reloads = 0, tickFn = null, onToggle = null;
 const store = {}; if (already) store[already] = "1";
 const countdownEl = { dataset: { ends: String(endsAt) }, textContent: "" };
 const els = {};
-const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", addEventListener: (ev, fn) => { if (id === "length-toggle") onToggle = fn; } });
+const el = (id) => (els[id] ||= { id, innerHTML: "", textContent: "", classList: { add() {} }, addEventListener: (ev, fn) => { if (id === "length-toggle") onToggle = fn; } });
 const ctx = {
   console, Intl, Math, String, Object, Number, JSON, URLSearchParams, encodeURIComponent,
   Date: { now: () => clientNow * 1000 },

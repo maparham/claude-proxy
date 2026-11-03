@@ -13,6 +13,7 @@ html[dir="rtl"] .home-top { justify-content: flex-start; }
 .hero-cta .btn { padding: 10px 18px; font-weight: 600; margin-inline-end: 8px; }
 .pricing-sec { padding: 48px 0; border-top: 1px solid var(--border); scroll-margin-top: 16px; }
 .pill-toggle { display: inline-flex; gap: 2px; padding: 3px; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); margin-bottom: 24px; }
+#length-toggle:not(.ready) { visibility: hidden; }   /* until the prices say which lengths are on sale */
 .pill-toggle button { border: 0; background: none; padding: 6px 16px; border-radius: 999px; cursor: pointer; color: var(--ink-2); }
 .pill-toggle button[aria-pressed="true"] { background: var(--ink); color: var(--surface); }
 .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; align-items: stretch; }
