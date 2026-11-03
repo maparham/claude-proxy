@@ -187,9 +187,14 @@ def test_formatters_follow_the_language(tmp_path):
 def _fail_messages():
     exact, built = set(), []
     for py in (STATIC.parent).glob("*.py"):
-        for node_ in ast.walk(ast.parse(py.read_text())):
-            if isinstance(node_, ast.Call) and getattr(node_.func, "id", None) == "fail" and len(node_.args) > 1:
+        tree = ast.parse(py.read_text())
+        # Module constants such as orders.TOO_MANY, so a message passed by name is checked too.
+        consts = {t.id: n.value for n in tree.body if isinstance(n, ast.Assign) for t in n.targets if isinstance(t, ast.Name)}
+        for node_ in ast.walk(tree):
+            if isinstance(node_, ast.Call) and getattr(node_.func, "id", None) in ("fail", "OrderError", "PaymentError") and len(node_.args) > 1:
                 a = node_.args[1]
+                if isinstance(a, ast.Name) and a.id in consts:
+                    a = consts[a.id]
                 if isinstance(a, ast.Constant) and isinstance(a.value, str) and a.value[:1].isupper():
                     exact.add(a.value)
                 elif isinstance(a, ast.JoinedStr):

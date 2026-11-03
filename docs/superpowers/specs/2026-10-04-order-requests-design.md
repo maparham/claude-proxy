@@ -75,7 +75,7 @@ days (in the existing maintenance task). Messages are kept with the order.
 ## 4. Limits
 
 - A signed-in user may have one open order. A second is refused with 409, "You already have an open order."
-  They may also place at most 3 orders per day, withdrawn ones included (each one mails the admin, and sign-up is
+  They may also place at most 10 orders per day, withdrawn ones included (each one mails the admin, and sign-up is
   open). Over it: 429, "Too many orders today; try again tomorrow."
 - A visitor: at most 10 orders per day per IP address, and 10 per day per email address (case-insensitive). Over either:
   429, "Too many orders today; try again tomorrow or sign in."
