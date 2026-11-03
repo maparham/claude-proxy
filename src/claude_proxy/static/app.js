@@ -1477,7 +1477,8 @@ async function renderPricing(main) {
     for (const body of bodies) { try { await api(path, { method: "POST", body }); } catch (e) { errEl.textContent = e.message; return; } }
     render();
   };
-  $("#f-rates").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "rate", (input) => ({ currency: input.dataset.cur, rate: num(input.value) }), "/api/admin/rates", $("#rates-err")); };
+  // Every filled-in rate is saved, unchanged ones too: saving confirms a rate is still right and clears "stale".
+  $("#f-rates").onsubmit = (e) => { e.preventDefault(); saveChanged(e.target, "rate", (input) => ({ currency: input.dataset.cur, rate: num(input.value) }), "/api/admin/rates", $("#rates-err"), (input) => input.value.trim() !== ""); };
   // The recommended plan first, then the changed prices; a recommendation alone re-renders here.
   $("#f-prices").onsubmit = async (e) => {
     e.preventDefault();
