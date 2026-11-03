@@ -2,6 +2,8 @@
 https://www.zarinpal.com/docs/paymentGateway/connectToGateway.html"""
 from __future__ import annotations
 
+import os
+
 import httpx
 
 TIMEOUT_S = 10
@@ -28,7 +30,9 @@ def _client() -> httpx.AsyncClient:
 
 
 def start_url(authority: str, sandbox: bool) -> str:
-    return f"{_host(sandbox)}/pg/StartPay/{authority}"
+    """ZARINPAL_START_HOST (e.g. https://pay.rahkar.pro, the terminal's custom subdomain) replaces the production host here."""
+    host = (not sandbox and os.environ.get("ZARINPAL_START_HOST", "").rstrip("/")) or _host(sandbox)
+    return f"{host}/pg/StartPay/{authority}"
 
 
 async def _call(path: str, body: dict, sandbox: bool) -> dict:

@@ -151,6 +151,8 @@ Enable online payment for Toman orders:
 
 The payment callback is `https://rahkar.pro/pay/callback`. The server's outgoing IP must be the one registered with ZarinPal (`3.139.146.5`).
 
+To send buyers to the terminal's custom subdomain instead of `payment.zarinpal.com`, also put `ZARINPAL_START_HOST=https://pay.rahkar.pro` in `gateway.env` (only once ZarinPal shows the subdomain as active).
+
 ### Restore
 
 On the Mac, with the age private key from the password manager:
