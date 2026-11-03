@@ -171,3 +171,21 @@ async def test_usage_views_split_cli_from_api_requests(env):  # noqa: F811
         h = bearer(keys["alice"])
         assert (await c.get("/api/overview?source=api", headers=h)).json()["totals"]["24h"]["requests"] == 1
         assert (await c.get("/api/overview?source=cli", headers=h)).json()["totals"]["24h"]["requests"] == 2
+
+
+async def test_api_requests_name_their_key_and_search(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    on(gw)
+    kid, _ = api_credit.create_key(conn, ids["alice"], "ci-bot")
+    now = time.time()
+    for model, sid in (("claude-opus-5", None), ("claude-haiku-5", "s-1")):
+        conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, status, session_id, api_key_id) "
+                     "VALUES(?,?,?,?,?,?,?,?,?,?)", (ids["alice"], now - 60, now - 59, "POST", "/v1/messages", "anthropic", model, 200, sid, kid))
+    async with admin_client(gw) as c:
+        async def got(q):
+            return (await c.get(f"/api/requests?source=api&q={q}")).json()["requests"]
+        assert {r["key"] for r in await got("")} == {"ci-bot"}
+        assert len(await got("ci-b")) == 2 and len(await got("ali")) == 2
+        assert [r["model"] for r in await got("haiku")] == ["claude-haiku-5"]
+        assert await got("nobody") == []
+        assert all(r["key"] is None for r in (await c.get("/api/requests?source=cli")).json()["requests"])

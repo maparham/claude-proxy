@@ -554,14 +554,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
 
     @app.get("/api/requests")
-    async def recent_requests(request: Request, user_id: int | None = None, limit: int = 100, source: str = "all"):
+    async def recent_requests(request: Request, user_id: int | None = None, limit: int = 100, source: str = "all",
+                              q: str = ""):
         user = principal(request)
         where, params = scope_where(user, user_id)
         src = by_source(source)
+        match, mparams = "", ()
+        if q := q.strip():   # a user's name, an API key's label or prefix, or a model
+            ids = named(names(), q)
+            match = (f"AND (model LIKE ? ESCAPE '\\' OR user_id IN ({','.join('?' * len(ids)) or 'NULL'}) OR api_key_id IN "
+                     f"(SELECT id FROM api_keys WHERE label LIKE ? ESCAPE '\\' OR key_prefix LIKE ? ESCAPE '\\')) ")
+            mparams = (_like(q), *ids, _like(q), _like(q, prefix=True))
         rows = conn.execute(
-            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, "
-            f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind FROM requests WHERE {where} AND {src} "
-            f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, min(max(limit, 1), 500))).fetchall()
+            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, "
+            f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind FROM requests WHERE {where} AND {src} {match}"
+            f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, *mparams, min(max(limit, 1), 500))).fetchall()
+        kids = {r["api_key_id"] for r in rows if r["api_key_id"]}
+        key_names = {k["id"]: k["label"] or f"{k['key_prefix']}…" for k in conn.execute(
+            f"SELECT id, label, key_prefix FROM api_keys WHERE id IN ({','.join('?' * len(kids))})", tuple(kids))} if kids else {}
         ids = [r["id"] for r in rows]
         marks = ",".join("?" * len(ids))
         tot = usage.grouped(conn, cfg.pricing, f"id IN ({marks})", tuple(ids), group="id") if ids else {}
@@ -578,7 +588,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "provider": r["provider"], "model": r["model"], "status": r["status"], "stream": bool(r["stream"]),
                         "kind": r["kind"] if is_admin(user) else _user_error_kind(r["kind"]),
                         "rejected_by": r["rejected_by"] if is_admin(user) else _user_rejected_by(r["rejected_by"]),
-                        "session_id": r["session_id"],
+                        "session_id": r["session_id"], "key": key_names.get(r["api_key_id"]),
                         "title": titled.get((r["user_id"], r["session_id"])),
                         **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")}})
         return {"requests": out}
