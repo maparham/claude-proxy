@@ -841,9 +841,10 @@ def test_gclaude_picks_the_1m_context_forms_of_fable_opus_and_sonnet(stub, home)
     assert json.loads(gsettings.read_text()) == {}
 
 
-def test_gclaude_hides_claude_codes_login_and_logout_but_global_mode_does_not(stub, home):
+def test_gclaude_hides_claude_codes_account_commands_but_global_mode_does_not(stub, home):
     """gclaude signs in to the gateway; its /logout_gclaude is the way out. No hook can block a built-in."""
-    switches = {"DISABLE_LOGIN_COMMAND": "1", "DISABLE_LOGOUT_COMMAND": "1"}
+    switches = {k: "1" for k in ("DISABLE_LOGIN_COMMAND", "DISABLE_LOGOUT_COMMAND", "DISABLE_UPGRADE_COMMAND",
+                                 "DISABLE_EXTRA_USAGE_COMMAND", "DISABLE_INSTALL_GITHUB_APP_COMMAND")}
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, gsettings, _ = gc_paths(home)
     env = json.loads(gsettings.read_text())["env"]

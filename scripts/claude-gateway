@@ -192,8 +192,11 @@ mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
 ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}   # the newest of each; update when one ships
 # gclaude signs in to the gateway, not to Claude: Claude Code's /login and /logout would only confuse that (its
-# /logout_gclaude is the way out), and these hide them, as no hook can block a built-in.
-GCLAUDE_ENV = {"DISABLE_LOGIN_COMMAND": "1", "DISABLE_LOGOUT_COMMAND": "1"}
+# /logout_gclaude is the way out), /upgrade and /extra-usage are for a claude.ai plan it doesn't have, and
+# /install-github-app works with Anthropic outside the gateway. These hide them, as no hook can block a built-in. (Claude
+# Code 2.1.312 also reads DISABLE_BUG_COMMAND and DISABLE_FEEDBACK_COMMAND, but /bug and /feedback stay listed.)
+GCLAUDE_ENV = {k: "1" for k in ("DISABLE_LOGIN_COMMAND", "DISABLE_LOGOUT_COMMAND", "DISABLE_UPGRADE_COMMAND",
+                                "DISABLE_EXTRA_USAGE_COMMAND", "DISABLE_INSTALL_GITHUB_APP_COMMAND")}
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}

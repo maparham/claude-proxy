@@ -47,8 +47,11 @@ $WarnCmd = "$LineCmd --warn"
 $OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
                           ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5[1m]' }
 # gclaude signs in to the gateway, not to Claude: Claude Code's /login and /logout would only confuse that (its
-# /logout_gclaude is the way out), and these hide them, as no hook can block a built-in.
-$GclaudeEnv = [ordered]@{ DISABLE_LOGIN_COMMAND = '1'; DISABLE_LOGOUT_COMMAND = '1' }
+# /logout_gclaude is the way out), /upgrade and /extra-usage are for a claude.ai plan it doesn't have, and
+# /install-github-app works with Anthropic outside the gateway. These hide them, as no hook can block a built-in. (Claude
+# Code 2.1.312 also reads DISABLE_BUG_COMMAND and DISABLE_FEEDBACK_COMMAND, but /bug and /feedback stay listed.)
+$GclaudeEnv = [ordered]@{ DISABLE_LOGIN_COMMAND = '1'; DISABLE_LOGOUT_COMMAND = '1'; DISABLE_UPGRADE_COMMAND = '1'
+                          DISABLE_EXTRA_USAGE_COMMAND = '1'; DISABLE_INSTALL_GITHUB_APP_COMMAND = '1' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 
 function Get-Version {   # MAJOR.MINOR.N, as version() in scripts/claude-gateway works it out; '' when unknown
