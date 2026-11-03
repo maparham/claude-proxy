@@ -647,15 +647,9 @@ function startCountdowns(root) {
   tick();
   clearInterval(S.countdown); S.countdown = setInterval(() => (document.contains(root.querySelector(".countdown")) && (!root.showModal || root.open) ? tick() : clearInterval(S.countdown)), 1000);
 }
-// A payment that did not go through offers Pay again: the same tier and length go back in as the pick, and the
-// overview's wiring opens their order dialog (or the Renew dialog, while a pass runs).
 function showPaymentNotice(p) {
   const msg = paymentNoticeMsg(p);
-  if (!msg) return;
-  if (p.upgrade || !["failed", "cancelled", "expired"].includes(p.status)) return infoInline(t("pay.title"), msg);
-  const d = openDialog(`<h3>${esc(t("pay.title"))}</h3><p>${esc(msg)}</p>
-    <div class="dialog-actions wide"><button class="btn" data-close>${t("app.ok")}</button><button class="btn primary" type="button" id="pay-retry">${t("pay.retry")}</button></div>`);
-  $("#pay-retry", d).onclick = () => { S.pick = { tier: p.tier, length: p.length, open: true }; d.close(); render(); };
+  if (msg) infoInline(t("pay.title"), msg);
 }
 // The #payment/<id> result notice. infoInline() escapes the message it's handed, so this passes every
 // server value (ref_id, label, error_shown) in raw: escaping it here too would double-escape ' and & etc.
