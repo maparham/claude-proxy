@@ -42,7 +42,9 @@ class Stub:
                     line = stub.account_line if "format=account" in self.path else stub.status_line
                     code, body, ctype = (200 if line is not None else 503), ((line or "") + "\n").encode(), "text/plain; charset=utf-8"
                 elif self.path.startswith("/v1/models"):
-                    code, body, ctype = stub.models_status, json.dumps(stub.models).encode(), "application/json"
+                    ms = stub.models_status
+                    code = (ms.pop(0) if len(ms) > 1 else ms[0]) if isinstance(ms, list) else ms   # a list: answers in order, the last repeats
+                    body, ctype = json.dumps(stub.models).encode(), "application/json"
                 elif self.path == "/install" and stub.install is not None:
                     code, body, ctype = 200, stub.install.encode(), "text/x-shellscript"
                 elif self.path == "/health":
@@ -1845,6 +1847,13 @@ def test_on_still_stops_on_a_rejected_key(stub, home):
     r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-bad")
     assert r.returncode == 1 and "did not accept the key (HTTP 401)" in r.stderr
     assert not gc_paths(home)[2].exists()
+
+
+def test_on_rides_out_a_gateway_restart(stub, home):
+    stub.models_status = [502, 200]   # the gateway (or the one behind it) restarting: retried, then set up
+    r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full")
+    assert r.returncode == 0, r.stderr
+    assert gc_paths(home)[2].exists() and "did not accept" not in r.stderr
 
 
 def test_bare_on_keeps_refreshing_global_mode_where_it_is_on(stub, home):

@@ -203,8 +203,12 @@ function Authorize([string]$Dash) {   # the key the dashboard hands this compute
 }
 
 function Preflight([string]$Url, [string]$Key) {   # the gateway answers and accepts the key
-  try { $r = Invoke-Json GET "$Url/v1/models" $null @{ Authorization = "Bearer $Key"; 'anthropic-version' = '2023-06-01' } }
-  catch { $r = @{ code = '000'; text = $_.Exception.Message } }
+  for ($try = 1; $try -le 4; $try++) {   # an unreachable gateway or a 5xx (e.g. it is restarting) gets three more tries, 2 s apart
+    try { $r = Invoke-Json GET "$Url/v1/models" $null @{ Authorization = "Bearer $Key"; 'anthropic-version' = '2023-06-01' } }
+    catch { $r = @{ code = '000'; text = $_.Exception.Message } }
+    if (-not ([string]$r.code -eq '000' -or [int]$r.code -ge 500) -or $try -eq 4) { break }
+    Start-Sleep -Seconds 2
+  }
   $detail = [string]$r.text; if ($detail.Length -gt 400) { $detail = $detail.Substring(0, 400) }
   if ($r.code -eq 403 -or $r.code -eq 429) {   # the key is good; the account is out of credit or ticket for now
     Say "Signed in, but the gateway is not serving this account yet (HTTP $($r.code)):`n$detail"

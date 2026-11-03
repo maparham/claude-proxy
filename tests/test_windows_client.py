@@ -81,7 +81,8 @@ class Stub:
                 if self.path in d.files:
                     self.reply(200, d.files[self.path], "text/plain; charset=utf-8")
                 elif self.path.startswith("/v1/models"):
-                    self.reply(d.models_status, {"data": [], "has_more": False})
+                    ms = d.models_status   # a list: answers in order, the last repeats
+                    self.reply((ms.pop(0) if len(ms) > 1 else ms[0]) if isinstance(ms, list) else ms, {"data": [], "has_more": False})
                 elif self.path.startswith("/api/me/status") and self.headers.get("authorization", "").removeprefix("Bearer ") in d.revoked:
                     self.reply(401, {"detail": "Not signed in."})
                 elif self.path.startswith("/api/me/status"):
@@ -399,6 +400,15 @@ def test_a_refused_authorization_changes_nothing(installed, stub, error, message
     assert r.returncode != 0 and message in r.out, r.out
     assert not (win.config / "client.json").exists() and not (win.gdir / "settings.json").exists()
     assert not (win.bin / "gclaude.cmd").exists()
+
+
+@on_windows
+def test_a_gateway_restart_is_ridden_out(installed, stub):
+    win = installed
+    stub.models_status = [502, 200]   # the gateway restarting: retried, then set up
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-full", "--dashboard", stub.url)
+    assert r.returncode == 0 and "did not accept" not in r.out, r.out
+    assert (win.bin / "gclaude.cmd").exists()
 
 
 @on_windows

@@ -304,8 +304,12 @@ preflight() {   # mode: the gateway answers and accepts the key the way that mod
   url=$(field url)
   if [ "$1" = own-login ]; then auth="x-gateway-key: $(field key)"; else auth="Authorization: Bearer $(field key)"; fi
   out=$(mktemp)
-  code=$(printf '%s\n' "$auth" | curl -sS -o "$out" -w '%{http_code}' --max-time 15 -H @- -H "anthropic-version: 2023-06-01" \
-         "$url/v1/models" 2>/dev/null) || code=000   # the key goes on stdin: in curl's arguments, `ps` would show it
+  local try
+  for try in 1 2 3 4; do   # an unreachable gateway or a 5xx (e.g. it is restarting) gets three more tries, 2 s apart
+    code=$(printf '%s\n' "$auth" | curl -sS -o "$out" -w '%{http_code}' --max-time 15 -H @- -H "anthropic-version: 2023-06-01" \
+           "$url/v1/models" 2>/dev/null) || code=000   # the key goes on stdin: in curl's arguments, `ps` would show it
+    case $code in 000|5??) [ "$try" = 4 ] || sleep 2 ;; *) break ;; esac
+  done
   if [ "$code" = 403 ] || [ "$code" = 429 ]; then   # the key is good; the account is out of credit or ticket for now
     echo "Signed in, but the gateway is not serving this account yet (HTTP $code):" >&2
     head -c 400 "$out" >&2; echo >&2
