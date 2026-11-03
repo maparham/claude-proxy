@@ -1196,7 +1196,7 @@ function grantDialog(users, pre = null) {
       <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
       <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label class="wide">${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
-      <label class="check wide"><input type="checkbox" name="start_now"${pre && pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
+      <label class="check grant-now wide"><input type="checkbox" name="start_now"${!pre || pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
       <div id="grant-limits" class="wide"></div>
       ${pre ? "" : `<div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
