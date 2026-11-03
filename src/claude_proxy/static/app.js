@@ -876,13 +876,13 @@ function myOrderCard(o, pay) {
   if (!o) return "";
   const what = o.upgrade ? t("up.what", { label: tierName(o.tier, o.label) }) : t("ord.what", { label: tierName(o.tier, o.label), len: lengthName(o.length) });
   if (o.status === "new" || o.status === "contacted") {
-    // Submitted, the admin in touch about paying, the ticket live: where the order stands, as steps.
-    const at = o.status === "contacted" ? 2 : 1;
-    const steps = ["ord.step_sent", "ord.step_contact", "ord.step_live"].map((k, i) => `<li class="${i < at ? "done" : i === at ? "now" : ""}">${t(k)}</li>`).join("");
-    return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
-      <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div>
+    // Submitted, the admin in touch about paying (or paid here), the ticket live: where the order stands, as steps.
+    const at = o.status === "contacted" ? 2 : 1, payable = !!pay && o.currency === pay.currency;
+    const steps = ["ord.step_sent", payable ? "ord.step_pay" : "ord.step_contact", "ord.step_live"].map((k, i) => `<li class="${i < at ? "done" : i === at ? "now" : ""}">${t(k)}</li>`).join("");
+    return `<div class="card order-note" id="my-order"><div><b>${t(payable ? "ord.received_pay" : "ord.received", { what })}</b>
+      <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t(payable ? "ord.waiting_pay" : "ord.waiting")}</div>
       <ol class="order-steps">${steps}</ol></div>
-      <div class="row-actions">${pay && o.currency === pay.currency ? `<button class="btn small primary" data-my-order="pay" data-id="${o.id}">${t("pay.button_short", { amount: esc(money(o.quoted_amount, o.currency)) })}</button>` : ""}
+      <div class="row-actions">${payable ? `<button class="btn small primary" data-my-order="pay" data-id="${o.id}">${t("pay.button_short", { amount: esc(money(o.quoted_amount, o.currency)) })}</button>` : ""}
       <button class="btn small" data-my-order="withdraw" data-id="${o.id}">${t("ord.withdraw")}</button></div></div>`;
   }
   const text = o.status === "done" ? t("ord.done") : o.status === "declined" ? t("ord.declined") : "";
@@ -2361,12 +2361,25 @@ async function renderSessions(main) {
   wireSearch($("#sess-q"), (v) => { S.sessQ = v; fill(); });
   await fill();
 }
-// API keys are used by SDKs and curl, which send no session id, so the API view lists the requests themselves.
+// API keys are used by SDKs and curl, which send no session id, so the API view lists the requests themselves;
+// Claude Code run on an API key does send one, and its sessions come first.
 async function renderApiRequests(main) {
-  const d = await api(`/api/requests?limit=${API_REQ_PAGE}`);
-  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${plural("sess.lede_api", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>
-    <div class="card table-wrap">${d.requests.length ? requestsTable(d.requests, isAdmin()) : `<p class="muted">${t("user.no_requests")}</p>`}</div></section>`;
-  wireMore(main);
+  const range = S.prefs.range === "1d" ? "1d" : "7d";
+  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_api")}</p>
+    <div class="controls">${searchBox("api-q", S.apiQ, t(isAdmin() ? "sess.search_api_admin" : "sess.search_api"))}</div>
+    <div id="api-sess"></div><div class="card table-wrap" id="api-list"></div></section>`;
+  const fill = latest(async (fresh) => {
+    const q = encodeURIComponent(S.apiQ || "");
+    const [sess, d] = await Promise.all([api(`/api/sessions?range=${range}&limit=${SESS_PAGE}&q=${q}`), api(`/api/requests?limit=${API_REQ_PAGE}&q=${q}`)]);
+    if (!fresh()) return;
+    $("#api-sess").innerHTML = sess.sessions.length ? `<div class="card table-wrap" style="margin-bottom:16px">${sessionsTable(sess.sessions, isAdmin(), true)}</div>` : "";
+    const list = $("#api-list");
+    list.innerHTML = d.requests.length ? `<p class="sub">${plural("sess.api_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
+      : `<p class="muted">${t(S.apiQ ? "search.none" : "sess.api_none")}</p>`;
+    wireMore(main);
+  });
+  wireSearch($("#api-q"), (v) => { S.apiQ = v; fill(); });
+  await fill();
 }
 function wireSessMore(list, page, offset) {
   const more = $("#sess-more");
@@ -2405,8 +2418,8 @@ function latest(fn) {
   let n = 0;
   return (...args) => { const mine = ++n; return fn(() => mine === n, ...args); };
 }
-const requestsTable = (requests, showUser) => `<table class="data"><thead><tr><th>${t("errs.when")}</th>${showUser ? `<th>${t("app.user")}</th>` : ""}<th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
-        ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
+const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key)) => `<table class="data"><thead><tr><th>${t("errs.when")}</th>${showUser ? `<th>${t("app.user")}</th>` : ""}${showKey ? `<th>${t("sess.key")}</th>` : ""}<th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
+        ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}${showKey ? `<td>${r.key ? bdi(r.key) : `<span class="muted">—</span>`}</td>` : ""}<td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
           <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
           <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`))}

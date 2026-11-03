@@ -575,6 +575,8 @@ def test_an_open_toman_order_can_be_paid_online(tmp_path):
     out = _app_fn(tmp_path, ["myOrderCard", "tierName"], APP_STUBS + f"var out = {json.dumps(cases)}.map(([o, p]) => myOrderCard(o, p));")
     assert 'data-my-order="pay" data-id="4"' in out[0] and ">Pay " in out[0] and "ZarinPal" not in out[0] and 'data-my-order="withdraw"' in out[0]
     assert all('data-my-order="pay"' not in o for o in out[1:])
+    assert "pay for it here" in out[0] and "waiting for payment" in out[0] and "You pay here" in out[0]
+    assert "the admin will contact you about the next step." in out[1] and "pay for it here" not in out[1]
 
 
 def _price_list(tmp_path, order=None, pick=None, sold_out_week=False):
