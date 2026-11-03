@@ -8,7 +8,14 @@ crawler sees the whole text. Each post is blog/<slug>.html, an HTML fragment und
     -->
     <p>...</p>
 
-The slug is the file name, in Latin letters so links stay readable once copied."""
+The slug is the file name, in Latin letters so links stay readable once copied.
+
+A post can carry a table of the packages that suit its tasks; the server fills in each package's name, usage and
+today's price, so the table follows the rate and discounts. Each row names its task and package:
+
+    <table class="packages">
+    <tr data-package="lite/day"><td>یک رزومه و یک انگیزه‌نامه</td></tr>
+    </table>"""
 from __future__ import annotations
 
 import datetime
@@ -21,6 +28,10 @@ from pathlib import Path
 POSTS = Path(__file__).parent / "blog"
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
+FA_TIERS = {"lite": "اقتصادی", "standard": "استاندارد"}
+FA_LENGTHS = {"day": ("یک‌روزه", "یک روز"), "week": ("هفتگی", "یک هفته"), "month": ("ماهانه", "یک ماه")}
+FA_PLANS = {"Claude Pro": "کلاود پرو", "Claude Max": "کلاود مکس"}
+PACKAGE_ROW = re.compile(r'<tr data-package="([a-z0-9_]+)/(day|week|month)"><td>(.*?)</td></tr>', re.S)
 FA_MONTHS = ("فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند")
 
 
@@ -68,6 +79,50 @@ def jalali(d: datetime.date) -> str:
         days = (days - 1) % 365
     jm, jd = (1 + days // 31, 1 + days % 31) if days < 186 else (7 + (days - 186) // 30, 1 + (days - 186) % 30)
     return f"{jd} {FA_MONTHS[jm - 1]} {jy}".translate(FA_DIGITS)
+
+
+def _money(amount: float, currency: str) -> str:
+    n = f"{round(amount):,}".translate(FA_DIGITS).replace(",", "٬")
+    return f"{n} تومان" if currency == "IRT" else f"{n} {currency}"
+
+
+def _usage(tier: dict, length: str) -> str:
+    if not tier["compare"] or tier["compare_pct"] is None:
+        return ""
+    plan, pct, span = FA_PLANS.get(tier["compare"], tier["compare"]), tier["compare_pct"], FA_LENGTHS[length][1]
+    times = {100: "", 200: "دو برابر ", 300: "سه برابر "}.get(round(pct))
+    return f"{times}مصرف {span} {plan}" if times is not None else f"{pct:g}٪ مصرف {span} {plan}".translate(FA_DIGITS)
+
+
+def packages(body: str, prices: dict | None) -> str:
+    """The post with its package tables filled in from today's price table; rows for packages not on sale are dropped,
+    and without prices (tickets off) the tables go."""
+    tiers = {t["tier"]: t for t in prices["tiers"]} if prices else {}
+
+    def row(m: re.Match) -> str:
+        tier, length, task = tiers.get(m.group(1)), m.group(2), m.group(3)
+        l = tier and tier["lengths"].get(length)
+        if not l or l["amount"] is None:   # not on sale, or no exchange rate yet
+            return ""
+        name = f'{FA_TIERS.get(tier["tier"], tier["label"])} {FA_LENGTHS[length][0]}'
+        price = _money(l["amount"], prices["currency"])
+        if l["discount_ends_at"]:
+            price = f'<s>{_money(l["list_amount"], prices["currency"])}</s> {price}'
+        buy = ('<span class="muted">تمام شد</span>' if l["sold_out"] else
+               f'<a class="btn small" href="/dashboard?tier={tier["tier"]}&amp;length={length}&amp;order=1">خرید</a>')
+        return (f"<tr><td>{task}</td><td><b>{html.escape(name)}</b></td><td>{html.escape(_usage(tier, length))}</td>"
+                f"<td>{price}</td><td>{buy}</td></tr>")
+
+    def table(m: re.Match) -> str:
+        rows = PACKAGE_ROW.sub(row, m.group(1))
+        if not prices or "<tr>" not in rows:
+            return ""
+        vat = (f'<p class="packages-note">قیمت‌ها شامل {prices["vat_percent"]:g}٪ مالیات بر ارزش افزوده است.</p>'.translate(FA_DIGITS)
+               if prices.get("vat_percent") else "")
+        return ('<div class="packages-wrap"><table class="packages"><thead><tr><th>کار</th><th>بسته پیشنهادی</th>'
+                f"<th>سهمیه</th><th>قیمت</th><th></th></tr></thead><tbody>{rows}</tbody></table></div>{vat}")
+
+    return re.sub(r'<table class="packages">(.*?)</table>', table, body, flags=re.S)
 
 
 def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website") -> str:
@@ -118,9 +173,9 @@ def index_page(base: str) -> str:
     return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main)
 
 
-def post_page(base: str, p: Post) -> str:
+def post_page(base: str, p: Post, prices: dict | None) -> str:
     main = (f'<article class="post"><h1>{html.escape(p.title)}</h1>'
-            f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{p.body}'
+            f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{packages(p.body, prices)}'
             '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article>')
     return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article")
 

@@ -1703,7 +1703,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         post = blog.find(slug) if cfg.tickets.enabled else None
         if post is None:
             fail(404, "Not found.")
-        return HTMLResponse(blog.post_page(home_base(request), post), headers=PAGE_HEADERS)
+        prices = tickets.price_table(conn, cfg, time.time(), display_currency())
+        return HTMLResponse(blog.post_page(home_base(request), post, prices), headers=PAGE_HEADERS)
 
     @app.get("/d/{code}")
     @app.get("/D/{code}")   # as the QR code spells it
