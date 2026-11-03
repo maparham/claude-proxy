@@ -722,6 +722,10 @@ const I18N = {
     "ord.split": "Your allowance renews on a fixed weekly schedule, so your pass is used in {n} parts: {pieces}. Whatever is left of a part when the next one starts is lost.",
     "ord.split_one": "Your whole pass is usable until {date}.",
     "ord.split_open": "Your whole pass is usable until it ends.",
+    "ord.term_now": "Starts as soon as it's paid or approved and lasts {len}.",
+    "ord.term_after": "Starts when your current passes run out and lasts {len}.",
+    "ord.bar_start": "start",
+    "ord.bar_end": "end",
     "ord.split_and": " and ",
     "ord.split_week": "{n} part: {pct}",
     "ord.nth.1": "First", "ord.nth.2": "Second", "ord.nth.3": "Third", "ord.nth.4": "Fourth", "ord.nth.5": "Fifth",
@@ -1707,6 +1711,10 @@ const I18N = {
     "ord.split": "سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در {n} قسمت قابل استفاده است: {pieces}. هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
     "ord.split_one": "کل بسته شما تا {date} قابل استفاده است.",
     "ord.split_open": "کل بسته شما تا پایانش قابل استفاده است.",
+    "ord.term_now": "به‌محض پرداخت یا تأیید شروع می‌شود و {len} اعتبار دارد.",
+    "ord.term_after": "پس از تمام شدن بسته‌های فعلی شروع می‌شود و {len} اعتبار دارد.",
+    "ord.bar_start": "شروع",
+    "ord.bar_end": "پایان",
     "ord.split_and": " و ",
     "ord.split_week": "قسمت {n}: {pct}",
     "ord.nth.1": "اول", "ord.nth.2": "دوم", "ord.nth.3": "سوم", "ord.nth.4": "چهارم", "ord.nth.5": "پنجم",
@@ -2016,8 +2024,16 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 // has them all), with only the ticket's start and end marked with their date and time. `use` (a running pass's,
 // {pcts, cur, label, resets}): each piece's use in percent filled into its segment, `label` written in the segment in
 // use, and each split marked with its time (`resets`), a split near an end with its time a row lower.
-// The terms' first line: the split, else (no quota data) a day pass is one allowance and anything longer the general line.
-function splitOrGeneral(ws, len, days) { return splitTerms(ws, len, days) || t(len === "day" ? "ord.split_open" : "ord.terms_l1"); }
+// The order terms' first line: when the pass starts and how long it lasts, never a date (the start is the approval,
+// so any date is a guess; `after`: queued behind the buyer's current passes), then the split, else (no quota data)
+// for anything longer than a day the general line.
+function splitOrGeneral(ws, len, days, after) {
+  const head = t(after ? "ord.term_after" : "ord.term_now", { len: t(`price.1_${len}`) });
+  const parts = ws && ws[len];
+  if (parts && parts.length === 1) return head;
+  const split = splitTerms(ws, len, days);
+  return split ? `${head} ${split}` : len === "day" ? head : `${head} ${t("ord.terms_l1")}`;
+}
 function splitTerms(ws, len, days, use) {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
@@ -2060,7 +2076,9 @@ function splitTerms(ws, len, days, use) {
     const edge = at < 0.15 ? "start" : "end";
     return `<em class="tick" style="inset-inline-start:${(at * 100).toFixed(2)}%"></em>${mark(edge === "start" ? 0 : 1, r, `low notick edge-${edge}`, only, rel)}`;
   }).join("");
-  const ends = mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end") + splits;
+  // An order's bar marks its ends by name: its dates hang on when it is approved.
+  const ends = use ? mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end") + splits
+    : mark(0, 0, "edge-start", false, t("ord.bar_start")) + mark(1, 0, "edge-end", false, t("ord.bar_end"));
   return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${use ? " use" : ""}" aria-hidden="true">${bar}${ends}</span>`;
 }
 

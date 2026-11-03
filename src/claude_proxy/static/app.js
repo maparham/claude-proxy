@@ -922,7 +922,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   const now = () => !!start && f.start.value === "now";
   // The terms follow the choice: a ticket starting now splits across the weeks from now.
   if (start) f.querySelectorAll('input[name="start"]').forEach((r) => (r.onchange = () => {
-    $("#order-split", d).innerHTML = splitOrGeneral(now() ? start.splitNow : p.week_split, len, tier.lengths[len].days);
+    $("#order-split", d).innerHTML = splitOrGeneral(now() ? start.splitNow : p.week_split, len, tier.lengths[len].days, !now());
   }));
   f.onsubmit = async (e) => {
     e.preventDefault();
