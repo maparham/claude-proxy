@@ -69,7 +69,7 @@ If your machine has no Claude login of its own, you can instead point plain `cla
 - **`/usage`** in `gclaude` shows the same line with a link to the dashboard, without using a request.
 - **`/account`** in `gclaude` shows your account and key with a link to the dashboard (a small Haiku request;
   when you're out of credit it's answered without one).
-- **`/logout_gclaude`** in `gclaude` signs this computer out (Claude Code's own `/logout` doesn't): it revokes this computer's key, removes it and closes the session. Run `gclaude`
+- **`/logout_gclaude`** in `gclaude` signs this computer out (Claude Code's own `/login` and `/logout` are hidden in gclaude): it revokes this computer's key, removes it and closes the session. Run `gclaude`
   again to sign in: it shows the link and code, as the first setup did, then starts.
 - **`gclaude update`** updates the gateway client and gclaude's setup, then Claude Code itself.
 - **Dashboard**: `https://dash.rahkar.pro/dashboard` shows your own requests, sessions, usage and computers.

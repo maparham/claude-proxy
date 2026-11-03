@@ -46,6 +46,9 @@ $WarnCmd = "$LineCmd --warn"
 # So gclaude's aliases (and its /model picker) name those. The newest of each; update when one ships.
 $OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
                           ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5[1m]' }
+# gclaude signs in to the gateway, not to Claude: Claude Code's /login and /logout would only confuse that (its
+# /logout_gclaude is the way out), and these hide them, as no hook can block a built-in.
+$GclaudeEnv = [ordered]@{ DISABLE_LOGIN_COMMAND = '1'; DISABLE_LOGOUT_COMMAND = '1' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 
 function Get-Version {   # MAJOR.MINOR.N, as version() in scripts/claude-gateway works it out; '' when unknown
@@ -220,9 +223,11 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
   $envBlock = Field $s 'env'
   if ($envBlock -is [psobject]) {
     foreach ($k in 'ANTHROPIC_BASE_URL', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_GATEWAY_DASHBOARD', 'CLAUDE_GATEWAY_VERSION') { Remove-Field $envBlock $k }
-    $added = Field $rec 'added_models'
-    if ($added -is [psobject]) {   # only while still ours: the user has not picked another model for that alias since
-      foreach ($p in $added.PSObject.Properties) { if ((Field $envBlock $p.Name) -eq $p.Value) { Remove-Field $envBlock $p.Name } }
+    foreach ($r in 'added_models', 'added_env') {
+      $added = Field $rec $r
+      if ($added -is [psobject]) {   # only while still ours: the user has not picked another model for that alias, or set it, since
+        foreach ($p in $added.PSObject.Properties) { if ((Field $envBlock $p.Name) -eq $p.Value) { Remove-Field $envBlock $p.Name } }
+      }
     }
     if (Is-Empty $envBlock) { Remove-Field $s 'env' }
   }
@@ -234,7 +239,7 @@ function Remove-Ours($s, $rec) {   # what an earlier `on` added to gclaude's set
     if ($groups.Count) { Set-Field $hooks 'UserPromptSubmit' $groups } else { Remove-Field $hooks 'UserPromptSubmit' }
     if (Is-Empty $hooks) { Remove-Field $s 'hooks' }
   }
-  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook', 'added_models') { Remove-Field $rec $k }
+  foreach ($k in 'added_disable_connectors', 'added_statusline', 'added_warn_hook', 'added_models', 'added_env') { Remove-Field $rec $k }
 }
 
 function Command-Text([string]$name) {
@@ -276,7 +281,7 @@ are on the status line and on the dashboard, and that running ``gclaude update``
 
 function Write-Commands {
   # Claude Code's own /usage can't see the gateway, nor its /logout sign out of it; the --warn hook answers /usage
-  # and /logout_gclaude instead (not /logout: a built-in can't be hidden, so the menu would list both). /account: Command-Text.
+  # and /logout_gclaude instead (not /logout: gclaude hides the built-in one ($GclaudeEnv), but an older Claude Code would list both). /account: Command-Text.
   $old = Join-Path $GDir 'commands\logout.md'   # what an older gclaude named /logout_gclaude
   if ((Test-Path -LiteralPath $old) -and (Select-String -LiteralPath $old -SimpleMatch $UsageMark -Quiet)) { Remove-Item -LiteralPath $old -Force }
   foreach ($name in 'usage', 'account', 'logout_gclaude') {
@@ -411,6 +416,11 @@ function Gclaude-On($c) {
     if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $OneMModels[$k]; Set-Field $added $k $OneMModels[$k] }
   }
   if (-not (Is-Empty $added)) { Set-Field $rec 'added_models' $added }
+  $added = New-Object psobject
+  foreach ($k in $GclaudeEnv.Keys) {
+    if (-not (Has $envBlock $k)) { Set-Field $envBlock $k $GclaudeEnv[$k]; Set-Field $added $k $GclaudeEnv[$k] }
+  }
+  if (-not (Is-Empty $added)) { Set-Field $rec 'added_env' $added }
   if (-not (Has $s 'disableClaudeAiConnectors')) {   # no claude.ai login in gclaude: silence its connectors warning
     Set-Field $s 'disableClaudeAiConnectors' $true
     Set-Field $rec 'added_disable_connectors' $true

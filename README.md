@@ -230,8 +230,8 @@ so it costs nothing. Plain `claude` keeps the real `/usage`.
 `Account: maya · maya@example.com · user · key sk-proxy-ab1… for MacBook, authorized 2026-09-20 · dashboard: https://…/dashboard`.
 A small Haiku request repeats that line, since a hook's reply reads as an error in Claude Code. When a limit is
 reached or the gateway is down, so that request would fail, the hook answers `/account` itself.
-Claude Code's own `/logout` only clears its claude.ai login, which gclaude doesn't use, and it can't be hidden or
-blocked (a hook never sees it). gclaude's `/logout_gclaude` signs this computer out of the gateway, answered by the hook: it revokes the key when it is this computer's own
+Claude Code's own `/login` and `/logout` deal with a claude.ai login, which gclaude doesn't use, so gclaude hides them
+(`DISABLE_LOGIN_COMMAND` and `DISABLE_LOGOUT_COMMAND` in its settings). gclaude's `/logout_gclaude` signs this computer out of the gateway, answered by the hook: it revokes the key when it is this computer's own
 (one authorized in the browser; your first key may be in use elsewhere, so it stays valid) and removes it from
 gclaude's `settings.json` and `client.json`. Like Claude Code's own `/logout`, it then closes the session (on macOS
 and Linux; on Windows, `/exit`). The next `gclaude` signs this computer in again in the browser before it starts,

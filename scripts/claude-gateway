@@ -191,6 +191,9 @@ import json, os, shlex, sys, tempfile
 mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
 ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
                 "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}   # the newest of each; update when one ships
+# gclaude signs in to the gateway, not to Claude: Claude Code's /login and /logout would only confuse that (its
+# /logout_gclaude is the way out), and these hide them, as no hook can block a built-in.
+GCLAUDE_ENV = {"DISABLE_LOGIN_COMMAND": "1", "DISABLE_LOGOUT_COMMAND": "1"}
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}
@@ -208,10 +211,11 @@ if ours(env.get("ANTHROPIC_CUSTOM_HEADERS")):
     del env["ANTHROPIC_CUSTOM_HEADERS"]
 if st.pop("added_disable_connectors", False):
     s.pop("disableClaudeAiConnectors", None)
-added = st.pop("added_models", None)
-for k, v in (added.items() if isinstance(added, dict) else ()):
-    if env.get(k) == v:   # still ours: the user has not picked another model for that alias since
-        del env[k]
+for rec in ("added_models", "added_env"):
+    added = st.pop(rec, None)
+    for k, v in (added.items() if isinstance(added, dict) else ()):
+        if env.get(k) == v:   # still ours: the user has not picked another model for that alias, or set it, since
+            del env[k]
 line_cmd = shlex.quote(statusline)
 ours_line = lambda v: isinstance(v, dict) and isinstance(v.get("command"), str) and (
     v["command"] == line_cmd or v["command"].startswith(line_cmd + " --then "))
@@ -249,6 +253,10 @@ if mode == "on":
             if k not in env:
                 env[k] = v
                 st.setdefault("added_models", {})[k] = v
+    for k, v in (GCLAUDE_ENV.items() if scope == "gclaude" else ()):
+        if k not in env:
+            env[k] = v
+            st.setdefault("added_env", {})[k] = v
     if os.path.exists(statusline):
         if "statusLine" not in s:
             s["statusLine"] = {"type": "command", "command": line_cmd, "refreshInterval": 30}
@@ -525,8 +533,8 @@ cmds, own_cmds = os.path.join(gdir, "commands"), os.path.join(shared, "commands"
 # /account runs statusline.sh --account and a small model call repeats its line: a hook's reply would read as an
 # error. When that call can't be made (a limit reached, the gateway down), the hook answers /account instead.
 # /logout_gclaude signs out of the gateway, which Claude Code's own /logout can't: the hook answers it, as the key it
-# removes is the one a model call would need. Not named /logout: a built-in can't be hidden, and the menu would list
-# both under one name.
+# removes is the one a model call would need. Not named /logout: gclaude hides the built-in one (GCLAUDE_ENV), but
+# an older Claude Code without that switch would list both under one name.
 account_cmd = f"sh {shlex.quote(statusline)} --account"
 COMMANDS = {"usage": f"""---
 description: Your gateway limits and usage
