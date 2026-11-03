@@ -179,6 +179,15 @@ def index_page(base: str) -> str:
     return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main)
 
 
+def latest(n: int = 3) -> str:
+    """The newest posts as cards for the home page, in Persian whichever language the page is shown in."""
+    items = "".join(
+        f'<li><a href="/blog/{p.slug}"><h3>{html.escape(p.title)}</h3>'
+        f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>'
+        f"<p>{html.escape(p.description)}</p></a></li>" for p in posts()[:n])
+    return f'<ul class="latest-list" lang="fa" dir="rtl">{items}</ul>' if items else ""
+
+
 def contents(body: str) -> tuple[str, str]:
     """The post with an id on each h2 and h3, and its table of contents linking them; no table for under two."""
     items = []

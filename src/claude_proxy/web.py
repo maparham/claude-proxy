@@ -298,22 +298,22 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return conn.execute("SELECT * FROM users WHERE id=?", (user["id"],)).fetchone()
         if not cfg.signup.enabled:
             fail(403, "Sign-ups are closed. Ask the gateway admin for an account.")
-        # A deleted account's email stays in the audit log: signing up again never brings a new credit. Someone who
-        # deleted their own account (their latest entry) may come back with none; one the admin removed may not.
+        # A deleted account's email stays in the audit log. Someone who deleted their own account (their latest entry)
+        # may come back; one the admin removed may not.
         last = conn.execute("SELECT action FROM audit_log WHERE action IN ('signup', 'delete_self') AND lower(target)=? "
                             "ORDER BY id DESC LIMIT 1", (email,)).fetchone()
         if last is not None and last["action"] == "signup":
             fail(403, "This account was removed. Ask the gateway admin.")
-        credit = 0 if last is not None else cfg.signup.credit_usd
         if conn.execute("SELECT 1 FROM users WHERE lower(name)=?", (email,)).fetchone():
             fail(409, f"The name {email} is taken. Ask the gateway admin.")
         conn.execute("BEGIN IMMEDIATE")
         try:
             uid, _ = db.create_user(conn, email)   # its own key is never shown; machines get theirs in the browser
             conn.execute("UPDATE users SET clerk_id=?, email=? WHERE id=?", (clerk_id, email, uid))
+            # No credit until a ticket is granted: the first ticket removes this zero credit.
             conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)",
-                         (uid, "cost_total", "*", f"{credit:g}", "usd", int(time.time())))
-            db.audit(conn, uid, "signup", email, {"credit_usd": credit})
+                         (uid, "cost_total", "*", "0", "usd", int(time.time())))
+            db.audit(conn, uid, "signup", email, {"credit_usd": 0})
             conn.execute("COMMIT")
         except BaseException as e:
             conn.execute("ROLLBACK")
@@ -1657,7 +1657,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.tickets.enabled or (signed_in and home is None):
             return RedirectResponse("/dashboard")
         html = versioned("home.html", ("i18n.js", "home.js", "home.css", "app.css"))
-        return HTMLResponse(html.replace("https://rahkar.pro/", f"{home_base(request)}/"), headers=PAGE_HEADERS)
+        html = html.replace("https://rahkar.pro/", f"{home_base(request)}/").replace("<!--latest-posts-->", blog.latest())
+        return HTMLResponse(html, headers=PAGE_HEADERS)
 
     def home_base(request: Request) -> str:
         """Where the public home page lives: [listener] home_url, else this host."""
