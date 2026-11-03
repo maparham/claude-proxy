@@ -30,7 +30,7 @@ import segno
 from argon2 import PasswordHasher
 from argon2.exceptions import VerificationError, InvalidHashError
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
@@ -131,7 +131,7 @@ class SecurityHeaders(BaseHTTPMiddleware):
 
 class HomeHost(BaseHTTPMiddleware):
     """On [listener] home_url's host only the home page and what it uses are served; the rest is the dashboard's."""
-    PUBLIC = ("/", "/privacy", "/api/pricing", "/api/orders", "/pay/callback")
+    PUBLIC = ("/", "/privacy", "/robots.txt", "/sitemap.xml", "/api/pricing", "/api/orders", "/pay/callback")
 
     def __init__(self, app, home_host: str, dashboard: str):
         super().__init__(app)
@@ -1640,7 +1640,33 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         signed_in = db.find_session(conn, request.cookies.get(COOKIE, "")) is not None
         if not cfg.tickets.enabled or (signed_in and home is None):
             return RedirectResponse("/dashboard")
-        return HTMLResponse(versioned("home.html", ("i18n.js", "home.js", "home.css", "app.css")), headers=PAGE_HEADERS)
+        html = versioned("home.html", ("i18n.js", "home.js", "home.css", "app.css"))
+        return HTMLResponse(html.replace("https://rahkar.pro/", f"{home_base(request)}/"), headers=PAGE_HEADERS)
+
+    def home_base(request: Request) -> str:
+        """Where the public home page lives: [listener] home_url, else this host."""
+        return (cfg.listener.home_url or str(request.base_url)).rstrip("/")
+
+    def on_home_host(request: Request) -> bool:
+        return not cfg.listener.home_url or request.url.hostname == urlsplit(cfg.listener.home_url).hostname
+
+    # Search engines index the home and privacy pages, on the home host only: the dashboard's copy of the home page
+    # would be a duplicate, and the rest needs sign-in.
+    @app.get("/robots.txt")
+    async def robots(request: Request):
+        if not cfg.tickets.enabled or not on_home_host(request):
+            return PlainTextResponse("User-agent: *\nDisallow: /\n")
+        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /static/\nAllow: /api/pricing\nDisallow: /\n\n"
+                                 f"Sitemap: {home_base(request)}/sitemap.xml\n")
+
+    @app.get("/sitemap.xml")
+    async def sitemap(request: Request):
+        if not cfg.tickets.enabled or not on_home_host(request):
+            fail(404, "Not found.")
+        urls = "".join(f"<url><loc>{home_base(request)}{path}</loc></url>" for path in ("/", "/privacy"))
+        return Response('<?xml version="1.0" encoding="UTF-8"?>\n'
+                        f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n',
+                        media_type="application/xml")
 
     @app.get("/d/{code}")
     @app.get("/D/{code}")   # as the QR code spells it

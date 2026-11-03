@@ -272,7 +272,7 @@ async def test_home_is_for_visitors_and_signed_in_browsers_go_to_the_dashboard(e
     gw, conn, cfg, ids, keys = env
     async with asgi_client(create_dashboard_app(gw)) as c:
         page = await c.get("/")
-        assert page.status_code == 200 and 'id="pricing"' in page.text and 'name="robots" content="noindex"' in page.text
+        assert page.status_code == 200 and 'id="pricing"' in page.text and "noindex" not in page.text
         assert 'href="/dashboard"' in page.text
     async with admin_client(gw) as c:
         r = await c.get("/")
