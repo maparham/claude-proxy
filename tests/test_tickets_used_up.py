@@ -215,3 +215,32 @@ def test_requests_spill_to_the_next_pass_and_come_back_when_the_first_refills_at
     assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t2["id"]
     week_snap(conn, RESET7 + 3600, 1)
     assert limits.serving(conn, cfg, ids["alice"], RESET7 + 3600)[0]["id"] == t["id"]
+
+
+async def test_a_used_up_pass_with_one_queued_that_cannot_move_up_is_not_replaced_by_a_new_one(db, cfg):
+    """The account is too full for the queued pass to start early: a new pass would queue after it, so the dashboard
+    offers the start choice (no `replaces`) rather than "starts at once, in place of this one"."""
+    import time
+    from tests.test_orders_web import client
+    from tests.test_tickets_limits import snap
+    from tests.test_tickets_web import env as web_env
+    from tests.test_web import bearer
+    gw, conn, cfg, ids, keys = web_env.__wrapped__(db, cfg)
+    now = time.time()
+    reset = now + 3 * DAY   # refills after the day pass ends: it can be used up
+    snap(conn, now - 9000, 0, "7d", reset)
+    req(conn, ids["alice"], now - 8900, i=1000)
+    snap(conn, now - 8800, 1, "7d", reset)
+    snap(conn, now - 60, 0, "5h", now + 3000)
+    cfg.tickets.max_sold_pct = 40
+    bob, _ = create_user(conn, "bob")
+    g = lambda uid, tier, at: tickets.grant(conn, cfg, ids["admin"], user(conn, uid), tier, "day", "USD", now=at, terms_version="v1")  # noqa: E731
+    g(bob, "standard", now - 7200)                      # 25%, until 22 hours from now
+    a = g(ids["alice"], "lite", now - 3600)             # 5%
+    b = g(ids["alice"], "standard", now - 1800)         # 25%, queued after a: 50% beside bob's if moved up now
+    req(conn, ids["alice"], now - 200, i=30000, ticket=a["id"])
+    snap(conn, now - 100, 31, "7d", reset)
+    async with client(gw) as c:
+        me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
+    assert me["current"]["used_up"] and tickets.get(conn, b["id"])["starts_at"] == a["ends_at"]   # no hand-over: no room
+    assert me["replaces"] is False and me["next_start"] == tickets.get(conn, b["id"])["effective_end"]

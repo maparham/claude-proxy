@@ -753,11 +753,11 @@ function userLimitsCard(me, tk, order) {
   const fromNow = (ts) => fmtDur(Math.max(0, ts - Date.now() / 1000 - (S.tkSkew || 0)));
   const open = !!order && (order.status === "new" || order.status === "contacted");
   // Another ticket: now, beside this one (limits add up), or queued after the last one; a used-up ticket's starts at once.
-  const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(c.used_up ? "new.button" : "renew.button")}</button>` : "";
+  const renew = c ? `<button class="btn small primary" id="renew-btn"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t(tk.replaces ? "new.button" : "renew.button")}</button>` : "";
   const multi = !!c && !!c.passes && c.passes.length > 1;
   const extras = !c ? "" : `${c.bonuses.map((b) => `<div class="badge bonus">${t("ov.bonus_share", { share: `${nf0.format(Math.round(b.pct))}${PCT}`, date: fmtDate(b.ends_at) })}${b.note ? ` · ${bdi(b.note)}` : ""}</div>`).join("")}
       ${(c.day_bonuses || []).filter((b) => b.note).map((b) => `<div class="badge bonus">${plural("ov.bonus_extra_days", b.extra_days, { n: nf0.format(b.extra_days) })} · ${bdi(b.note)}</div>`).join("")}
-      ${c.used_up ? `<p class="sub">${t("ov.used_up")}</p>` : ""}
+      ${tk.replaces ? `<p class="sub">${t("ov.used_up")}</p>` : ""}
       ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}`;
   // With several passes, the one in use stands on its own above the others, with its limits in full.
   const inUse = multi && c.passes.find((p) => p.serving);
@@ -859,7 +859,7 @@ function priceListCard(tk, order, renew) {
   const planShare = (tier, k) => tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
   const cell = (tier, k) => { const l = tier.lengths[k]; if (!l) return `<td class="r muted">${t("price.off_sale")}</td>`; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
     ${planShare(tier, k)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
-  return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t(tk.current && tk.current.used_up ? "new.title" : "renew.title") : t("tab.tickets")}</h3><p class="sub">${renew || `${t("price.sub", { lengths: lengthsList(p.tiers, "price.a_") })}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}`}</p>
+  return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t(tk.replaces ? "new.title" : "renew.title") : t("tab.tickets")}</h3><p class="sub">${renew || `${t("price.sub", { lengths: lengthsList(p.tiers, "price.a_") })}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}`}</p>
     <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
     ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
     </tbody></table></div><p class="sub">${t("price.terms_note")}${p.vat_percent ? ` ${t("pay.vat", { pct: fmtNum(p.vat_percent) })}` : ""}</p>${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
@@ -986,7 +986,7 @@ function wireOrdering(root, tk, order) {
   }));
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
-    const sub = tk.current.used_up ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.next_start) });
+    const sub = tk.replaces ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.next_start) });
     const d = openDialog(`${priceListCard(tk, order, sub)}
       <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
     wireOrdering(d, tk, order);
@@ -996,7 +996,7 @@ function wireOrdering(root, tk, order) {
     const [tierId, len] = b.dataset.order.split(":");
     const tier = tk.prices.tiers.find((x) => x.tier === tierId);
     // A used-up ticket's replacement starts now either way: no choice to offer.
-    const c = tk.current, start = c && !c.used_up ? { date: tk.next_start, splitNow: tk.split_now } : null;
+    const c = tk.current, start = c && !tk.replaces ? { date: tk.next_start, splitNow: tk.split_now } : null;
     if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version, tk.manual, start);
   }));
   // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).

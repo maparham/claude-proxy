@@ -1401,7 +1401,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "amount": t["amount"], "currency": t["currency"]} for t in tickets.past(conn, user["id"], now)]
         currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
         # A new ticket queues after the last, or starts now in place of a used-up one: the order dialog's "after" date.
-        out["next_start"] = tickets.next_start(conn, cfg, user["id"], now)[0]
+        # `replaces`: the latter, so the dialog offers no start choice. Not merely `used_up`: with a ticket queued that
+        # had no room to move up (hand_over), a new one still queues after it.
+        out["next_start"], replaces = tickets.next_start(conn, cfg, user["id"], now)
+        out["replaces"] = bool(replaces)
         out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"])
         # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
         out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
