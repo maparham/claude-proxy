@@ -640,13 +640,14 @@ def last_end(conn: sqlite3.Connection, user_id: int) -> int | None:
 
 def next_start(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float, start_now: bool = False) -> tuple[int, list[dict]]:
     """When a new ticket for the user starts, and the running tickets it replaces. `start_now`: now, alongside the
-    running ones (their limits add up). Else after the user's last ticket, or now in place of running tickets that
-    are used up (limits.used_up) with nothing queued after them."""
+    running ones (their limits add up), or in their place when they are used up (limits.used_up), so their share no
+    longer counts against capacity. Else after the user's last ticket, or now in place of running tickets that are
+    used up with nothing queued after them."""
     from . import limits   # here, not at the top: limits imports tickets
     now, last = _now(now), last_end(conn, user_id)
-    if start_now:
-        return now, []
     run = running(conn, user_id, now)
+    if start_now:
+        return now, run if run and limits.used_up(conn, cfg, user_id, now, run) else []
     if run and max(t["effective_end"] for t in run) == last and limits.used_up(conn, cfg, user_id, now, run):
         return now, run
     return max(now, last or 0), []

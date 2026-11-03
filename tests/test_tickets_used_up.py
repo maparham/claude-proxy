@@ -82,10 +82,13 @@ def test_only_an_unused_ticket_can_be_upgraded(env):
 
 
 def test_a_pass_started_now_runs_beside_the_first_with_limits_of_its_own(env):
-    """As if another user held it: the second pass counts only what it served, so it starts with all of its limits."""
+    """As if another user held it: the second pass counts only what it served, so it starts with all of its limits.
+    The first is at its weekly limit but refills before it ends (not used up), so it keeps running."""
     conn, cfg, ids, t = env
-    use_up(conn, ids)
+    conn.execute("UPDATE tickets SET ends_at=? WHERE id=?", (NOW + 4 * DAY, t["id"]))   # past the reset at NOW + 3 days
+    req(conn, ids["alice"], NOW - 200, i=5000)
     req(conn, ids["alice"], NOW - 190, i=0)
+    assert not limits.used_up(conn, cfg, ids["alice"], NOW - 100)
     p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "standard", "week", "USD", NOW - 100, start_now=True)
     assert (p["starts_at"], p["replaces"]) == (NOW - 100, [])
     t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
@@ -244,3 +247,21 @@ async def test_a_used_up_pass_with_one_queued_that_cannot_move_up_is_not_replace
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["current"]["used_up"] and tickets.get(conn, b["id"])["starts_at"] == a["ends_at"]   # no hand-over: no room
     assert me["replaces"] is False and me["next_start"] == tickets.get(conn, b["id"])["effective_end"]
+
+
+def test_a_ticket_to_start_now_takes_the_place_of_used_up_ones_so_it_fits(env):
+    """A paid "Now" order granted after the running ticket was used up: it replaces that ticket, whose share no longer
+    counts, rather than failing for capacity beside it (and leaving a paid order with no ticket)."""
+    conn, cfg, ids, t = env
+    use_up(conn, ids)
+    cfg.tickets.max_sold_pct = 25   # the used-up 5% beside a new 25% would not fit
+    nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=NOW - 100,
+                        terms_version="v1", start_now=True)
+    assert nxt["starts_at"] == NOW - 100 and tickets.get(conn, t["id"])["used_up_at"] == NOW - 100
+
+
+def test_a_ticket_to_start_now_runs_beside_one_with_use_left(env):
+    conn, cfg, ids, t = env
+    nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=NOW - 100,
+                        terms_version="v1", start_now=True)
+    assert nxt["starts_at"] == NOW - 100 and tickets.get(conn, t["id"])["used_up_at"] is None
