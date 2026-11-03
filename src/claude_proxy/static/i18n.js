@@ -1701,7 +1701,7 @@ const I18N = {
     "ord.step_sent": "سفارش ثبت شد",
     "ord.step_contact": "ادمین برای پرداخت با شما تماس می‌گیرد",
     "ord.step_live": "بسته شما فعال می‌شود",
-    "ord.withdraw": "پس‌گرفتن",
+    "ord.withdraw": "لغو سفارش",
     "ord.done": "سفارش شما انجام شد.",
     "ord.declined": "سفارش شما رد شد.",
     "ord.dismiss": "بستن",
