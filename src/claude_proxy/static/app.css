@@ -348,6 +348,16 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .badge.state-cancelled { border-color: var(--critical); color: var(--critical-text); }
 .good { color: var(--good-text); } .critical { color: var(--critical-text); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
+/* The order dialog's start choice, for a buyer with a running pass: two cards, the chosen one in the accent color. */
+.start-choice { border: 0; padding: 0; margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.start-choice legend { font-weight: 600; padding: 0; margin-bottom: 8px; }
+.start-choice label { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; align-items: center; border: 1.5px solid var(--border);
+  border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+.start-choice input { width: 16px; height: 16px; margin: 0; accent-color: var(--s1); }
+.start-choice span { grid-column: 2; font-size: 13px; color: var(--ink-2); }
+.start-choice label:has(input:checked) { border-color: var(--s1); background: color-mix(in srgb, var(--s1) 9%, transparent); }
+.start-choice label:has(input:focus-visible) { outline: 2px solid var(--s1); outline-offset: 2px; }
+@media (max-width: 480px) { .start-choice { grid-template-columns: 1fr; } }
 .form-grid .hint { grid-column: 1 / -1; }
 .ticket { padding: 10px 0 6px; border-bottom: 1px solid var(--border); margin-bottom: 8px; }
 .ticket-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; } .badge.bonus { display: inline-block; margin: 4px 4px 0 0; border-color: var(--s4); }

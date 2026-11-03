@@ -886,7 +886,7 @@ function myOrderCard(o) {
     <button class="btn small" data-my-order="dismiss" data-id="${o.id}">${t("ord.dismiss")}</button></div>` : "";
 }
 // What a buyer can order in: the price list's currency and USD, which always has a rate.
-// `start`: with a running ticket, the choice of starting now beside it or after the last one ({ date, splitNow }).
+// `start`: with a running ticket, the choice of starting now beside it (the default) or after the last one ({ date, splitNow }).
 function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
   const l = tier.lengths[len];
   const price = (c) => (c === "USD" ? money(l.usd_total, "USD") : money(l.amount, c));
@@ -895,10 +895,10 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
     <p class="order-price"><b id="order-price">${esc(price(p.currency))}</b></p>
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
-      ${start ? `<div class="wide"><p class="sub">${t("ord.start")}</p>
-        <label class="check"><input type="radio" name="start" value="after" checked> ${t("ord.start_after", { date: fmtDate(start.date) })}</label>
-        <label class="check"><input type="radio" name="start" value="now"> ${t("ord.start_now")}</label></div>` : ""}
-      <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li>${pay?.vat_percent ? `<li>${t("pay.vat", { pct: fmtNum(pay.vat_percent) })}</li>` : ""}</ul></div>
+      ${start ? `<fieldset class="wide start-choice"><legend>${t("ord.start")}</legend>
+        <label><input type="radio" name="start" value="now" checked><b>${t("ord.start_now")}</b><span>${t("ord.start_now_sub")}</span></label>
+        <label><input type="radio" name="start" value="after"><b>${t("ord.start_after")}</b><span>${t("ord.start_after_sub", { date: fmtDate(start.date) })}</span></label></fieldset>` : ""}
+      <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(start ? start.splitNow : p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li>${pay?.vat_percent ? `<li>${t("pay.vat", { pct: fmtNum(pay.vat_percent) })}</li>` : ""}</ul></div>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>
