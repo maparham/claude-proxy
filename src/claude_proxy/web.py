@@ -1405,7 +1405,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         # had no room to move up (hand_over), a new one still queues after it.
         out["next_start"], replaces = tickets.next_start(conn, cfg, user["id"], now)
         out["replaces"] = bool(replaces)
-        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"])
+        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"],
+                                            exclude=[t["id"] for t in tickets.next_start(conn, cfg, user["id"], now, True)[1]])
         # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
         out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
         out["timeline"] = tickets.timeline(conn, cfg, user["id"], now)   # the card's chart, with more than one live ticket

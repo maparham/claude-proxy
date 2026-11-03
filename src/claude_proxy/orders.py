@@ -146,8 +146,10 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             if _count(conn, f"{VISITOR} AND created_at>?", (since,)) >= VISITOR_GLOBAL:
                 raise OrderError(429, BUSY)
         rate = tickets.current_rate(conn, currency)
-        # Judged as the price list judges it: for a ticket starting now (spec section 2, Sold out).
-        if tickets.sold_out(conn, cfg, tier, length, now):
+        # Judged as the price list judges it: for a ticket starting now (spec section 2, Sold out), without the buyer's
+        # used-up tickets, which one starting now replaces (next_start).
+        mine = [t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]] if user_id is not None else None
+        if tickets.sold_out(conn, cfg, tier, length, now, None, mine):
             raise OrderError(409, "That pass is sold out.")
         if user_id is not None:
             # And where the grant will put it: after the buyer's last pass, so no one pays for a pass that cannot start then.

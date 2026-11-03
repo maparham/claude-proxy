@@ -265,3 +265,27 @@ def test_a_ticket_to_start_now_runs_beside_one_with_use_left(env):
     nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=NOW - 100,
                         terms_version="v1", start_now=True)
     assert nxt["starts_at"] == NOW - 100 and tickets.get(conn, t["id"])["used_up_at"] is None
+
+
+@pytest.mark.parametrize("start_now", [True, False])
+def test_an_order_in_place_of_a_used_up_ticket_is_judged_without_it(env, start_now):
+    """The grant ends the used-up ticket, so its share must not make the order, or the price list, read sold out."""
+    conn, cfg, ids, t = env
+    use_up(conn, ids)
+    cfg.tickets.max_sold_pct = 25   # the used-up 5% beside a new 25% would not fit
+    exclude = [x["id"] for x in tickets.next_start(conn, cfg, ids["alice"], NOW - 100, True)[1]]
+    prices = tickets.price_table(conn, cfg, NOW - 100, "USD", exclude=exclude)
+    assert next(x for x in prices["tiers"] if x["tier"] == "standard")["lengths"]["day"]["sold_out"] is False
+    o = orders.create(conn, cfg, tier="standard", length="day", currency="USD", name="alice", email="a@example.com",
+                      user_id=ids["alice"], notify=False, now=NOW - 100, terms_version="v1", start_now=start_now)
+    g = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", order_id=o["id"], now=NOW - 90)
+    assert g["starts_at"] == NOW - 90 and tickets.get(conn, t["id"])["used_up_at"] == NOW - 90
+
+
+def test_a_visitor_order_still_counts_every_ticket(env):
+    conn, cfg, ids, t = env
+    use_up(conn, ids)
+    cfg.tickets.max_sold_pct = 25
+    with pytest.raises(orders.OrderError, match="sold out"):
+        orders.create(conn, cfg, tier="standard", length="day", currency="USD", name="v", email="v@example.com",
+                      ip="1.2.3.4", notify=False, now=NOW - 100, terms_version="v1")
