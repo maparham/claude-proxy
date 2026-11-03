@@ -5,6 +5,16 @@ date: 2026-11-03
 -->
 <p>کلاد فقط کد نمی‌نویسد؛ اگر <strong>Playwright</strong> را به آن وصل کنید، یک مرورگر واقعی را باز می‌کند، کلیک می‌کند، تایپ می‌کند، صفحه را می‌خواند و اسکرین‌شات می‌گیرد. شما به فارسی می‌گویید چه می‌خواهید و کلاد خودش در مرورگر انجامش می‌دهد. نصبش یک دستور است.</p>
 
+<h2>نصب</h2>
+<ol>
+  <li><strong>Node.js نسخه ۱۸ یا بالاتر</strong> را نصب کنید. برای بررسی، در ترمینال <code>node -v</code> را بزنید.</li>
+  <li>Playwright را به کلاد اضافه کنید (در ویندوز در PowerShell، در مک و لینوکس در ترمینال):
+    <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest</code></pre>
+    با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی.</li>
+  <li><code>gclaude</code> را اجرا کنید، <code>/mcp</code> را بزنید و ببینید <code>playwright</code> وصل شده باشد.</li>
+  <li>بار اول مرورگر خودش دانلود می‌شود. اگر نشد، یک بار <code>npx playwright install chromium</code> را اجرا کنید.</li>
+</ol>
+
 <h2>با کلاد و مرورگر چه کارهایی می‌شود کرد؟</h2>
 
 <h3>کارهای تکراری و جمع‌آوری انبوه داده از وب</h3>
@@ -29,16 +39,6 @@ date: 2026-11-03
   <li><strong>بررسی SEO و دسترس‌پذیری:</strong> «سایتم را باز کن و بررسی کن کدام صفحه‌ها title، description یا alt عکس ندارند و لینک شکسته دارند؛ گزارش بده و درستشان کن.»</li>
   <li><strong>نوشتن راهنما:</strong> «مراحل ساخت حساب در پنل ادمین را انجام بده و از هر مرحله اسکرین‌شات بگیر، بعد یک راهنمای فارسی قدم‌به‌قدم بنویس.» برای راهنمای کاربران و آشنا کردن همکاران تازه.</li>
 </ul>
-
-<h2>نصب در چهار قدم</h2>
-<ol>
-  <li><strong>Node.js نسخه ۱۸ یا بالاتر</strong> را نصب کنید. برای بررسی، در ترمینال <code>node -v</code> را بزنید.</li>
-  <li>Playwright را به کلاد اضافه کنید (در ویندوز در PowerShell، در مک و لینوکس در ترمینال):
-    <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest</code></pre>
-    با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی.</li>
-  <li><code>gclaude</code> را اجرا کنید، <code>/mcp</code> را بزنید و ببینید <code>playwright</code> وصل شده باشد.</li>
-  <li>بار اول مرورگر خودش دانلود می‌شود. اگر نشد، یک بار <code>npx playwright install chromium</code> را اجرا کنید.</li>
-</ol>
 
 <h2>سه نمونه کاربردی</h2>
 <ul>
