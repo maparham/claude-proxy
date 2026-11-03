@@ -897,7 +897,7 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       ${start ? `<fieldset class="wide start-choice"><legend>${t("ord.start")}</legend>
         <label><input type="radio" name="start" value="now" checked><b>${t("ord.start_now")}</b><span>${t("ord.start_now_sub")}</span></label>
-        <label><input type="radio" name="start" value="after"><b>${t("ord.start_after")}</b><span>${t("ord.start_after_sub", { date: fmtDate(start.date) })}</span></label></fieldset>` : ""}
+        <label><input type="radio" name="start" value="after"${l.sold_out_later ? " disabled" : ""}><b>${t("ord.start_after")}</b><span>${l.sold_out_later ? t("ord.start_after_sold_out", { date: fmtDate(start.date) }) : t("ord.start_after_sub", { date: fmtDate(start.date) })}</span></label></fieldset>` : ""}
       <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(start ? start.splitNow : p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li>${pay?.vat_percent ? `<li>${t("pay.vat", { pct: fmtNum(pay.vat_percent) })}</li>` : ""}</ul></div>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>

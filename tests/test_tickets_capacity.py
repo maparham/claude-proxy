@@ -544,3 +544,16 @@ def test_grant_at_a_discounts_start_takes_it_and_at_its_end_the_list_price(db):
     assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 6, d["id"], 6)
     t = grant(conn, cfg, ids, who="bob", now=NOW + 2 * DAY, currency="USD")
     assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 8, None, 8)
+
+
+def test_a_price_list_for_a_later_start_says_which_lengths_are_sold_out_then(db):
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.max_sold_pct = 50
+    bob = add_user(conn, ids, "bob")
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 3 * DAY, confirm_stale_rate=True)   # 25% on day 3 only
+    grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 3 * DAY, confirm_stale_rate=True,
+          start_now=True)                                                                    # day 3 is now 50
+    lengths = lambda p: next(t for t in p["tiers"] if t["tier"] == "lite")["lengths"]
+    later = lengths(tickets.price_table(conn, cfg, NOW, "EUR", starts_at=NOW + 3 * DAY))
+    assert (later["day"]["sold_out"], later["day"]["sold_out_later"]) == (False, True)       # free today, full on day 3
+    assert "sold_out_later" not in lengths(tickets.price_table(conn, cfg, NOW, "EUR"))["day"]   # the public list: starting now only
