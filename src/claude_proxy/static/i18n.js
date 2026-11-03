@@ -2099,7 +2099,7 @@ const ERR_FA = {
   "Not found.": "پیدا نشد.",
   "Not signed in.": "وارد نشده‌اید.",
   "Online payment is not set up on this gateway.": "پرداخت آنلاین روی این سرویس راه‌اندازی نشده است.",
-  "Online payment is paused; try again later or send an order request.": "پرداخت آنلاین موقتاً متوقف است؛ کمی بعد دوباره تلاش کنید یا یک درخواست سفارش بفرستید.",
+  "Online payment is paused; try again later.": "پرداخت آنلاین موقتاً متوقف است؛ کمی بعد دوباره تلاش کنید.",
   "Ordering without signing in is not set up on this gateway.": "سفارش بدون ورود روی این سرویس راه‌اندازی نشده است.",
   "Ordering without paying online is off; pay with ZarinPal.": "سفارش بدون پرداخت آنلاین خاموش است؛ با زرین‌پال پرداخت کنید.",
   "Preview the pass first and send the usd and rate it showed.": "اول پیش‌نمایش بسته را ببینید و مبلغ دلاری و نرخی را که نشان داد بفرستید.",

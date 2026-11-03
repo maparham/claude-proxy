@@ -942,7 +942,9 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
     pb.disabled = true; pb.textContent = t("pay.going");
     try {
       const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, start_now: now(), ...(f.email ? { email: f.email.value } : {}) } });
-      location.href = r.url;
+      // ZarinPal refuses a StartPay without a Referer from the registered domain, and every page here is no-referrer.
+      const a = Object.assign(document.createElement("a"), { href: r.url, referrerPolicy: "origin" });
+      document.body.append(a); a.click();
     } catch (err) { pb.disabled = false; pb.textContent = payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
   };
 }
