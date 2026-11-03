@@ -81,10 +81,8 @@ class QuotaConfig:
 
 @dataclass
 class SignupConfig:
-    """Self-service accounts (sign-up design, 2026-09-26): people sign in with Clerk; a new account gets a one-time credit."""
+    """Self-service accounts (sign-up design, 2026-09-26): people sign in with Clerk; a new account gets no credit."""
     enabled: bool = False              # False: Clerk sign-in still links existing accounts, but creates none
-    credit_usd: float = 5.0            # the new account's cost_total limit
-    free_daily_cap_usd: float = 0.0    # what all accounts on a credit may spend together in any 24 h; 0: no cap
     clerk_publishable_key: str = ""    # public; the secret key is CLERK_SECRET_KEY in the environment
     installer_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh"
     installer_ps1_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1"   # Windows

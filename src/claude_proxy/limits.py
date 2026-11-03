@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from . import db, quota, tickets
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
-from .usage import SUMS, Totals, price_totals, priced_sql
+from .usage import SUMS, Totals, price_totals
 
 MINUTE, HOUR, DAY = 60, 3600, 86400
 
@@ -29,8 +29,7 @@ WINDOWS = {
     "requests_monthly": 30 * DAY, "tokens_monthly": 30 * DAY, "cost_monthly": 30 * DAY,
 }
 SHARE_BUCKETS = {"share_5h": "5h", "share_7d": "7d"}
-TOTALS = ("cost_total",)   # no window: everything the database still holds, e.g. a new account's one-time credit
-FREE_CAP = "free_credit_cap"   # rejected_by for signup.free_daily_cap_usd, the ceiling on all credit accounts together
+TOTALS = ("cost_total",)   # no window: everything the database still holds, e.g. a credit the admin sets
 UNITS = {
     **{k: ("count",) for k in WINDOWS if k.startswith("requests_")},
     **{k: ("weighted", "raw") for k in WINDOWS if k.startswith("tokens_")},
@@ -617,25 +616,6 @@ def human_wait(s: int) -> str:
     return f"{d} days {h} h" if h else f"{d} days"
 
 
-def free_credit_spend(conn: sqlite3.Connection, cfg: Config, now: float) -> tuple[float, int | None]:
-    """What all accounts on a one-time credit (a cost_total limit) spent together in the last 24 hours, and, when
-    that is at the cap, the seconds until enough of it has left the window to be under it."""
-    cap = cfg.signup.free_daily_cap_usd
-    where = ("user_id IN (SELECT user_id FROM limits WHERE kind='cost_total') AND started_at>? "
-             "AND rejected_by IS NULL AND path!=? AND api_key_id IS NULL")
-    params: list = [now - DAY, COUNT_TOKENS_PATH]
-    groups = conn.execute(f"SELECT model, {SUMS} FROM requests WHERE {where} GROUP BY model", params).fetchall()
-    spent = sum(price_totals(cfg.pricing, g["model"], Totals(g["n"], g["i"], g["o"], g["c5"], g["c1"], g["cr"])).cost_usd
-                for g in groups)
-    if spent < cap or not groups:
-        return spent, None
-    amount, args = priced_sql(cfg.pricing, {g["model"] for g in groups}, 1e6)   # one request's cost in USD
-    r = conn.execute(f"SELECT started_at FROM (SELECT started_at, SUM({amount}) OVER (ORDER BY started_at, id) AS cum "
-                     f"FROM requests WHERE {where}) WHERE ? - cum < ? ORDER BY started_at LIMIT 1",
-                     (*args, *params, spent, cap)).fetchone()
-    return spent, max(1, math.ceil(r[0] + DAY - now)) if r else None
-
-
 MAX_INFLIGHT = "max_inflight"   # rejected_by for [limits] max_inflight, the per-user concurrency cap
 UNPRICED = "unpriced_model"     # rejected_by for a model with no [pricing] entry: no limit could meter it
 
@@ -709,15 +689,6 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
             if st.exceeded:
                 return Decision(429, st.kind, {"type": "error", "error": {"type": "rate_limit_error", "message": _describe(st)}},
                                 st.reset_in or 60)
-    # Everyone still on their sign-up credit shares one daily ceiling, so a crowd of new accounts can't use up the
-    # subscription even if each stays within its own credit.
-    if cfg.signup.free_daily_cap_usd > 0 and not is_count_tokens and any(r["kind"] in TOTALS for r in rows):
-        spent, wait = free_credit_spend(conn, cfg, now)
-        if spent >= cfg.signup.free_daily_cap_usd:
-            ask = f"Try again in {human(wait)}, or ask" if wait else "Ask"
-            return Decision(429, FREE_CAP, {"type": "error", "error": {"type": "rate_limit_error", "message":
-                            f"The gateway's free credit is used up for today across all new accounts. {ask} the "
-                            "gateway admin to upgrade your account."}}, wait or 3600)
     if t is not None:
         wk = next((st for st in sts if st.kind == "share_7d"), None)
         if wk is not None and wk.rate and wk.limit > wk.own:

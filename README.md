@@ -123,14 +123,12 @@ People can create their own account and connect their computers without the admi
 
 - **Sign-up**: the dashboard's sign-in is [Clerk](https://clerk.com) (Google, GitHub or an emailed code). A first
   sign-in links an existing user whose name or email is that address; otherwise, with `signup.enabled`, it creates
-  one with a one-time credit (`cost_total`, `signup.credit_usd`). Clerk only proves who someone is; the dashboard
+  one with no credit (a `cost_total` of $0) until the admin grants a pass. Clerk only proves who someone is; the dashboard
   then uses its own session, and requests never touch Clerk.
 - **Computers**: `curl -fsSL https://<dashboard>/install | sh` (Windows: `irm https://<dashboard>/install.ps1 | iex`) installs claude-gateway and runs
   `claude-gateway on`, which shows a code and opens `…/dashboard#authorize/<code>`. **Authorize** there gives that
   computer a key of its own (the `keys` table), listed and removable under **Your computers**.
 - **Upgrade**: limits apply together, so the admin's **Upgrade** swaps the credit for a daily allowance.
-- **Shared cap**: `signup.free_daily_cap_usd` limits what all accounts still on their credit spend together in any
-  24 hours, so many sign-ups can't use up the subscription even if each stays within its own credit.
 
 ```toml
 [listener]
@@ -140,8 +138,6 @@ home_url = "https://example.com"                     # optional: the home page o
 
 [signup]
 enabled = true
-credit_usd = 5.0
-free_daily_cap_usd = 20.0                            # all credit accounts together, any 24 h; 0: no cap
 clerk_publishable_key = "pk_live_..."                # CLERK_SECRET_KEY goes in the environment (gateway.env)
 ```
 

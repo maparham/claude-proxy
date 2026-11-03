@@ -1,4 +1,4 @@
-"""Sign-up with Clerk, browser authorization for `claude-gateway on`, machine keys and the one-time credit."""
+"""Sign-up with Clerk, browser authorization for `claude-gateway on`, and machine keys."""
 import base64
 import json
 import time
@@ -139,15 +139,15 @@ async def test_clerk_token_signature_and_key_id(env):
     assert sum("jwks" in u for u in fake.calls) == 1   # cached; an unknown kid refetches at most every 30 s
 
 
-async def test_sign_up_creates_an_account_with_the_one_time_credit(env):
+async def test_sign_up_creates_an_account_with_no_credit(env):
     gw, conn, _ = env
     async with app(gw) as c:
         user = await signed_in(c)
         assert user["name"] == "new@example.com" and user["role"] == "user" and user["email"] == "new@example.com"
         st = (await c.get("/api/me/status?format=text")).text
-    assert st.strip() == "new@example.com · credit $0.00/$5.00"
+    assert st.strip() == "new@example.com · credit $0.00/$0.00"
     row = conn.execute("SELECT kind, value, unit FROM limits WHERE user_id=?", (user["id"],)).fetchone()
-    assert tuple(row) == ("cost_total", "5", "usd")
+    assert tuple(row) == ("cost_total", "0", "usd")
     assert conn.execute("SELECT action FROM audit_log WHERE action='signup'").fetchone()
     async with app(gw) as c:   # the next sign-in finds the same account by its Clerk id
         assert (await signed_in(c))["id"] == user["id"]
@@ -360,6 +360,7 @@ async def test_credit_runs_out_and_upgrade_replaces_it(env):
     async with app(gw) as c:
         user = await signed_in(c)
     uid = user["id"]
+    conn.execute("UPDATE limits SET value='5' WHERE user_id=? AND kind='cost_total'", (uid,))   # a credit the admin gave
     spend(conn, uid, 4.0)
     assert limits.evaluate(conn, gw.cfg, uid, "claude-sonnet-5", "/v1/messages") is None
     conn.execute("UPDATE requests SET started_at=started_at-40*86400")   # a credit has no window: old spending counts
@@ -426,7 +427,7 @@ async def test_an_admins_computer_key_is_not_an_admin(env):
         assert (await c.get("/api/session")).json()["user"]["role"] == "user"
 
 
-async def test_a_deleted_account_gets_no_new_credit(env):
+async def test_a_deleted_account_cannot_sign_up_again(env):
     gw, conn, _ = env
     from claude_proxy.db import delete_user, revoke
     async with app(gw) as c:
@@ -479,7 +480,7 @@ async def test_an_admin_cannot_delete_themselves(env):
     assert conn.execute("SELECT 1 FROM users WHERE name='admin'").fetchone()
 
 
-async def test_a_self_deleted_email_signs_up_again_without_the_credit(env):
+async def test_a_self_deleted_email_signs_up_again(env):
     gw, conn, fake = env
     async with app(gw) as c:
         await signed_in(c)
@@ -516,25 +517,3 @@ async def test_privacy_page(env):
     assert r.status_code == 200 and "after 90 days" in r.text and "not stored" in r.text
     assert '<meta name="retention-days" content="90">' in r.text   # what privacy.js shows, in either language
     assert "no-transform" in r.headers["cache-control"]
-
-
-def test_credit_accounts_share_a_daily_cap(env):
-    gw, conn, _ = env
-    gw.cfg.signup.free_daily_cap_usd = 3.0
-    a, _ = create_user(conn, "a"); b, _ = create_user(conn, "b"); paid, _ = create_user(conn, "paid")
-    for uid in (a, b):
-        conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (uid, "cost_total", "*", "5", "usd"))
-    spend(conn, a, 2.0)
-    spend(conn, paid, 50.0)   # accounts without a credit neither count nor are held back
-    assert limits.evaluate(conn, gw.cfg, b, "claude-sonnet-5", "/v1/messages") is None
-    spend(conn, b, 1.5)
-    d = limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages")
-    assert d.status == 429 and d.kind == limits.FREE_CAP
-    assert "Try again in" in d.body["error"]["message"] and 80000 < d.retry_after <= 86400
-    assert limits.evaluate(conn, gw.cfg, paid, "claude-sonnet-5", "/v1/messages") is None
-    assert limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages/count_tokens") is None
-    conn.execute("UPDATE requests SET started_at=started_at-86400")   # a day later it has room again
-    assert limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages") is None
-    gw.cfg.signup.free_daily_cap_usd = 0
-    spend(conn, a, 1.0); spend(conn, b, 2.9)
-    assert limits.evaluate(conn, gw.cfg, a, "claude-sonnet-5", "/v1/messages") is None   # 0: no cap

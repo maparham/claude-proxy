@@ -18,8 +18,6 @@ path = "/data/claude_proxy.db"
 # README "Sign-up and browser authorization". CLERK_SECRET_KEY is in gateway.env.
 [signup]
 enabled = true
-credit_usd = 5.0
-free_daily_cap_usd = 20.0   # all accounts still on their credit, together, in any 24 h
 clerk_publishable_key = "pk_live_Y2xlcmsuZGFzaC5yYWhrYXIucHJvJA"
 
 # Order emails (docs/superpowers/specs/2026-10-04-order-requests-design.md). support@chartkar.app only forwards to

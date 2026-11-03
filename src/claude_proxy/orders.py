@@ -478,7 +478,7 @@ def link(conn: sqlite3.Connection, cfg: Config, actor: int | None, order_id: int
             if len(email) > 64:   # the users' name limit
                 raise OrderError(400, "The email is too long for a user name; add the user by hand.")
             user_id, _ = db.create_user(conn, email)   # its key is never shown; the buyer signs in with Clerk
-            # No credit until a ticket is granted: the first ticket removes this, as it does a sign-up credit.
+            # No credit until a ticket is granted: the first ticket removes this, as it does a sign-up's.
             conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at, updated_by) VALUES(?,?,?,?,?,?,?)",
                          (user_id, "cost_total", "*", "0", "usd", int(now), actor))
             db.audit(conn, actor, "user_add", email, {"role": "user", "order_id": order_id})
