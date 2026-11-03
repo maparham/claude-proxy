@@ -42,3 +42,10 @@ def test_a_package_table_marks_discounts_and_sold_out_and_goes_without_prices():
     out = blog.packages(TABLE, prices(list_amount=600000.0, discount_ends_at=1.0, sold_out=True))
     assert "<s>۶۰۰٬۰۰۰ تومان</s>" in out and "تمام شد" in out
     assert blog.packages(TABLE, None) == ""
+
+
+def test_a_post_gets_a_table_of_contents_linking_its_headings():
+    body, toc = blog.contents("<h2>یک</h2><p>.</p><h3>دو</h3><h2>سه</h2>")
+    assert body == '<h2 id="s1">یک</h2><p>.</p><h3 id="s2">دو</h3><h2 id="s3">سه</h2>'
+    assert '<li class="toc-h2"><a href="#s1">یک</a></li><li class="toc-h3"><a href="#s2">دو</a></li>' in toc
+    assert blog.contents("<h2>تنها</h2>")[1] == ""

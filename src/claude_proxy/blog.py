@@ -125,7 +125,7 @@ def packages(body: str, prices: dict | None) -> str:
     return re.sub(r'<table class="packages">(.*?)</table>', table, body, flags=re.S)
 
 
-def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website") -> str:
+def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website", wide: bool = False) -> str:
     t, d, url = html.escape(title), html.escape(description), html.escape(f"{base}{path}")
     return f"""<!doctype html>
 <html lang="fa" dir="rtl">
@@ -149,8 +149,9 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <link rel="alternate" type="application/rss+xml" title="وبلاگ کلاد" href="{html.escape(base)}/blog/feed.xml">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/home.css">
+{'<script src="/static/blog.js" defer></script>' if wide else ""}
 </head>
-<body class="home blog">
+<body class="home blog{' blog-wide' if wide else ''}">
 <header class="home-top">
   <span class="home-top-right">
     <a class="btn small" href="/blog">وبلاگ</a>
@@ -178,11 +179,28 @@ def index_page(base: str) -> str:
     return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main)
 
 
+def contents(body: str) -> tuple[str, str]:
+    """The post with an id on each h2 and h3, and its table of contents linking them; no table for under two."""
+    items = []
+
+    def anchor(m: re.Match) -> str:
+        items.append((m.group(1), f"s{len(items) + 1}", m.group(2)))
+        return f'<{m.group(1)} id="{items[-1][1]}">{m.group(2)}</{m.group(1)}>'
+
+    body = re.sub(r"<(h[23])>(.*?)</\1>", anchor, body, flags=re.S)
+    if len(items) < 2:
+        return body, ""
+    links = "".join(f'<li class="toc-{level}"><a href="#{i}">{text}</a></li>' for level, i, text in items)
+    return body, ('<aside class="toc"><details open><summary>در این مطلب</summary>'
+                  f'<nav aria-label="فهرست مطالب"><ol>{links}</ol></nav></details></aside>')
+
+
 def post_page(base: str, p: Post, prices: dict | None) -> str:
-    main = (f'<article class="post"><h1>{html.escape(p.title)}</h1>'
-            f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{packages(p.body, prices)}'
-            '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article>')
-    return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article")
+    body, toc = contents(packages(p.body, prices))
+    main = (f'<div class="post-layout">{toc}<article class="post"><h1>{html.escape(p.title)}</h1>'
+            f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{body}'
+            '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article></div>')
+    return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article", wide=bool(toc))
 
 
 def feed(base: str) -> str:
