@@ -35,7 +35,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, clerk, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
@@ -139,7 +139,7 @@ class HomeHost(BaseHTTPMiddleware):
 
     async def dispatch(self, request, call_next):
         path = request.url.path
-        if request.url.hostname == self.home_host and path not in self.PUBLIC and not path.startswith("/static/"):
+        if request.url.hostname == self.home_host and path not in self.PUBLIC and not path.startswith(("/static/", "/blog")):
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"{self.dashboard}{path}{query}", status_code=302)
         return await call_next(request)
@@ -1672,17 +1672,38 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def robots(request: Request):
         if not cfg.tickets.enabled or not on_home_host(request):
             return PlainTextResponse("User-agent: *\nDisallow: /\n")
-        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /static/\nAllow: /api/pricing\nDisallow: /\n\n"
+        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /blog\nAllow: /static/\nAllow: /api/pricing\nDisallow: /\n\n"
                                  f"Sitemap: {home_base(request)}/sitemap.xml\n")
 
     @app.get("/sitemap.xml")
     async def sitemap(request: Request):
         if not cfg.tickets.enabled or not on_home_host(request):
             fail(404, "Not found.")
-        urls = "".join(f"<url><loc>{home_base(request)}{path}</loc></url>" for path in ("/", "/privacy"))
+        base = home_base(request)
+        urls = "".join(f"<url><loc>{base}{path}</loc></url>" for path in ("/", "/privacy", "/blog"))
+        urls += "".join(f"<url><loc>{base}/blog/{p.slug}</loc><lastmod>{p.date.isoformat()}</lastmod></url>" for p in blog.posts())
         return Response('<?xml version="1.0" encoding="UTF-8"?>\n'
                         f'<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">{urls}</urlset>\n',
                         media_type="application/xml")
+
+    @app.get("/blog")
+    async def blog_index(request: Request):
+        if not cfg.tickets.enabled:
+            fail(404, "Not found.")
+        return HTMLResponse(blog.index_page(home_base(request)), headers=PAGE_HEADERS)
+
+    @app.get("/blog/feed.xml")
+    async def blog_feed(request: Request):
+        if not cfg.tickets.enabled:
+            fail(404, "Not found.")
+        return Response(blog.feed(home_base(request)), media_type="application/rss+xml")
+
+    @app.get("/blog/{slug}")
+    async def blog_post(request: Request, slug: str):
+        post = blog.find(slug) if cfg.tickets.enabled else None
+        if post is None:
+            fail(404, "Not found.")
+        return HTMLResponse(blog.post_page(home_base(request), post), headers=PAGE_HEADERS)
 
     @app.get("/d/{code}")
     @app.get("/D/{code}")   # as the QR code spells it

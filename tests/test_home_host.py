@@ -50,3 +50,20 @@ async def test_search_engines_index_the_home_host_only(env):
     async with client(app, "dash.example.com") as c:
         assert (await c.get("/robots.txt")).text == "User-agent: *\nDisallow: /\n"
         assert (await c.get("/sitemap.xml")).status_code == 404
+
+
+async def test_blog_is_served_on_the_home_host_and_listed_in_the_sitemap(env):
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.dashboard_url = "https://dash.example.com/"
+    cfg.listener.home_url = "https://example.com"
+    async with client(create_dashboard_app(gw), "example.com") as c:
+        index = await c.get("/blog")
+        assert index.status_code == 200 and 'href="/blog/visa-documents-lite-pass"' in index.text
+        post = await c.get("/blog/visa-documents-lite-pass")
+        assert post.status_code == 200 and "بسته اقتصادی" in post.text
+        assert '<link rel="canonical" href="https://example.com/blog/visa-documents-lite-pass">' in post.text
+        assert (await c.get("/blog/no-such-post")).status_code == 404
+        assert "<link>https://example.com/blog/visa-documents-lite-pass</link>" in (await c.get("/blog/feed.xml")).text
+        sitemap = (await c.get("/sitemap.xml")).text
+        assert "<loc>https://example.com/blog/visa-documents-lite-pass</loc><lastmod>" in sitemap
+        assert "Allow: /blog" in (await c.get("/robots.txt")).text

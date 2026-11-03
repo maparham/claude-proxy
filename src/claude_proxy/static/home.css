@@ -36,6 +36,23 @@ html[dir="rtl"] .home-top { justify-content: flex-start; }
 .home-foot a { color: var(--muted); }
 .foot-currency { display: flex; align-items: center; gap: 6px; }
 .foot-currency select { font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
+/* The blog: server-rendered Persian posts, in a reading-width column. */
+.blog main { max-width: 44rem; }
+.blog-head { padding: 56px 0 24px; }
+.blog h1 { font-size: clamp(28px, 4vw, 40px); line-height: 1.2; letter-spacing: -0.02em; margin: 0 0 12px; text-wrap: balance; }
+.post-list { list-style: none; margin: 0; padding: 0 0 48px; }
+.post-list li { padding: 24px 0; border-top: 1px solid var(--border); }
+.post-list a { color: var(--ink); text-decoration: none; }
+.post-list a:hover h2 { text-decoration: underline; }
+.post-list h2 { margin: 0 0 6px; font-size: 20px; }
+.post-list p { margin: 0; color: var(--ink-2); line-height: 1.7; }
+.post-date { font-size: 13px; color: var(--muted) !important; margin: 0 0 8px !important; }
+.post { padding: 48px 0; font-size: 16px; line-height: 1.9; }
+.post h2 { font-size: 20px; margin: 36px 0 12px; }
+.post li { margin-bottom: 8px; }
+.post code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; direction: ltr; unicode-bidi: isolate; }
+.post-cta { margin-top: 40px; }
+.post-cta .btn { padding: 10px 18px; font-weight: 600; }
 @media (max-width: 720px) {
   .hero { padding: 40px 0 32px; }
   .cards { grid-template-columns: minmax(0, 1fr); }
