@@ -888,7 +888,7 @@ function myOrderCard(o, pay) {
     return `<div class="card order-note" id="my-order"><div><b>${t("ord.received", { what })}</b>
       <div class="muted">${t("ord.quoted", { amount: esc(money(o.quoted_amount, o.currency)) })} · ${o.status === "contacted" ? t("ord.in_touch") : t("ord.waiting")}</div>
       <ol class="order-steps">${steps}</ol></div>
-      <div class="row-actions">${pay && o.currency === pay.currency ? `<button class="btn small primary" data-my-order="pay" data-id="${o.id}">${t("pay.button", { amount: esc(money(o.quoted_amount, o.currency)) })}</button>` : ""}
+      <div class="row-actions">${pay && o.currency === pay.currency ? `<button class="btn small primary" data-my-order="pay" data-id="${o.id}">${t("pay.button_short", { amount: esc(money(o.quoted_amount, o.currency)) })}</button>` : ""}
       <button class="btn small" data-my-order="withdraw" data-id="${o.id}">${t("ord.withdraw")}</button></div></div>`;
   }
   const text = o.status === "done" ? t("ord.done") : o.status === "declined" ? t("ord.declined") : "";

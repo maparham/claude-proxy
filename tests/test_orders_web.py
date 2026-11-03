@@ -573,7 +573,7 @@ def test_an_open_toman_order_can_be_paid_online(tmp_path):
     pay = {"currency": "IRT"}
     cases = [[mine, pay], [mine, None], [mine | {"currency": "EUR"}, pay], [mine | {"status": "done"}, pay]]
     out = _app_fn(tmp_path, ["myOrderCard", "tierName"], APP_STUBS + f"var out = {json.dumps(cases)}.map(([o, p]) => myOrderCard(o, p));")
-    assert 'data-my-order="pay" data-id="4"' in out[0] and "with ZarinPal" in out[0] and 'data-my-order="withdraw"' in out[0]
+    assert 'data-my-order="pay" data-id="4"' in out[0] and ">Pay " in out[0] and "ZarinPal" not in out[0] and 'data-my-order="withdraw"' in out[0]
     assert all('data-my-order="pay"' not in o for o in out[1:])
 
 
