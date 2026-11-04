@@ -463,7 +463,12 @@ def pass_weeks(conn, cfg: Config, t: dict, now: float, current: LimitState | Non
         # What it borrowed from this week in the last (2026-10-30 spec, §3); a future week, what the current one has taken.
         debt = _debt(conn, cfg, t, start, capacity, now) if state != "future" else weeks[-1]["took"] if weeks else 0.0
         own = max(0.0, limit - debt)
-        took = max(0.0, used - own) if t["length"] == "day" and end < t_end else 0.0   # only a day pass borrows
+        if t["length"] != "day" or end >= t_end:   # only a day pass borrows
+            took = 0.0
+        elif state == "past":   # as recorded then (the next part's debt), so the parts agree whatever the rate did since
+            took = _debt(conn, cfg, t, end, capacity, now)
+        else:
+            took = max(0.0, used - own)
         meter = current.limit if state == "current" and current is not None and current.limit else own + took
         weeks.append({"pct": 100.0 * used / meter if meter else 100.0, "state": state, "limit": limit, "debt": debt, "took": took})
         used_all, limit_all = used_all + used, limit_all + limit

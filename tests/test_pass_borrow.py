@@ -182,6 +182,21 @@ def test_debt_does_not_follow_capacity_or_rate_changes_after_the_reset(env):
     assert week(conn, cfg, ids["alice"], now=after).limit == pytest.approx(NEXT - (0.4 - OWN))
 
 
+def test_split_bar_parts_still_add_up_after_the_rate_changed(env, monkeypatch):
+    # The past part is drawn with what it took as recorded then, the figure the next part's debt uses, not re-measured
+    # at today's rate: the two must agree for the parts to add up to the whole pass.
+    from claude_proxy import quota
+    conn, cfg, ids, t = env
+    borrowed(conn, cfg, ids, t)
+    after = RESET7 + 600
+    at(conn, after - 60, 0, resets=RESET7 + 7 * DAY)
+    monkeypatch.setattr(quota, "observed_rate", lambda *a, **k: 500.0)   # the rate halved since the borrowing
+    weeks = limits.ticket_weeks(conn, cfg, ids["alice"], after, week(conn, cfg, ids["alice"], now=after))
+    whole = OWN + NEXT
+    assert [w["share"] for w in weeks["weeks"]] == pytest.approx([0.4 / whole, (NEXT - (0.4 - OWN)) / whole])
+    assert sum(w["share"] for w in weeks["weeks"]) == pytest.approx(1)
+
+
 def test_a_pass_that_never_borrowed_gets_its_whole_next_part(env):
     conn, cfg, ids, t = env
     use(conn, ids["alice"], t, 50, 1.05)
