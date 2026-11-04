@@ -18,6 +18,7 @@ import hashlib
 import hmac
 import logging
 import math
+import re
 import secrets
 import shlex
 import sqlite3
@@ -1434,6 +1435,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def tier_label(tier: str) -> str:
         return cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
 
+    def pay_url(o: dict) -> str | None:
+        """A payment link's address (links spec, section 3): the dashboard host, which sends the buyer to sign in."""
+        return f"{(cfg.listener.dashboard_url or cfg.listener.home_url).rstrip('/')}/pay/{o['pay_code']}" if o.get("pay_code") else None
+
     def my_order(user_id: int) -> dict | None:
         """What the buyer's dashboard shows: their open order, or their latest closed one until dismissed."""
         m = orders.mine(conn, user_id)
@@ -1521,6 +1526,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             task.add_done_callback(_mail_done)
         return RedirectResponse(f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#payment/{p['id']}", status_code=302)
 
+    @app.get("/pay/{code}")
+    async def paylink_open(code: str):
+        """A payment link: straight to the dashboard, which keeps #paylink/<code> through sign-in. No lookup here, so
+        the address says nothing about the code."""
+        if not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", code):
+            fail(404, "Not found.")
+        return RedirectResponse(f"{(cfg.listener.dashboard_url or cfg.listener.home_url).rstrip('/')}/dashboard#paylink/{code}",
+                                status_code=302)
+
     @app.get("/api/me/payments/{pid}")
     async def my_payment(request: Request, pid: int):
         user = principal(request)
@@ -1532,6 +1546,26 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"id": row["id"], "status": row["status"], "amount": row["amount"], "ref_id": row["ref_id"], "tier": row["tier"],
                 "label": tier_label(row["tier"]), "length": row["length"], "upgrade": row["upgrade_of"] is not None,
                 "error_shown": row["error"] if row["status"] == "failed" else None}
+
+    @app.get("/api/me/paylinks/{code}")
+    async def my_paylink(request: Request, code: str):
+        """What a payment link is to the signed-in user (links spec, section 4); never the admin's note or the code."""
+        user = principal(request)
+        need_tickets()
+        s = payments.link_state(conn, user, code)
+        out = {k: s[k] for k in ("state", "message", "email", "unfulfilled") if k in s}
+        if "order" in s:
+            o = s["order"]
+            out |= {"tier": o["tier"], "label": tier_label(o["tier"]), "length": o["length"], "amount": o["quoted_amount"],
+                    "currency": o["currency"], "pay_by": o["pay_by"], "terms_version": tickets.TERMS_VERSION}
+        return out
+
+    @app.post("/api/me/paylinks/{code}/pay")
+    async def pay_my_paylink(request: Request, code: str):
+        user = principal(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        return await payments.pay_link(conn, cfg, user, code, body.get("terms_version"))
 
     @app.post("/api/me/tickets/pin")
     async def pass_pin(request: Request):
@@ -1575,6 +1609,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         rows = orders.admin_list(conn, status)
         for o in rows:
             o["label"] = tier_label(o["tier"])
+            o["pay_url"] = pay_url(o)
             # Offered in the link dialog, never linked by itself (spec section 7).
             o["suggested_user"] = orders.suggest_user(conn, o) if o["user_id"] is None and o["status"] in orders.OPEN else None
             pay = conn.execute("SELECT status, amount, ref_id, card_pan FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1",
@@ -1609,6 +1644,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(400, "mode must be zarinpal, manual or both.")
         payments.set_pay_mode(conn, actor["id"], body["mode"])
         return {"ok": True, "pay_mode": body["mode"]}
+
+    # ---------- payment links (spec 2026-11-04) ----------
+
+    @app.get("/api/admin/orders/link_quote")
+    async def paylink_quote(request: Request, tier: str = "", length: str = ""):
+        """The list price in Toman the link dialog prefills."""
+        admin(request)
+        need_tickets()
+        return {"amount": ticket_call(orders.link_price, conn, cfg, tier, length, payments.CURRENCY, time.time())[1]}
+
+    @app.post("/api/admin/orders/link")
+    async def paylink_create(request: Request):
+        actor = admin(request, write=True)
+        need_tickets()
+        b = await _json(request)
+        o = ticket_call(payments.create_link, conn, cfg, actor["id"], email=b.get("email"), tier=str(b.get("tier") or ""),
+                        length=str(b.get("length") or ""), pay_by=b.get("pay_by"), amount=b.get("amount"), note=b.get("note"))
+        return {"ok": True, "order": o, "url": pay_url(o)}
 
     @app.post("/api/admin/orders/{oid}")
     async def order_action(request: Request, oid: int):
