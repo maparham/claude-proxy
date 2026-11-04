@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import secrets
 import sqlite3
 import time
 
@@ -30,6 +31,7 @@ VISITOR_GLOBAL = 200                     # all visitor orders together, per 24 h
 USER_PER_DAY = 10                        # a signed-in user's orders per 24 hours, withdrawn ones included: each mails the admin
 BUYER_MAILS = 3                          # confirmations to one address per 24 hours
 IP_KEEP_S = 30 * DAY
+PAYLINK_MAX_S = 30 * DAY                 # a payment link's deadline is at most this far out
 
 STATUSES = ("new", "contacted", "done", "declined", "withdrawn")
 OPEN = ("new", "contacted")
@@ -41,9 +43,11 @@ TOO_MANY = "Too many orders today; try again tomorrow or sign in."
 USER_TOO_MANY = "Too many orders today; try again tomorrow."
 BUSY = "Orders are busy today; please sign in to order."
 CHANGED = "This order was withdrawn or changed; reload."
+LINK_INVALID = "This payment link is no longer valid."
 # A visitor order: placed without an account (user_id NULL until linked) or still carrying its IP (cleared on close).
 # One the admin has both linked and closed drops out of the visitor limits, which only loosens them for a handled buyer.
-VISITOR = "(user_id IS NULL OR ip IS NOT NULL)"
+# A payment link is the admin's, never a visitor's, though it has no account until claimed.
+VISITOR = "(pay_code IS NULL AND (user_id IS NULL OR ip IS NOT NULL))"
 
 
 class OrderError(Exception):
@@ -176,6 +180,71 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
                                                               "visitor": user_id is None, "terms_version": terms_version,
                                                               **({"start_now": True} if start_now else {})})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return get(conn, oid)
+
+
+# ---------- payment links (spec 2026-11-04) ----------
+
+def mask_email(email: str) -> str:
+    """bob@example.com -> bo…@example.com: enough for the right person to recognise, not to read off."""
+    local, _, domain = str(email).partition("@")
+    return f"{local[:1 if len(local) <= 2 else 2]}…@{domain}"
+
+
+def link_price(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, currency: str, now: float) -> tuple[float, int, dict]:
+    """What a pass bought now costs: (USD charged, whole local amount with VAT, the rate row). OrderError 400 for an
+    unknown tier or length or a currency without a rate."""
+    if tier not in cfg.tickets.tiers:
+        raise OrderError(400, f"Unknown tier {tier!r}.")
+    if length not in LENGTHS:
+        raise OrderError(400, f"Unknown length {length!r}; one of {', '.join(LENGTHS)}.")
+    rate = tickets.current_rate(conn, currency)
+    if rate is None:
+        raise OrderError(400, f"No exchange rate for {currency} yet.")
+    usd = tickets.price_now(conn, tier, length, now)["usd"]
+    return usd, int(tickets.round_local(usd, rate["rate"], tickets.currencies(cfg)[currency], tickets.vat_percent(cfg))), rate
+
+
+def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, *, email, tier, length, pay_by, amount=None,
+                note="", currency: str = "IRT", now: float | None = None) -> dict:
+    """An admin's payment link (spec section 3): an unclaimed order for `email` at the list price or `amount`, payable
+    until `pay_by`. No mail. The caller checks that online payment can take it (payments.create_link)."""
+    now = _now(now)
+    email, note = _email(email), _note(note)
+    usd, listed, rate = link_price(conn, cfg, str(tier or ""), str(length or ""), currency, now)
+    try:
+        pay_by = int(pay_by)
+    except (TypeError, ValueError):
+        raise OrderError(400, "Give the deadline as a date and time.") from None
+    if not now < pay_by <= now + PAYLINK_MAX_S:
+        raise OrderError(400, "The deadline must be in the next 30 days.")
+    edited = amount not in (None, "")
+    if edited:
+        try:
+            amount = int(str(amount))
+        except ValueError:
+            raise OrderError(400, "The price is a whole number of Toman.") from None
+        if not 1000 <= amount <= listed * 10:
+            raise OrderError(400, f"The price must be between 1,000 and {listed * 10:,} Toman.")
+        usd = amount / (rate["rate"] * (1 + tickets.vat_percent(cfg) / 100))
+    else:
+        amount = listed
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        if tickets.sold_out(conn, cfg, tier, length, now, None, None):
+            raise OrderError(409, "That pass is sold out.")
+        cur = conn.execute(
+            "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, "
+            "quoted_amount, message, status, ip, admin_mail, buyer_mail, terms_version, lang, start_now, admin_note, pay_code, pay_by) "
+            "VALUES(?,?,NULL,?,?,?,?,?,?,?,?,'','new',NULL,'off','off',?,'fa',0,?,?,?)",
+            (now, now, email, email, tier, length, currency, usd, rate["rate"], amount, tickets.TERMS_VERSION, note,
+             secrets.token_urlsafe(16), pay_by))
+        oid = cur.lastrowid
+        db.audit(conn, actor, "order_paylink", f"order #{oid}", {"amount": amount, "edited": edited, "pay_by": pay_by})
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

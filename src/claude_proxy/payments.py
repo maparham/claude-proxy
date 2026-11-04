@@ -160,6 +160,18 @@ async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, 
     return await _open(conn, cfg, user, o, now, withdraw=False)
 
 
+def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, **kw) -> dict:
+    """An admin's payment link (links spec, section 3): only while ZarinPal can take it, and at a fresh rate, so a link
+    never freezes a stale price. The rest is orders.create_link."""
+    if not on(cfg):
+        raise PaymentError(404, "Online payment is not set up on this gateway.")
+    if pay_mode(conn, cfg) == "manual":
+        raise PaymentError(409, MANUAL_ONLY)
+    if not rate_ok(conn):
+        raise PaymentError(409, PAUSED)
+    return orders.create_link(conn, cfg, actor, currency=CURRENCY, **kw)
+
+
 async def _open(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int, withdraw: bool) -> dict:
     """A ZarinPal payment for order `o`'s quote; `withdraw`: the order was made for this payment, so a refused
     request withdraws it, and so does the payment dying later (_close) once no payment on the order is still going."""

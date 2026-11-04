@@ -2223,6 +2223,9 @@ const ERR_FA = {
   "The email is too long for a user name; add the user by hand.": "این ایمیل برای نام کاربری بیش از حد بلند است؛ کاربر را دستی اضافه کنید.",
   "Online payment is off for now; send an order request instead.": "پرداخت آنلاین فعلاً خاموش است؛ به‌جای آن یک درخواست سفارش بفرستید.",
   "ZarinPal is not available right now; try again later.": "زرین‌پال اکنون در دسترس نیست؛ کمی بعد دوباره تلاش کنید.",
+  "Give the deadline as a date and time.": "مهلت را به‌صورت تاریخ و ساعت بدهید.",
+  "The deadline must be in the next 30 days.": "مهلت باید در ۳۰ روز آینده باشد.",
+  "The price is a whole number of Toman.": "قیمت باید عدد صحیحی به تومان باشد.",
 };
 const ERR_PATTERNS = [
   [/^(.+) must be a number\.$/, "{1} باید عدد باشد."],
@@ -2254,6 +2257,8 @@ const ERR_PATTERNS = [
   [/^Unknown currency (.+)\.$/, "ارز ناشناخته: {1}."],
   [/^Unknown status (.+?); open, all or one of (.+)\.$/, "وضعیت ناشناخته: {1}؛ open، all یا یکی از {2}."],
   [/^No exchange rate for (.+) yet; choose another currency\.$/, "هنوز نرخی برای {1} نیست؛ ارز دیگری انتخاب کنید."],
+  [/^No exchange rate for (.+) yet\.$/, "هنوز نرخی برای {1} نیست."],
+  [/^The price must be between 1,000 and (.+) Toman\.$/, "قیمت باید بین ۱٬۰۰۰ و {1} تومان باشد."],
   [/^An order that is (\S+) cannot become (\S+)\.$/, "سفارشی که {1} است نمی‌تواند {2} شود."],
   [/^This order is (\S+); only an open order can be linked\.$/, "این سفارش {1} است؛ فقط سفارش باز را می‌توان لینک کرد."],
   [/^A user named (.+) or with that email exists already\.$/, "کاربری با نام {1} یا با این ایمیل از قبل وجود دارد."],

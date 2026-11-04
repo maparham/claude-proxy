@@ -440,6 +440,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN upgrade_of INTEGER REFERENCES tickets(id)")
     if "start_now" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN start_now INTEGER NOT NULL DEFAULT 0")
+    # Admin payment links (spec 2026-11-04): NULL on every other order. SQLite cannot add a UNIQUE column.
+    if "pay_code" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN pay_code TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_orders_pay_code ON orders(pay_code)")
+    if "pay_by" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN pay_by INTEGER")
     if "api_key_id" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")
