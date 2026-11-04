@@ -797,14 +797,17 @@ function passTimeline(tk, inUseAt = -1, no = []) {
     const p = tl.passes[i];
     const from = Math.max(p.starts_at, tl.start);
     const name = `${nf0.format(no[i] || i + 1)}. ${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`;
-    // A bar names the time it spans (where that fits, see fitBarLabels); a used-up pass's bar is dimmed.
+    // A bar names the time it spans and, for a running pass, how much of it is used (where that fits, see
+    // fitBarLabels); a used-up pass's bar is dimmed.
     const cp = cps[i] && !cps[i].queued ? cps[i] : null;
+    const pct = cp ? cp.pct_pass ?? cp.pct_7d : null;
+    const used = pct == null ? "" : ` · ${t("tl.used", { pct: `${nf0.format(Math.round(Math.min(100, pct)))}${PCT}` })}`;
     const len = fmtDur(p.ends_at - from);
-    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)} · ${len}`;
+    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)} · ${len}${used}`;
     const cls = [p.starts_at > tl.start ? "later" : "", cp && cp.used_up ? "spent" : ""].filter(Boolean).join(" ");
     return `<div class="gantt-name${i === inUseAt ? " in-use" : ""}" data-pass="${i}">${esc(name)}</div><div class="gantt-track" data-pass="${i}">
       <i class="${cls}" style="${colors[i]};inset-inline-start:${at(from).toFixed(2)}%;width:${(at(p.ends_at) - at(from)).toFixed(2)}%"
-        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><span>${esc(len)}</span></i></div>`;
+        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><span>${esc(len + used)}</span></i></div>`;
   }).join("");
   // A timestamp at now and at each start and end, all on one line. One close to the label before, on the same day,
   // adds its time under that label; on another day it is left out. A bar's hover names its own times.
