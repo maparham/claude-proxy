@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 CURRENCY = "IRT"
 EXPIRE_S = 3600
+LINK_EXPIRED_GRACE_S = 3600   # a payment link is declined this long after its deadline (links spec, section 5)
 PAUSED = "Online payment is paused; try again later."
 MANUAL_ONLY = "Online payment is off for now; send an order request instead."
 UNAVAILABLE = "ZarinPal is not available right now; try again later."
@@ -371,14 +372,27 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
     return {**get(conn, p["id"]), "changed": True}
 
 
+def expire_links(conn: sqlite3.Connection, now: int) -> int:
+    """Decline open payment links an hour past their deadline with no payment going or gone through (links spec,
+    section 5). Returns how many."""
+    ids = [r[0] for r in conn.execute(
+        f"SELECT o.id FROM orders o WHERE o.pay_code IS NOT NULL AND o.status IN {orders.OPEN} AND o.pay_by<? AND NOT EXISTS "
+        "(SELECT 1 FROM payments p WHERE p.order_id=o.id AND p.status IN ('started','paid','paid_unfulfilled'))",
+        (now - LINK_EXPIRED_GRACE_S,))]
+    for oid in ids:
+        orders.set_status(conn, None, oid, "declined", note="Payment link expired", now=now)
+    return len(ids)
+
+
 async def reconcile(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> dict:
     """Payments still `started` an hour after they began (section 4, Expiry): the buyer never came back, or their
     verify could not reach ZarinPal. Each is verified with its stored amount: confirmed -> granted (or
     paid_unfulfilled); refused -> expired, its order withdrawn (_close's rule); unreachable -> left `started` for the next run.
     With payments off, or its order closed, it is closed without verifying. Returns counts per outcome, and in
-    `changed` the ids THIS run moved to paid/paid_unfulfilled (the caller mails those, once)."""
+    `changed` the ids THIS run moved to paid/paid_unfulfilled (the caller mails those, once). Then payment links an
+    hour past their deadline are declined (expire_links)."""
     now = _now(now)
-    out = {"paid": 0, "paid_unfulfilled": 0, "expired": 0, "cancelled": 0, "pending": 0, "errors": 0, "changed": []}
+    out = {"paid": 0, "paid_unfulfilled": 0, "expired": 0, "cancelled": 0, "pending": 0, "errors": 0, "changed": [], "links_expired": 0}
     ids = [r[0] for r in conn.execute("SELECT id FROM payments WHERE status='started' AND created_at<? ORDER BY id",
                                       (now - EXPIRE_S,)).fetchall()]
     for pid in ids:
@@ -427,6 +441,11 @@ async def reconcile(conn: sqlite3.Connection, cfg: Config, now: float | None = N
                     out["changed"].append(pid)
             except Exception:
                 logger.exception("payment #%d: re-reading after the failure failed", pid)
+    try:
+        out["links_expired"] = expire_links(conn, now)
+    except Exception:
+        logger.exception("expiring payment links failed")
+        out["links_expired"], out["errors"] = 0, out["errors"] + 1
     return out
 
 

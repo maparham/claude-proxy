@@ -205,3 +205,24 @@ async def test_withdrawn_claimed_link_is_invalid(env):
     await payments.pay_link(conn, cfg, b, o["pay_code"], "v1")
     orders.withdraw(conn, b["id"], o["id"])
     assert payments.link_state(conn, b, o["pay_code"])["state"] == "invalid"
+
+
+async def test_reconcile_declines_a_link_an_hour_past_its_deadline(env):
+    conn, cfg, ids, zp = env
+    o = make(conn, cfg, ids)
+    t = o["pay_by"] + payments.LINK_EXPIRED_GRACE_S + 1
+    assert (await payments.reconcile(conn, cfg, now=o["pay_by"] + 60))["links_expired"] == 0
+    assert (await payments.reconcile(conn, cfg, now=t))["links_expired"] == 1
+    d = orders.get(conn, o["id"])
+    assert (d["status"], d["admin_note"]) == ("declined", "Payment link expired")
+
+
+async def test_reconcile_leaves_an_expired_link_with_a_payment_going_or_through(env):
+    conn, cfg, ids, zp = env
+    o = make(conn, cfg, ids)
+    await payments.pay_link(conn, cfg, bob(conn), o["pay_code"], "v1")
+    t = o["pay_by"] + payments.LINK_EXPIRED_GRACE_S + 1
+    assert payments.expire_links(conn, t) == 0                              # started
+    conn.execute("UPDATE payments SET status='paid_unfulfilled', ref_id='1'")
+    assert payments.expire_links(conn, t) == 0                              # went through: the admin's to handle
+    assert orders.get(conn, o["id"])["status"] == "new"
