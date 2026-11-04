@@ -21,6 +21,8 @@ EXPIRE_S = 3600
 PAUSED = "Online payment is paused; try again later."
 MANUAL_ONLY = "Online payment is off for now; send an order request instead."
 UNAVAILABLE = "ZarinPal is not available right now; try again later."
+ALREADY_PAID = "This order is already paid."
+LINK_OTHER_ORDER = "You have another open order; cancel it first."
 
 
 class PaymentError(orders.OrderError):
@@ -144,18 +146,24 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
 async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, now: float | None = None) -> dict:
     """Pay online for the buyer's own open Toman order at its quote: one sent unpaid, or one whose payment never came
     back (still `started` until reconcile; whichever payment verifies first grants, the other is then cancelled
-    unverified). A ZarinPal failure leaves the order open, as it was. Returns what start() does."""
+    unverified). A ZarinPal failure leaves the order open, as it was. Returns what start() does.
+    A payment link's order skips the stale-rate pause and refuses past its deadline; no order with a payment that
+    went through is paid again."""
     now = _now(now)
     o = orders._own(conn, user["id"], order_id)
     if o["status"] not in orders.OPEN:
         raise PaymentError(409, orders.CHANGED)
     if o["currency"] != CURRENCY:
         raise PaymentError(409, "Only an order in Toman can be paid online.")
+    if _has_paid(conn, o["id"]):
+        raise PaymentError(409, ALREADY_PAID)
+    if o["pay_code"] is not None and now > o["pay_by"]:   # a payment link past its deadline (links spec, section 5)
+        raise PaymentError(404, orders.LINK_INVALID)
     if pay_mode(conn, cfg) == "manual":
         raise PaymentError(409, MANUAL_ONLY)
     if not on(cfg):
         raise PaymentError(404, "Online payment is not set up on this gateway.")
-    if not rate_ok(conn, now):
+    if o["pay_code"] is None and not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
     return await _open(conn, cfg, user, o, now, withdraw=False)
 
@@ -170,6 +178,64 @@ def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, **kw) 
     if not rate_ok(conn):
         raise PaymentError(409, PAUSED)
     return orders.create_link(conn, cfg, actor, currency=CURRENCY, **kw)
+
+
+def _has_paid(conn: sqlite3.Connection, order_id: int) -> bool:
+    """A payment on the order went through (granted or not): it is never offered for paying again."""
+    return conn.execute("SELECT 1 FROM payments WHERE order_id=? AND status IN ('paid','paid_unfulfilled') LIMIT 1",
+                        (order_id,)).fetchone() is not None
+
+
+def link_state(conn: sqlite3.Connection, user, code: str, now: float | None = None) -> dict:
+    """What the payment link `code` is to the signed-in `user` (links spec, section 4). Checked in this order, so a
+    stranger learns at most that the link exists and its masked email."""
+    now = _now(now)
+    row = conn.execute("SELECT * FROM orders WHERE pay_code=?", (str(code),)).fetchone()
+    if row is None or row["user_id"] not in (None, user["id"]):
+        return {"state": "invalid", "message": orders.LINK_INVALID}
+    o = dict(row)
+    if (user["email"] or "").lower() != o["email"].lower():
+        masked = orders.mask_email(o["email"])
+        return {"state": "other_email", "email": masked, "message": f"This link is for {masked}; sign in with that email."}
+    if _has_paid(conn, o["id"]):
+        unfulfilled = conn.execute("SELECT 1 FROM payments WHERE order_id=? AND status='paid' LIMIT 1", (o["id"],)).fetchone() is None
+        return {"state": "paid", "unfulfilled": unfulfilled, "order": o, "message": ALREADY_PAID}
+    if o["status"] not in orders.OPEN or now > o["pay_by"]:
+        return {"state": "invalid", "message": orders.LINK_INVALID}
+    if o["user_id"] is None and conn.execute(f"SELECT 1 FROM orders WHERE user_id=? AND status IN {orders.OPEN} LIMIT 1",
+                                             (user["id"],)).fetchone():
+        return {"state": "other_order", "message": LINK_OTHER_ORDER}
+    return {"state": "open", "order": o}
+
+
+LINK_REFUSED = {"invalid": 404, "other_email": 403, "paid": 409, "other_order": 409}
+
+
+async def pay_link(conn: sqlite3.Connection, cfg: Config, user, code: str, terms_version, now: float | None = None) -> dict:
+    """Pay a payment link (links spec, section 4): claimed for `user` on the first pay, then paid like any open order,
+    at its quote, without the stale-rate pause. Returns what start() does."""
+    now = _now(now)
+    if terms_version != tickets.TERMS_VERSION:
+        raise PaymentError(400, tickets.TERMS_CHANGED)
+    if not on(cfg):
+        raise PaymentError(404, "Online payment is not set up on this gateway.")
+    if pay_mode(conn, cfg) == "manual":
+        raise PaymentError(409, MANUAL_ONLY)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        s = link_state(conn, user, code, now)
+        if s["state"] != "open":
+            raise PaymentError(LINK_REFUSED[s["state"]], s["message"])
+        o = s["order"]
+        if o["user_id"] is None:
+            conn.execute("UPDATE orders SET user_id=?, name=?, terms_version=?, updated_at=? WHERE id=?",
+                         (user["id"], user["name"], terms_version, now, o["id"]))
+            db.audit(conn, user["id"], "order_paylink_claimed", f"order #{o['id']}")
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return await _open(conn, cfg, user, orders.get(conn, o["id"]), now, withdraw=False)
 
 
 async def _open(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int, withdraw: bool) -> dict:

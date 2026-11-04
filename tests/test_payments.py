@@ -215,6 +215,29 @@ async def test_pay_order_refuses_what_it_cannot_pay(env):
     assert zp.requests == []
 
 
+async def test_pay_order_refuses_an_order_already_paid(env):
+    conn, cfg, ids, zp = env
+    o = unpaid_order(conn, cfg, ids)
+    r = await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    conn.execute("UPDATE payments SET status='paid_unfulfilled', ref_id='9' WHERE id=?", (r["payment_id"],))
+    with pytest.raises(payments.PaymentError) as e:
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert e.value.status == 409 and str(e.value) == payments.ALREADY_PAID
+
+
+async def test_pay_order_on_a_link_skips_the_rate_check_and_keeps_the_deadline(env):
+    conn, cfg, ids, zp = env
+    o = payments.create_link(conn, cfg, ids["admin"], email="alice@example.com", tier="lite", length="week",
+                             pay_by=int(time.time()) + 86400)
+    conn.execute("UPDATE orders SET user_id=? WHERE id=?", (ids["alice"], o["id"]))
+    conn.execute("UPDATE fx_rates SET set_at=? WHERE currency='IRT'", (int(time.time()) - 40 * 3600,))
+    assert (await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"]))["url"]
+    conn.execute("UPDATE orders SET pay_by=? WHERE id=?", (int(time.time()) - 1, o["id"]))
+    with pytest.raises(payments.PaymentError) as e:
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert e.value.status == 404
+
+
 async def paid_flow(conn, cfg, ids):
     r = await start(conn, cfg, ids)
     p = payments.get(conn, r["payment_id"])

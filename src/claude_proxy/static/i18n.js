@@ -2159,6 +2159,7 @@ const ERR_FA = {
   "No such machine.": "چنین کامپیوتری نیست.",
   "No such payment.": "چنین پرداختی نیست.",
   "This order is not an upgrade.": "این سفارش ارتقا نیست.",
+  "This order is already paid.": "این سفارش قبلاً پرداخت شده است.",
   "That pass is not running.": "این بسته فعال نیست.",
   "No such request waiting: it may have expired (after 10 minutes) or been answered already. Run gclaude again for a new code (the first time, the install command).": "چنین درخواستی در انتظار نیست: شاید منقضی شده (پس از ۱۰ دقیقه) یا قبلاً پاسخ گرفته باشد. برای کد تازه دوباره gclaude را اجرا کنید (بار اول، دستور نصب را).",
   "No such user.": "چنین کاربری نیست.",
