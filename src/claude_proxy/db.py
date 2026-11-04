@@ -108,7 +108,15 @@ SCHEMA = [
         key TEXT PRIMARY KEY,
         value TEXT
     )""",
-    # Latest title Claude Code gave each of its sessions (titles.py); the only conversation content kept.
+    # The full request and reply of API clients' requests (contents.py), zlib-compressed; gone with its request.
+    """CREATE TABLE IF NOT EXISTS request_contents (
+        request_id INTEGER PRIMARY KEY REFERENCES requests(id) ON DELETE CASCADE,
+        request BLOB NOT NULL,
+        reply BLOB NOT NULL,
+        stream INTEGER NOT NULL,
+        truncated INTEGER NOT NULL DEFAULT 0
+    )""",
+    # Latest title Claude Code gave each of its sessions (titles.py); Claude Code's only conversation content kept.
     """CREATE TABLE IF NOT EXISTS session_titles (
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL,
@@ -641,8 +649,8 @@ def revoke(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> 
 
 
 def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None, now: float | None = None) -> int:
-    """Remove a revoked user. Their requests stay, anonymized, for gateway-wide cost analysis: no user, session or
-    client version, but the time, model, tokens and cost. Returns how many were anonymized. Tickets stay as sales
+    """Remove a revoked user. Their requests stay, anonymized, for gateway-wide cost analysis: no user, session,
+    client version or content, but the time, model, tokens and cost. Returns how many were anonymized. Tickets stay as sales
     records with user_id NULL (the FK's ON DELETE SET NULL); a user with an active or queued ticket is not deleted."""
     now = time.time() if now is None else now
     u = conn.execute("SELECT name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
@@ -651,6 +659,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
     if conn.execute(f"SELECT 1 FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL AND {TICKET_EFFECTIVE_END}>? LIMIT 1",
                     (user_id, now)).fetchone():
         raise ValueError("Cancel the user's active or queued pass first.")
+    conn.execute("DELETE FROM request_contents WHERE request_id IN (SELECT id FROM requests WHERE user_id=?)", (user_id,))
     n = conn.execute("UPDATE requests SET user_id=NULL, session_id=NULL, client_version=NULL WHERE user_id=?",
                      (user_id,)).rowcount
     conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits, sessions and titles cascade; tickets keep user_name
@@ -715,11 +724,14 @@ def delete_session(conn: sqlite3.Connection, raw_token: str) -> None:
 
 
 def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = False) -> dict[str, int]:
-    """Delete expired sessions and events older than the retention period; with `keep_usage`, only the expired."""
+    """Delete expired sessions and events older than the retention period; with `keep_usage`, only the expired.
+    Request contents go after the retention period even with `keep_usage`: they are what the usage is kept without."""
     now = time.time()
     cutoff = float("-inf") if keep_usage else now - retention_days * 86400
     out = {
         "sessions": conn.execute("DELETE FROM sessions WHERE expires_at<?", (int(now),)).rowcount,
+        "request_contents": conn.execute("DELETE FROM request_contents WHERE request_id IN (SELECT id FROM requests "
+                                         "WHERE started_at<?)", (now - retention_days * 86400,)).rowcount,
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
         "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,

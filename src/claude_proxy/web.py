@@ -36,7 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, contents, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
@@ -568,7 +568,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             mparams = (_like(q), *ids, _like(q), _like(q, prefix=True))
         rows = conn.execute(
             f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, "
-            f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind FROM requests WHERE {where} AND {src} {match}"
+            f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind, EXISTS(SELECT 1 FROM request_contents rc WHERE rc.request_id=requests.id) "
+            f"AS has_content FROM requests WHERE {where} AND {src} {match}"
             f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, *mparams, min(max(limit, 1), 500))).fetchall()
         kids = {r["api_key_id"] for r in rows if r["api_key_id"]}
         key_names = {k["id"]: k["label"] or f"{k['key_prefix']}…" for k in conn.execute(
@@ -590,9 +591,20 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "kind": r["kind"] if is_admin(user) else _user_error_kind(r["kind"]),
                         "rejected_by": r["rejected_by"] if is_admin(user) else _user_rejected_by(r["rejected_by"]),
                         "session_id": r["session_id"], "key": key_names.get(r["api_key_id"]),
-                        "title": titled.get((r["user_id"], r["session_id"])),
+                        "title": titled.get((r["user_id"], r["session_id"])), "has_content": bool(r["has_content"]),
                         **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")}})
         return {"requests": out}
+
+    @app.get("/api/requests/{request_id}/content")
+    async def request_content(request: Request, request_id: int):
+        """An API client's request and reply in full: for the key's owner and the admin."""
+        user = principal(request)
+        where, params = scope_where(user)
+        row = conn.execute(f"SELECT 1 FROM requests WHERE id=? AND {where}", (request_id, *params)).fetchone()
+        content = contents.load(conn, request_id) if row else None
+        if content is None:
+            fail(404, "No content kept for this request.")
+        return content
 
     @app.get("/api/users")
     async def users(request: Request, source: str = "all"):

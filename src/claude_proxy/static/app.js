@@ -2274,7 +2274,7 @@ async function renderUser(main) {
           ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
           </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div>
       </div>
-      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("tab.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
+      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("sess.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.recent_requests")}${tipI("recent_requests")} <span class="badge">${nfFull.format(reqs.requests.length)}</span></h3></summary><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? requestsTable(reqs.requests, false) : `<p class="muted">${t("user.no_requests")}</p>`}</details>
       ${machinesCard(keys.keys, null, u.name)}
     </section>`;
@@ -2282,6 +2282,7 @@ async function renderUser(main) {
   wireUserActions(main, users);
   wireMachines(main);
   wireMore(main);
+  wireContent(main);
   if (series.points.length) stackedTime($("#u-usage"), series.points, "weighted", "model", gran);
   else $("#u-usage").outerHTML = none;
   if (heat.cells.length) heatmap($("#u-heat"), heat.cells);
@@ -2510,7 +2511,7 @@ async function renderSessions(main) {
 // Claude Code run on an API key does send one, and its sessions come first.
 async function renderApiRequests(main) {
   const range = S.prefs.range === "1d" ? "1d" : "7d";
-  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_api")}</p>
+  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_api")} ${t("req.lede_content")}</p>
     <div class="controls">${searchBox("api-q", S.apiQ, t(isAdmin() ? "sess.search_api_admin" : "sess.search_api"))}</div>
     <div id="api-sess"></div><div class="card table-wrap" id="api-list"></div></section>`;
   const fill = latest(async (fresh) => {
@@ -2522,9 +2523,38 @@ async function renderApiRequests(main) {
     list.innerHTML = d.requests.length ? `<p class="sub">${plural("sess.api_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
       : `<p class="muted">${t(S.apiQ ? "search.none" : "sess.api_none")}</p>`;
     wireMore(main);
+    wireContent(list);
   });
   wireSearch($("#api-q"), (v) => { S.apiQ = v; fill(); });
   await fill();
+}
+// An API client's request and reply in full (contents.py): the conversation as read, then the raw JSON.
+function wireContent(root) {
+  root.querySelectorAll("[data-content]").forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    try { contentDialog(await api(`/api/requests/${b.dataset.content}/content`)); } finally { b.disabled = false; }
+  }));
+}
+const blockText = (b) => (typeof b === "string" ? b : !b || typeof b !== "object" ? String(b ?? "")
+  : b.type === "text" ? b.text : b.type === "thinking" ? `[${t("req.thinking")}] ${b.thinking ?? ""}` : b.type === "redacted_thinking" ? `[${t("req.thinking")}]`
+  : b.type === "tool_use" || b.type === "server_tool_use" ? `→ ${b.name}(${JSON.stringify(b.input ?? {}, null, 2)})`
+  : b.type === "tool_result" || b.type?.endsWith("_tool_result") ? `← ${Array.isArray(b.content) ? b.content.map(blockText).join("\n") : typeof b.content === "string" ? b.content : JSON.stringify(b.content ?? "", null, 2)}`
+  : `[${b.type}]`);
+const contentText = (c) => (Array.isArray(c) ? c.map(blockText).join("\n\n") : blockText(c));
+const turn = (role, c) => `<div class="turn turn-${esc(role)}"><div class="turn-role">${esc(role)}</div><pre>${esc(contentText(c))}</pre></div>`;
+function contentDialog(d) {
+  const req = d.request && typeof d.request === "object" ? d.request : null, reply = d.reply && typeof d.reply === "object" ? d.reply : null;
+  const convo = req ? [req.system ? turn("system", req.system) : "", ...(Array.isArray(req.messages) ? req.messages : []).map((m) => turn(m?.role ?? "?", m?.content)),
+    reply?.content ? turn("assistant", reply.content) : reply?.error ? turn("error", reply.error.message ?? JSON.stringify(reply.error)) : ""].join("") : "";
+  const raw = (v) => esc(typeof v === "string" ? v : JSON.stringify(v, null, 2));
+  const dlg = openDialog(`<h3>${t("req.content_title")}${req?.model ? ` · ${bdi(req.model)}` : ""}</h3>${d.truncated ? `<p class="muted">${t("req.truncated")}</p>` : ""}
+    <div class="convo">${convo || `<p class="muted">${t("req.unreadable")}</p>`}</div>
+    <details class="raw"><summary>${t("req.raw_request")}</summary><pre>${raw(d.request)}</pre></details>
+    <details class="raw"><summary>${t(d.stream ? "req.raw_reply_stream" : "req.raw_reply")}</summary><pre>${raw(d.reply)}</pre></details>
+    <div class="dialog-actions"><button class="btn primary" id="content-close">${t("app.close")}</button></div>`);
+  dlg.classList.add("wide");
+  dlg.addEventListener("close", () => dlg.classList.remove("wide"), { once: true });
+  $("#content-close", dlg).onclick = () => dlg.close();   // no re-render: the table keeps its unfolded rows
 }
 function wireSessMore(list, page, offset) {
   const more = $("#sess-more");
@@ -2563,11 +2593,11 @@ function latest(fn) {
   let n = 0;
   return (...args) => { const mine = ++n; return fn(() => mine === n, ...args); };
 }
-const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key)) => `<table class="data"><thead><tr><th>${t("errs.when")}</th>${showUser ? `<th>${t("app.user")}</th>` : ""}${showKey ? `<th>${t("sess.key")}</th>` : ""}<th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th></tr></thead><tbody>
+const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key), showContent = requests.some((r) => r.has_content)) => `<table class="data"><thead><tr><th>${t("errs.when")}</th>${showUser ? `<th>${t("app.user")}</th>` : ""}${showKey ? `<th>${t("sess.key")}</th>` : ""}<th>${t("errs.model")}</th><th>${t("sess.session")}</th><th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th>${showContent ? `<th>${t("req.content")}${tipI("req_content")}</th>` : ""}</tr></thead><tbody>
         ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}${showKey ? `<td>${r.key ? bdi(r.key) : `<span class="muted">—</span>`}</td>` : ""}<td>${bdi(r.model ?? "—")}</td><td>${sessionCell(r.title, r.session_id)}</td>
           <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
-          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td></tr>`))}
+          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td>${showContent ? `<td>${r.has_content ? `<button class="btn small" data-content="${r.id}">${t("req.view")}</button>` : ""}</td>` : ""}</tr>`))}
         </tbody></table>${moreButton(requests.length)}`;
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
         <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`;

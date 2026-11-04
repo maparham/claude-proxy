@@ -1,7 +1,7 @@
 """Session titles: Claude Code names each session with a small side request whose answer is {"title": "..."}.
 
 The gateway recognises that request and keeps the title, so the dashboard can show sessions by name.
-It is the only piece of conversation content the gateway stores.
+It is the only piece of Claude Code's conversation content the gateway stores (API clients': contents.py).
 """
 from __future__ import annotations
 
