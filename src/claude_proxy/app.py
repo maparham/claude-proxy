@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import api_credit, contents, limits, quota, titles
+from . import api_credit, limits, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
@@ -160,12 +160,10 @@ def _usage_fresh(conn) -> float | None:
     return conn.execute(USAGE_FRESH_SQL).fetchone()[0]
 
 
-def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> None:
-    """One request's log row, its API charge, its session title and its content, on a db worker thread."""
+def _save(conn, row: dict, title: str | None) -> None:
+    """One request's log row, its API charge and its session title, on a db worker thread."""
     try:
         rid = insert_request(conn, **row)
-        if content:
-            contents.save(conn, rid, *content)
         if row.get("api_key_id") and "rejected_by" not in row:
             # Priced by the model the gate approved; the reply's model id only if that one has no rate.
             model_ = row.get("requested_model") if api_credit.rate_for(conn, row.get("requested_model")) else row.get("model")
@@ -239,12 +237,12 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base = {"started_at": started, "method": request.method, "path": path}
     held = False   # this request is counted in `inflight` until it is recorded
 
-    async def record(title: str | None = None, content: tuple | None = None, **kw) -> None:
+    async def record(title: str | None = None, **kw) -> None:
         # The slot is given back once the row is written, never before: between the two the request would count
         # nowhere, and a burst could pass limits it should not. Shielded, so a client disconnect (which cancels the
         # relay) still records and charges the request and frees its slot.
         nonlocal held
-        fut = gw.db.run(_save, {**base, "ended_at": time.time(), **kw}, title, content)
+        fut = gw.db.run(_save, {**base, "ended_at": time.time(), **kw}, title)
         if held:
             uid = base["user_id"]
             fut.add_done_callback(lambda _: inflight.release(uid))
@@ -275,7 +273,6 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["model"] = model
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
-    client_body = body if contents.wanted(is_api, base["session_id"], request.method, path) else None
 
     if is_api and not cfg.api.enabled:
         await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
@@ -423,7 +420,6 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         async def relay():
             meter = SSEMeter(collect_text=wants_title) if is_stream else None
             body_meter = BodyMeter() if not is_stream else None
-            capture = contents.Capture() if client_body is not None else None
             finished = False
             try:
                 async for chunk in resp.aiter_bytes():
@@ -435,8 +431,6 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                             meter.result.meter_error_detail = str(e)[:200]
                     else:
                         body_meter.feed(chunk)
-                    if capture is not None:
-                        capture.feed(chunk)
                     yield chunk
                 finished = True
             finally:
@@ -453,9 +447,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                         cache_creation_1h=mr.cache_creation_1h, cache_read_tokens=mr.cache_read_tokens,
                         upstream_request_id=mr.upstream_request_id or resp.headers.get("request-id"),
                         error_type=error_type or mr.error_type or (f"upstream_{resp.status_code}" if resp.status_code >= 400 else None),
-                        meter_error=1 if mr.meter_error else 0, title=title,
-                        content=(client_body, bytes(capture.buf), is_stream, capture.truncated or not finished)
-                        if capture is not None else None)
+                        meter_error=1 if mr.meter_error else 0, title=title)
                 finally:
                     await resp.aclose()
 
