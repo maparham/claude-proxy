@@ -452,7 +452,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .gantt-track i.spent { opacity: .4; }
 /* A used-up pass's card is dimmed, all but its "used up" badge. */
 .pass-card.spent > :not(.pass-card-head), .pass-card.spent .pass-card-head b { opacity: .45; }
-.gantt-track i.later { background-image: repeating-linear-gradient(45deg, rgba(255,255,255,.45) 0 3px, transparent 3px 7px) !important; }
+.gantt-track i.later { background-image: repeating-linear-gradient(45deg, color-mix(in oklab, var(--ink) 12%, transparent) 0 3px, transparent 3px 7px) !important; }
 .pass-axis { position: relative; height: 38px; background-size: 100% 6px; background-repeat: no-repeat; }
 .pass-axis em { position: absolute; top: 2px; width: 0; display: flex; justify-content: center; font-style: normal; }
 .pass-axis em.edge-start { justify-content: flex-start; } .pass-axis em.edge-end { justify-content: flex-end; }

@@ -690,10 +690,10 @@ function passLeft(end) {
   const from = parts.findIndex(([n], k) => n > 0 || k === 2);
   return t("pass.left", { d: parts.slice(from).map(([n, u]) => t(`pass.left_${u}`, { n: nf0.format(n) })).join(t("pass.left_join")) });
 }
-// Every pass's bar on the timeline is the same gray (the cards' blue meters are usage, these are spans of time): the
-// number and name tell them apart, a queued one is hatched and a used-up one dimmed.
+// Every pass's bar on the timeline is the same light gray (the cards' blue meters are usage, these are spans of time):
+// the number and name tell them apart, a queued one is hatched and a used-up one dimmed.
 function passColors(tl) {
-  return (tl ? tl.passes : []).map(() => "background:var(--ink-2);color:var(--surface)");
+  return (tl ? tl.passes : []).map(() => "background:var(--grid);color:var(--ink-2)");
 }
 const passNo = (n) => `<span class="pass-no">${nf0.format(n)}.</span> `;
 // Passes are numbered, and their cards and timeline rows ordered, by when they were bought. `no[i]` is the number of
