@@ -240,6 +240,20 @@ async def test_browser_headers_never_reach_upstream(setup, anthropic):
     assert [k for k in anthropic.calls[0]["headers"] if k in BROWSER_HEADERS] == []
 
 
+async def test_any_web_page_can_call_the_api(setup, anthropic):
+    # The key travels in a header, never a cookie, so allowing every origin lends no one a user's session.
+    gw, conn, uid, h = setup
+    origin = {"origin": "https://app.example"}
+    async with asgi_client(create_app(gw)) as c:
+        pre = await c.options("/v1/messages", headers={**origin, "access-control-request-method": "POST",
+                                                        "access-control-request-headers": "x-api-key,content-type,anthropic-version"})
+        r = await c.post("/v1/messages", json=MSG, headers={**h, **origin})
+    assert pre.status_code == 200 and len(anthropic.calls) == 1   # only the POST went upstream
+    assert pre.headers["access-control-allow-origin"] == "*"
+    assert "x-api-key" in pre.headers["access-control-allow-headers"].lower()
+    assert r.status_code == 200 and r.headers["access-control-allow-origin"] == "*"
+
+
 TITLE_REQ = {"model": "claude-haiku-4-5", "max_tokens": 64, "system": [{"type": "text", "text": "You are naming a coding session so the user can pick it out."}],
              "messages": [{"role": "user", "content": "<session>fix the login</session>"}],
              "output_config": {"format": {"type": "json_schema", "schema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}}}
