@@ -2227,6 +2227,8 @@ const ERR_FA = {
   "Give the deadline as a date and time.": "مهلت را به‌صورت تاریخ و ساعت بدهید.",
   "The deadline must be in the next 30 days.": "مهلت باید در ۳۰ روز آینده باشد.",
   "The price is a whole number of Toman.": "قیمت باید عدد صحیحی به تومان باشد.",
+  "This payment link is no longer valid.": "این لینک پرداخت دیگر معتبر نیست.",
+  "You have another open order; cancel it first.": "یک سفارش باز دیگر دارید؛ اول آن را لغو کنید.",
 };
 const ERR_PATTERNS = [
   [/^(.+) must be a number\.$/, "{1} باید عدد باشد."],
@@ -2264,6 +2266,7 @@ const ERR_PATTERNS = [
   [/^This order is (\S+); only an open order can be linked\.$/, "این سفارش {1} است؛ فقط سفارش باز را می‌توان لینک کرد."],
   [/^A user named (.+) or with that email exists already\.$/, "کاربری با نام {1} یا با این ایمیل از قبل وجود دارد."],
   [/^(.+) is revoked; link the order to an active account\.$/, "{1} ابطال شده است؛ سفارش را به حسابی فعال لینک کنید."],
+  [/^This link is for (.+); sign in with that email\.$/, "این لینک برای {1} است؛ با همان ایمیل وارد شوید."],
 ];
 function errMsg(text) {
   if (LANG !== "fa" || !text) return text;

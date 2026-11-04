@@ -213,7 +213,8 @@ LINK_REFUSED = {"invalid": 404, "other_email": 403, "paid": 409, "other_order": 
 
 async def pay_link(conn: sqlite3.Connection, cfg: Config, user, code: str, terms_version, now: float | None = None) -> dict:
     """Pay a payment link (links spec, section 4): claimed for `user` on the first pay, then paid like any open order,
-    at its quote, without the stale-rate pause. Returns what start() does."""
+    at its quote, without the stale-rate pause. A newer tick updates the order's `terms_version` on every pay, not
+    only the first (section 4, step 2). Returns what start() does."""
     now = _now(now)
     if terms_version != tickets.TERMS_VERSION:
         raise PaymentError(400, tickets.TERMS_CHANGED)
@@ -228,9 +229,11 @@ async def pay_link(conn: sqlite3.Connection, cfg: Config, user, code: str, terms
             raise PaymentError(LINK_REFUSED[s["state"]], s["message"])
         o = s["order"]
         if o["user_id"] is None:
-            conn.execute("UPDATE orders SET user_id=?, name=?, terms_version=?, updated_at=? WHERE id=?",
-                         (user["id"], user["name"], terms_version, now, o["id"]))
+            conn.execute("UPDATE orders SET user_id=?, name=?, updated_at=? WHERE id=?",
+                         (user["id"], user["name"], now, o["id"]))
             db.audit(conn, user["id"], "order_paylink_claimed", f"order #{o['id']}")
+        if o["terms_version"] != terms_version:
+            conn.execute("UPDATE orders SET terms_version=?, updated_at=? WHERE id=?", (terms_version, now, o["id"]))
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

@@ -172,6 +172,20 @@ async def test_pay_link_skips_the_stale_rate_and_survives_zarinpal_failing(env):
     assert (await payments.pay_link(conn, cfg, b, o["pay_code"], "v1"))["url"]
 
 
+async def test_pay_link_updates_terms_version_on_a_later_pay_too(env, monkeypatch):
+    conn, cfg, ids, zp = env
+    o = make(conn, cfg, ids)
+    b = bob(conn)
+    zp.request_answer = payments.zarinpal.ZarinpalUnavailable("down")
+    with pytest.raises(payments.PaymentError):   # claims the link, but the payment itself fails
+        await payments.pay_link(conn, cfg, b, o["pay_code"], "v1")
+    assert orders.get(conn, o["id"])["terms_version"] == "v1"
+    monkeypatch.setattr(tickets, "TERMS_VERSION", "v2")   # a newer tick, between the two pay attempts
+    zp.request_answer = "A1"
+    assert (await payments.pay_link(conn, cfg, b, o["pay_code"], "v2"))["url"]
+    assert orders.get(conn, o["id"])["terms_version"] == "v2"
+
+
 async def test_two_tabs_pay_one_link_once(env):
     conn, cfg, ids, zp = env
     o = make(conn, cfg, ids)
