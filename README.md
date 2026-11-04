@@ -106,7 +106,7 @@ one; then it says how to add them to it). Setting it up by hand instead:
 "statusLine": { "type": "command", "command": "/path/to/scripts/statusline.sh", "refreshInterval": 30 }
 ```
 
-It prints each of their limits, e.g. `maya · daily $61/$100 61% (resets in 3.2 h) · 5h 30% (resets in 2.1 h)`: a
+It prints each of their limits, e.g. `maya · daily $61/$100 61% (resets in 3h 12m) · 5h 30% (resets in 2h 6m)`: a
 used/limit figure gets its percentage, rounded down, and each limit says when it resets (a usage limit when its window
 ends, a share limit with the account's bucket). It is
 cyan with a leading `◆`, and a figure turns yellow at 80% and red at 100%. They can also sign in to the dashboard with their key and
@@ -399,10 +399,12 @@ Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
   `claude-proxy login`; a user's says only that the gateway can't serve Claude right now), and the
   admin's dashboard shows a red banner. A running server picks up
   the new login without a restart.
-- Prompts and responses are never stored, only metadata and token counts. The one exception is the
-  short title Claude Code generates for each session, kept so the Sessions tab can show sessions by
-  name; the admin and the session's owner can see it. Requests, quota reports and session titles
-  older than `retention_days` (default 180) are deleted.
+- Claude Code's prompts and responses are never stored, only metadata and token counts. The one
+  exception is the short title Claude Code generates for each session, kept so the Requests tab can
+  show sessions by name; the admin and the session's owner can see it. Requests sent with an API key
+  by SDKs or curl (no session id) are kept in full, request and reply, for the key's owner and the
+  admin to open in the Requests tab. Requests, quota reports, session titles and request contents
+  older than `retention_days` (default 180) are deleted; contents go then even with `keep_usage`.
 - To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
   history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
   removes their recorded usage from totals and charts. Revoking also stops the person's OpenCode key.

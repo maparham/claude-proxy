@@ -522,13 +522,17 @@ def user_view(st: LimitState) -> dict:
 
 
 def human(s: int) -> str:
+    """A duration, short: `45s`, `58m`, `2h 30m`, `24h`, `7d`, `2d 5h`."""
+    s = int(s)
     if s < 120:
         return f"{s}s"
     if s < 7200:
-        return f"{s // 60} min"
+        return f"{s // 60}m"
     if s < 172800:
-        return f"{s / 3600:.1f} h"
-    return f"{s / 86400:.1f} days"
+        h, m = divmod(s // 60, 60)
+        return f"{h}h {m}m" if m else f"{h}h"
+    d, h = divmod(s // 3600, 24)
+    return f"{d}d {h}h" if h else f"{d}d"
 
 
 def human_wait(s: int) -> str:

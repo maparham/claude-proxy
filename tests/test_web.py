@@ -158,7 +158,7 @@ async def test_me_status_for_statusline(env):
     assert d["user"]["name"] == "alice"
     assert d["limits"][0]["kind"] == "requests_daily" and d["limits"][0]["current"] == 2
     assert "account" not in d and "credential_healthy" not in d
-    assert d["line"] == "alice · daily 2/10 req (resets in 24.0 h)"
+    assert d["line"] == "alice · daily 2/10 req (resets in 23h 58m)"
     async with asgi_client(create_dashboard_app(gw)) as c:
         d = (await c.get("/api/me/status", headers=bearer(keys["admin"]))).json()
     assert d["account"]["5h"]["utilization_pct"] == 14 and d["line"].startswith("admin · plan 5h 14%")
@@ -211,12 +211,12 @@ async def test_status_line_says_when_each_limit_resets(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
     # bob's one request, 100 s ago, opened a 24-hour window that resets in 86300 s, and a 7-day one.
-    assert r.text == "bob · daily 1/5 req (resets in 24.0 h) · weekly 350/1K tok (resets in 7.0 days)\n"
+    assert r.text == "bob · daily 1/5 req (resets in 23h 58m) · weekly 350/1K tok (resets in 6d 23h)\n"
     # A share limit follows the account's 5-hour bucket, which resets in an hour here.
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["bob"], "share_5h", "*", "50", "pct"))
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
-    assert re.fullmatch(r"bob · daily 1/5 req \(resets in 24\.0 h\) · 5h \d+% \(resets in (59|60) min\) · weekly .*\n", r.text), r.text
+    assert re.fullmatch(r"bob · daily 1/5 req \(resets in 23h 58m\) · 5h \d+% \(resets in (59|60)m\) · weekly .*\n", r.text), r.text
 
 
 async def test_status_line_says_when_the_shared_subscription_is_used_up(env):
@@ -227,7 +227,7 @@ async def test_status_line_says_when_the_shared_subscription_is_used_up(env):
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/me/status?format=text", headers=bearer(keys["bob"]))
         admin = await c.get("/api/me/status?format=text", headers=bearer(keys["admin"]))
-    assert r.text == "bob · gateway limit reached (resets in 2.1 h)\n"
+    assert r.text == "bob · gateway limit reached (resets in 2h 4m)\n"
     assert "gateway limit" not in admin.text   # admins see the plan's own figures
     conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, status) VALUES(?,?,?,?,?,?)",
                  (now + 1, "header", "5h", 100, now - 1, "rejected"))   # that window has reset
