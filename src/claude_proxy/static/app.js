@@ -1069,19 +1069,28 @@ function wireOrdering(root, tk, order) {
 function quotaBar(q) {
   const name = q.bucket === "5h" || q.bucket === "7d" ? t(`quota.bucket_${q.bucket}`) : esc(q.bucket);
   if (q.utilization_pct == null) return `<div style="margin-bottom:14px"><b>${name}</b> <span class="muted">${t("quota.no_data")}</span></div>`;
-  const shares = Object.entries(q.shares).sort((a, b) => b[1] - a[1]);
-  const segs = shares.map(([k, v]) => [k, v]).concat([["unattributed", q.unattributed || 0]]).filter(([, v]) => v > 0.05);
   const resets = q.resets_at ? t("quota.resets_in", { d: fmtDur(q.resets_at - Date.now() / 1000) }) : "";
   const pts = (v) => nfFix(1).format(v);
+  // The biggest shares get their own segment; the rest fold into one "Other" so a crowded account stays readable.
+  const shares = Object.entries(q.shares).sort((a, b) => b[1] - a[1]);
+  const named = topKeys(Object.fromEntries(shares), 5);
+  const folded = shares.filter(([k]) => !named.includes(k));
+  const segs = shares.filter(([k]) => named.includes(k))
+    .concat(folded.length ? [[OTHER, folded.reduce((a, [, v]) => a + v, 0)]] : [], [["unattributed", q.unattributed || 0]])
+    .filter(([, v]) => v > 0.05);
+  const otherName = plural("quota.other_users", folded.length);
+  const label = (k) => k === "unattributed" ? tipT(t("ov.not_attributed"), "unattributed") : k === OTHER ? otherName : bdi(k);
+  const tip = (k, v) => k === "unattributed" ? t("quota.seg_unattributed", { v: pts(v) })
+    : k === OTHER ? t("quota.seg_other", { name: otherName, v: pts(v), users: folded.map(([u, x]) => `${bdi(u)} ${pts(x)}`).join(" · ") })
+    : t("quota.seg_user", { name: bdi(k), v: pts(v) });
   return `<div style="margin-bottom:16px">
     <div style="display:flex;justify-content:space-between;align-items:baseline"><span><b>${tipT(name, `bucket:${q.bucket}`)}</b>
       <span style="font-size:22px;font-weight:650;margin-inline-start:8px">${fmtPct(q.utilization_pct)}</span></span>
       <span class="muted">${esc(resets)}${q.stale ? ` · ${tipT(t("quota.stale"), "stale")}` : ""}</span></div>
     <div class="stack" role="img" aria-label="${esc(t("quota.aria", { bucket: name, pct: fmtPct(q.utilization_pct) }))}">
-      ${segs.map(([k, v]) => `<span${tipAttr(k === "unattributed" ? t("quota.seg_unattributed", { v: pts(v) })
-        : t("quota.seg_user", { name: bdi(k), v: pts(v) }))} style="width:${v}%;background:${colorFor("user", k)}"></span>`).join("")}
+      ${segs.map(([k, v]) => `<span${tipAttr(tip(k, v))} style="width:${v}%;background:${colorFor("user", k)}"></span>`).join("")}
     </div>
-    <div class="legend">${segs.map(([k, v]) => `<span><i style="background:${colorFor("user", k)}"></i>${k === "unattributed" ? tipT(t("ov.not_attributed"), "unattributed") : bdi(k)} ${pts(v)}</span>`).join("")}</div>
+    <div class="legend">${segs.map(([k, v]) => `<span${k === OTHER ? tipAttr(tip(k, v)) : ""}><i style="background:${colorFor("user", k)}"></i>${label(k)} ${pts(v)}</span>`).join("")}</div>
   </div>`;
 }
 
