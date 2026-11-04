@@ -220,7 +220,8 @@ def link_price(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, cu
 def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, *, email, tier, length, pay_by, amount=None,
                 note="", currency: str = "IRT", now: float | None = None) -> dict:
     """An admin's payment link (spec section 3): an unclaimed order for `email` at the list price or `amount`, payable
-    until `pay_by`. No mail. The caller checks that online payment can take it (payments.create_link)."""
+    until `pay_by`. No mail. The caller checks that online payment can take it (payments.create_link). Without a
+    fresh weekly report this says unavailable, not sold out, like _check_on_sale (final review, finding 2)."""
     now = _now(now)
     email, note = _email(email), _note(note)
     usd, listed, rate = link_price(conn, cfg, str(tier or ""), str(length or ""), currency, now)
@@ -243,6 +244,9 @@ def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, *, ema
         amount = listed
     conn.execute("BEGIN IMMEDIATE")
     try:
+        from . import capacity
+        if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+            raise OrderError(409, UNAVAILABLE)
         if tickets.sold_out(conn, cfg, tier, length, now, None, None):
             raise OrderError(409, "That pass is sold out.")
         cur = conn.execute(

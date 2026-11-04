@@ -159,6 +159,7 @@ async def test_first_payment_expiring_leaves_the_order_to_the_second(env):
     # expires the first: the order stays open, so the second still grants when its callback comes.
     conn, cfg, ids, zp = env
     first = payments.get(conn, (await start(conn, cfg, ids))["payment_id"])
+    live(conn, later() - 60)   # a fresh report at the time she pays again: the first one is long past stale_after_s
     second = payments.get(conn, (await payments.pay_order(conn, cfg, user(conn, ids["alice"]), first["order_id"],
                                                           now=later() - 60))["payment_id"])
     zp.verify_answer = zarinpal.ZarinpalRefused(-51, "never paid")

@@ -149,7 +149,9 @@ async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, 
     back (still `started` until reconcile; whichever payment verifies first grants, the other is then cancelled
     unverified). A ZarinPal failure leaves the order open, as it was. Returns what start() does.
     A payment link's order skips the stale-rate pause and refuses past its deadline; no order with a payment that
-    went through is paid again."""
+    went through is paid again. Without a fresh weekly report this refuses before opening a payment, same as the
+    price list and orders.create: a payment the callback could not grant (tickets.grant's NO_REPORT) would otherwise
+    take the buyer's money and leave the order `paid_unfulfilled` (final review, finding 1)."""
     now = _now(now)
     o = orders._own(conn, user["id"], order_id)
     if o["status"] not in orders.OPEN:
@@ -166,6 +168,9 @@ async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, 
         raise PaymentError(404, "Online payment is not set up on this gateway.")
     if o["pay_code"] is None and not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
+    from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
+    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+        raise PaymentError(409, orders.UNAVAILABLE)
     return await _open(conn, cfg, user, o, now, withdraw=False)
 
 
@@ -215,7 +220,8 @@ LINK_REFUSED = {"invalid": 404, "other_email": 403, "paid": 409, "other_order": 
 async def pay_link(conn: sqlite3.Connection, cfg: Config, user, code: str, terms_version, now: float | None = None) -> dict:
     """Pay a payment link (links spec, section 4): claimed for `user` on the first pay, then paid like any open order,
     at its quote, without the stale-rate pause. A newer tick updates the order's `terms_version` on every pay, not
-    only the first (section 4, step 2). Returns what start() does."""
+    only the first (section 4, step 2). Returns what start() does. Without a fresh weekly report this refuses before
+    opening a payment, same as pay_order (final review, finding 1)."""
     now = _now(now)
     if terms_version != tickets.TERMS_VERSION:
         raise PaymentError(400, tickets.TERMS_CHANGED)
@@ -239,6 +245,9 @@ async def pay_link(conn: sqlite3.Connection, cfg: Config, user, code: str, terms
     except BaseException:
         conn.execute("ROLLBACK")
         raise
+    from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
+    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+        raise PaymentError(409, orders.UNAVAILABLE)
     return await _open(conn, cfg, user, orders.get(conn, o["id"]), now, withdraw=False)
 
 

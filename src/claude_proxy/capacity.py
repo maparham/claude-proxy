@@ -267,15 +267,24 @@ class Guard:
 
 
 def _returned(conn, cfg, account_id: int, week, att: dict, rate: float | None, now: float) -> float:
-    """Unused points of passes that ended this week: their sold piece of the week less their use."""
+    """Unused points of passes that ended this week: their sold piece of the week, their non-cancelled share bonuses'
+    pieces of it included (sold_by_week counts those too), less their use."""
     ws, we = week
     rows = [dict(r) for r in conn.execute(
         f"SELECT {tickets.TICKET_COLS}, {SOLD_END} AS sold_end FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
         f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}<=? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, we, now, ws))]
-    uses = _week_use(conn, cfg, [p["id"] for p in rows], ws, now) if rate and rows else {}
+    ids = [p["id"] for p in rows]
+    bonuses: dict[int, list] = {}
+    if ids:
+        for b in conn.execute(f"SELECT ticket_id, share_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id IN "
+                              f"({','.join('?' * len(ids))}) AND cancelled_at IS NULL AND share_pct>0", ids):
+            bonuses.setdefault(b["ticket_id"], []).append(b)
+    uses = _week_use(conn, cfg, ids, ws, now) if rate and rows else {}
     total = 0.0
     for p in rows:
         piece = pieces(week, p["share_pct"], max(ws, p["starts_at"]), p["sold_end"]).get(ws, 0.0)
+        for b in bonuses.get(p["id"], []):
+            piece += pieces(week, b["share_pct"], max(ws, b["starts_at"]), b["ends_at"]).get(ws, 0.0)
         use = uses.get(p["id"], 0.0) / rate if rate else att["ticket_shares"].get(p["id"], 0.0)
         total += max(0.0, piece - use)
     return total

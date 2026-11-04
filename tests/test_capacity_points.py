@@ -404,3 +404,82 @@ def test_summary_without_a_report_is_not_fresh_and_frees_nothing(db):
     conn, cfg, ids = seeded(db)
     w = capacity.summary(conn, cfg, 1, NOW)["week"]
     assert (w["fresh"], w["free"]) == (False, 0)
+
+
+# ---------- final review: a stale/missing report by the time money moves (findings 1 and 2) ----------
+
+@pytest.fixture
+def pay_env(db, monkeypatch):
+    """A ZarinPal-ready gateway in IRT, same setup as test_payments.env, but with no weekly report yet: each test
+    makes one fresh with live() only where it needs one, then can take it away again before paying."""
+    from claude_proxy import payments, zarinpal
+    from claude_proxy.config import Currency, ZarinpalConfig
+    from tests.test_payments import MID, FakeZP
+    conn, cfg, ids = seeded(db)
+    cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
+    tickets.set_rate(conn, cfg, "IRT", 156250, ids["admin"], now=NOW - 3600)
+    cfg.zarinpal = ZarinpalConfig()
+    cfg.listener.home_url = "https://rahkar.pro"
+    monkeypatch.setenv("ZARINPAL_MERCHANT_ID", MID)
+    zp = FakeZP()
+    monkeypatch.setattr(zarinpal, "request", zp.request)
+    monkeypatch.setattr(zarinpal, "verify", zp.verify)
+    return conn, cfg, ids, zp, payments
+
+
+async def test_pay_order_refuses_without_a_fresh_report(pay_env):
+    """Review finding 1: the order was placed while the report was fresh; by the time alice comes back to pay, it is
+    gone, so pay_order must refuse (not open a ZarinPal payment that tickets.grant could only fail at the callback,
+    taking her money for nothing)."""
+    from claude_proxy import orders
+    conn, cfg, ids, zp, payments = pay_env
+    live(conn, NOW)
+    o = orders.create(conn, cfg, tier="lite", length="week", currency="IRT", name="Alice", email="alice@example.com",
+                      user_id=ids["alice"], notify=False, terms_version="v1", now=NOW)
+    conn.execute("DELETE FROM quota_snapshots")
+    with pytest.raises(payments.PaymentError) as e:
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"], now=NOW)
+    assert e.value.status == 409 and str(e.value) == orders.UNAVAILABLE
+    assert zp.requests == [] and conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0] == 0
+
+
+async def test_pay_link_refuses_without_a_fresh_report(pay_env):
+    """Same as above, for a payment link: the admin made it while the report was fresh; it is gone by the time the
+    buyer pays."""
+    from claude_proxy import orders
+    from claude_proxy.db import create_user
+    conn, cfg, ids, zp, payments = pay_env
+    live(conn, NOW)
+    o = payments.create_link(conn, cfg, ids["admin"], email="bob@example.com", tier="lite", length="week",
+                             pay_by=NOW + 86400, now=NOW)
+    bob, _ = create_user(conn, "bob")
+    conn.execute("UPDATE users SET email='bob@example.com' WHERE id=?", (bob,))
+    conn.execute("DELETE FROM quota_snapshots")
+    with pytest.raises(payments.PaymentError) as e:
+        await payments.pay_link(conn, cfg, user(conn, bob), o["pay_code"], "v1", now=NOW)
+    assert e.value.status == 409 and str(e.value) == orders.UNAVAILABLE
+    assert zp.requests == [] and conn.execute("SELECT COUNT(*) FROM payments").fetchone()[0] == 0
+
+
+def test_create_link_refuses_as_unavailable_without_a_report(pay_env):
+    """Review finding 2: create_link without a fresh report must say unavailable, like _check_on_sale, not sold
+    out."""
+    from claude_proxy import orders
+    conn, cfg, ids, zp, payments = pay_env
+    with pytest.raises(orders.OrderError, match="temporarily unavailable"):
+        payments.create_link(conn, cfg, ids["admin"], email="bob@example.com", tier="lite", length="week",
+                             pay_by=NOW + 86400, now=NOW)
+
+
+# ---------- final review: _returned misses a pass's share bonuses (finding 3) ----------
+
+def test_returned_counts_a_share_bonus_of_an_ended_pass(acct):
+    conn, cfg, ids = acct
+    add_user(conn, ids, "a")
+    live(conn, NOW - 3 * DAY, 1)
+    ended = grant(conn, cfg, ids, who="a", tier="standard", length="day", now=NOW - 3 * DAY)
+    tickets.add_bonus(conn, cfg, ids["admin"], ended["id"], share_pct=10, now=NOW - 3 * DAY, ends_at=NOW - 2 * DAY)
+    use(conn, ids["a"], ended["id"], 1, NOW - 3 * DAY + 3600)
+    report(conn, ids, 2)
+    s = capacity.summary(conn, cfg, 1, NOW)
+    assert s["week"]["returned"] == pytest.approx(40 / 7 + 10 / 7 - 1)   # the pass's own piece, its bonus's, less use
