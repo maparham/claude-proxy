@@ -957,10 +957,11 @@ function payLinkMsg(r) {
 async function payLinkDialog(code, tk) {
   let r;
   try { r = await api(`/api/me/paylinks/${encodeURIComponent(code)}`); } catch (e) { return alertInline(e.message); }
+  if (r.state === "other_email") rememberPayLink(code);   // kept through signing out and in with the right account
   if (r.state !== "open") return openDialog(`<h3>${t("pl.title")}</h3><p>${payLinkMsg(r)}</p><p><button class="btn primary" data-close>${t("app.ok")}</button></p>`);
   const tier = tk && tk.prices && tk.prices.tiers.find((x) => x.tier === r.tier);
   const after = !!(tk && tk.current && !tk.replaces);
-  const terms = tier ? orderTerms(tk.prices, tier, r.length, after ? { date: tk.next_start, splitNow: tk.split_now } : null, after) : "";
+  const terms = tier && tier.lengths[r.length] ? orderTerms(tk.prices, tier, r.length, after ? { date: tk.next_start, splitNow: tk.split_now } : null, after) : "";
   const price = esc(money(r.amount, r.currency));
   const d = openDialog(`<h3>${t("ord.title", { what: t("ord.what", { label: tierName(r.tier, r.label), len: lengthName(r.length) }) })}</h3>
     <p class="order-price"><b>${price}</b></p><p class="muted">${t("pl.pay_by", { date: esc(fmtDate(r.pay_by)) })}</p>
@@ -1418,9 +1419,9 @@ async function renderOrders(main) {
 }
 // Every field a buyer typed (name, email, message) and the admin note go through esc().
 function orderRow(o) {
-  const account = o.pay_code ? `<div class="muted">${t("pl.row", { date: esc(fmtDate(o.pay_by)) })}${o.user_id == null ? ` · ${t("pl.unclaimed")}` : ""}</div>`
-    : o.user_id != null ? `<div class="muted">${t("ord.account")} <a class="user-link" href="#user/${o.user_id}">${bdi(o.user_name || `#${o.user_id}`)}</a></div>`
-    : `<div class="muted">${t("ord.visitor")}</div>`;
+  const owner = o.user_id != null ? `<div class="muted">${t("ord.account")} <a class="user-link" href="#user/${o.user_id}">${bdi(o.user_name || `#${o.user_id}`)}</a></div>` : "";
+  const account = o.pay_code ? `<div class="muted">${t("pl.row", { date: esc(fmtDate(o.pay_by)) })}${o.user_id == null ? ` · ${t("pl.unclaimed")}` : ""}</div>${owner}`
+    : owner || `<div class="muted">${t("ord.visitor")}</div>`;
   return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
     <td><b>${bdi(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${bdi(o.email)}</a></div>${account}</td>
     <td class="nowrap">${o.upgrade_of ? `${t("up.what", { label: tierName(o.tier, o.label) })}<div class="muted">${t("ord.ticket_n", { id: esc(o.upgrade_of) })}</div>` : `${tierName(o.tier, o.label)} · ${lengthName(o.length)}${o.start_now ? `<div class="muted">${t("ord.starts_now")}</div>` : ""}`}</td>
@@ -1472,7 +1473,7 @@ async function payLinkNewDialog() {
   const d = openDialog(`<h3>${t("pl.new")}</h3>
     <form id="f-pl" class="form-grid">
       <label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254"></label>
-      <label>${t("pl.tier")}<select name="tier">${Object.entries(tiers).map(([id, x]) => `<option value="${esc(id)}">${tierName(id, x.label)}</option>`).join("")}</select></label>
+      <label>${t("pl.tier")}<select name="tier">${Object.entries(tiers).map(([id, x]) => `<option value="${esc(id)}">${esc(tierNameText(id, x.label))}</option>`).join("")}</select></label>
       <label>${t("pl.length")}<select name="length">${Object.keys(lengths).map((k) => `<option value="${esc(k)}">${lengthName(k)}</option>`).join("")}</select></label>
       <label>${t("pl.price")}<input type="number" name="amount" min="1000" step="1" dir="ltr" required></label>
       <label>${t("pl.pay_by_label")}<input type="datetime-local" name="pay_by" required value="${toLocal(Date.now() / 1000 + 3 * 86400)}"></label>
@@ -1483,9 +1484,17 @@ async function payLinkNewDialog() {
     </form>`);
   const f = $("#f-pl", d);
   let listed = null;
+  const create = f.querySelector('button[type="submit"]');
+  // Create waits for this pass's list price: a reply for a pass no longer chosen is dropped.
   const quote = async () => {
-    try { listed = (await api(`/api/admin/orders/link_quote?tier=${encodeURIComponent(f.tier.value)}&length=${encodeURIComponent(f.length.value)}`)).amount; f.amount.value = listed; $("#pl-err", d).textContent = ""; }
-    catch (e) { $("#pl-err", d).textContent = e.message; }
+    const tier = f.tier.value, len = f.length.value;
+    listed = null; f.amount.value = ""; create.disabled = true;
+    let r, err = null;
+    try { r = await api(`/api/admin/orders/link_quote?tier=${encodeURIComponent(tier)}&length=${encodeURIComponent(len)}`); } catch (e) { err = e; }
+    if (f.tier.value !== tier || f.length.value !== len) return;
+    create.disabled = false;
+    if (err) { $("#pl-err", d).textContent = err.message; return; }
+    listed = r.amount; f.amount.value = listed; $("#pl-err", d).textContent = "";
   };
   f.tier.onchange = f.length.onchange = quote;
   quote();

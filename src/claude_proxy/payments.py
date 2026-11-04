@@ -375,13 +375,16 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
 def expire_links(conn: sqlite3.Connection, now: int) -> int:
     """Decline open payment links an hour past their deadline with no payment going or gone through (links spec,
     section 5). Returns how many."""
-    ids = [r[0] for r in conn.execute(
-        f"SELECT o.id FROM orders o WHERE o.pay_code IS NOT NULL AND o.status IN {orders.OPEN} AND o.pay_by<? AND NOT EXISTS "
+    rows = conn.execute(
+        f"SELECT o.id, o.admin_note FROM orders o WHERE o.pay_code IS NOT NULL AND o.status IN {orders.OPEN} AND o.pay_by<? AND NOT EXISTS "
         "(SELECT 1 FROM payments p WHERE p.order_id=o.id AND p.status IN ('started','paid','paid_unfulfilled'))",
-        (now - LINK_EXPIRED_GRACE_S,))]
-    for oid in ids:
-        orders.set_status(conn, None, oid, "declined", note="Payment link expired", now=now)
-    return len(ids)
+        (now - LINK_EXPIRED_GRACE_S,)).fetchall()
+    for oid, mine in rows:   # the admin's own note stays, trimmed so the reason still fits
+        why = "Payment link expired"
+        mine = (mine or "").strip()
+        note = f"{mine[:orders.NOTE_MAX - len(why) - 3].rstrip()} · {why}" if mine else why
+        orders.set_status(conn, None, oid, "declined", note=note, now=now)
+    return len(rows)
 
 
 async def reconcile(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> dict:

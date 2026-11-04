@@ -217,6 +217,15 @@ async def test_reconcile_declines_a_link_an_hour_past_its_deadline(env):
     assert (d["status"], d["admin_note"]) == ("declined", "Payment link expired")
 
 
+def test_expiring_a_link_keeps_the_admins_note(env):
+    conn, cfg, ids, zp = env
+    o, long = make(conn, cfg, ids, note="for Bob"), make(conn, cfg, ids, note="x" * orders.NOTE_MAX)
+    assert payments.expire_links(conn, long["pay_by"] + payments.LINK_EXPIRED_GRACE_S + 1) == 2
+    assert orders.get(conn, o["id"])["admin_note"] == "for Bob · Payment link expired"
+    n = orders.get(conn, long["id"])["admin_note"]
+    assert len(n) == orders.NOTE_MAX and n.endswith("x · Payment link expired")
+
+
 async def test_reconcile_leaves_an_expired_link_with_a_payment_going_or_through(env):
     conn, cfg, ids, zp = env
     o = make(conn, cfg, ids)
