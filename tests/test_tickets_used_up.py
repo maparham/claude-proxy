@@ -221,9 +221,6 @@ def test_requests_spill_to_the_next_pass_and_come_back_when_the_first_refills_at
     assert limits.serving(conn, cfg, ids["alice"], RESET7 + 3600)[0]["id"] == t["id"]
 
 
-@pytest.mark.xfail(strict=True, reason="me['current']['used_up'] now comes back False: a Tasks 2-5 points-model change "
-                    "to how a running ticket's 7d state is judged (limits._ticket_7d / capacity._pass_cap), not named "
-                    "by the brief's migration rules 1-6 and not clearly resolved by the spec text available here")
 async def test_a_used_up_pass_with_one_queued_that_cannot_move_up_is_not_replaced_by_a_new_one(db, cfg, monkeypatch):
     """The account is too full for the queued pass to start early: a new pass would queue after it, so the dashboard
     offers the start choice (no `replaces`) rather than "starts at once, in place of this one"."""
@@ -240,6 +237,7 @@ async def test_a_used_up_pass_with_one_queued_that_cannot_move_up_is_not_replace
     snap(conn, now - 8800, 1, "7d", reset)
     snap(conn, now - 60, 0, "5h", now + 3000)
     cfg.tickets.max_sold_pct = 40
+    cfg.tickets.max_sold_5h_pct = cfg.tickets.max_sold_pct   # b's move adds nothing to this week's owed: only the 5-hour check can refuse it
     bob, _ = create_user(conn, "bob")
     g = lambda uid, tier, at: tickets.grant(conn, cfg, ids["admin"], user(conn, uid), tier, "day", "USD", now=at, terms_version="v1")  # noqa: E731
     # The capacity gate (2026-11-04 spec) is stubbed fresh for these three grants only: the test's own snapshot

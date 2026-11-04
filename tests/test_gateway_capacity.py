@@ -93,8 +93,9 @@ def test_selling_checks_the_weeks_room_at_the_reported_capacity(env):
     for n in range(3):
         add_user(conn, ids, f"u{n}")
         grant(conn, cfg, ids, who=f"u{n}", tier="standard", length="week")
-    # The env fixture's lite week pass owes 1.07, and the three standard week passes owe 3 x 10.7 x 0.5 = 16.1
-    # (scaled by 50): room is 80 - 50 - 17.1 - 5 = 7.9, so a fourth standard week pass (5.4 scaled) still fits.
+    # The env fixture's lite week pass owes 1.07 (piece 2.14, scaled by 0.5), and each of the three standard week
+    # passes owes 5.36 (piece 10.71, scaled by 0.5): 1.07 + 3 x 5.36 = 17.14 owed, room 80 - 50 - 17.14 - 5 = 7.86,
+    # so a fourth standard week pass (5.36 scaled) still fits.
     add_user(conn, ids, "bob")
     grant(conn, cfg, ids, who="bob", tier="standard", length="week")
     cfg.tickets.max_sold_pct = 70

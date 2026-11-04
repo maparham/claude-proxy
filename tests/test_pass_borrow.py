@@ -4,19 +4,6 @@ import pytest
 from claude_proxy import capacity, limits, tickets
 from claude_proxy.config import LENGTHS
 from claude_proxy.db import create_user
-
-
-def grant_no_report(conn, cfg, ids, monkeypatch, uid, length="day", start=0):
-    """grant(), with the capacity gate stubbed fresh for just this call: bob's grant here is only there to make his
-    pass owe against alice's week, and inserting a real snapshot fresh enough for it shifts the attribution window
-    the `week()`/`piece()` arithmetic below depends on (a sale needs a fresh report, 2026-11-04 spec)."""
-    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
-    monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
-    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
-        "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
-    t = grant(conn, cfg, ids, uid, length=length, start=start)
-    monkeypatch.undo()
-    return t
 from tests.test_tickets_limits import RESET7, piece, req, set_limit, snap
 from tests.tickets_helpers import DAY, seeded, user
 
@@ -35,6 +22,19 @@ def grant(conn, cfg, ids, uid, length="day", start=START):
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, uid), "lite", length, "USD", now=start, terms_version="v1")
     conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (start, start + LENGTHS[length] * DAY, t["id"]))
     return tickets.get(conn, t["id"])
+
+
+def grant_no_report(conn, cfg, ids, monkeypatch, uid, length="day", start=0):
+    """grant(), with the capacity gate stubbed fresh for just this call: bob's grant here is only there to make his
+    pass owe against alice's week, and inserting a real snapshot fresh enough for it shifts the attribution window
+    the `week()`/`piece()` arithmetic below depends on (a sale needs a fresh report, 2026-11-04 spec)."""
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+        "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
+    t = grant(conn, cfg, ids, uid, length=length, start=start)
+    monkeypatch.undo()
+    return t
 
 
 @pytest.fixture
