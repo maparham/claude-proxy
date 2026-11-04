@@ -334,7 +334,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = principal(request)
         out = {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
                # Configurable values the dashboard's explanations quote.
-               "settings": {"reference_model": cfg.pricing.reference_model},
+               "settings": {"reference_model": cfg.pricing.reference_model, "family_cost": cfg.pricing.family_costs()},
                "install": install_command(), "install_windows": install_command(windows=True)}
         if is_admin(user):
             be = gw.backend.describe()

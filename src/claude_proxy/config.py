@@ -265,6 +265,16 @@ class Pricing:
         p = self.price_for(self.reference_model)
         return p.input if p else 1.0
 
+    def family_costs(self) -> dict[str, float]:
+        """Output price per million tokens of the first-listed (newest) price of each family Claude Code's /model
+        offers: fable, opus, sonnet. The dashboard quotes their ratios: how much faster one burns a pass than another."""
+        out: dict[str, float] = {}
+        for pattern, price in self.prices.items():
+            m = re.match(r"claude-(fable|opus|sonnet)-", pattern.lower())
+            if m and m.group(1) not in out:
+                out[m.group(1)] = price.output
+        return out
+
 
 @dataclass
 class Route:
