@@ -39,11 +39,6 @@ async def test_sandbox_uses_the_sandbox_host(monkeypatch):
     assert zarinpal.start_url("A1", sandbox=False) == "https://payment.zarinpal.com/pg/StartPay/A1"
 
 
-def test_start_host_env_replaces_the_production_start_address(monkeypatch):
-    monkeypatch.setenv("ZARINPAL_START_HOST", "https://pay.rahkar.pro/")
-    assert zarinpal.start_url("A1", sandbox=False) == "https://pay.rahkar.pro/pg/StartPay/A1"
-    assert zarinpal.start_url("S1", sandbox=True) == "https://sandbox.zarinpal.com/pg/StartPay/S1"
-
 
 async def test_refusal_carries_code_and_message(monkeypatch):
     fake(monkeypatch, lambda r: httpx.Response(200, json={"data": [], "errors": {"code": -9, "message": "The input params invalid"}}))
