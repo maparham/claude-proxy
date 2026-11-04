@@ -421,6 +421,16 @@ def test_a_key_the_gateway_refuses_changes_nothing(installed, stub):
 
 
 @on_windows
+@pytest.mark.parametrize("status", [402, 403, 429])
+def test_on_goes_ahead_for_an_account_with_no_pass_or_credit(installed, stub, status):
+    win = installed
+    stub.models_status = status   # the key is good; the gateway just won't serve it yet (402: no pass, the usual case)
+    r = win.cg("on", "--url", stub.url, "--key", "sk-proxy-full", "--dashboard", stub.url)
+    assert r.returncode == 0 and f"not serving this account yet (HTTP {status})" in r.out, r.out
+    assert (win.gdir / "settings.json").exists()
+
+
+@on_windows
 def test_on_leaves_a_foreign_gclaude_alone(installed, stub):
     win = installed
     (win.bin / "gclaude.cmd").write_bytes(b"@echo mine\r\n")

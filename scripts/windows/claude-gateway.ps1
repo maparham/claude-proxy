@@ -210,7 +210,7 @@ function Preflight([string]$Url, [string]$Key) {   # the gateway answers and acc
     Start-Sleep -Seconds 2
   }
   $detail = [string]$r.text; if ($detail.Length -gt 400) { $detail = $detail.Substring(0, 400) }
-  if ($r.code -eq 403 -or $r.code -eq 429) {   # the key is good; the account is out of credit or ticket for now
+  if ($r.code -eq 402 -or $r.code -eq 403 -or $r.code -eq 429) {   # the key is good; the account has no pass or credit for now
     Say "Signed in, but the gateway is not serving this account yet (HTTP $($r.code)):`n$detail"
   } elseif ($r.code -ne 200) {
     Fail "The gateway at $Url did not accept the key (HTTP $($r.code)); leaving Claude Code as it is.`n$detail"

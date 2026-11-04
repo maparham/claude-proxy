@@ -1834,9 +1834,9 @@ def test_on_sets_up_gclaude_by_default(stub, home):
     assert gc_paths(home)[2].exists() and settings.read_bytes() == before
 
 
-@pytest.mark.parametrize("status", [403, 429])
+@pytest.mark.parametrize("status", [402, 403, 429])
 def test_on_goes_ahead_for_an_account_with_no_credit_or_ticket(stub, home, status):
-    stub.models_status = status   # the key is good; the gateway just won't serve it yet
+    stub.models_status = status   # the key is good; the gateway just won't serve it yet (402: no pass, the usual case)
     r = cg(home, "on", "--url", stub.url, "--key", "sk-proxy-full")
     assert r.returncode == 0, r.stderr
     assert f"not serving this account yet (HTTP {status})" in r.stderr and gc_paths(home)[2].exists()
