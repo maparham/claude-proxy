@@ -49,6 +49,14 @@ def check(conn, cfg, uid, now=AT, served=None):
     return limits.evaluate(conn, cfg, uid, "claude-sonnet-5", "/v1/messages", now=now, served=served)
 
 
+def test_a_hand_set_weekly_share_is_headroom_and_holds_nothing_back(env):
+    conn, cfg, ids, t = env
+    set_limit(conn, ids["admin"], "share_7d", 93.6, "pct")
+    use(conn, ids["alice"], t, 300, 1.3)
+    assert check(conn, cfg, ids["alice"]) is None                  # borrows as on an empty account
+    assert week(conn, cfg, ids["alice"]).limit == pytest.approx(OWN + NEXT)
+
+
 def test_the_part_before_the_reset_borrows_the_next_part_on_an_empty_account(env):
     conn, cfg, ids, t = env
     use(conn, ids["alice"], t, 100, 1.1)                  # 0.1 points, past its own 2-hour part
@@ -57,10 +65,9 @@ def test_the_part_before_the_reset_borrows_the_next_part_on_an_empty_account(env
 
 
 def test_borrowing_stops_where_the_free_room_ends_not_halfway(env):
-    """Free room = 100 - U - owed - margin. Bob's hand-set weekly share holds back 93.6 points, so 0.3 are free."""
+    """Free room = 100 - U - owed - margin. A borrow margin of 98.6 (93.6 + the default 5) holds back the same, so 0.3 are free."""
     conn, cfg, ids, t = env
-    bob, _ = create_user(conn, "bob")
-    set_limit(conn, bob, "share_7d", 93.6, "pct")
+    cfg.tickets.borrow_margin_pct = 93.6 + 5
     use(conn, ids["alice"], t, 100, 1.1)
     assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + 0.3)
     use(conn, ids["alice"], t, 200, 1.3, when=AT - 40)    # the account rises with her use
@@ -72,8 +79,7 @@ def test_borrowing_stops_where_the_free_room_ends_not_halfway(env):
 
 def test_a_full_account_gives_no_extra(env):
     conn, cfg, ids, t = env
-    bob, _ = create_user(conn, "bob")
-    set_limit(conn, bob, "share_7d", 94, "pct")           # 100 - 1.1 - 94 - 5 < 0
+    cfg.tickets.borrow_margin_pct = 94 + 5                # 100 - 1.1 - 99 < 0
     use(conn, ids["alice"], t, 100, 1.1)
     st = week(conn, cfg, ids["alice"])
     assert st.limit == pytest.approx(0.1) and st.exceeded   # what it has used, and not a point more
@@ -82,7 +88,7 @@ def test_a_full_account_gives_no_extra(env):
 def test_other_passes_unused_parts_are_held_back(env):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
-    set_limit(conn, ids["admin"], "share_7d", 93, "pct")  # an ungated hand-set share: 93 owed
+    cfg.tickets.borrow_margin_pct = 93 + 5                # an ungated hand-set share no longer owed: 93, plus the default margin
     b = grant(conn, cfg, ids, bob, length="week", start=START - DAY)   # running, unused: its part this week is owed
     use(conn, ids["alice"], t, 100, 1.1)
     free = 100 - 1.1 - 93 - piece(5, DAY + 2 * 3600) - 5
@@ -93,7 +99,7 @@ def test_other_passes_unused_parts_are_held_back(env):
 def test_a_pass_queued_to_start_later_this_week_is_owed(env):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
-    set_limit(conn, ids["admin"], "share_7d", 93.8, "pct")
+    cfg.tickets.borrow_margin_pct = 93.8 + 5
     grant(conn, cfg, ids, bob, start=AT + 1400)           # starts 2200 s before the reset
     use(conn, ids["alice"], t, 100, 1.1)
     assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + (100 - 1.1 - 93.8 - 5) - piece(5, 2200))
@@ -102,7 +108,7 @@ def test_a_pass_queued_to_start_later_this_week_is_owed(env):
 def test_a_bonus_starting_later_this_week_is_owed(env):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
-    set_limit(conn, ids["admin"], "share_7d", 93.8, "pct")
+    cfg.tickets.borrow_margin_pct = 93.8 + 5
     b = grant(conn, cfg, ids, bob, length="week", start=AT + 1400)
     conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?)",
                  (b["id"], 2, AT + 1600, AT + 3600 * 24, AT))
@@ -114,7 +120,7 @@ def test_a_bonus_starting_later_this_week_is_owed(env):
 def test_what_one_pass_borrows_is_gone_for_the_next(env):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
-    set_limit(conn, ids["admin"], "share_7d", 93.6, "pct")
+    cfg.tickets.borrow_margin_pct = 93.6 + 5
     b = grant(conn, cfg, ids, bob)
     use(conn, ids["alice"], t, 100, 1.1)
     room = 100 - 1.1 - 93.6 - 5 - OWN                     # bob's own part is owed to him
@@ -330,7 +336,7 @@ def test_a_reset_time_that_shifts_a_little_keeps_one_borrow_record_and_the_last_
 def test_a_pass_that_ended_earlier_this_week_holds_nothing_back(env):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
-    set_limit(conn, ids["admin"], "share_7d", 93.6, "pct")
+    cfg.tickets.borrow_margin_pct = 93.6 + 5
     grant(conn, cfg, ids, bob, start=START - 2 * DAY)     # a day pass over a day ago, its part all unused
     use(conn, ids["alice"], t, 100, 1.1)
     assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + (100 - 1.1 - 93.6 - 5))

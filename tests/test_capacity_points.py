@@ -41,3 +41,27 @@ def test_set_share_5h_refuses_a_share_over_the_5h_ceiling(db):
     assert tickets.set_share_5h(conn, cfg, "lite", 50, ids["admin"]) == 50
     with pytest.raises(tickets.TicketError, match="max_sold_5h_pct"):
         tickets.set_share_5h(conn, cfg, "lite", 51, ids["admin"])
+
+
+from claude_proxy import capacity
+from tests.tickets_helpers import DAY, NOW
+
+WEEK = 7 * DAY
+W = (NOW - 4 * DAY, NOW + 3 * DAY)   # the week the tests' 7-day snapshots describe
+
+
+def test_pieces_split_a_period_by_week_and_project_forward():
+    assert capacity.pieces(W, 20, NOW, NOW + DAY) == {W[0]: pytest.approx(20 / 7)}
+    p = capacity.pieces(W, 40, NOW + 2 * DAY, NOW + 9 * DAY)          # a week pass from Thursday
+    assert p == {W[0]: pytest.approx(40 / 7), W[1]: pytest.approx(240 / 7)}
+    assert capacity.pieces(W, 5, NOW + 3 * DAY, NOW + 4 * DAY) == {W[1]: pytest.approx(5 / 7)}
+    assert capacity.pieces(W, 5, NOW - 10 * DAY, NOW - 9 * DAY) == {W[0] - WEEK: pytest.approx(5 / 7)}
+    assert capacity.pieces(W, 5, NOW, NOW) == {}
+
+
+def test_fresh_needs_a_young_snapshot_with_a_future_reset():
+    att = {"utilization_pct": 10.0, "stale": False, "resets_at": NOW + 10}
+    assert capacity.fresh(att, NOW)
+    assert not capacity.fresh(att | {"stale": True}, NOW)
+    assert not capacity.fresh(att | {"resets_at": NOW - 1}, NOW)
+    assert not capacity.fresh(att | {"utilization_pct": None}, NOW)

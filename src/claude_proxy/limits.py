@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass
 
 from . import db, quota, tickets
+from .capacity import _capacity, _debt, _pass_cap, _week_use, _weighted_since, fresh, room
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 from .usage import SUMS, Totals, price_totals
@@ -182,14 +183,6 @@ def _total_state(conn, cfg, user_id, row) -> LimitState:
                       remaining=max(0.0, limit - current), exceeded=current >= limit)
 
 
-def _capacity(att, now) -> float:
-    """The points of a bucket available to the gateway (2026-10-18 spec): 100 less what it can't pin on its users,
-    until the window resets. Every share limit is a share of this, not of the whole account."""
-    if att["unattributed"] is None or (att["resets_at"] and att["resets_at"] <= now):
-        return 100.0
-    return min(100.0, max(0.0, 100.0 - att["unattributed"]))
-
-
 def _share_state(conn, cfg, user_id, row, now) -> LimitState:
     att = quota.attribution(conn, cfg.pricing, SHARE_BUCKETS[row["kind"]], now=now, stale_after_s=cfg.quota.stale_after_s)
     limit = float(row["value"]) * _capacity(att, now) / 100
@@ -211,19 +204,6 @@ def _date(t: float) -> str:
 
 def _gated(conn, cfg, user_id) -> bool:
     return cfg.tickets.enabled and tickets.is_gated(conn, user_id)
-
-
-def _weighted_since(conn, cfg, user_id, since, now, ticket_id: int | None = None) -> float:
-    """The user's weighted Anthropic tokens that ended in (since, now], weighed as quota.observed_rate weighs them;
-    with `ticket_id`, only those that pass served."""
-    span = ("user_id=? AND provider='anthropic' AND rejected_by IS NULL AND path!=? AND api_key_id IS NULL "
-            "AND ended_at>? AND ended_at<=?")
-    params = (user_id, COUNT_TOKENS_PATH, since, now)
-    if ticket_id is not None:
-        span, params = span + " AND ticket_id=?", (*params, ticket_id)
-    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
-    w, args = quota.weighted_sql(cfg.pricing, models)
-    return float(conn.execute(f"SELECT COALESCE(SUM({w}), 0) FROM requests WHERE {span}", (*args, *params)).fetchone()[0])
 
 
 def _finish(st: LimitState) -> LimitState:
@@ -262,70 +242,14 @@ def _ticket_5h(conn, cfg, t, now) -> LimitState:
     return _finish(st)
 
 
-def _pass_cap(conn, t, start, end, now) -> float:
-    """The weekly points one pass gives between `start` and `end` (both inside one Anthropic week), before capacity
-    scaling: its share × the days of the span it covers ÷ 7, plus its active bonus pieces."""
-    cap = t["share_pct"] * max(0.0, min(end, t["effective_end"]) - max(start, t["starts_at"])) / DAY / 7
-    for b in tickets.active_bonuses(conn, t["id"], now):
-        cap += b["share_pct"] * max(0.0, min(end, b["ends_at"]) - max(start, b["starts_at"])) / DAY / 7
-    return cap
-
-
-def _debt(conn, cfg, t, week_start, capacity, now) -> float:
-    """What the pass borrowed from the week starting at `week_start` in the week before (2026-10-30 spec, §3), in
-    points: measured as it was recorded then (pass_borrows), so the reset's new capacity and rate don't move it. A
-    day pass is the only one that borrows, and it has no third part, so nothing ever carries further."""
-    if t["starts_at"] >= week_start - quota.RESET_TOLERANCE_S:
-        return 0.0
-    row = conn.execute("SELECT week_end, own_pts, rate FROM pass_borrows WHERE ticket_id=? AND ABS(week_end - ?)<=? "
-                       "ORDER BY ABS(week_end - ?) LIMIT 1", (t["id"], week_start, quota.RESET_TOLERANCE_S, week_start)).fetchone()
-    if row is None:
-        return 0.0
-    used = _weighted_since(conn, cfg, t["user_id"], max(week_start - 7 * DAY, t["starts_at"]), row["week_end"], t["id"]) / row["rate"]
-    return max(0.0, used - row["own_pts"])
-
-
-def _week_use(conn, cfg, ticket_ids, since, now) -> dict[int, float]:
-    """Each pass's weighted Anthropic tokens that ended in (since, now], in one query, weighed as _weighted_since weighs them."""
-    if not ticket_ids:
-        return {}
-    span = (f"ticket_id IN ({','.join('?' * len(ticket_ids))}) AND provider='anthropic' AND rejected_by IS NULL AND path!=? "
-            "AND api_key_id IS NULL AND ended_at>? AND ended_at<=?")
-    params = (*ticket_ids, COUNT_TOKENS_PATH, since, now)
-    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
-    w, args = quota.weighted_sql(cfg.pricing, models)
-    return {r[0]: float(r[1]) for r in conn.execute(f"SELECT ticket_id, COALESCE(SUM({w}), 0) FROM requests WHERE {span} "
-                                                    "GROUP BY ticket_id", (*args, *params))}
-
-
 def _free_room(conn, cfg, t, week, att, rate, capacity, now) -> float | None:
-    """The points of the current week no one is owed (2026-10-30 spec, §1): 100 less the account's use, what the other
-    passes and the hand-set weekly shares may still draw, and the margin. None without live data to say so."""
-    if cfg.tickets.borrow_margin_pct >= 100 or att["utilization_pct"] is None or att["stale"] or not att["resets_at"] \
-            or att["resets_at"] <= now:
+    """The points of the current week no one is owed, for borrowing (2026-10-30 spec §1, through the 2026-11-04 spec §5):
+    100 less the account's use, what the other passes may still draw, and the borrow margin. Hand-set weekly shares are
+    headroom and hold nothing back. None without live data to say so."""
+    if cfg.tickets.borrow_margin_pct >= 100 or not fresh(att, now):
         return None
-    week_start, week_end = week
-    others = [dict(r) for r in conn.execute(
-        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL AND t.id!=? "
-        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (t["account_id"], t["id"], week_end, now))]   # running or queued: an ended one draws nothing more
-    owed = 0.0
-    if others:
-        ids = [p["id"] for p in others]
-        uses = _week_use(conn, cfg, ids, week_start, now)
-        bonuses: dict[int, list] = {}
-        for b in conn.execute(f"SELECT ticket_id, share_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id IN "
-                              f"({','.join('?' * len(ids))}) AND cancelled_at IS NULL AND share_pct>0", ids):
-            bonuses.setdefault(b["ticket_id"], []).append(b)
-        for p in others:
-            span = lambda s, e: max(0.0, min(week_end, e) - max(week_start, s)) / DAY / 7   # noqa: E731
-            part = p["share_pct"] * span(p["starts_at"], p["effective_end"])
-            part += sum(b["share_pct"] * span(b["starts_at"], b["ends_at"]) for b in bonuses.get(p["id"], []))
-            own = part * capacity / 100 - _debt(conn, cfg, p, week_start, capacity, now)
-            owed += max(0.0, own - uses.get(p["id"], 0.0) / rate)
-    for r in conn.execute("SELECT user_id, value FROM limits WHERE kind='share_7d'"):
-        if not _gated(conn, cfg, r["user_id"]):
-            owed += max(0.0, float(r["value"]) * capacity / 100 - att["shares"].get(r["user_id"], 0.0))
-    return max(0.0, 100.0 - att["utilization_pct"] - owed - cfg.tickets.borrow_margin_pct)
+    return max(0.0, room(conn, cfg, t["account_id"], week, att, rate, capacity, now, ceiling=100.0,
+                         margin=cfg.tickets.borrow_margin_pct, exclude=t["id"]))
 
 
 def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
