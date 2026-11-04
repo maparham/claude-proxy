@@ -294,7 +294,8 @@ SCHEMA = [
         status TEXT NOT NULL CHECK(status IN ('started','cancelled','failed','expired','paid','paid_unfulfilled')),
         ref_id TEXT,
         card_pan TEXT,                      -- ZarinPal's masked card number; the card hash is never stored
-        error TEXT
+        error TEXT,
+        made_order INTEGER NOT NULL DEFAULT 1   -- 1: the order was created for this payment; 0: it pays an order sent earlier
     )""",
     "CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)",
     "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status, created_at)",
@@ -453,6 +454,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ticket ON requests(ticket_id, ended_at)")
     if "pass_pin" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN pass_pin INTEGER")   # the running pass the user chose to serve first
+    if "made_order" not in _columns(conn, "payments"):
+        conn.execute("ALTER TABLE payments ADD COLUMN made_order INTEGER NOT NULL DEFAULT 1")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:

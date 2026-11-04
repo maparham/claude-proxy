@@ -153,6 +153,41 @@ async def test_pay_order_again_after_a_payment_that_never_came_back(env):
     assert len(zp.verifies) == 1
 
 
+async def test_first_payment_expiring_leaves_the_order_to_the_second(env):
+    # The buyer never came back from the first payment, pressed Pay and is at the bank on the second when reconcile
+    # expires the first: the order stays open, so the second still grants when its callback comes.
+    conn, cfg, ids, zp = env
+    first = payments.get(conn, (await start(conn, cfg, ids))["payment_id"])
+    second = payments.get(conn, (await payments.pay_order(conn, cfg, user(conn, ids["alice"]), first["order_id"],
+                                                          now=later() - 60))["payment_id"])
+    zp.verify_answer = zarinpal.ZarinpalRefused(-51, "never paid")
+    out = await payments.reconcile(conn, cfg, now=later())
+    assert out["expired"] == 1 and payments.get(conn, first["id"])["status"] == "expired"
+    assert orders.get(conn, first["order_id"])["status"] == "new"
+    zp.verify_answer = {"code": 100, "ref_id": 202, "card_pan": None}
+    r = await payments.callback(conn, cfg, second["authority"], "OK")
+    assert r["status"] == "paid" and orders.get(conn, first["order_id"])["status"] == "done"
+    # the second one dying as well, with no payment left, withdraws the order the first was made for
+    conn.execute("UPDATE orders SET status='new'")
+    conn.execute("UPDATE payments SET status='started' WHERE id=?", (second["id"],))
+    await payments.callback(conn, cfg, second["authority"], "NOK")
+    assert orders.get(conn, first["order_id"])["status"] == "withdrawn"
+
+
+async def test_backing_out_of_pay_order_keeps_the_order_open(env):
+    # An order sent unpaid was not made for its payment: cancelling at the bank leaves it as it was, to pay later or
+    # for the admin to handle.
+    conn, cfg, ids, zp = env
+    o = unpaid_order(conn, cfg, ids)
+    p = payments.get(conn, (await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"]))["payment_id"])
+    await payments.callback(conn, cfg, p["authority"], "NOK")
+    assert payments.get(conn, p["id"])["status"] == "cancelled" and orders.get(conn, o["id"])["status"] == "new"
+    zp.verify_answer = zarinpal.ZarinpalRefused(-51, "never paid")
+    p = payments.get(conn, (await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"]))["payment_id"])
+    assert (await payments.reconcile(conn, cfg, now=later()))["expired"] == 1
+    assert payments.get(conn, p["id"])["status"] == "expired" and orders.get(conn, o["id"])["status"] == "new"
+
+
 async def test_pay_order_failure_keeps_the_order_open(env):
     conn, cfg, ids, zp = env
     o = unpaid_order(conn, cfg, ids)

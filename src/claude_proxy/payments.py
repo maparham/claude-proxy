@@ -161,7 +161,8 @@ async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, 
 
 
 async def _open(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int, withdraw: bool) -> dict:
-    """A ZarinPal payment for order `o`'s quote; `withdraw`: a refused request withdraws the order (one made for it)."""
+    """A ZarinPal payment for order `o`'s quote; `withdraw`: the order was made for this payment, so a refused
+    request withdraws it, and so does the payment dying later (_close) once no payment on the order is still going."""
     amount = int(round(o["quoted_amount"]))
     try:
         authority = await zarinpal.request(cfg.zarinpal.merchant_id(), amount,
@@ -173,8 +174,8 @@ async def _open(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int, 
         if withdraw:
             orders.set_status(conn, user["id"], o["id"], "withdrawn")
         raise PaymentError(502, UNAVAILABLE) from e
-    cur = conn.execute("INSERT INTO payments(order_id, user_id, created_at, updated_at, amount, authority, status) "
-                       "VALUES(?,?,?,?,?,?,'started')", (o["id"], user["id"], now, now, amount, authority))
+    cur = conn.execute("INSERT INTO payments(order_id, user_id, created_at, updated_at, amount, authority, status, made_order) "
+                       "VALUES(?,?,?,?,?,?,'started',?)", (o["id"], user["id"], now, now, amount, authority, int(withdraw)))
     db.audit(conn, user["id"], "payment_started", f"order #{o['id']}", {"payment_id": cur.lastrowid, "amount": amount})
     return {"payment_id": cur.lastrowid, "url": zarinpal.start_url(authority, cfg.zarinpal.sandbox)}
 
@@ -240,11 +241,21 @@ def _unfulfilled(conn: sqlite3.Connection, p: dict, ref_id: str, card_pan: str |
 
 
 def _close(conn: sqlite3.Connection, p: dict, status: str, now: int, **cols) -> None:
-    """A payment that will never be paid: its status, and its order withdrawn if still open."""
+    """A payment that will never be paid: its status, and its order withdrawn if still open, it was made for a
+    payment (start, not pay_order on an order sent unpaid) and no other payment on it is still started (pay_order
+    can open a second one; the order must outlive the first for the second to grant)."""
     _set(conn, p["id"], status, now, **cols)
-    if orders.get(conn, p["order_id"])["status"] in orders.OPEN:
+    if orders.get(conn, p["order_id"])["status"] in orders.OPEN and _closes_order(conn, p["order_id"]):
         orders.set_status(conn, p["user_id"], p["order_id"], "withdrawn", now=now)
     db.audit(conn, p["user_id"], f"payment_{status}", f"order #{p['order_id']}", {"payment_id": p["id"], **cols})
+
+
+def _closes_order(conn: sqlite3.Connection, order_id: int) -> bool:
+    """Whether an order whose payments are all dead should be withdrawn: it was created for a payment, and none
+    of its payments is still started."""
+    made, started = conn.execute("SELECT MAX(made_order), SUM(status='started') FROM payments WHERE order_id=?",
+                                 (order_id,)).fetchone()
+    return bool(made) and not started
 
 
 def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pan: str | None, now: int) -> dict:
@@ -282,7 +293,7 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
 async def reconcile(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> dict:
     """Payments still `started` an hour after they began (section 4, Expiry): the buyer never came back, or their
     verify could not reach ZarinPal. Each is verified with its stored amount: confirmed -> granted (or
-    paid_unfulfilled); refused -> expired, its order withdrawn; unreachable -> left `started` for the next run.
+    paid_unfulfilled); refused -> expired, its order withdrawn (_close's rule); unreachable -> left `started` for the next run.
     With payments off, or its order closed, it is closed without verifying. Returns counts per outcome, and in
     `changed` the ids THIS run moved to paid/paid_unfulfilled (the caller mails those, once)."""
     now = _now(now)
