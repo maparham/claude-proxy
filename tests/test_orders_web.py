@@ -652,7 +652,7 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     from tests.test_tickets_web import _app_fn
     p = {"currency": "EUR", "tiers": [_tier(label=BAD)]}
     script = APP_STUBS + f"var p = {json.dumps(p)}; var out = [orderFormHtml(p, p.tiers[0], 'week', null), orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd')];"
-    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "tierName"], script)
+    without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "orderTerms", "tierName"], script)
     assert 'name="email"' in without and 'name="email"' not in with_
     assert "<img" not in without and 'name="currency"' not in with_ and "EUR 8" in with_   # the price list's currency, no picker
 
@@ -664,7 +664,7 @@ def test_the_order_dialog_says_the_vat_is_in_without_online_payment(tmp_path):
     from tests.test_tickets_web import _app_fn
     p = {"currency": "EUR", "vat_percent": 10, "tiers": [_tier()]}
     script = APP_STUBS + f"var fmtNum = (v) => String(v); var p = {json.dumps(p)}; var out = orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd', null, null, true);"
-    html = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "tierName"], script)
+    html = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "orderTerms", "tierName"], script)
     assert "Prices include 10% VAT." in html
 
 

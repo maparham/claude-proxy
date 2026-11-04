@@ -683,8 +683,7 @@ const I18N = {
     "ord.start_after_tip": "When your current passes expire on {date},",
     "ord.start_after_tip2": "or once they're used up, if there's room.",
     "ord.start_after_sold_out": "Sold out for {date}",
-    "ord.start_now": "Now",
-    "ord.start_now_sub": "Beside your current pass",
+    "ord.start_now": "Now, beside your current pass",
     "ord.starts_now": "starts now, beside the running pass",
     "pass.list": "Each pass has limits of its own. Requests use the oldest pass first and move to the next when one reaches a limit.",
     "pass.usable_in": "Usable in {d}",
@@ -735,14 +734,13 @@ const I18N = {
     "ord.message": "Message (optional)",
     "ord.message_ph": "Anything the admin should know",
     "ord.terms_l1": "Your pass is usable at your own pace until it ends. Your allowance renews on a fixed weekly schedule, so a pass that runs past it is used in parts; whatever is left of a part when the next one starts is lost.",
-    "ord.split": "Your allowance renews on a fixed weekly schedule, so your pass is used in {n} parts: {pieces}. Whatever is left of a part when the next one starts is lost.",
+    "ord.split": "Your allowance renews on a fixed weekly schedule, so your pass is used in {n} parts. Whatever is left of a part when the next one starts is lost.",
     "ord.split_one": "Your whole pass is usable until {date}.",
     "ord.split_open": "Your whole pass is usable until it ends.",
     "ord.term_now": "Starts as soon as it's paid or approved and lasts {len}.",
     "ord.term_after": "Starts when your current passes run out and lasts {len}.",
     "ord.bar_start": "start",
     "ord.bar_end": "end",
-    "ord.split_and": " and ",
     "ord.split_week": "{n} part: {pct}",
     "ord.nth.1": "First", "ord.nth.2": "Second", "ord.nth.3": "Third", "ord.nth.4": "Fourth", "ord.nth.5": "Fifth",
     "num.2": "two", "num.3": "three", "num.4": "four", "num.5": "five", "num.6": "six",
@@ -1691,8 +1689,7 @@ const I18N = {
     "ord.start_after_tip": "پس از انقضای بسته‌های فعلی در {date}",
     "ord.start_after_tip2": "و یا پس از مصرف شدن بسته‌های فعلی و در صورت وجود ظرفیت خالی",
     "ord.start_after_sold_out": "برای {date} ظرفیت تمام شده است",
-    "ord.start_now": "همین حالا",
-    "ord.start_now_sub": "کنار بسته فعلی",
+    "ord.start_now": "همین حالا، کنار بسته فعلی",
     "ord.starts_now": "شروع فوری، کنار بسته فعال",
     "pass.list": "هر بسته سقف مصرف خودش را دارد. درخواست‌ها اول از قدیمی‌ترین بسته استفاده می‌کنند و وقتی به سقف رسید، سراغ بعدی می‌روند.",
     "pass.usable_in": "تا شروع: {d}",
@@ -1743,14 +1740,13 @@ const I18N = {
     "ord.message": "پیام (اختیاری)",
     "ord.message_ph": "هر چه ادمین باید بداند",
     "ord.terms_l1": "بسته‌تان را تا پایانش با سرعت خودتان مصرف می‌کنید. سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته‌ای که از آن زمان بگذرد در چند قسمت مصرف می‌شود؛ هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
-    "ord.split": "سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در {n} قسمت قابل استفاده است: {pieces}. هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
+    "ord.split": "سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در {n} قسمت مصرف می‌شود. هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود.",
     "ord.split_one": "کل بسته شما تا {date} قابل استفاده است.",
     "ord.split_open": "کل بسته شما تا پایانش قابل استفاده است.",
     "ord.term_now": "به‌محض پرداخت یا تأیید شروع می‌شود و {len} اعتبار دارد.",
     "ord.term_after": "پس از تمام شدن بسته‌های فعلی شروع می‌شود و {len} اعتبار دارد.",
     "ord.bar_start": "شروع",
     "ord.bar_end": "پایان",
-    "ord.split_and": " و ",
     "ord.split_week": "قسمت {n}: {pct}",
     "ord.nth.1": "اول", "ord.nth.2": "دوم", "ord.nth.3": "سوم", "ord.nth.4": "چهارم", "ord.nth.5": "پنجم",
     "num.2": "دو", "num.3": "سه", "num.4": "چهار", "num.5": "پنج", "num.6": "شش",
@@ -2058,32 +2054,30 @@ function plural(key, n, vars = {}) { return t(`${key}.${n === 1 ? "one" : "other
 // week_split (fractions of the ticket per week): each piece named for its week (a ticket under a week: first and
 // second part) with its share. Whole percents: "rough" is the promise. "" without quota data. Never a weekly reset's
 // date: that is the account's, not the buyer's. Several pieces are also drawn as a bar, each segment as long as its
-// share, labelled with its name and percent (a narrow one with the percent only, a sliver with neither: the sentence
-// has them all), with only the ticket's start and end marked with their date and time. `use` (a running pass's,
+// share, labelled with its name and percent (a narrow one with the percent only, a sliver with neither), with only
+// the ticket's start and end marked with their date and time. `tail`: text that follows the sentence, before the bar. `use` (a running pass's,
 // {pcts, cur, label, resets}): each piece's use in percent filled into its segment, `label` written in the segment in
 // use, and each split marked with its time (`resets`), a split near an end with its time a row lower.
 // The order terms' first line: when the pass starts and how long it lasts, never a date (the start is the approval,
 // so any date is a guess; `after`: queued behind the buyer's current passes), then the split, else (no quota data)
 // for anything longer than a day the general line.
-function splitOrGeneral(ws, len, days, after) {
+function splitOrGeneral(ws, len, days, after, tail = "") {
   const head = t(after ? "ord.term_after" : "ord.term_now", { len: t(`price.1_${len}`) });
   const parts = ws && ws[len];
-  if (parts && parts.length === 1) return head;
-  const split = splitTerms(ws, len, days);
-  return split ? `${head} ${split}` : len === "day" ? head : `${head} ${t("ord.terms_l1")}`;
+  if (parts && parts.length === 1) return `${head}${tail}`;
+  const split = splitTerms(ws, len, days, undefined, tail);
+  return split ? `${head} ${split}` : `${head}${len === "day" ? "" : ` ${t("ord.terms_l1")}`}${tail}`;
 }
-function splitTerms(ws, len, days, use) {
+function splitTerms(ws, len, days, use, tail = "") {
   const parts = ws && ws[len];
   if (!parts || !parts.length || !days) return "";
   const pct = (v) => (v > 0 && v < 0.01 ? `<${new Intl.NumberFormat(LOC, { style: "percent" }).format(0.01)}`
     : new Intl.NumberFormat(LOC, { style: "percent", maximumFractionDigits: 0 }).format(v));
   const when = (ts) => new Date(ts * 1000).toLocaleString(LOC, { weekday: "long", month: "long", day: "numeric", hour: "2-digit", minute: "2-digit" });
   const end = ws.starts_at + days * 86400;
-  if (parts.length === 1) return t("ord.split_one", { date: when(end) });
+  if (parts.length === 1) return `${t("ord.split_one", { date: when(end) })}${tail}`;
   // A ticket under a week crosses one reset at most: its two parts are named first and second, not as weeks.
   const name = (v, i) => t("ord.split_week", { n: t(`ord.nth.${i + 1}`), pct: pct(v) });   // parts, never weeks: the buyer bought a length
-  const pieces = parts.map(name);
-  const list = `${pieces.slice(0, -1).join(t("app.list_sep"))}${t("ord.split_and")}${pieces[pieces.length - 1]}`;
   const label = (v, i) => (v >= 0.2 ? name(v, i) : v >= 0.1 ? pct(v) : "&nbsp;");
   const fill = (i) => {
     if (!use) return "";
@@ -2121,7 +2115,7 @@ function splitTerms(ws, len, days, use) {
   // resets, fixed whenever it starts.
   const ends = use ? mark(0, ws.starts_at, "edge-start") + mark(1, end, "edge-end") + splits
     : mark(0, 0, "edge-start", false, t("ord.bar_start")) + mark(1, 0, "edge-end", false, t("ord.bar_end")) + splits;
-  return `${t("ord.split", { n: t(`num.${parts.length}`), pieces: list })}<span class="split-bar${use ? " use" : ""}" aria-hidden="true">${bar}${ends}</span>`;
+  return `${t("ord.split", { n: t(`num.${parts.length}`) })}${tail}<span class="split-bar${use ? " use" : ""}" aria-hidden="true">${bar}${ends}</span>`;
 }
 
 // data-i18n="key" sets an element's innerHTML (dictionary markup is trusted); data-i18n-attr="placeholder:key;title:key"

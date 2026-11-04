@@ -923,15 +923,21 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       ${start ? `<fieldset class="wide start-choice"><legend>${t("ord.start")}</legend>
-        <label><input type="radio" name="start" value="now" checked><b>${t("ord.start_now")}</b><span>${t("ord.start_now_sub")}</span></label>
+        <label><input type="radio" name="start" value="now" checked><b>${t("ord.start_now")}</b></label>
         <label><input type="radio" name="start" value="after"${l.sold_out_later ? " disabled" : ""}><b>${tipH(t("ord.start_after"), `${esc(t("ord.start_after_tip", { date: fmtDate(start.date) }))}<br>${esc(t("ord.start_after_tip2"))}`)}</b>${l.sold_out_later ? `<span>${t("ord.start_after_sold_out", { date: fmtDate(start.date) })}</span>` : ""}</label></fieldset>` : ""}
-      <div class="terms wide"><ul class="muted"><li id="order-split">${splitOrGeneral(start ? start.splitNow : p.week_split, len, tier.lengths[len].days)}</li><li>${t("ord.terms_l3")}</li>${p.vat_percent ? `<li>${t("pay.vat", { pct: fmtNum(p.vat_percent) })}</li>` : ""}</ul></div>
-      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="3" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
+      <p class="terms muted wide" id="order-split">${orderTerms(p, tier, len, start, false)}</p>
+      <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="1" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         ${orderButtons(manual, payBtn)}</div>
     </form>`;
+}
+// The order's terms as one paragraph: when it starts and how it splits, the 5-hour cap and VAT, then the split bar.
+// `after`: queued behind the buyer's current passes, so the split is the account's plain weekly one.
+function orderTerms(p, tier, len, start, after) {
+  const tail = ` ${t("ord.terms_l3")}${p.vat_percent ? ` ${t("pay.vat", { pct: fmtNum(p.vat_percent) })}` : ""}`;
+  return splitOrGeneral(start && !after ? start.splitNow : p.week_split, len, tier.lengths[len].days, after, tail);
 }
 // ZarinPal refuses a StartPay without a Referer from the registered domain, and every page here is no-referrer.
 function goPay(url) {
@@ -954,8 +960,10 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   const now = () => !!start && f.start.value === "now";
   // The terms follow the choice: a ticket starting now splits across the weeks from now.
   if (start) f.querySelectorAll('input[name="start"]').forEach((r) => (r.onchange = () => {
-    $("#order-split", d).innerHTML = splitOrGeneral(now() ? start.splitNow : p.week_split, len, tier.lengths[len].days, !now());
+    $("#order-split", d).innerHTML = orderTerms(p, tier, len, start, !now());
   }));
+  // The optional message starts one line tall and grows with what is typed.
+  f.message.oninput = () => { f.message.style.height = "auto"; f.message.style.height = `${f.message.scrollHeight}px`; };
   f.onsubmit = async (e) => {
     e.preventDefault();
     if (!f.querySelector('button[type="submit"]')) return $("#order-pay", d).click();   // Enter, with only Pay offered

@@ -409,8 +409,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .badge.state-done { border-color: var(--good); color: var(--good-text); }
 .badge.state-declined { border-color: var(--critical); color: var(--critical-text); }
 .form-grid .wide { grid-column: 1 / -1; }
-.terms ul { margin: 4px 0 10px; padding-inline-start: 18px; font-size: 13px; line-height: 1.6; }
-.terms li + li { margin-top: 4px; }
+.terms { margin: 4px 0 10px; font-size: 13px; line-height: 1.6; }
+.order-form textarea { resize: none; overflow: hidden; }
 /* The ticket's split across Anthropic's weeks: one segment per week, as long as its share, 2px apart. */
 .split-bar { display: flex; gap: 2px; position: relative; margin: 8px 0 4px; padding-bottom: 36px; }
 .split-bar span { flex-basis: 0; min-width: 3px; display: flex; flex-direction: column; }
