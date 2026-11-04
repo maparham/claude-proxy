@@ -576,7 +576,7 @@ async function renderOverview(main) {
   const fc = S.settings.family_cost || {};
   if (!isAdmin() && !S.prefs.fableNoteSeen && fc.fable && fc.opus && fc.sonnet) {
     const ratio = (x) => nfFix(x % 1 ? 1 : 0).format(x);
-    banners.push(`<div class="banner" id="fable-note"><span class="icon">i</span><span>${t("ov.fable_note", { opus: ratio(fc.fable / fc.opus), sonnet: ratio(fc.fable / fc.sonnet) })}</span>
+    banners.push(`<div class="banner warning important" id="fable-note" role="alert"><span class="icon">⚠</span><span>${t("ov.fable_note", { opus: ratio(fc.fable / fc.opus), sonnet: ratio(fc.fable / fc.sonnet) })}</span>
       <button class="close" id="fable-close" aria-label="${esc(t("ov.fable_close"))}"${tipAttr(esc(t("ov.fable_close")))}>✕</button></div>`);
   }
   const up = ov.upstream;
