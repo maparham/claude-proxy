@@ -17,6 +17,11 @@ RECOMPUTED = {"host", "content-length"}
 REVERSE_PROXY = {"cdn-loop", "true-client-ip", "x-real-ip", "forwarded", "via"}
 REVERSE_PROXY_PREFIXES = ("cf-", "x-forwarded-")
 
+# Added by a browser or extension calling the gateway. Anthropic answers 401 to a subscription token sent
+# with an Origin, and the gateway key, not the page, is what vouches for the request.
+BROWSER = {"origin", "referer"}
+BROWSER_PREFIXES = ("sec-",)
+
 SESSION_HEADERS = ("x-claude-code-session-id", "x-session-id", "anthropic-session-id")
 
 COUNT_TOKENS_PATH = "/v1/messages/count_tokens"
@@ -37,9 +42,9 @@ def _connection_tokens(headers: dict[str, str]) -> set[str]:
 
 
 def filter_request_headers(headers: dict[str, str]) -> dict[str, str]:
-    drop = HOP_BY_HOP | CLIENT_CREDENTIALS | RECOMPUTED | REVERSE_PROXY | _connection_tokens(headers)
+    drop = HOP_BY_HOP | CLIENT_CREDENTIALS | RECOMPUTED | REVERSE_PROXY | BROWSER | _connection_tokens(headers)
     return {k: v for k, v in headers.items()
-            if k.lower() not in drop and not k.lower().startswith(REVERSE_PROXY_PREFIXES)}
+            if k.lower() not in drop and not k.lower().startswith(REVERSE_PROXY_PREFIXES + BROWSER_PREFIXES)}
 
 
 def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:

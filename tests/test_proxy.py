@@ -227,6 +227,19 @@ async def test_reverse_proxy_headers_never_reach_upstream(setup, anthropic, meta
     assert "203.0.113.9" not in str(sent)
 
 
+BROWSER_HEADERS = {"origin": "chrome-extension://egdccebcgcgfffdfohdbapbjeonikjap", "referer": "https://www.youtube.com/watch",
+                   "sec-fetch-mode": "cors", "sec-fetch-site": "cross-site", "sec-ch-ua": '"Chromium";v="142"'}
+
+
+async def test_browser_headers_never_reach_upstream(setup, anthropic):
+    # Anthropic answers 401 to a subscription token sent with an Origin, which a browser extension always adds.
+    gw, conn, uid, h = setup
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers={**h, **BROWSER_HEADERS})
+    assert r.status_code == 200
+    assert [k for k in anthropic.calls[0]["headers"] if k in BROWSER_HEADERS] == []
+
+
 TITLE_REQ = {"model": "claude-haiku-4-5", "max_tokens": 64, "system": [{"type": "text", "text": "You are naming a coding session so the user can pick it out."}],
              "messages": [{"role": "user", "content": "<session>fix the login</session>"}],
              "output_config": {"format": {"type": "json_schema", "schema": {"type": "object", "properties": {"title": {"type": "string"}}, "required": ["title"]}}}}
