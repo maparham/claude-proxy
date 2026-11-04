@@ -80,3 +80,18 @@ def test_the_5h_sum_reads_5h_shares_and_its_own_ceiling(db):
     tickets.check_capacity(conn, cfg, 1, 20, NOW, NOW + DAY)       # 40 + 20 = 60: fits
     with pytest.raises(tickets.CapacityError, match="5-hour shares would reach 61% .* over max_sold_5h_pct"):
         tickets.check_capacity(conn, cfg, 1, 21, NOW, NOW + DAY)
+
+
+from claude_proxy import quota
+from tests.tickets_helpers import PTS, WEEK_START, live, report, use
+
+
+def test_report_keeps_the_rate_and_attributes_everything(db):
+    conn, cfg, ids = seeded(db)
+    report(conn, ids, 1, t=WEEK_START + 60)
+    report(conn, ids, 42, t=NOW - 60)
+    att = quota.attribution(conn, cfg.pricing, "7d", now=NOW, stale_after_s=cfg.quota.stale_after_s)
+    assert (att["utilization_pct"], att["unattributed"], att["stale"]) == (42, pytest.approx(0), False)
+    assert quota.observed_rate(conn, cfg.pricing, "7d", NOW) == pytest.approx(PTS)
+    with pytest.raises(AssertionError, match="not after"):
+        report(conn, ids, 43, t=NOW - 3 * DAY)
