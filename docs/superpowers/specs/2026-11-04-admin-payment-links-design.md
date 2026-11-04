@@ -60,17 +60,17 @@ The response is the order and its link: `{dashboard_url}/pay/{pay_code}`.
 lookup, so it says nothing about the code. The dashboard keeps `#paylink/<code>` through Clerk's sign-in and sign-up,
 as it keeps `#authorize/…`, and opens it once signed in.
 
-**What the signed-in user sees.** `GET /api/me/paylinks/{code}` answers one of:
+**What the signed-in user sees.** `GET /api/me/paylinks/{code}` answers 200 with a `state`, one of:
 
-- `invalid` (404): no such code, the order is no longer open (declined or withdrawn), or the deadline has passed.
+- `invalid`: no such code, a code another account has claimed, the order is no longer open (declined or withdrawn), or the deadline has passed.
   The dashboard says "This payment link is no longer valid." The same answer for all of them.
 - `paid`: a payment on the order is `paid` or `paid_unfulfilled`. The dashboard says the payment was received and,
   for `paid_unfulfilled`, that the admin will contact them. Never offered again (this also closes a gap in today's
   `pay_order`, below).
-- `other_email` (403): the signed-in account's email differs from the link's, ignoring case. The dashboard says "This
+- `other_email`: the signed-in account's email differs from the link's, ignoring case. The dashboard says "This
   link is for ma…@gmail.com; sign in with that email." The email is masked: the first two characters of the part before
   `@` (one if it has only one or two), then `…`, then `@` and the domain.
-- `other_order` (409): the link is not yet claimed and the user has another open order. The dashboard says to cancel
+- `other_order`: the link is not yet claimed and the user has another open order. The dashboard says to cancel
   that order first.
 - `open`: the pass, the price, the deadline, the terms and start line exactly as the order dialog shows them for this
   account (`tickets.next_start` for this user, `week_split`, the VAT line), the terms tick, and a Pay button. The
@@ -79,8 +79,8 @@ as it keeps `#authorize/…`, and opens it once signed in.
 **Pay.** `POST /api/me/paylinks/{code}/pay` with `terms_version` runs `payments.pay_link(conn, cfg, user, code,
 terms_version)`:
 
-1. The same checks as the GET, refusing with the same answers; plus the user must be enabled (409, "Your account is
-   disabled; contact the admin.") and not revoked.
+1. The same checks as the GET; any state but `open` is refused (404 `invalid`, 403 `other_email`, 409 otherwise) with
+   the GET's message. A disabled or revoked user never gets this far: sign-in sessions and keys already refuse them.
 2. The terms version must be current (400, the existing `TERMS_CHANGED`); a newer tick updates the order's
    `terms_version`.
 3. If the link is unclaimed, it is claimed in the same transaction as the checks: `user_id` = the user, `name` = the
@@ -139,7 +139,7 @@ the payment tests:
   (400); sold out (409); an edited amount stored with `quoted_usd` net of VAT; the audit row.
 - viewing: `invalid` for an unknown, declined, withdrawn or expired code; `paid`; `other_email` with the masked
   address; `other_order`; `open` with no note in it.
-- paying: claims on first pay (user, name, audit); terms required and updated; a disabled user refused; the stale-rate
+- paying: claims on first pay (user, name, audit); terms required and updated; the stale-rate
   check skipped; a ZarinPal failure leaves the order open; a second pay after `paid_unfulfilled` refused.
 - `pay_order`: refuses an order with a `paid_unfulfilled` payment; skips the rate check and enforces `pay_by` for a
   link order.
