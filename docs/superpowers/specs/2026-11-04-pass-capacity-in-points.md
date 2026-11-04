@@ -1,7 +1,7 @@
 # Passes are sold in points of the week, against Anthropic's reported usage
 
 - **Date:** 2026-11-04
-- **Status:** proposed (revision 2, after review).
+- **Status:** proposed (revision 3: unused points of ended passes are sold again, 2026-11-04).
 - **Builds on:** `2026-10-03-paid-tickets-design.md` §5 (capacity), `2026-10-13-ticket-weekly-pieces.md` §1.1 (the
   prorated piece), `2026-10-18-gateway-capacity.md` (capacity scaling), `2026-10-30-pass-borrow-across-reset.md` §1
   (free room).
@@ -24,7 +24,8 @@
   points, of which 42.2 were used. The rule cannot see the points of the days already gone, and those expire at the
   reset unsold.
 - **Goal:** the gateway sells what Anthropic says is left of the week and what no running pass is still owed, and
-  never the same point twice. A 20% day pass costs 2.9 points of the week it runs in; seven in a row cost 20.
+  never the same point twice. A 20% day pass costs 2.9 points of the week it runs in; seven in a row cost 20. A
+  pass that ends with points unused gives them back: its holder can no longer draw them, so they are free to sell.
 
 ## 1. Terms
 
@@ -37,8 +38,8 @@
   (`100 − unattributed`, 10-18), because that is the most the pass can actually draw; the scaled piece is never
   larger than the unscaled one. Check 2 compares unscaled pieces with `max_sold_pct`.
 - **Sold period:** a pass's `[starts_at, ends_at + bonus days)`, the period it was sold for. A pass marked used up
-  (`used_up_at`, `tickets.end_used_up`) ends early for enforcement and for owed, but its sold period does not shrink:
-  what was sold is sold.
+  (`used_up_at`, `tickets.end_used_up`) ends early for enforcement and for owed; its sold period is what check 2 and
+  the panel's "sold" figures count.
 - **Week:** the current Anthropic week is `tickets.week_bounds`; later weeks follow in 7-day steps.
 - **U:** the account's weekly utilization from the newest `7d` snapshot. **Fresh** means the snapshot is younger
   than `quota.stale_after_s` and its `resets_at` is in the future.
@@ -48,8 +49,11 @@
   observed 7-day rate; on an account with no rate yet it is the pass's attributed share (`ticket_shares` of the
   attribution), as 10-13 §1.2 measures it. A pass that has ended, used up or not, owes nothing. A queued pass owes its
   whole piece. Hand-set `share_7d` rows are **not** owed (§5).
-- **Free room (F):** `max(0, 100 − U − Σ owed − M)` with `M = tickets.sell_margin_pct` (§7). Defined only while the
-  weekly report is fresh; otherwise there is no free room (§3).
+- **Free room (F):** `max(0, max_sold_pct − U − Σ owed − M)` with `M = tickets.sell_margin_pct` (§7). The
+  `100 − max_sold_pct` points above it are the headroom users' (10-03 §5), kept in points now. Defined only while
+  the weekly report is fresh; otherwise there is no free room (§3).
+- **Recycling:** a pass that has ended is neither owed nor sold any more in the current week. Whatever it did not use
+  is not in `U`, so it is in `F` and sells again. Its holder cannot draw it, so no point is sold twice.
 
 ## 2. The selling rule
 
@@ -59,14 +63,15 @@ days (`add_bonus`), an upgrade's extra share (`upgrade`), and a pass moved to a 
 bonus days). `exclude` (the used-up passes a new pass replaces, `next_start`; a moved pass at its old place) applies
 to checks 1 and 3 only.
 
-1. **This week fits.** After the change, `Σ owed ≤ 100 − U − M`, with the new rows counted in owed at their full
-   scaled piece (they have no use yet). For a pass that is not written yet (`preview`, `sold_out`), this is the same
-   as: its current-week piece, scaled, is at most `F`. A change that adds no time to the current week passes.
-2. **Every week fits.** For every Anthropic week the change touches, the pieces over the sold periods of all
-   non-cancelled passes and bonuses in that week, plus the change's own piece there, stay at or under `max_sold_pct`.
-   The sum counts every pass that had time in the week, ended, used up or not, and never applies `exclude`. So
-   `max_sold_pct` below 100 keeps the rest of every week for headroom users in points, as it kept it in rate before.
-   A cancelled pass leaves the sum; its draw stays in `U`.
+1. **This week fits.** After the change, `Σ owed ≤ max_sold_pct − U − M`, with the new rows counted in owed at
+   their full scaled piece (they have no use yet). For a pass that is not written yet (`preview`, `sold_out`), this
+   is the same as: its current-week piece, scaled, is at most `F`. A change that adds no time to the current week
+   passes. Passes that have ended, used up or not, are not in the sum (recycling, §1); only `U` remembers them.
+2. **Every later week fits.** For every Anthropic week after the current one that the change touches, the pieces
+   over the sold periods of all non-cancelled passes and bonuses in that week, plus the change's own piece there,
+   stay at or under `max_sold_pct`. Those weeks have no utilization yet, so promised pieces are the only measure;
+   the current week is judged by check 1 alone, so that what ended passes left unused can be sold. The sum never
+   applies `exclude`: a replaced pass keeps its sold period in the weeks ahead. A cancelled pass leaves the sum.
 3. **The 5-hour bucket is not oversubscribed.** At every moment of the period the 5-hour shares of the passes and
    bonuses covering that moment, plus `s5`, stay at or under `max_sold_5h_pct` (§7). This is today's
    `check_capacity` over `sold_at`, reading `share_5h_pct` and falling back to `share_pct` for passes and bonuses, as
@@ -111,14 +116,15 @@ Owed subtracts each pass's own use from its piece, so a pass's use is never coun
 pass's piece is scaled by `100 − unattributed` in owed and in check 1 because that is what the pass can draw under
 10-18; outside use therefore both raises `U` and shrinks the pieces, which errs toward selling less, never more.
 
-## 4. What is sold is sold
+## 4. Reserved while it runs, recycled when it ends
 
 Selling against `F` reserves the sale: once a pass is granted, its unused piece is owed and leaves `F` at once, so a
-second buyer cannot take the same points. Two concurrent grants are serialised by the `BEGIN IMMEDIATE` transaction,
-as today. `U` can still rise from outside use, which shrinks `F` for later sales but never touches a pass already
-sold; at run time such a shortfall is handled as 10-18 handles it, and `M` covers the requests in flight when a sale
-is checked. Lowering `max_sold_pct` or `max_sold_5h_pct` below what is sold refuses new grants until passes end; it
-never cancels anything (10-03 §3).
+second buyer cannot take the same points while the pass runs. Two concurrent grants are serialised by the
+`BEGIN IMMEDIATE` transaction, as today. `U` can still rise from outside use, which shrinks `F` for later sales but
+never touches a pass already sold; at run time such a shortfall is handled as 10-18 handles it, and `M` covers the
+requests in flight when a sale is checked. When the pass ends, whatever it left unused returns to `F` (§1,
+Recycling). Lowering `max_sold_pct` or `max_sold_5h_pct` below what is owed or running refuses new grants until
+passes end; it never cancels anything (10-03 §3).
 
 ## 5. Borrowing and the free room are one function
 
@@ -134,9 +140,10 @@ capacity panel (§6) shows the hand-set shares' total so the admin can see what 
 The Capacity card replaces "Sold now" and "Peak, next 30 days" with:
 
 - **This week** (resets `{weekday} {time}`): a stacked meter of 100 points: used (`U`, from Anthropic), owed to
-  passes, margin, free. The figure beside it is `F`, "free to sell". Below: "Sold this week: `Σ pieces` of
-  `max_sold_pct`" as a second meter. While the report is not fresh, the meter is grey and the figure reads "no fresh
-  report; nothing on sale".
+  passes, margin, free, and the headroom band `100 − max_sold_pct` at the end. The figure beside it is `F`, "free
+  to sell". Below, as a line of text, "Sold this week: `Σ pieces` over sold periods, of which `Σ unused pieces of
+  ended passes` returned", information only. While the report is not fresh, the meter is grey and the figure reads
+  "no fresh report; nothing on sale".
 - **Fullest week ahead:** the Anthropic week within 30 days with the highest `Σ pieces` over sold periods, as
   "`week start`: `Σ pieces` of `max_sold_pct`" with a meter. Omitted when no pass reaches past this week.
 - **5-hour:** "`Σ 5h shares now` of `max_sold_5h_pct`" and the peak over 30 days, as the old two rows but with 5-hour
@@ -148,15 +155,16 @@ The Account utilization card stays. The tips `tip.capacity_sold` and `tip.capaci
 `tk.peak`, `tk.headroom` are rewritten in English and Persian; the grant form's availability line and the
 `tk.sold_out_tip` wording name the failing check.
 
-`GET /api/admin/capacity` returns `{week: {start, end, fresh, used, owed, margin, free, sold, max_sold_pct},
+`GET /api/admin/capacity` returns `{week: {start, end, fresh, used, owed, margin, free, sold, returned, max_sold_pct},
 peak_week: {start, sold} | null, five_hour: {now, peak_30d, max_sold_5h_pct}, hand_set_7d_pct, utilization}`.
 Nothing of this reaches non-admins; `/pricing` still shows only the per-tier flags.
 
 ## 7. Settings (`[tickets]`)
 
-- `max_sold_pct` (default 80): now the ceiling on the points sold in any one Anthropic week (§2 check 2). Validation
-  unchanged: above 0, at most 100, and every tier's share at most this (a tier's week pass takes its full share in
-  points, so a share over the ceiling could never be sold).
+- `max_sold_pct` (default 80): now the points of a week that passes may have: the current week's budget in `F`
+  (used, owed and margin must fit under it) and the ceiling on promised pieces in each later week (§2 check 2).
+  Validation unchanged: above 0, at most 100, and every tier's share at most this (a tier's week pass takes its
+  full share in points, so a share over the ceiling could never be sold).
 - `max_sold_5h_pct` (new, default 100): the ceiling on the summed 5-hour shares of passes running at once (§2
   check 3). Above 0; it may exceed 100 for an admin who chooses to oversubscribe the 5-hour bucket. Every tier's
   5-hour share must be at most this, in the config and in `set_share_5h` (the dashboard override), which refuses a
@@ -176,7 +184,8 @@ The example config and the README's `[tickets]` table describe the three.
   from `limits` to `capacity`; `limits` imports them back by name, so no `limits` caller changes.
   - `pieces(conn, cfg, share, starts_at, ends_at, now) -> dict[week_start, points]`, from `week_split`'s boundaries;
   - `sold_by_week(conn, cfg, account_id, now) -> dict[week_start, points]`: Σ pieces over sold periods of the
-    account's non-cancelled passes and bonuses per week, 30 days ahead;
+    account's non-cancelled passes and bonuses per week, 30 days ahead; the current week's entry is for the panel
+    only (with `returned`, the unused pieces of ended passes), later weeks gate check 2;
   - `owed(conn, cfg, account_id, week, att, rate, now, exclude) -> float`;
   - `free_room(conn, cfg, account_id, now, margin, exclude) -> float | None`: None without a fresh report;
   - `check(conn, cfg, account_id, share, share_5h, starts_at, ends_at, exclude) -> None`: the three checks for a
@@ -205,20 +214,22 @@ stays. In every case below the snapshot is fresh and `unattributed` is 0 unless 
    `F = 100 − 42 − 0 − 5 = 53`; a 40% day pass costs 5.71 and sells, and the 5-hour sum reaches exactly 100.
 2. The same with the account at 93: refused by check 1, the reason naming 0 free points and 5.71 needed. At 90 with
    a 40% pass that has used 1 point (owed 4.71): `F = 0.29`, refused.
-3. `max_sold_pct = 80`, two 40% week passes sold and unused: a third refuses by check 2 (120 over 80) even with the
-   account at 0; `max_sold_pct = 100` lets the third in only after one of them ends.
+3. `max_sold_pct = 80`, account at 0, two 40% week passes sold just now and unused: a third refuses by check 1 this
+   week (owed 80, nothing under the budget) and by check 2 next week (120 over 80); `max_sold_pct = 100` still
+   refuses it this week (owed 80 + 40 over 100 − 5) until one of them ends.
 4. A week pass starting on Thursday: its current-week piece is charged to `F`, its next-week piece to next week's
    sum; next week's sum alone can refuse it.
 5. A pass starting next week needs no free room this week, and a pass that ended two days ago owes nothing.
-6. Sold points stay sold: a pass that ended two days ago at full use counts in this week's `Σ pieces`; a pass sold
-   just now leaves `F` by its whole piece before it is used; a pass replaced through `exclude` (used up) still counts
-   its sold period in `Σ pieces` while leaving owed and the 5-hour sum.
+6. Recycling: a 40% week pass that ended yesterday having used 10 of its 40 points leaves `F = max_sold_pct − 10 − M`
+   with no other pass, so the 30 unused points sell again; the panel reports 40 sold and 30 returned. A pass sold
+   just now leaves `F` by its whole piece before it is used. A pass replaced through `exclude` (used up) leaves owed
+   and the 5-hour sum at once, and its next-week piece, if any, stays in next week's sum.
 7. Stale snapshot, no snapshot, or `resets_at` in the past: refused with the "no fresh report" reason; every tier is
    `unavailable` on `/pricing`, not `sold_out`; the panel says so; a fresh snapshot lifts it.
 8. 5-hour ceiling: four 20% passes and one 40% at once refuse a fifth 20% at the default; `max_sold_5h_pct = 150`
    admits it; a bonus with extra days is checked to its new end; a share bonus without `share_5h_pct` counts its
    `share_pct`; `set_share_5h` refuses a share over the ceiling.
-9. `unattributed = 10`: owed and check 1 use pieces scaled by 0.9; `Σ pieces` for check 2 is unscaled.
+9. `unattributed = 10`: owed and check 1 use pieces scaled by 0.9; next week's `Σ pieces` for check 2 is unscaled.
 10. No observed rate with use on a running pass: owed uses the attributed share per ticket.
 11. A bonus with share and extra days whose two parts each fit `F` but together don't: refused as one change, nothing
     written. An `upgrade` is checked the same way.
@@ -227,7 +238,8 @@ stays. In every case below the snapshot is fresh and `unattributed` is 0 unless 
     pass's unused own limit is free for a sale and a sale's owed piece is held back from borrowing.
 14. Queue moves on cancel and bonus days re-check with the three checks; a failed move on cancel keeps the dates and
     cancels anyway; a failed move on bonus days refuses the bonus and names the check.
-15. `max_sold_pct` lowered below this week's `Σ pieces` refuses new grants and cancels nothing.
+15. `max_sold_pct` lowered below `U + Σ owed + M` refuses new grants and cancels nothing; lowered below next week's
+    `Σ pieces`, the same for passes reaching into next week.
 16. `sold_out_later` in `orders.py` and the buyer's price list: a pass after the buyer's queue is judged at that
     start.
 17. Validation: a tier's share over `max_sold_pct`, a 5-hour share over `max_sold_5h_pct`, `sell_margin_pct` outside
