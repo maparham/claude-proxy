@@ -511,6 +511,8 @@ var nfFix = (d) => new Intl.NumberFormat("en-US", { minimumFractionDigits: d, ma
 var nf0 = nfFix(0), nf2 = nfFix(2), nfFull = new Intl.NumberFormat("en-US");
 var lengthName = (l) => ({ day: "1 day", week: "1 week", month: "1 month" }[l] || esc(l));
 var stateBadge = (s) => `<span class="badge state-${s}">${esc(s)}</span>`;
+var tipAttr = (html) => (html ? ` data-tip-html="${esc(html)}"` : "");
+var tipH = (html, tip) => (tip ? `${html}<span class="tip-i"${tipAttr(tip)}>?</span>` : html);
 var S = { tkSkew: 0, pick: null, user: { email: null } };
 var Date = { now: () => 0 };
 """
@@ -579,33 +581,51 @@ def test_an_open_toman_order_can_be_paid_online(tmp_path):
     assert "the admin will contact you about the next step." in out[1] and "pay for it here" not in out[1]
 
 
+PRICE_LIST_FNS = ["priceListCard", "pickedLine", "takePick", "tierName", "tierNameText"]
+
+
 def _price_list(tmp_path, order=None, pick=None, sold_out_week=False):
     import json
     from tests.test_tickets_web import _tier
     from tests.test_tickets_web import _app_fn
     tk = {"how_to_buy": "", "prices": {"currency": "EUR", "rate_set_at": None, "tiers": [_tier(week={"sold_out": sold_out_week})]}}
     script = APP_STUBS + f"S.pick = {json.dumps(pick)}; var out = priceListCard({json.dumps(tk)}, {json.dumps(order)});"
-    return _app_fn(tmp_path, ["priceListCard", "pickedLine", "takePick", "tierName", "tierNameText"], script)
+    return _app_fn(tmp_path, PRICE_LIST_FNS, script)
 
 
-def test_the_price_list_offers_an_order_button_per_price(tmp_path):
+def test_the_price_list_offers_a_row_per_tier_under_a_length_toggle(tmp_path):
     html = _price_list(tmp_path)
-    assert html.count('data-order="lite:') == 3 and "disabled" not in html
+    assert html.count('data-order="lite:') == 3 and html.count('data-len="') == 6 and "disabled" not in html   # 3 toggles, 3 lists
+    assert html.count('aria-pressed="true"') == 1 and 'data-len="day" aria-pressed="true"' in html                 # the first length shown
+    assert html.count(" hidden") == 2 and 'data-len="day">' in html                                                # the others folded
+    assert html.count('id="order-go"') == 1 and ">Continue<" in html
     sold = _price_list(tmp_path, sold_out_week=True)
-    assert 'data-order="lite:week"' not in sold and 'data-order="lite:day"' in sold
+    row = next(r for r in sold.split("<label")[1:] if 'data-order="lite:week"' in r)
+    assert "disabled" in row and "sold out" in row and "checked" not in row                                        # a sold-out row can't be picked
 
 
-def test_order_buttons_are_disabled_while_an_order_is_open(tmp_path):
-    assert _price_list(tmp_path, order={"status": "new"}).count("disabled") == 3
-    assert _price_list(tmp_path, order={"status": "contacted"}).count("disabled") == 3
+def test_the_terms_sit_behind_a_tip_and_the_vat_note_stays(tmp_path):
+    import json
+    from tests.test_tickets_web import _tier
+    from tests.test_tickets_web import _app_fn
+    tk = {"how_to_buy": "", "prices": {"currency": "EUR", "rate_set_at": None, "vat_percent": 10, "tiers": [_tier()]}}
+    html = _app_fn(tmp_path, PRICE_LIST_FNS, APP_STUBS + f"var fmtNum = (v) => String(v); var out = priceListCard({json.dumps(tk)}, null);")
+    assert "data-tip-html=" in html and "split across weekly windows" not in html.split("data-tip-html=")[0]
+    assert "Prices include 10% VAT." in html
+
+
+def test_continue_is_disabled_while_an_order_is_open(tmp_path):
+    assert _price_list(tmp_path, order={"status": "new"}).count("disabled") == 1
+    assert _price_list(tmp_path, order={"status": "contacted"}).count("disabled") == 1
     assert "disabled" not in _price_list(tmp_path, order={"status": "done"})
 
 
 def test_the_home_page_pick_is_preselected(tmp_path):
     html = _price_list(tmp_path, pick={"tier": "lite", "length": "month"})
-    btn = next(b for b in html.split("<button")[1:] if 'data-order="lite:month"' in b)
-    assert "primary" in btn
-    assert all("primary" not in b for b in html.split("<button")[1:] if 'data-order="lite:month"' not in b)
+    assert 'data-len="month" aria-pressed="true"' in html and html.count('aria-pressed="true"') == 1
+    assert 'data-len="month">' in html and 'data-len="day" hidden' in html
+    row = next(r for r in html.split("<label")[1:] if 'data-order="lite:month"' in r)
+    assert "checked" in row
 
 
 def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
@@ -617,6 +637,17 @@ def test_the_order_dialog_asks_for_an_email_only_without_one(tmp_path):
     without, with_ = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "tierName"], script)
     assert 'name="email"' in without and 'name="email"' not in with_
     assert "<img" not in without and 'name="currency"' not in with_ and "EUR 8" in with_   # the price list's currency, no picker
+
+
+def test_the_order_dialog_says_the_vat_is_in_without_online_payment(tmp_path):
+    # The price list's VAT, not the online-payment block's: a manual-only order's price includes it just the same.
+    import json
+    from tests.test_tickets_web import _tier
+    from tests.test_tickets_web import _app_fn
+    p = {"currency": "EUR", "vat_percent": 10, "tiers": [_tier()]}
+    script = APP_STUBS + f"var fmtNum = (v) => String(v); var p = {json.dumps(p)}; var out = orderFormHtml(p, p.tiers[0], 'week', 'a@b.cd', null, null, true);"
+    html = _app_fn(tmp_path, ["orderFormHtml", "orderButtons", "tierName"], script)
+    assert "Prices include 10% VAT." in html
 
 
 # ---------- the home page's order dialog ----------
