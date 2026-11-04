@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import logging
+import secrets
 import sqlite3
 
 import httpx
@@ -28,6 +29,7 @@ class Gateway:
                                               timeout=httpx.Timeout(cfg.upstream.timeout_s, connect=15.0),
                                               limits=httpx.Limits(max_connections=100, max_keepalive_connections=20))
         self.backend = backend or OAuthBackend(cfg, conn, self.http)
+        self.device_id = _device_id(conn)
         self.poller = Poller(conn, self.backend, cfg.quota, self.db)
         self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
@@ -67,3 +69,13 @@ class _BackendView:
         b = copy.copy(self._backend)
         b.conn = self._conn
         return b.describe()
+
+
+def _device_id(conn: sqlite3.Connection) -> str:
+    """The one machine id every user's Claude Code requests carry to Anthropic, made once and kept."""
+    row = conn.execute("SELECT value FROM settings WHERE key='device_id'").fetchone()
+    if row:
+        return row[0]
+    device_id = secrets.token_hex(32)
+    conn.execute("INSERT INTO settings(key, value) VALUES('device_id', ?)", (device_id,))
+    return device_id

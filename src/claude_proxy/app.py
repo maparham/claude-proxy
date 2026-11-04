@@ -17,7 +17,7 @@ from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
 from .db import insert_request, set_session_title
 from .forwarder import (COUNT_TOKENS_PATH, filter_request_headers, filter_response_headers, merge_beta, session_id,
-                        should_forward, strip_account_headers, with_claude_code_identity)
+                        should_forward, strip_account_headers, with_claude_code_identity, with_gateway_device)
 from .gateway import Gateway
 from .meter import BodyMeter, SSEMeter
 
@@ -351,9 +351,11 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 for f in dropped:
                     del data[f]
                 body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
-        elif request.method == "POST" and path == "/v1/messages" and with_claude_code_identity(data):
-            # Requests from outside Claude Code (API keys, scripts): the subscription refuses them without this.
-            body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
+        elif request.method == "POST" and path == "/v1/messages":
+            # Requests from outside Claude Code (API keys, scripts) get the identity line the subscription requires;
+            # Claude Code's get the gateway's device id in place of the user's machine. `|`, so both always run.
+            if with_claude_code_identity(data) | with_gateway_device(data, gw.device_id):
+                body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
 
         client_headers = dict(request.headers)
         query = request.url.query

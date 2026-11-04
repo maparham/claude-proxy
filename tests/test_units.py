@@ -7,11 +7,11 @@ from claude_proxy.forwarder import filter_request_headers, filter_response_heade
 from tests.conftest import asgi_client, make_gateway
 
 
-def test_request_headers_drop_hop_by_hop_and_client_credentials():
-    out = filter_request_headers({"connection": "keep-alive, x-foo", "x-foo": "bar", "x-keep": "yes",
+def test_request_headers_keep_only_what_a_provider_needs():
+    out = filter_request_headers({"connection": "keep-alive, x-foo", "x-foo": "bar", "x-unknown": "yes",
                                   "authorization": "Bearer xyz", "x-api-key": "abc", "host": "gw", "content-length": "5",
-                                  "content-type": "application/json"})
-    assert out == {"x-keep": "yes", "content-type": "application/json"}
+                                  "content-type": "application/json", "Anthropic-Version": "2023-06-01"})
+    assert out == {"content-type": "application/json", "Anthropic-Version": "2023-06-01"}
 
 
 def test_response_headers_drop_framing():

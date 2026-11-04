@@ -1,28 +1,19 @@
 from __future__ import annotations
 
+import json
 import re
 
 # Hop-by-hop headers (RFC 9110 section 7.6.1) are never forwarded.
 HOP_BY_HOP = {"connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "te", "trailer",
               "trailers", "transfer-encoding", "upgrade", "proxy-connection"}
 
-# Client credentials: removed on every route before the route's own credential is added (spec 17.1).
-CLIENT_CREDENTIALS = {"authorization", "x-api-key", "x-gateway-key"}
-
-# Recomputed by the HTTP client for the outgoing request.
-RECOMPUTED = {"host", "content-length"}
-
-# Added by a reverse proxy or CDN in front of the gateway (Cloudflare, nginx). Forwarding them would
-# leak each user's IP to the provider and make requests look unlike Claude Code's.
-REVERSE_PROXY = {"cdn-loop", "true-client-ip", "x-real-ip", "forwarded", "via"}
-REVERSE_PROXY_PREFIXES = ("cf-", "x-forwarded-")
-
-# Added by a browser or extension calling the gateway. Anthropic answers 401 to a subscription token sent
-# with an Origin, and the gateway key, not the page, is what vouches for the request.
-BROWSER = {"origin", "referer"}
-BROWSER_PREFIXES = ("sec-",)
-
 SESSION_HEADERS = ("x-claude-code-session-id", "x-session-id", "anthropic-session-id")
+
+# The only client headers a provider gets: what it needs to read the request and pick its features, and what tells
+# it the request is Claude Code's. Everything else stays at the gateway: credentials (each route adds its own),
+# the user's IP from the CDN, the browser's Origin (Anthropic answers 401 to a subscription token sent with one),
+# and the SDK's x-stainless-* (the user's OS, CPU and runtime).
+FORWARDED = {"content-type", "accept", "anthropic-version", "anthropic-beta", "user-agent", "x-app", *SESSION_HEADERS}
 
 COUNT_TOKENS_PATH = "/v1/messages/count_tokens"
 
@@ -42,9 +33,7 @@ def _connection_tokens(headers: dict[str, str]) -> set[str]:
 
 
 def filter_request_headers(headers: dict[str, str]) -> dict[str, str]:
-    drop = HOP_BY_HOP | CLIENT_CREDENTIALS | RECOMPUTED | REVERSE_PROXY | BROWSER | _connection_tokens(headers)
-    return {k: v for k, v in headers.items()
-            if k.lower() not in drop and not k.lower().startswith(REVERSE_PROXY_PREFIXES + BROWSER_PREFIXES)}
+    return {k: v for k, v in headers.items() if k.lower() in FORWARDED}
 
 
 def filter_response_headers(headers: dict[str, str]) -> dict[str, str]:
@@ -94,4 +83,21 @@ def with_claude_code_identity(data: dict) -> bool:
     if not isinstance(rest, list):
         return False   # malformed; let Anthropic reject it
     data["system"] = [{"type": "text", "text": CLAUDE_CODE_IDENTITY}, *rest]
+    return True
+
+
+def with_gateway_device(data: dict, device_id: str) -> bool:
+    """Put `device_id` in Claude Code's metadata.user_id (JSON naming the machine, account and session), so every
+    user's machine reaches Anthropic as the gateway's one. A user_id that isn't Claude Code's is the client's own and
+    left alone. True if `data` changed."""
+    meta = data.get("metadata")
+    raw = meta.get("user_id") if isinstance(meta, dict) else None
+    try:
+        user = json.loads(raw) if isinstance(raw, str) else None
+    except ValueError:
+        return False
+    if not isinstance(user, dict) or "device_id" not in user or user["device_id"] == device_id:
+        return False
+    user["device_id"] = device_id
+    meta["user_id"] = json.dumps(user, ensure_ascii=False, separators=(",", ":"))
     return True

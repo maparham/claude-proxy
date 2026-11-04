@@ -227,17 +227,48 @@ async def test_reverse_proxy_headers_never_reach_upstream(setup, anthropic, meta
     assert "203.0.113.9" not in str(sent)
 
 
-BROWSER_HEADERS = {"origin": "chrome-extension://egdccebcgcgfffdfohdbapbjeonikjap", "referer": "https://www.youtube.com/watch",
-                   "sec-fetch-mode": "cors", "sec-fetch-site": "cross-site", "sec-ch-ua": '"Chromium";v="142"'}
+# What Claude Code 2.1.312 sends (captured 2026-11-04), plus what a browser and an app add.
+CLIENT_HEADERS = {"accept": "application/json", "anthropic-version": "2023-06-01", "x-app": "cli",
+                  "x-claude-code-session-id": "024c5ae5-73f7-448c-81b3-451e95e824a5", "anthropic-dangerous-direct-browser-access": "true",
+                  "x-stainless-os": "MacOS", "x-stainless-arch": "arm64", "x-stainless-runtime-version": "v26.12.1",
+                  "x-stainless-retry-count": "0", "x-stainless-timeout": "600", "x-my-app": "glosse", "cookie": "a=b",
+                  "origin": "chrome-extension://egdccebcgcgfffdfohdbapbjeonikjap", "referer": "https://www.youtube.com/watch",
+                  "sec-fetch-mode": "cors", "sec-ch-ua": '"Chromium";v="142"'}
 
 
-async def test_browser_headers_never_reach_upstream(setup, anthropic):
-    # Anthropic answers 401 to a subscription token sent with an Origin, which a browser extension always adds.
+@pytest.mark.parametrize("model,upstream_name", [("claude-sonnet-5", "anthropic"), ("muse-spark", "meta")])
+async def test_only_the_headers_a_provider_needs_reach_it(setup, anthropic, meta, model, upstream_name):
+    # Origin made Anthropic answer 401; the rest tell it the user's OS, runtime and apps, which it does not need.
     gw, conn, uid, h = setup
     async with asgi_client(create_app(gw)) as c:
-        r = await c.post("/v1/messages", json=MSG, headers={**h, **BROWSER_HEADERS})
+        r = await c.post("/v1/messages", json={**MSG, "model": model}, headers={**h, **CLIENT_HEADERS})
     assert r.status_code == 200
-    assert [k for k in anthropic.calls[0]["headers"] if k in BROWSER_HEADERS] == []
+    sent = (anthropic if upstream_name == "anthropic" else meta).calls[0]["headers"]
+    client_set = {k for k in sent if k in CLIENT_HEADERS or k in {k.lower() for k in h}}
+    assert client_set <= {"content-type", "accept", "anthropic-version", "anthropic-beta", "user-agent", "x-app",
+                          "x-claude-code-session-id", "authorization"}
+    assert sent["x-claude-code-session-id"] == CLIENT_HEADERS["x-claude-code-session-id"] and sent["x-app"] == "cli"
+
+
+def claude_code_metadata(device: str, session: str) -> dict:
+    return {"user_id": json.dumps({"device_id": device, "account_uuid": "", "session_id": session}, separators=(",", ":"))}
+
+
+async def test_every_users_device_id_reaches_anthropic_as_one_gateway_id(setup, anthropic):
+    gw, conn, uid, h = setup
+    bob_key = create_user(conn, "bob")[1]
+    async with asgi_client(create_app(gw)) as c:
+        for key, device in ((None, "a" * 64), (bob_key, "b" * 64)):
+            hh = h if key is None else {**h, "Authorization": f"Bearer {key}"}
+            r = await c.post("/v1/messages", json={**MSG, "metadata": claude_code_metadata(device, "s-" + device[0])}, headers=hh)
+            assert r.status_code == 200
+        r = await c.post("/v1/messages", json={**MSG, "metadata": {"user_id": "my-own-label"}}, headers=h)
+    sent = [json.loads(call["json"]["metadata"]["user_id"]) if call["json"]["metadata"]["user_id"].startswith("{")
+            else call["json"]["metadata"]["user_id"] for call in anthropic.calls]
+    assert sent[0]["device_id"] == sent[1]["device_id"] == gw.device_id
+    assert len(gw.device_id) == 64 and gw.device_id not in ("a" * 64, "b" * 64)
+    assert [sent[0]["session_id"], sent[1]["session_id"]] == ["s-a", "s-b"]
+    assert sent[2] == "my-own-label"   # not Claude Code's: the client's own, left alone
 
 
 async def test_any_web_page_can_call_the_api(setup, anthropic):
