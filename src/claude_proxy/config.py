@@ -158,6 +158,8 @@ class TicketsConfig:
     how_to_buy_fa: str = ""       # the same in Persian, for buyers who ordered from the Persian page; else how_to_buy
     max_sold_pct: float = 80      # ceiling on what tickets and bonuses may reserve; the rest is headroom
     borrow_margin_pct: float = 5  # points a pass across the weekly reset never borrows into (2026-10-30); 100: no borrowing
+    max_sold_5h_pct: float = 100  # ceiling on the summed 5-hour shares of passes running at once (2026-11-04); >100 oversubscribes
+    sell_margin_pct: float = 5    # points of the week never sold: requests in flight, rate error, whole-percent reports (2026-11-04)
     tiers: dict[str, Tier] = field(default_factory=_default_tiers)
     currencies: dict[str, Currency] = field(default_factory=dict)   # USD is built in and must not appear here
     turnstile_site_key: str = ""  # public; with TURNSTILE_SECRET, visitors can order from the home page (order requests)
@@ -370,6 +372,10 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
         raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 100")
     if isinstance(t.borrow_margin_pct, bool) or not isinstance(t.borrow_margin_pct, (int, float)) or not 0 <= t.borrow_margin_pct <= 100:
         raise ConfigError(f"{toml_path}: [tickets].borrow_margin_pct must be from 0 to 100")
+    if isinstance(t.max_sold_5h_pct, bool) or not isinstance(t.max_sold_5h_pct, (int, float)) or not 0 < t.max_sold_5h_pct <= 1000:
+        raise ConfigError(f"{toml_path}: [tickets].max_sold_5h_pct must be above 0 and at most 1000")
+    if isinstance(t.sell_margin_pct, bool) or not isinstance(t.sell_margin_pct, (int, float)) or not 0 <= t.sell_margin_pct <= 100:
+        raise ConfigError(f"{toml_path}: [tickets].sell_margin_pct must be from 0 to 100")
     if not isinstance(t.turnstile_site_key, str):
         raise ConfigError(f"{toml_path}: [tickets].turnstile_site_key must be a string")
     if not t.tiers:
@@ -378,6 +384,10 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
         if tier.share_pct > t.max_sold_pct:   # it could never be sold, and nothing else would say why
             raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] share_pct {tier.share_pct:g} is above "
                               f"[tickets].max_sold_pct {t.max_sold_pct:g}, so it could never be sold")
+        s5 = tier.share_5h_pct if tier.share_5h_pct is not None else tier.share_pct
+        if s5 > t.max_sold_5h_pct:
+            raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] 5-hour share {s5:g} is above "
+                              f"[tickets].max_sold_5h_pct {t.max_sold_5h_pct:g}, so it could never be sold")
     return t
 
 

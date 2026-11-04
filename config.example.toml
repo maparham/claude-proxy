@@ -71,11 +71,13 @@ model_info = { "muse-spark" = { context = 1048576, output = 32000, display_name 
 # [tickets]
 # how_to_buy = "Send the amount by bank transfer to … and email the admin."
 # how_to_buy_fa = "…"            # the same in Persian, for buyers on the Persian page; else how_to_buy
-# max_sold_pct = 80            # passes and bonuses together may reserve at most this; the rest is headroom
+# max_sold_pct = 80            # points of a week passes may have; the rest is headroom for everyone else
+# max_sold_5h_pct = 100        # summed 5-hour shares of passes running at once; above 100 oversubscribes the 5-hour bucket
+# sell_margin_pct = 5          # points of the week never sold: requests in flight, rate error, whole-percent reports
 # borrow_margin_pct = 5        # a pass across the weekly reset borrows the old week's free room, less this; 100: never
 # [tickets.tiers.lite]
 # label = "Lite"
-# share_pct = 5                # weekly share of the account; also what max_sold_pct counts
+# share_pct = 5                # weekly share: a pass takes share × days ÷ 7 points of each week it covers
 # share_5h_pct = 5             # 5-hour share; leave out to use share_pct (the dashboard can set it later)
 # default_usd = { day = 3, week = 8, month = 20 }
 # [tickets.tiers.standard]

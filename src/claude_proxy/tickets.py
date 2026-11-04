@@ -498,8 +498,8 @@ def set_share(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor
 
 
 def set_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor: int | None, now: float | None = None) -> float:
-    """Change a tier's 5-hour share for future tickets. Capacity counts the weekly share only, so no max_sold_pct check:
-    the 5-hour share caps a buyer's bursts, and buyers rarely burst together."""
+    """Change a tier's 5-hour share for future tickets. Refused above max_sold_5h_pct (2026-11-04 spec, §7): passes
+    running at once may hold at most that much 5-hour share, so a larger one could never be sold."""
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
     if isinstance(share_pct, bool) or not isinstance(share_pct, (int, float)) or not math.isfinite(share_pct):
@@ -507,6 +507,9 @@ def set_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, ac
     share_pct = float(share_pct)
     if not 0 < share_pct <= 100:
         raise TicketError("The 5-hour share must be above 0 and at most 100.")
+    if share_pct > cfg.tickets.max_sold_5h_pct + 1e-9:
+        raise TicketError(f"The 5-hour share must be at most {cfg.tickets.max_sold_5h_pct:g}% (max_sold_5h_pct), "
+                          "or the tier could never be sold.")
     now = _now(now)
     conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, share_5h_pct) VALUES(?,?,?,?,?) "
                  "ON CONFLICT(tier) DO UPDATE SET share_5h_pct=excluded.share_5h_pct, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
