@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import math
 import sqlite3
+import time
+from dataclasses import dataclass
 
 from . import db, quota, tickets
 from .config import Config
@@ -160,3 +162,105 @@ def room(conn: sqlite3.Connection, cfg: Config, account_id: int, week, att: dict
          now: float, ceiling: float, margin: float, exclude=()) -> float:
     """ceiling − U − Σ owed − margin (spec §1, Free room), not floored: negative means the week is over-committed."""
     return ceiling - att["utilization_pct"] - owed(conn, cfg, account_id, week, att, rate, scale, now, exclude) - margin
+
+
+NO_REPORT = "No fresh usage report from Anthropic; try again in a few minutes."
+
+
+def _day(t: float) -> str:
+    return time.strftime("%d.%m", time.gmtime(t))
+
+
+@dataclass
+class Context:
+    """One look at the account for judging hypothetical passes (preview, sold-out flags, price lists)."""
+    week: tuple[float, float] | None
+    fresh: bool
+    scale: float
+    used: float | None
+    owed: float
+    room: float | None          # max_sold_pct − U − owed − sell_margin_pct, not floored; None without a fresh report
+    sold: dict[float, float]    # sold_by_week, no exclude
+    exclude: tuple
+
+
+def _att(conn, cfg, now):
+    return quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+
+
+def context(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float, exclude=()) -> Context:
+    week = tickets.week_bounds(conn, cfg, now)
+    att = _att(conn, cfg, now)
+    ok = week is not None and fresh(att, now)
+    scale = _capacity(att, now)
+    if week is None:
+        return Context(None, False, scale, att["utilization_pct"], 0.0, None, {}, _ids(exclude))
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    owe = owed(conn, cfg, account_id, week, att, rate, scale, now, exclude)
+    room_ = cfg.tickets.max_sold_pct - att["utilization_pct"] - owe - cfg.tickets.sell_margin_pct if ok else None
+    return Context(week, ok, scale, att["utilization_pct"], owe, room_, sold_by_week(conn, account_id, week), _ids(exclude))
+
+
+def _week_full(w: float, total: float, ceiling: float) -> str:
+    return f"The week of {_day(w)} would hold {total:.1f}% with this pass, over max_sold_pct ({ceiling:g}%)."
+
+
+def _no_room(free: float, need: float) -> str:
+    return f"This week has {max(0.0, free):.1f} points free and the pass needs {need:.1f}."
+
+
+def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
+          ends_at: float, now: float, exclude=(), ctx: Context | None = None) -> None:
+    """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails."""
+    ctx = ctx or context(conn, cfg, account_id, now, exclude)
+    if not ctx.fresh:
+        raise tickets.CapacityError(NO_REPORT)
+    ps = pieces(ctx.week, share, starts_at, ends_at)
+    ws = ctx.week[0]
+    need = ps.get(ws, 0.0) * ctx.scale / 100
+    if need > 1e-12 and need > ctx.room + 1e-9:
+        raise tickets.CapacityError(_no_room(ctx.room, need))
+    for w, p in sorted(ps.items()):
+        if w > ws and ctx.sold.get(w, 0.0) + p > cfg.tickets.max_sold_pct + 1e-9:
+            raise tickets.CapacityError(_week_full(w, ctx.sold.get(w, 0.0) + p, cfg.tickets.max_sold_pct))
+    tickets.check_capacity(conn, cfg, account_id, share_5h, int(starts_at), int(ends_at), list(ctx.exclude) or None)
+
+
+class Guard:
+    """Spec §2 for a change written row by row (a bonus with share and days, a queue move): take it before the change,
+    call verify() after every row is written, inside the caller's transaction or savepoint. The change is judged by what
+    it adds: more owed this week must fit the room that was there, a later week it raises must stay under max_sold_pct,
+    and the 5-hour sum over its period must stay under max_sold_5h_pct. A change that adds nothing to owed and raises
+    no later week passes the first two without needing a fresh report."""
+
+    def __init__(self, conn: sqlite3.Connection, cfg: Config, account_id: int, now: float):
+        self.conn, self.cfg, self.account_id, self.now = conn, cfg, account_id, now
+        self.week = tickets.week_bounds(conn, cfg, now)
+        self.owed0, self.sold0 = self._state() if self.week else (0.0, {})
+
+    def _state(self) -> tuple[float, dict[float, float]]:
+        att = _att(self.conn, self.cfg, self.now)
+        rate = quota.observed_rate(self.conn, self.cfg.pricing, "7d", self.now)
+        return (owed(self.conn, self.cfg, self.account_id, self.week, att, rate, _capacity(att, self.now), self.now),
+                sold_by_week(self.conn, self.account_id, self.week))
+
+    def verify(self, starts_at: float, ends_at: float) -> None:
+        if self.week is not None:
+            owed1, sold1 = self._state()
+            ws, ceiling = self.week[0], self.cfg.tickets.max_sold_pct
+            added = owed1 - self.owed0
+            later = [w for w in sorted(sold1) if w > ws and sold1[w] > self.sold0.get(w, 0.0) + 1e-9]
+            if added > 1e-9 or later:
+                att = _att(self.conn, self.cfg, self.now)
+                if not fresh(att, self.now):
+                    raise tickets.CapacityError(NO_REPORT)
+                free = ceiling - att["utilization_pct"] - self.owed0 - self.cfg.tickets.sell_margin_pct
+                if added > 1e-9 and added > free + 1e-9:
+                    raise tickets.CapacityError(_no_room(free, added))
+                for w in later:
+                    if sold1[w] > ceiling + 1e-9:
+                        raise tickets.CapacityError(_week_full(w, sold1[w], ceiling))
+        elif ends_at > starts_at:
+            raise tickets.CapacityError(NO_REPORT)
+        if ends_at > starts_at:
+            tickets.verify_capacity(self.conn, self.cfg, self.account_id, int(starts_at), int(ends_at))

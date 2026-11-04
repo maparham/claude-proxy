@@ -752,6 +752,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     """Everything the grant form shows before the admin confirms. Raises TicketError for a bad tier, length or currency
     and when the currency has no rate; capacity trouble is reported in `available`, not raised. `start_now`: the
     ticket starts now beside the user's running tickets instead of after them (next_start)."""
+    from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     _check_tier_length(cfg, tier, length)
     steps = currencies(cfg)
@@ -765,8 +766,8 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     share_5h = effective_share_5h(conn, cfg, tier)
     starts_at, replaces = next_start(conn, cfg, user["id"], now, start_now)
     ends_at = starts_at + LENGTHS[length] * DAY
-    try:   # used-up tickets this one replaces end as it starts: their share is not sold any more
-        check_capacity(conn, cfg, ACCOUNT_ID, share, starts_at, ends_at, exclude=[t["id"] for t in replaces])
+    try:   # used-up tickets this one replaces end as it starts: their owed points and 5-hour share go with them
+        capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=[t["id"] for t in replaces])
         available, reason = True, None
     except CapacityError as e:
         available, reason = False, str(e)
@@ -837,7 +838,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         for rid in p["replaces"]:   # the user's tickets are used up: they end now and this one starts in their place
             end_used_up(conn, get(conn, rid), now)
             db.audit(conn, actor, "ticket_used_up", user["name"], {"ticket_id": rid})
-        check_capacity(conn, cfg, ACCOUNT_ID, p["share_pct"], p["starts_at"], p["ends_at"])
+        if not p["available"]:   # judged by preview just now, inside this transaction (2026-11-04 spec, §2)
+            raise CapacityError(p["reason"])
         cur = conn.execute(
             "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
             "discount_id, currency, rate, amount, granted_by, granted_at, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -876,13 +878,16 @@ def capacity(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:
 
 
 def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float, starts_at: float | None = None,
-             exclude=None) -> bool:
-    """A tier and length is sold out when a ticket starting now, or at `starts_at`, would fail the capacity rule.
-    `exclude`: the used-up tickets it would replace (next_start), as grant leaves them out."""
+             exclude=None, ctx=None) -> bool:
+    """A tier and length is sold out when a ticket starting now, or at `starts_at`, fails spec §2, or no fresh weekly
+    report exists (price_table tells that case apart as `unavailable`). `exclude`: the used-up tickets it would replace
+    (next_start), as grant leaves them out. `ctx`: a capacity.context to reuse."""
+    from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     start = now if starts_at is None else int(starts_at)
     try:
-        check_capacity(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), start, start + LENGTHS[length] * DAY, exclude)
+        capacity.check(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), effective_share_5h(conn, cfg, tier), start,
+                       start + LENGTHS[length] * DAY, now, exclude or (), ctx)
     except CapacityError:
         return True
     return False
@@ -896,25 +901,19 @@ def _later_tickets(conn, user_id: int, from_t: int) -> list[dict]:
                                           f"AND t.starts_at>=? ORDER BY t.starts_at, t.id", (user_id, from_t))]
 
 
-def _shift(conn, cfg: Config, chain: list[dict], delta: int) -> None:
-    """Move a user's queued tickets by `delta` seconds, bonus periods with them, each re-checked at its new place.
-    Moves toward the past go earliest-first and moves toward the future latest-first, so a moving ticket never meets
-    its own neighbour. One savepoint: a move that does not fit undoes them all and raises CapacityError."""
+def _shift(conn, cfg: Config, chain: list[dict], delta: int, now: float) -> None:
+    """Move a user's queued tickets by `delta` seconds, bonus periods with them. Moves toward the past go earliest-first
+    and moves toward the future latest-first, so a moving ticket never meets its own neighbour. One savepoint, one
+    Guard over the whole move: a move that does not fit undoes them all and raises CapacityError."""
+    from . import capacity   # here, not at the top: capacity imports tickets
     conn.execute("SAVEPOINT moves")
     try:
+        guard = capacity.Guard(conn, cfg, chain[0]["account_id"], now)
         for tk in (chain if delta < 0 else reversed(chain)):
-            s, e = tk["starts_at"] + delta, tk["effective_end"] + delta
-            check_capacity(conn, cfg, tk["account_id"], tk["share_pct"], s, e, exclude=tk["id"])
-            for b in bonuses(conn, tk["id"]):
-                if b["cancelled_at"] is None and b["share_pct"] > 0:
-                    check_capacity(conn, cfg, tk["account_id"], tk["share_pct"] + b["share_pct"], b["starts_at"] + delta,
-                                   b["ends_at"] + delta, exclude=tk["id"])
             conn.execute("UPDATE tickets SET starts_at=starts_at+?, ends_at=ends_at+? WHERE id=?", (delta, delta, tk["id"]))
             conn.execute("UPDATE ticket_bonuses SET starts_at=starts_at+?, ends_at=ends_at+? WHERE ticket_id=? AND cancelled_at IS NULL",
                          (delta, delta, tk["id"]))
-        # Each bonus above was checked on its own; overlapping ones add up, so check the moved chain as written.
-        verify_capacity(conn, cfg, chain[0]["account_id"], min(tk["starts_at"] for tk in chain) + delta,
-                        max(tk["effective_end"] for tk in chain) + delta)
+        guard.verify(min(tk["starts_at"] for tk in chain) + delta, max(tk["effective_end"] for tk in chain) + delta)
         conn.execute("RELEASE moves")
     except BaseException:
         conn.execute("ROLLBACK TO moves")
@@ -943,7 +942,7 @@ def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: 
             shift = max(now, t["starts_at"], held or 0) - chain[0]["starts_at"]
             if shift < 0:
                 try:
-                    _shift(conn, cfg, chain, shift)
+                    _shift(conn, cfg, chain, shift, now)
                     moved = len(chain)
                 except CapacityError as e:
                     kept, reason = True, str(e)
@@ -971,7 +970,7 @@ def hand_over(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | 
         for t in run:
             end_used_up(conn, t, now)
         if chain[0]["starts_at"] > now:
-            _shift(conn, cfg, chain, now - chain[0]["starts_at"])
+            _shift(conn, cfg, chain, now - chain[0]["starts_at"], now)
         db.audit(conn, None, "ticket_used_up", run[0]["user_name"], {"ticket_ids": [t["id"] for t in run], "moved": len(chain)})
         conn.execute("COMMIT")
     except CapacityError:
@@ -986,8 +985,9 @@ def hand_over(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | 
 def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, share_pct=0, extra_days=0, starts_at=None,
               ends_at=None, note: str = "", now: float | None = None) -> dict:
     """Extra share for a period inside the ticket, extra days at the ticket's share, or both. Extra days push the user's
-    queued tickets forward; each move and the extension itself are checked against capacity, and one failure refuses
-    the whole bonus."""
+    queued tickets forward; the moves, the extension and the share are checked as one change (capacity.Guard), and a
+    failure refuses the whole bonus."""
+    from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     note = _note(note)
     share_pct, extra_days = share_pct or 0, extra_days or 0
@@ -1012,6 +1012,7 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         if t["used_up_at"] is not None:
             raise TicketError("The ticket was used up and the next one took over; bonuses go on live tickets.")
         old_end, new_end, moved = t["effective_end"], t["effective_end"] + extra_days * DAY, 0
+        guard = capacity.Guard(conn, cfg, t["account_id"], now)   # before the queue moves: the bonus is judged as one change
         # Capacity is checked from now on: on a ticket that has started or ended, the past is spent either way.
         if extra_days:
             chain = _later_tickets(conn, t["user_id"], old_end) if t["user_id"] is not None else []
@@ -1020,19 +1021,15 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
                 if chain[0]["starts_at"] <= now:
                     raise TicketError("The user's next pass has already started; the extra days would run into it.")
                 try:
-                    _shift(conn, cfg, chain, new_end - chain[0]["starts_at"])
+                    _shift(conn, cfg, chain, new_end - chain[0]["starts_at"], now)
                     moved = len(chain)
                 except CapacityError as e:
                     raise CapacityError(f"The extra days would move {t['user_name']}'s queued pass, which then does not fit: {e}") from e
-            if new_end > now:
-                check_capacity(conn, cfg, t["account_id"], t["share_pct"], max(old_end, now), new_end)
         if share_pct:
             s = max(int(now if starts_at is None else starts_at), t["starts_at"])
             e = min(int(new_end if ends_at is None else ends_at), new_end)
             if s >= e:
                 raise TicketError("The bonus share period must lie within the pass's period.")
-            if e > now:
-                check_capacity(conn, cfg, t["account_id"], share_pct, max(s, now), e)
         else:
             s, e = old_end, new_end
         if extra_days:   # an upgrade runs to the ticket's end, so it reaches into the extra days too (2026-10-26 spec)
@@ -1040,10 +1037,10 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
                          (new_end, ticket_id, old_end))
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, note, granted_by, granted_at) "
                            "VALUES(?,?,?,?,?,?,?,?)", (ticket_id, share_pct, extra_days, s, e, note, actor, now))
-        # The share was checked before the extra days existed: where it reaches into them, both count.
+        # Judged as written: the share and the extra days together, against the room there was before (spec §2).
         hi = max(e, new_end)
         if hi > now:
-            verify_capacity(conn, cfg, t["account_id"], max(min(s, old_end) if extra_days else s, now), hi)
+            guard.verify(max(min(s, old_end) if extra_days else s, now), hi)
         db.audit(conn, actor, "ticket_bonus", t["user_name"], {"ticket_id": ticket_id, "bonus_id": cur.lastrowid, "share_pct": share_pct,
                                                                "extra_days": extra_days, "starts_at": s, "ends_at": e, "moved": moved})
         conn.execute("COMMIT")
@@ -1084,6 +1081,7 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     now to the ticket's end, as a bonus would, so what the ticket already spent stays spent.
     Raises TicketError for a tier that is not higher, a ticket not running, already used or with under an hour left, or no rate;
     capacity trouble is reported in `sold_out`, not raised."""
+    from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
@@ -1116,13 +1114,14 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     if share <= 0 or usd <= 0:
         raise TicketError(f"{cfg.tickets.tiers[tier].label} is not above this pass's tier.")
     try:
-        check_capacity(conn, cfg, ticket["account_id"], share, now, ticket["effective_end"])
-        sold = False
-    except CapacityError:
-        sold = True
+        capacity.check(conn, cfg, ticket["account_id"], share, max(0.0, share_5h), now, ticket["effective_end"], now)
+        sold, reason = False, None
+    except CapacityError as e:
+        sold, reason = True, str(e)
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "from_tier": frm, "length": ticket["length"], "share_pct": share,
             "share_5h_pct": max(0.0, share_5h), "starts_at": now, "ends_at": ticket["effective_end"], "usd": usd, "currency": currency,
-            "rate": rate["rate"], "amount": round_local(usd, rate["rate"], steps[currency], vat_percent(cfg)), "sold_out": sold}
+            "rate": rate["rate"], "amount": round_local(usd, rate["rate"], steps[currency], vat_percent(cfg)), "sold_out": sold,
+            "reason": reason}
 
 
 def upgrade(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, ticket_id: int, tier: str, currency: str, note: str = "",
@@ -1145,7 +1144,8 @@ def upgrade(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tick
             if o is None:
                 raise TicketError(f"Order #{order_id} does not exist.")
             q |= {"usd": o["quoted_usd"], "rate": o["quoted_rate"], "amount": o["quoted_amount"]}
-        check_capacity(conn, cfg, t["account_id"], q["share_pct"], now, t["effective_end"])
+        if q["sold_out"]:   # judged by upgrade_quote just now, inside this transaction
+            raise CapacityError(q["reason"])
         cur = conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, share_5h_pct, extra_days, starts_at, ends_at, note, granted_by, "
                            "granted_at, tier) VALUES(?,?,?,0,?,?,?,?,?,?)",
                            (ticket_id, q["share_pct"], q["share_5h_pct"], now, t["effective_end"], note, actor, now, tier))
