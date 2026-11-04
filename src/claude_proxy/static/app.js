@@ -867,12 +867,12 @@ function priceListCard(tk, order, renew) {
   // Only the lengths some tier sells get a toggle; shown first is the home page's pick, else the first offered.
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]].filter(([k]) => p.tiers.some((x) => x.lengths[k]));
   const len0 = pick && L.some(([k]) => k === pick.length) ? pick.length : L.length ? L[0][0] : "";
-  const canOrder = (tier, k) => !!tier.lengths[k] && !tier.lengths[k].sold_out;
+  const canOrder = (tier, k) => !!tier.lengths[k] && !tier.lengths[k].sold_out && !tier.lengths[k].unavailable;
   // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
   const planShare = (tier, k) => tier.compare_pct != null ? `<span class="muted">${shareOfPlan(tier, k)}</span>` : "";
   // The price, and under a longer length what that is a day, so the longer lengths' discount shows.
   const price = (l) => { const a = live(l) || !l.discount_ends_at ? l.amount : l.list_amount;
-    return `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(a, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, p.currency)) })}</div>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`; };
+    return `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(a, p.currency))}</b>${l.sold_out || l.unavailable ? ` <span class="badge">${t(l.unavailable ? "price.unavailable" : "price.sold_out")}</span>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, p.currency)) })}</div>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`; };
   // The tier of the running pass is tagged, and checked when there is no pick.
   const cur = tk.current ? tk.current.tier : null;
   // The checked row: the pick's tier while it can be ordered, else the running pass's, else the first tier on sale.

@@ -1237,11 +1237,13 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
     percent of its compare plan's weekly usage (share × compare_ratio), None without one. Falls back to USD without a rate.
     `exclude`: a buyer's used-up tickets, which a pass bought now replaces (next_start), left out of `sold_out`."""
     now = _now(now)
+    from . import capacity   # here, not at the top: capacity imports tickets
+    ctx_now = capacity.context(conn, cfg, ACCOUNT_ID, now, exclude or ())
+    ctx_later = capacity.context(conn, cfg, ACCOUNT_ID, now) if (later := starts_at is not None and starts_at > now) else None
     rate = current_rate(conn, currency)
     if rate is None:
         currency, rate = "USD", current_rate(conn, "USD")
     step, vat = currencies(cfg)[currency], vat_percent(cfg)   # the price lists say the VAT is in, under the prices
-    later = starts_at is not None and starts_at > now
     tiers = []
     eff = effective_tiers(conn, cfg)
     for tid, t in cfg.tickets.tiers.items():
@@ -1256,9 +1258,10 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                "amount": round_local(p["usd"], rate["rate"], step, vat), "list_amount": round_local(p["list_usd"], rate["rate"], step, vat),
                                # the USD price with VAT, for a page showing USD beside its own currency
                                "usd_total": round_local(p["usd"], 1, USD_ROUND_TO, vat), "list_usd_total": round_local(p["list_usd"], 1, USD_ROUND_TO, vat),
-                               "sold_out": sold_out(conn, cfg, tid, length, now, None, exclude),
+                               "sold_out": ctx_now.fresh and sold_out(conn, cfg, tid, length, now, None, exclude, ctx_now),
+                               "unavailable": not ctx_now.fresh,
                                # a buyer's list: whether one starting at `starts_at` (after their passes) fits too
-                               **({"sold_out_later": sold_out(conn, cfg, tid, length, now, starts_at)} if later else {})}
+                               **({"sold_out_later": sold_out(conn, cfg, tid, length, now, starts_at, None, ctx_later)} if later else {})}
         compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
         tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers, "vat_percent": vat,

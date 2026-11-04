@@ -349,3 +349,29 @@ def test_upgrade_is_checked_in_points(acct):
     assert q["sold_out"] and "points free" in q["reason"]
     with pytest.raises(tickets.CapacityError, match="points free"):
         tickets.upgrade(conn, cfg, ids["admin"], user(conn, ids["alice"]), t["id"], "standard", "EUR", now=NOW)
+
+
+def test_price_table_says_unavailable_not_sold_out_without_a_report(db):
+    conn, cfg, ids = seeded(db)
+    l = tickets.price_table(conn, cfg, NOW, "EUR")["tiers"][0]["lengths"]["day"]
+    assert (l["sold_out"], l["unavailable"]) == (False, True)
+    live(conn, NOW)
+    l = tickets.price_table(conn, cfg, NOW, "EUR")["tiers"][0]["lengths"]["day"]
+    assert (l["sold_out"], l["unavailable"]) == (False, False)
+
+
+def test_price_table_builds_one_context_per_start(db, monkeypatch):     # Review Focus 4
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    calls = []
+    real = capacity.context
+    monkeypatch.setattr(capacity, "context", lambda *a, **k: calls.append(1) or real(*a, **k))
+    tickets.price_table(conn, cfg, NOW, "EUR", starts_at=NOW + DAY)
+    assert len(calls) == 2
+
+
+def test_an_order_without_a_report_is_refused_as_unavailable(db):
+    from claude_proxy import orders
+    conn, cfg, ids = seeded(db)
+    with pytest.raises(orders.OrderError, match="temporarily unavailable"):
+        orders._check_on_sale(conn, cfg, "lite", "day", NOW, ids["alice"], False)

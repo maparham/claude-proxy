@@ -1,8 +1,21 @@
 import pytest
 
-from claude_proxy import limits, tickets
+from claude_proxy import capacity, limits, tickets
 from claude_proxy.db import create_user
 from tests.tickets_helpers import DAY, NOW, seeded, user
+
+
+def grant_no_report(conn, cfg, ids, monkeypatch, *a, **kw):
+    """tickets.grant, with the capacity gate stubbed fresh just for this call: these tests want a ticket to exist
+    with no quota snapshot recorded at all, to see how limits.evaluate reads a pass with no usage data (a sale
+    needs a fresh report to go through, 2026-11-04 spec, which would otherwise make this setup impossible)."""
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+        "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), *a, **kw)
+    monkeypatch.undo()
+    return t
 
 
 def set_limit(conn, uid, kind, value, unit, scope="*"):
@@ -191,6 +204,7 @@ def test_a_slice_handed_over_mid_week_draws_at_most_its_share_from_one_week(db):
     """Alice's week ticket ends mid-week; Bob's starts then. Their pieces of the shared week add up to the slice share."""
     conn, cfg, ids = seeded(db)
     cfg.tickets.max_sold_pct = 7
+    cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
     tickets.set_share(conn, cfg, "lite", 7, ids["admin"])
     fresh(conn, NOW - 600)
     bob, _ = create_user(conn, "bob")
@@ -209,11 +223,13 @@ def test_consecutive_day_tickets_each_allow_share_over_7(db):
     """Seven day tickets back to back inside one Anthropic week: each piece is share/7, the week draws 7 x share/7."""
     conn, cfg, ids = seeded(db)
     cfg.tickets.max_sold_pct = 7
+    cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
     tickets.set_share(conn, cfg, "lite", 7, ids["admin"])
     fresh(conn, NOW - 600)
     bob, _ = create_user(conn, "bob")
     for day in range(7):
         holder = ids["alice"] if day < 4 else bob
+        fresh(conn, WEEK_START + day * DAY - 600)
         tickets.grant(conn, cfg, ids["admin"], user(conn, holder), "lite", "day", "USD",
                       now=WEEK_START + day * DAY, terms_version="v1")
     for day in range(7):
@@ -231,6 +247,7 @@ def test_same_user_renewal_gets_a_fresh_piece(db):
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW - 300, terms_version="v1")
     req(conn, ids["alice"], NOW - 200, i=2000)   # 3 points: past any day-ticket piece
     assert check(conn, cfg, ids["alice"], now=NOW - 100).kind == "share_7d"
+    fresh(conn, t["ends_at"] - 600, util5=1, util7=1)
     nxt = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD",
                         now=t["ends_at"], terms_version="v1")   # queued renewal
     at = nxt["starts_at"] + 100
@@ -309,7 +326,10 @@ def test_bonus_days_extend_the_ticket_period(env):
 def test_no_active_ticket_is_a_402_with_the_right_message(env):
     conn, cfg, ids, t = env
     after = t["ends_at"] + 100
-    fresh(conn, after - 50)
+    # fresh()'s fixed RESET5/RESET7 are already behind `after`; the capacity gate needs its own reset ahead of it
+    # for the renewal grant below to go through (2026-11-04 spec).
+    snap(conn, after - 50, 0, "5h", after + DAY)
+    snap(conn, after - 40, 0, "7d", after + DAY)
     assert check(conn, cfg, ids["alice"], now=after).body["error"]["message"] == f"Your pass ended on {limits._date(t['ends_at'])}."
     cfg.listener.dashboard_url = "https://dash.example/"   # with a dashboard: where to buy the next one
     d = check(conn, cfg, ids["alice"], now=after)
@@ -382,9 +402,9 @@ def test_ticket_user_with_only_an_8_day_old_rate_gets_an_estimate_not_a_503(env)
     assert check(conn, cfg, ids["alice"], now=mid) is None                       # estimated from the old rate, not a 503
 
 
-def test_ticket_user_gets_503_when_no_rate_was_ever_observed(db):
+def test_ticket_user_gets_503_when_no_rate_was_ever_observed(db, monkeypatch):
     conn, cfg, ids = seeded(db)
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
+    grant_no_report(conn, cfg, ids, monkeypatch, "lite", "day", "USD", now=NOW, terms_version="v1")
     d = check(conn, cfg, ids["alice"], now=NOW + 10)                           # no snapshots at all
     assert (d.status, d.kind, d.retry_after) == (503, "ticket_no_data", 60)
     assert d.body["error"] == {"type": "api_error", "message": "Your pass's use can't be checked right now. Please try again in a few minutes."}
@@ -392,10 +412,10 @@ def test_ticket_user_gets_503_when_no_rate_was_ever_observed(db):
     assert check(conn, cfg, ids["alice"], now=NOW + 10, path="/v1/messages/count_tokens") is None   # consumes no quota
 
 
-def test_ticket_user_gets_503_when_no_reset_was_ever_reported(db):
+def test_ticket_user_gets_503_when_no_reset_was_ever_reported(db, monkeypatch):
     """Snapshots without a reset time: the week is unknown, so the piece cannot be capped."""
     conn, cfg, ids = seeded(db)
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
+    grant_no_report(conn, cfg, ids, monkeypatch, "lite", "day", "USD", now=NOW, terms_version="v1")
     snap(conn, NOW - 100, 0, "5h", None)
     snap(conn, NOW - 100, 0, "7d", None)
     d = check(conn, cfg, ids["alice"], now=NOW + 10)
@@ -403,11 +423,11 @@ def test_ticket_user_gets_503_when_no_reset_was_ever_reported(db):
     assert by_kind(conn, cfg, ids["alice"], now=NOW + 10)["share_7d"].skipped == limits.NO_RATE
 
 
-def test_ungated_users_keep_the_old_stale_behaviour(db):
+def test_ungated_users_keep_the_old_stale_behaviour(db, monkeypatch):
     conn, cfg, ids = seeded(db)
     set_limit(conn, ids["alice"], "share_5h", 1, "pct")
     assert check(conn, cfg, ids["alice"]) is None                              # stale: skipped, as today
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
+    t = grant_no_report(conn, cfg, ids, monkeypatch, "lite", "day", "USD", now=NOW, terms_version="v1")
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 1)
     tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 2)
     assert check(conn, cfg, ids["alice"], now=NOW + 3) is None
@@ -528,9 +548,9 @@ def test_tickets_switched_off_refuse_gated_users_instead_of_failing_open(env):
     assert check(conn, cfg, bob) is None        # never had a ticket: untouched
 
 
-def test_a_ticket_cancelled_before_it_started_is_like_having_no_ticket(db):
+def test_a_ticket_cancelled_before_it_started_is_like_having_no_ticket(db, monkeypatch):
     conn, cfg, ids = seeded(db)
-    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
+    t = grant_no_report(conn, cfg, ids, monkeypatch, "lite", "day", "USD", now=NOW, terms_version="v1")
     conn.execute("UPDATE tickets SET starts_at=?, ends_at=? WHERE id=?", (NOW + DAY, NOW + 2 * DAY, t["id"]))   # queued
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 10)
     d = check(conn, cfg, ids["alice"], now=NOW + 20)
@@ -559,10 +579,10 @@ def test_stale_share_5h_counts_at_most_the_last_5_hours(env):
     assert by_kind(conn, cfg, ids["alice"], now=later)["share_5h"].current == pytest.approx(0.3)
 
 
-def test_a_young_account_with_fresh_snapshots_does_not_lock_out_its_first_ticket_user(db):
+def test_a_young_account_with_fresh_snapshots_does_not_lock_out_its_first_ticket_user(db, monkeypatch):
     # Utilization has never risen a whole point, so there is no rate; the user's own requests are all that could raise it.
     conn, cfg, ids = seeded(db)
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW - 300, terms_version="v1")
+    grant_no_report(conn, cfg, ids, monkeypatch, "lite", "day", "USD", now=NOW - 300, terms_version="v1")
     for k in range(5):
         fresh(conn, NOW - 240 + 60 * k)
         req(conn, ids["alice"], NOW - 230 + 60 * k, i=20000)
@@ -748,9 +768,9 @@ def test_status_line_caps_use_at_100_percent():
     assert _ticket_weeks_text(weeks, "") == "100% of first part · 0% of second part · 100% used (expires in 1h:0m)"
 
 
-def test_usage_data_unavailable_says_try_again_shortly(db):
+def test_usage_data_unavailable_says_try_again_shortly(db, monkeypatch):
     conn, cfg, ids = seeded(db)
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW - 300, terms_version="v1")
+    grant_no_report(conn, cfg, ids, monkeypatch, "lite", "week", "USD", now=NOW - 300, terms_version="v1")
     d = check(conn, cfg, ids["alice"])
     assert d.status == 503 and d.body["error"]["message"] == (
         "Your pass's use can't be checked right now. Please try again in a few minutes.")

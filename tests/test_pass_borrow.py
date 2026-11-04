@@ -1,9 +1,22 @@
 """A pass across the weekly reset borrows from its next part (spec 2026-10-30-pass-borrow-across-reset)."""
 import pytest
 
-from claude_proxy import limits, tickets
+from claude_proxy import capacity, limits, tickets
 from claude_proxy.config import LENGTHS
 from claude_proxy.db import create_user
+
+
+def grant_no_report(conn, cfg, ids, monkeypatch, uid, length="day", start=0):
+    """grant(), with the capacity gate stubbed fresh for just this call: bob's grant here is only there to make his
+    pass owe against alice's week, and inserting a real snapshot fresh enough for it shifts the attribution window
+    the `week()`/`piece()` arithmetic below depends on (a sale needs a fresh report, 2026-11-04 spec)."""
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+        "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
+    t = grant(conn, cfg, ids, uid, length=length, start=start)
+    monkeypatch.undo()
+    return t
 from tests.test_tickets_limits import RESET7, piece, req, set_limit, snap
 from tests.tickets_helpers import DAY, seeded, user
 
@@ -96,20 +109,20 @@ def test_other_passes_unused_parts_are_held_back(env):
     assert b["id"]
 
 
-def test_a_pass_queued_to_start_later_this_week_is_owed(env):
+def test_a_pass_queued_to_start_later_this_week_is_owed(env, monkeypatch):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
     cfg.tickets.borrow_margin_pct = 93.8 + 5
-    grant(conn, cfg, ids, bob, start=AT + 1400)           # starts 2200 s before the reset
+    grant_no_report(conn, cfg, ids, monkeypatch, bob, start=AT + 1400)           # starts 2200 s before the reset
     use(conn, ids["alice"], t, 100, 1.1)
     assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + (100 - 1.1 - 93.8 - 5) - piece(5, 2200))
 
 
-def test_a_bonus_starting_later_this_week_is_owed(env):
+def test_a_bonus_starting_later_this_week_is_owed(env, monkeypatch):
     conn, cfg, ids, t = env
     bob, _ = create_user(conn, "bob")
     cfg.tickets.borrow_margin_pct = 93.8 + 5
-    b = grant(conn, cfg, ids, bob, length="week", start=AT + 1400)
+    b = grant_no_report(conn, cfg, ids, monkeypatch, bob, length="week", start=AT + 1400)
     conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?)",
                  (b["id"], 2, AT + 1600, AT + 3600 * 24, AT))
     use(conn, ids["alice"], t, 100, 1.1)
@@ -285,7 +298,7 @@ def test_serving_pass_card_is_not_marked_at_its_limit_while_borrowing(env):
 
 
 
-async def test_the_dashboard_card_of_a_borrowing_pass_shows_it_serving_not_at_its_limit(db, cfg):
+async def test_the_dashboard_card_of_a_borrowing_pass_shows_it_serving_not_at_its_limit(db, cfg, monkeypatch):
     """The cards run on the wall clock: a day pass an hour into its last two hours before the reset, and a queued pass
     so the card lists them."""
     import time
@@ -300,7 +313,7 @@ async def test_the_dashboard_card_of_a_borrowing_pass_shows_it_serving_not_at_it
     snap(conn, now - 800, 1, "7d", reset)
     snap(conn, now - 800, 0, "5h", now + 3000)
     t = grant(conn, cfg, ids, ids["alice"], start=int(now - 3600))
-    grant(conn, cfg, ids, ids["alice"], start=int(now + 2 * DAY))
+    grant_no_report(conn, cfg, ids, monkeypatch, ids["alice"], start=int(now + 2 * DAY))   # queued, just to list on the card
     req(conn, ids["alice"], now - 100, i=100, ticket=t["id"])   # 0.1 points, past its own 2-hour part
     snap(conn, now - 50, 1.1, "7d", reset)
     async with client(gw) as c:

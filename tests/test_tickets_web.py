@@ -4,11 +4,11 @@ import time
 import pytest
 from argon2 import PasswordHasher
 
-from claude_proxy import db as dbm, tickets
+from claude_proxy import capacity, db as dbm, tickets
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client, make_gateway
 from tests.test_web import PW, admin_client, bearer
-from tests.tickets_helpers import DAY, seeded, user
+from tests.tickets_helpers import DAY, live, seeded, user
 
 
 @pytest.fixture
@@ -148,6 +148,7 @@ async def test_session_carries_the_ticket_settings_for_admins_only(env):
 
 async def test_preview_grant_list_and_users_state(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["alice"], "cost_total", "*", "5", "usd"))
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["alice"], "tokens_daily", "*", "9", "weighted"))
     async with admin_client(gw) as c:
@@ -175,16 +176,19 @@ async def test_preview_grant_list_and_users_state(env):
 
 async def test_grant_refusals_map_to_400_and_409(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     cfg.tickets.max_sold_pct = 5
+    cfg.tickets.sell_margin_pct = 0
+    cfg.tickets.max_sold_5h_pct = 5
     async with admin_client(gw) as c:
         assert (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
         bob = (await c.post("/api/admin/users", json={"name": "bob"})).json()["id"]
         r = await grant(c, {"user": bob, "tier": "lite", "length": "day", "currency": "USD"})
-        assert r.status_code == 409 and "Not enough capacity" in r.json()["error"]
+        assert r.status_code == 409 and "5-hour shares would reach" in r.json()["error"]
         assert (await grant(c, {"user": "nobody", "tier": "lite", "length": "day", "currency": "USD"})).status_code == 404
         assert (await grant(c, {"user": bob, "tier": "gold", "length": "day", "currency": "USD"})).status_code == 400
         conn.execute("UPDATE fx_rates SET set_at=?", (int(time.time()) - 40 * 3600,))
-        cfg.tickets.max_sold_pct = 80
+        cfg.tickets.max_sold_pct = cfg.tickets.max_sold_5h_pct = 80
         r = await grant(c, {"user": bob, "tier": "lite", "length": "day", "currency": "EUR"})
         assert r.status_code == 400 and "hours old" in r.json()["error"]
         r = await grant(c, {"user": bob, "tier": "lite", "length": "day", "currency": "EUR", "confirm_stale_rate": True})
@@ -193,6 +197,7 @@ async def test_grant_refusals_map_to_400_and_409(env):
 
 async def test_cancel_bonus_capacity_and_ungate(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         t = (await grant(c, {"user": "alice", "tier": "standard", "length": "week", "currency": "USD"})).json()["ticket"]
         r = await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": 5, "extra_days": 1, "note": "welcome"})
@@ -219,7 +224,11 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     tickets.create_discount(conn, cfg, "lite", "month", 15, now - 10, now + DAY, ids["admin"], now=now)
     tickets.set_compare(conn, cfg, "lite", "Claude Pro", 6, ids["admin"], now=now)
     cfg.tickets.max_sold_pct = 25
-    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "day", "USD", now=now, terms_version="v1")
+    # A running ticket, inserted directly: tickets.grant needs a fresh usage report (2026-11-04 spec), which this test
+    # has none of on purpose (so week_split below stays position-independent); the page must still not leak its buyer.
+    conn.execute("INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, length, days, starts_at, ends_at, "
+                 "list_usd, usd, currency, rate, amount, granted_at, granted_by) VALUES(?,'alice',1,'standard',25,'day',1,?,?,"
+                 "12,11,'USD',1,11,?,?)", (ids["alice"], now, now + DAY, now, ids["admin"]))
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/api/pricing")
         assert r.status_code == 200
@@ -228,8 +237,9 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     lite = next(t for t in p["tiers"] if t["tier"] == "lite")
     assert (lite["compare"], lite["compare_pct"]) == ("Claude Pro", 30) and lite["lengths"]["month"] == {
         "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5,
-        "usd_total": 15.0, "list_usd_total": 20.0, "sold_out": True}   # 25 sold: nothing fits today
-    assert lite["lengths"]["week"]["sold_out"] is True and lite["lengths"]["week"]["discount_ends_at"] is None
+        "usd_total": 15.0, "list_usd_total": 20.0, "sold_out": False, "unavailable": True}   # no fresh report: nothing sells
+    assert lite["lengths"]["week"]["sold_out"] is False and lite["lengths"]["week"]["unavailable"] is True \
+        and lite["lengths"]["week"]["discount_ends_at"] is None
     standard = next(t for t in p["tiers"] if t["tier"] == "standard")
     assert (standard["compare"], standard["compare_pct"]) == ("", None)   # no comparison set: the line is hidden
     assert p["week_split"] is None   # no quota data: the terms keep their general line
@@ -288,12 +298,20 @@ async def test_home_ignores_a_stale_session_cookie(env):
     assert r.status_code == 200 and 'id="pricing"' in r.text
 
 
-async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_account(env):
+async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_account(env, monkeypatch):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
+    # This test wants no quota snapshot at all, to exercise the no-data display fallback below; a sale still needs a
+    # fresh report to go through (2026-11-04 spec), so the capacity gate (context() and Guard both read these two
+    # functions) is stubbed for these three calls only.
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+        "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=now - 3600, terms_version="v1")
     tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=2, extra_days=1, note="welcome", now=now)
     q = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "EUR", now=now, terms_version="v1")
+    monkeypatch.undo()
     async with asgi_client(create_dashboard_app(gw)) as c:
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["enabled"] and me["gated"]
@@ -316,6 +334,7 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
 async def test_me_tickets_lists_past_tickets_newest_first(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
+    live(conn, now)   # one fresh report covers every grant below: the older ones' pieces fall outside its week, so they need no room
     alice = user(conn, ids["alice"])
     ran = tickets.grant(conn, cfg, ids["admin"], alice, "lite", "day", "EUR", now=now - 20 * DAY, terms_version="v1")
     tickets.cancel(conn, cfg, ids["admin"], ran["id"], now=now - 18 * DAY)   # cancelled after its end: it still ran its course
@@ -361,6 +380,7 @@ async def test_pricing_api_says_the_servers_time(env):
 
 async def test_money_inputs_are_rounded_to_cents_and_bounded(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     now = int(time.time())
     async with admin_client(gw) as c:
         assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9.999})).status_code == 200
@@ -389,6 +409,7 @@ async def test_money_inputs_are_rounded_to_cents_and_bounded(env):
 
 async def test_notes_are_capped_at_200_characters(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         r = await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "note": "x" * 201})
         assert r.status_code == 400 and "200" in r.json()["error"]
@@ -399,6 +420,7 @@ async def test_notes_are_capped_at_200_characters(env):
 
 async def test_grant_refused_when_the_price_or_rate_changed_since_the_preview(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "EUR"})).json()
         assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9})).status_code == 200
@@ -439,7 +461,9 @@ async def test_dashboard_links_the_pricing_page_only_while_tickets_are_on(env):
 async def test_me_tickets_shows_the_note_of_an_extra_days_bonus(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
+    live(conn, now - 3600)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now - 3600, terms_version="v1")
+    live(conn, now)
     tickets.add_bonus(conn, cfg, ids["admin"], t["id"], extra_days=2, note="sorry for Tuesday", now=now)
     async with asgi_client(create_dashboard_app(gw)) as c:
         cur = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
@@ -448,6 +472,7 @@ async def test_me_tickets_shows_the_note_of_an_extra_days_bonus(env):
 
 async def test_users_with_ungated_tickets_still_have_tickets(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time() - 2 * DAY)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY,
                       terms_version="v1")
     tickets.ungate(conn, ids["admin"], ids["alice"])
@@ -467,6 +492,7 @@ async def test_a_grant_needs_the_quote_its_preview_showed(env):
 async def test_a_grant_needs_the_terms_tick_unless_from_an_order(env):
     from claude_proxy import orders
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         p = (await c.post("/api/admin/tickets/preview", json={"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).json()
         quote = {"user": "alice", "tier": "lite", "length": "week", "currency": "USD", "usd": p["usd"], "rate": p["rate"]}
@@ -483,6 +509,7 @@ async def test_a_grant_needs_the_terms_tick_unless_from_an_order(env):
 
 async def test_with_tickets_off_a_paused_user_is_shown_and_can_be_ungated(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         assert (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).status_code == 200
     cfg.tickets.enabled = False
@@ -517,6 +544,7 @@ async def test_my_status_gives_the_weekly_limits_week_breakdown(env):
 
 async def test_the_ticket_filter_reaches_a_deleted_users_tickets(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         t = (await grant(c, {"user": "alice", "tier": "lite", "length": "day", "currency": "USD"})).json()["ticket"]
         assert (await c.post(f"/api/admin/tickets/{t['id']}/cancel", json={})).status_code == 200

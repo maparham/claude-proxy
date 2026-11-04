@@ -6,11 +6,12 @@ from claude_proxy import cli, db as dbm, tickets
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client, make_gateway
 from tests.test_web import PW, admin_client
-from tests.tickets_helpers import DAY, NOW, seeded, user
+from tests.tickets_helpers import DAY, NOW, live, seeded, user
 
 
 def test_delete_refused_with_a_live_ticket_and_keeps_records_after(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
     dbm.revoke(conn, ids["alice"])
     with pytest.raises(ValueError, match="active or queued pass"):
@@ -27,6 +28,7 @@ async def test_web_delete_needs_the_typed_name(db, cfg):
     cfg.tickets = tcfg_.tickets
     gw = make_gateway(cfg, conn)
     # the endpoint uses the wall clock, so the ticket must have ended in real time
+    live(conn, time.time() - 2 * DAY)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=int(time.time()) - 2 * DAY,
                       terms_version="v1")
     dbm.revoke(conn, ids["alice"])
@@ -74,6 +76,7 @@ async def test_self_delete_forfeits_live_tickets(db, cfg):
     gw = make_gateway(cfg, conn)
     bob, key = dbm.create_user(conn, "bob")
     now = int(time.time())
+    live(conn, now - 3600)
     active = tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "day", "USD", now=now - 3600, terms_version="v1")
     queued = tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "day", "USD", now=now - 3600, terms_version="v1")
     async with asgi_client(create_dashboard_app(gw)) as c:

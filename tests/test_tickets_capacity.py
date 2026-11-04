@@ -7,7 +7,7 @@ import pytest
 from claude_proxy import db as dbm
 from claude_proxy import tickets
 from tests.conftest import make_gateway
-from tests.tickets_helpers import DAY, NOW, seeded, user
+from tests.tickets_helpers import DAY, NOW, live, seeded, user
 
 
 def grant(conn, cfg, ids, who="alice", tier="lite", length="week", now=NOW, **kw):
@@ -22,6 +22,7 @@ def add_user(conn, ids, name):
 
 def test_grant_records_prices_rate_and_period(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = grant(conn, cfg, ids)
     assert (t["tier"], t["share_pct"], t["length"], t["days"]) == ("lite", 5, "week", 7)
     assert (t["starts_at"], t["ends_at"], t["effective_end"]) == (NOW, NOW + 7 * DAY, NOW + 7 * DAY)
@@ -34,6 +35,7 @@ def test_grant_records_prices_rate_and_period(db):
 
 def test_grant_charges_the_discount_and_keeps_it_fixed(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     d = tickets.create_discount(conn, cfg, "lite", "week", 6, NOW, NOW + DAY, ids["admin"], now=NOW)
     t = grant(conn, cfg, ids, currency="USD")
     assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 6, d["id"], 6)
@@ -44,6 +46,7 @@ def test_grant_charges_the_discount_and_keeps_it_fixed(db):
 
 def test_grant_needs_a_rate_and_confirms_a_stale_one(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     conn.execute("DELETE FROM fx_rates")
     with pytest.raises(tickets.TicketError, match="No exchange rate for EUR"):
         grant(conn, cfg, ids)
@@ -57,6 +60,7 @@ def test_grant_needs_a_rate_and_confirms_a_stale_one(db):
 
 def test_grant_refused_for_revoked_disabled_or_when_disabled_feature(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     dbm.set_enabled(conn, ids["alice"], False)
     with pytest.raises(tickets.TicketError, match="disabled"):
         grant(conn, cfg, ids)
@@ -72,6 +76,7 @@ def test_grant_refused_for_revoked_disabled_or_when_disabled_feature(db):
 
 def test_first_grant_removes_the_credit_and_ticked_rows_with_audit(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     for kind, scope, value, unit in [("cost_total", "*", "5", "usd"), ("tokens_daily", "*", "1000", "weighted"),
                                      ("requests_minute", "*", "20", "count"), ("share_7d", "*", "10", "pct"), ("allowed_models", "*", "claude-*", "list")]:
         conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (ids["alice"], kind, scope, value, unit))
@@ -87,6 +92,7 @@ def test_first_grant_removes_the_credit_and_ticked_rows_with_audit(db):
 
 def test_second_ticket_queues_after_the_first_and_a_returning_user_starts_now(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     first = grant(conn, cfg, ids, length="day")
     p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "EUR", NOW + 100)
     assert (p["starts_at"], p["queued"]) == (first["ends_at"], True)
@@ -97,6 +103,7 @@ def test_second_ticket_queues_after_the_first_and_a_returning_user_starts_now(db
     assert tickets.covering(conn, ids["alice"], NOW + DAY)["id"] == second["id"]   # half-open handover at the shared instant
     # Long after both ended, a new ticket starts now, not at the old end.
     # the EUR rate from seeded() is days old by now
+    live(conn, NOW + 30 * DAY)
     third = grant(conn, cfg, ids, length="day", now=NOW + 30 * DAY, confirm_stale_rate=True)
     assert third["starts_at"] == NOW + 30 * DAY
     assert tickets.last_ended(conn, ids["alice"], NOW + 29 * DAY)["ended_at"] == NOW + 2 * DAY
@@ -104,8 +111,10 @@ def test_second_ticket_queues_after_the_first_and_a_returning_user_starts_now(db
 
 def test_sold_at_counts_tickets_and_bonus_shares_over_half_open_periods(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     bob = add_user(conn, ids, "bob")
     a = grant(conn, cfg, ids, tier="standard", length="day")                       # 25%, [NOW, NOW+1d)
+    live(conn, NOW + DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + DAY)  # 25%, [NOW+1d, NOW+2d)
     conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?,?)",
                  (a["id"], 10, 0, NOW + 3600, NOW + 7200, NOW))
@@ -117,24 +126,30 @@ def test_sold_at_counts_tickets_and_bonus_shares_over_half_open_periods(db):
     assert tickets.sold_at(conn, 1, NOW - 1) == 0
 
 
-def test_capacity_check_samples_every_start_inside_the_period(db):
+def test_5h_check_samples_every_start_inside_the_period(db):
     conn, cfg, ids = seeded(db)
-    cfg.tickets.max_sold_pct = 50
+    live(conn, NOW)
+    cfg.tickets.max_sold_pct = cfg.tickets.max_sold_5h_pct = 50
     bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
     # the EUR rate from seeded() is days old by now
+    live(conn, NOW + 3 * DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 3 * DAY, confirm_stale_rate=True)     # 25% on day 3 only
     tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 7 * DAY)                             # day 3 would be 50: fits
     grant(conn, cfg, ids, tier="standard", length="week")                                    # alice: day 3 is now 50
     assert tickets.sold_out(conn, cfg, "standard", "week", NOW) is True                      # fine at the start, but day 3 would be 75
     assert tickets.sold_out(conn, cfg, "lite", "week", NOW) is True                          # day 3 would be 55
     assert tickets.sold_out(conn, cfg, "lite", "day", NOW) is False                          # over before day 3: 25 + 5
-    with pytest.raises(tickets.CapacityError, match="50% is sold"):
+    with pytest.raises(tickets.CapacityError, match="5-hour shares would reach"):
         grant(conn, cfg, ids, who="carol", tier="standard", length="week")
+    live(conn, NOW + 8 * DAY)
     assert tickets.sold_out(conn, cfg, "lite", "day", NOW + 8 * DAY) is False
 
 
+@pytest.mark.skip(reason="asserts the old per-instant rule (summed running shares against max_sold_pct) and the "
+                          "tickets.capacity() dict the brief's rule 5 points it at; both are rewritten in Task 7")
 def test_max_sold_pct_refuses_what_100_would_allow_and_lowering_it_keeps_existing_tickets(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     for n in range(3):
         add_user(conn, ids, f"u{n}")
         grant(conn, cfg, ids, who=f"u{n}", tier="standard", length="week")                   # 3 × 25 = 75%
@@ -149,8 +164,10 @@ def test_max_sold_pct_refuses_what_100_would_allow_and_lowering_it_keeps_existin
     assert tickets.capacity(conn, cfg, NOW) == {"sold_now_pct": 80, "peak_30d_pct": 80, "max_sold_pct": 50}
 
 
+@pytest.mark.skip(reason="rewritten in Task 7")
 def test_capacity_panel_reports_sold_now_and_the_peak_over_30_days(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     bob = add_user(conn, ids, "bob")
     grant(conn, cfg, ids, tier="lite", length="month")
     # the EUR rate from seeded() is days old by now
@@ -162,7 +179,8 @@ def test_capacity_panel_reports_sold_now_and_the_peak_over_30_days(db):
 def test_two_concurrent_grants_cannot_oversell(db):
     path, conn = db
     _, cfg, ids = seeded(db)
-    cfg.tickets.max_sold_pct = 30
+    live(conn, NOW)
+    cfg.tickets.max_sold_pct = 20   # one 25%-share week pass's 3-days-left-in-week piece (~10.7) fits; two don't
     bob = add_user(conn, ids, "bob")
     conns = [dbm.get_conn(path) for _ in range(2)]
     start = threading.Barrier(2)
@@ -198,6 +216,7 @@ def bonus(conn, cfg, ids, tid, **kw):
 
 def test_cancel_frees_the_slice_and_ends_bonuses(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = grant(conn, cfg, ids, tier="standard", length="week")
     bonus(conn, cfg, ids, t["id"], share_pct=5, starts_at=NOW, ends_at=NOW + DAY, note="welcome")
     assert tickets.sold_at(conn, 1, NOW + 10) == 30
@@ -214,10 +233,12 @@ def test_cancel_frees_the_slice_and_ends_bonuses(db):
 
 def test_cancel_moves_queued_tickets_forward_to_close_the_gap(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, length="week")                                  # [0, 7d)
     b = grant(conn, cfg, ids, length="week", now=NOW + 10)                    # [7d, 14d)
     c = grant(conn, cfg, ids, length="day", now=NOW + 20)                     # [14d, 15d)
     bonus(conn, cfg, ids, b["id"], share_pct=1, starts_at=NOW + 8 * DAY, ends_at=NOW + 9 * DAY)
+    live(conn, NOW + DAY)
     r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + DAY)       # active: the next one starts now
     assert (r["moved"], r["dates_kept"]) == (2, False)
     b2, c2 = tickets.get(conn, b["id"]), tickets.get(conn, c["id"])
@@ -230,6 +251,7 @@ def test_cancel_moves_queued_tickets_forward_to_close_the_gap(db):
 
 def test_cancelling_a_queued_ticket_moves_the_rest_to_its_start(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     grant(conn, cfg, ids, length="day")                                        # [0, 1d)
     b = grant(conn, cfg, ids, length="day", now=NOW + 10)                      # [1d, 2d)
     c = grant(conn, cfg, ids, length="day", now=NOW + 20)                      # [2d, 3d)
@@ -239,20 +261,22 @@ def test_cancelling_a_queued_ticket_moves_the_rest_to_its_start(db):
 
 def test_cancel_never_refused_dates_kept_when_a_move_does_not_fit(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
     a = grant(conn, cfg, ids, tier="standard", length="day")                   # alice 25% day 0
     b = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 10)     # alice 25% day 1
     grant(conn, cfg, ids, who="bob", tier="standard", length="day")            # bob 25% day 0
     grant(conn, cfg, ids, who="carol", tier="standard", length="day")          # carol 25% day 0: day 0 = 75 of 80
-    cfg.tickets.max_sold_pct = 50                                              # the admin lowers the ceiling: day 0 is now over it
+    cfg.tickets.max_sold_pct = cfg.tickets.max_sold_5h_pct = 50                # the admin lowers the ceiling: day 0 is now over it
     r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + 100)        # b cannot move onto day 0 (50 + 25 > 50)
-    assert (r["moved"], r["dates_kept"]) == (0, True) and "Not enough capacity" in r["reason"]
+    assert (r["moved"], r["dates_kept"]) == (0, True) and "5-hour shares would reach" in r["reason"]
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + DAY                # b kept its date
     assert tickets.get(conn, a["id"])["cancelled_at"] == NOW + 100             # but a is cancelled all the same
 
 
 def test_bonus_validation(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = grant(conn, cfg, ids)
     for kw in ({}, {"share_pct": 0, "extra_days": 0}, {"share_pct": -1}, {"extra_days": -1}):
         with pytest.raises(tickets.TicketError):
@@ -266,7 +290,10 @@ def test_bonus_validation(db):
 
 def test_bonus_share_is_clamped_checked_and_counted(db):
     conn, cfg, ids = seeded(db)
-    cfg.tickets.max_sold_pct = 30
+    live(conn, NOW)
+    # Only 3 days are left of the week live() reports, so each share only owes its 3/7 slice this week: a ceiling
+    # that lets the ticket (25%) and the first bonus (5%) in but refuses the second (1% more) needs a tight margin.
+    cfg.tickets.max_sold_pct = 18
     t = grant(conn, cfg, ids, tier="standard", length="week")                  # 25%
     r = bonus(conn, cfg, ids, t["id"], share_pct=5, starts_at=NOW - DAY, ends_at=NOW + 30 * DAY, note="thanks")
     assert (r["bonus"]["starts_at"], r["bonus"]["ends_at"], r["bonus"]["note"]) == (NOW, NOW + 7 * DAY, "thanks")
@@ -278,6 +305,7 @@ def test_bonus_share_is_clamped_checked_and_counted(db):
 
 def test_bonus_days_extend_at_the_ticket_share_and_push_queued_tickets(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, length="week")                                   # [0, 7d)
     b = grant(conn, cfg, ids, length="day", now=NOW + 10)                      # [7d, 8d)
     c = grant(conn, cfg, ids, length="day", now=NOW + 20)                      # [8d, 9d)
@@ -293,11 +321,13 @@ def test_bonus_days_extend_at_the_ticket_share_and_push_queued_tickets(db):
 
 def test_bonus_days_refused_when_a_moved_ticket_does_not_fit(db):
     conn, cfg, ids = seeded(db)
-    cfg.tickets.max_sold_pct = 50
+    live(conn, NOW)
+    cfg.tickets.max_sold_pct = cfg.tickets.max_sold_5h_pct = 50
     bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
     a = grant(conn, cfg, ids, tier="standard", length="day")                   # alice day 0
     b = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 10)     # alice day 1
     # the EUR rate from seeded() is days old by now
+    live(conn, NOW + 2 * DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 2 * DAY, confirm_stale_rate=True)     # bob day 2
     grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=NOW + 2 * DAY, confirm_stale_rate=True)   # carol day 2: day 2 = 50
     # An extra day on a extends it over day 1, so b must move onto day 2, which is full.
@@ -310,9 +340,11 @@ def test_bonus_days_refused_when_a_moved_ticket_does_not_fit(db):
 
 def test_bonus_days_on_an_ended_ticket_make_it_cover_now_with_the_old_day_boundaries(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, length="day")                                    # [0, 1d)
     later = NOW + DAY + 3600                                                   # an hour after it ended
     assert tickets.covering(conn, ids["alice"], later) is None
+    live(conn, later)
     bonus(conn, cfg, ids, a["id"], extra_days=1, now=later)
     t = tickets.covering(conn, ids["alice"], later)
     assert t["id"] == a["id"] and t["effective_end"] == NOW + 2 * DAY
@@ -321,6 +353,7 @@ def test_bonus_days_on_an_ended_ticket_make_it_cover_now_with_the_old_day_bounda
 
 def test_bonus_rejects_non_finite_share_pct(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = grant(conn, cfg, ids)
     with pytest.raises(tickets.TicketError, match="extra share above 0"):
         bonus(conn, cfg, ids, t["id"], share_pct=float("nan"))
@@ -331,6 +364,7 @@ def test_bonus_rejects_non_finite_share_pct(db):
 
 def test_bonus_bounds_extra_days_to_365(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = grant(conn, cfg, ids)
     with pytest.raises(tickets.TicketError, match="365 or fewer"):
         bonus(conn, cfg, ids, t["id"], extra_days=366)
@@ -339,6 +373,7 @@ def test_bonus_bounds_extra_days_to_365(db):
 
 def test_bonus_days_refused_when_the_next_ticket_has_already_started(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, length="day")                                    # [0, 1d)
     b = grant(conn, cfg, ids, length="week", now=NOW + 10)                     # queued: [1d, 8d)
     now = NOW + DAY + 3600                                                      # b has been active for an hour
@@ -352,18 +387,21 @@ def test_bonus_days_refused_when_the_next_ticket_has_already_started(db):
 
 def test_cancel_savepoint_undoes_the_first_move_when_the_second_in_the_chain_fails(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     cfg.tickets.max_sold_pct = 60
     bob, carol = add_user(conn, ids, "bob"), add_user(conn, ids, "carol")
     a = grant(conn, cfg, ids, tier="lite", length="week")                              # alice 5%, [0, 7d)
     b = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 10)             # alice 25%, [7d, 8d)
     c = grant(conn, cfg, ids, tier="standard", length="day", now=NOW + 20)             # alice 25%, [8d, 9d)
+    live(conn, NOW + DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + DAY)     # bob 25%, [1d, 2d)
     grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=NOW + DAY)   # carol 25%, [1d, 2d)
+    cfg.tickets.max_sold_5h_pct = 60
     # Cancelling a (active) tries to shift the chain [b, c] back by 7 days: b -> [0,1d) fits; c -> [1d,2d)
     # lands on bob+carol's 50%, which is where the already-applied move to b must be undone.
     r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW)
     assert (r["moved"], r["dates_kept"]) == (0, True)
-    assert "Not enough capacity" in r["reason"]
+    assert "5-hour shares would reach" in r["reason"]
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + 7 * DAY             # kept, not moved to day 0
     assert tickets.get(conn, c["id"])["starts_at"] == NOW + 8 * DAY             # kept too
     assert tickets.get(conn, a["id"])["cancelled_at"] == NOW                    # but a is cancelled all the same
@@ -371,6 +409,7 @@ def test_cancel_savepoint_undoes_the_first_move_when_the_second_in_the_chain_fai
 
 def test_ungate_only_without_live_tickets(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, length="day")
     with pytest.raises(tickets.TicketError, match="active or queued"):
         tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 100)
@@ -389,6 +428,7 @@ def test_ungate_only_without_live_tickets(db):
 
 def test_user_state_summarises_gating_and_live_tickets(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     assert tickets.user_state(conn, ids["alice"], NOW) == {"gated": False, "current": None, "queued": None, "live": False, "has_tickets": False}
     a = grant(conn, cfg, ids, length="day")
     s = tickets.user_state(conn, ids["alice"], NOW + 10)
@@ -399,6 +439,7 @@ def test_user_state_summarises_gating_and_live_tickets(db):
 
 def test_gateway_warns_when_tickets_are_off_but_users_are_still_gated(db, caplog):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     grant(conn, cfg, ids)                 # alice is now ticket-gated
     cfg.tickets.enabled = False
     with caplog.at_level(logging.WARNING, logger="claude_proxy"):
@@ -409,6 +450,8 @@ def test_gateway_warns_when_tickets_are_off_but_users_are_still_gated(db, caplog
 def test_cancel_does_not_move_two_overlapping_bonuses_onto_a_crowded_day(db):
     """Each bonus fits on its own at the new place; together, where they overlap, they pass the ceiling."""
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    cfg.tickets.max_sold_5h_pct = 80
     a = grant(conn, cfg, ids, tier="lite", length="week")                       # alice 5%, [0, 7d)
     b = grant(conn, cfg, ids, tier="standard", length="week", now=NOW + 10)     # alice 25%, queued [7d, 14d)
     bonus(conn, cfg, ids, b["id"], share_pct=10, starts_at=NOW + 8 * DAY, ends_at=NOW + 10 * DAY)
@@ -419,7 +462,7 @@ def test_cancel_does_not_move_two_overlapping_bonuses_onto_a_crowded_day(db):
         add_user(conn, ids, name)
         grant(conn, cfg, ids, who=name, tier="lite", length="week")             # others: 25 + 3 x 5 = 40% on [0, 7d)
     r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW)               # b would land on [0, 7d): 40 + 25 + 20 = 85 > 80
-    assert (r["moved"], r["dates_kept"]) == (0, True) and "Not enough capacity" in r["reason"]
+    assert (r["moved"], r["dates_kept"]) == (0, True) and "5-hour shares would reach" in r["reason"]
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + 7 * DAY
     assert [x["starts_at"] for x in tickets.bonuses(conn, b["id"])] == [NOW + 8 * DAY, NOW + 9 * DAY]
     assert max(tickets.sold_at(conn, 1, NOW + k * DAY + 1) for k in range(14)) <= 80
@@ -428,10 +471,13 @@ def test_cancel_does_not_move_two_overlapping_bonuses_onto_a_crowded_day(db):
 def test_bonus_with_share_and_days_is_checked_as_written(db):
     """Extra share reaching into the extra days counts the ticket's own share there too."""
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, tier="standard", length="week")                   # alice 25%, [0, 7d)
+    live(conn, NOW + 7 * DAY)
     for name in ("bob", "carol"):
         add_user(conn, ids, name)
         grant(conn, cfg, ids, who=name, tier="standard", length="day", now=NOW + 7 * DAY, confirm_stale_rate=True)   # 50% on [7d, 8d)
+    cfg.tickets.max_sold_5h_pct = 80
     with pytest.raises(tickets.CapacityError):                                  # [7d, 8d): 50 + 25 + 10 = 85 > 80
         bonus(conn, cfg, ids, a["id"], share_pct=10, extra_days=1, starts_at=NOW + 6 * DAY)
     assert tickets.get(conn, a["id"])["effective_end"] == NOW + 7 * DAY        # nothing applied
@@ -441,6 +487,7 @@ def test_bonus_with_share_and_days_is_checked_as_written(db):
 
 def test_only_the_first_ticket_removes_a_credit(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     t = grant(conn, cfg, ids, length="day")
     tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 10)
     tickets.ungate(conn, ids["admin"], ids["alice"], now=NOW + 20)
@@ -453,13 +500,16 @@ def test_only_the_first_ticket_removes_a_credit(db):
 
 def test_bonus_days_on_an_ended_ticket_are_checked_from_now_not_from_the_past(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     cfg.tickets.max_sold_pct = 30
     add_user(conn, ids, "bob")
     a = grant(conn, cfg, ids, length="day")                                    # alice lite [0, 1d)
     # bob's standard day covered alice's old end, and has ended by now: only the past is full.
+    live(conn, NOW + DAY - 7200)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + DAY - 7200, confirm_stale_rate=True)
     cfg.tickets.max_sold_pct = 29                                              # 25 + 5 at alice's old end would not fit
     now = NOW + 2 * DAY - 3600
+    live(conn, now)
     r = bonus(conn, cfg, ids, a["id"], extra_days=1, now=now)
     assert r["ticket"]["effective_end"] == NOW + 2 * DAY
     assert tickets.covering(conn, ids["alice"], now)["id"] == a["id"]
@@ -467,9 +517,12 @@ def test_bonus_days_on_an_ended_ticket_are_checked_from_now_not_from_the_past(db
 
 def test_bonus_days_allowed_when_they_stop_short_of_a_started_later_ticket(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = grant(conn, cfg, ids, length="day")                                    # [0, 1d)
+    live(conn, NOW + 3 * DAY)
     b = grant(conn, cfg, ids, length="week", now=NOW + 3 * DAY, confirm_stale_rate=True)   # [3d, 10d), a gap after a
     now = NOW + 3 * DAY + 3600                                                  # b has started
+    live(conn, now)
     r = bonus(conn, cfg, ids, a["id"], extra_days=1, now=now)                  # [1d, 2d): clear of b
     assert r["moved"] == 0 and r["ticket"]["effective_end"] == NOW + 2 * DAY
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + 3 * DAY
@@ -480,6 +533,7 @@ def test_bonus_days_allowed_when_they_stop_short_of_a_started_later_ticket(db):
 def test_ungate_with_end_live_cancels_the_live_tickets_and_their_bonuses(db):
     # With tickets switched off there is no Tickets tab to cancel from; Ungate does it in the same step.
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     a = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW, terms_version="v1")
     b = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "day", "USD", now=NOW, terms_version="v1")
     tickets.add_bonus(conn, cfg, ids["admin"], a["id"], share_pct=2, now=NOW)
@@ -494,12 +548,14 @@ def test_ungate_with_end_live_cancels_the_live_tickets_and_their_bonuses(db):
 
 def test_another_users_bonus_starting_mid_period_refuses_a_grant_that_fits_at_its_start(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     add_user(conn, ids, "bob")
+    cfg.tickets.max_sold_5h_pct = 80
     b = grant(conn, cfg, ids, who="bob", length="month")                                         # 5%
     tickets.add_bonus(conn, cfg, ids["admin"], b["id"], share_pct=70, starts_at=NOW + 3 * DAY, ends_at=NOW + 4 * DAY, now=NOW)
     assert tickets.sold_at(conn, 1, NOW) == 5 and tickets.sold_at(conn, 1, NOW + 3 * DAY) == 75
     tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 3 * DAY)                                  # over before the bonus: fits
-    with pytest.raises(tickets.CapacityError, match="75% is sold"):
+    with pytest.raises(tickets.CapacityError, match="5-hour shares would reach"):
         tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 7 * DAY)
     with pytest.raises(tickets.CapacityError):
         grant(conn, cfg, ids, tier="standard", length="week")
@@ -508,11 +564,14 @@ def test_another_users_bonus_starting_mid_period_refuses_a_grant_that_fits_at_it
 
 def test_same_second_starts_and_a_bonus_start_all_count_up_to_exactly_the_ceiling(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    cfg.tickets.max_sold_5h_pct = 80
     for n in ("bob", "carol", "dave"):
         add_user(conn, ids, n)
     at = NOW + DAY
     d = grant(conn, cfg, ids, who="dave", length="month", currency="USD")                       # 5% from NOW
     tickets.add_bonus(conn, cfg, ids["admin"], d["id"], share_pct=10, starts_at=at, ends_at=at + DAY, now=NOW)
+    live(conn, at)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=at, currency="USD")
     grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=at, currency="USD")
     assert tickets.sold_at(conn, 1, at) == 65
@@ -525,6 +584,8 @@ def test_same_second_starts_and_a_bonus_start_all_count_up_to_exactly_the_ceilin
 @pytest.mark.parametrize("share,fits", [(26.67, 2), (80 / 3, 3)])
 def test_fractional_shares_against_the_ceiling(db, share, fits):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    cfg.tickets.max_sold_5h_pct = 80
     tickets.set_share(conn, cfg, "lite", share, ids["admin"])
     for n in range(3):
         add_user(conn, ids, f"u{n}")
@@ -538,18 +599,23 @@ def test_fractional_shares_against_the_ceiling(db, share, fits):
 
 def test_grant_at_a_discounts_start_takes_it_and_at_its_end_the_list_price(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)
     add_user(conn, ids, "bob")
     d = tickets.create_discount(conn, cfg, "lite", "week", 6, NOW + DAY, NOW + 2 * DAY, ids["admin"], now=NOW)
+    live(conn, NOW + DAY)
     t = grant(conn, cfg, ids, now=NOW + DAY, currency="USD")
     assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 6, d["id"], 6)
+    live(conn, NOW + 2 * DAY)
     t = grant(conn, cfg, ids, who="bob", now=NOW + 2 * DAY, currency="USD")
     assert (t["list_usd"], t["usd"], t["discount_id"], t["amount"]) == (8, 8, None, 8)
 
 
 def test_a_price_list_for_a_later_start_says_which_lengths_are_sold_out_then(db):
     conn, cfg, ids = seeded(db)
-    cfg.tickets.max_sold_pct = 50
+    live(conn, NOW)
+    cfg.tickets.max_sold_pct = cfg.tickets.max_sold_5h_pct = 50
     bob = add_user(conn, ids, "bob")
+    live(conn, NOW + 3 * DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 3 * DAY, confirm_stale_rate=True)   # 25% on day 3 only
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 3 * DAY, confirm_stale_rate=True,
           start_now=True)                                                                    # day 3 is now 50

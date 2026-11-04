@@ -86,12 +86,18 @@ def test_stale_snapshot_in_an_unreset_window_still_sets_capacity(env):
     assert st.limit == pytest.approx(5 * 0.7)
 
 
-def test_selling_still_checks_max_sold_pct_not_runtime_capacity(env):
+def test_selling_checks_the_weeks_room_at_the_reported_capacity(env):
     conn, cfg, ids, _ = env
-    snap(conn, NOW - 500, 50, "7d", RESET7)        # half the week used outside the gateway
+    cfg.tickets.max_sold_5h_pct = 200
+    snap(conn, NOW - 500, 50, "7d", RESET7)        # half the week used outside the gateway (scale 50)
     for n in range(3):
         add_user(conn, ids, f"u{n}")
-        grant(conn, cfg, ids, who=f"u{n}", tier="standard", length="week")   # 5 + 3 × 25 = 80: the ceiling, not 50
+        grant(conn, cfg, ids, who=f"u{n}", tier="standard", length="week")
+    # The env fixture's lite week pass owes 1.07, and the three standard week passes owe 3 x 10.7 x 0.5 = 16.1
+    # (scaled by 50): room is 80 - 50 - 17.1 - 5 = 7.9, so a fourth standard week pass (5.4 scaled) still fits.
     add_user(conn, ids, "bob")
-    with pytest.raises(tickets.CapacityError):                                # 80 + 5 > 80
-        grant(conn, cfg, ids, who="bob", tier="lite", length="week")
+    grant(conn, cfg, ids, who="bob", tier="standard", length="week")
+    cfg.tickets.max_sold_pct = 70
+    add_user(conn, ids, "carol")
+    with pytest.raises(tickets.CapacityError, match="points free"):
+        grant(conn, cfg, ids, who="carol", tier="standard", length="week")

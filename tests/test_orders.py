@@ -2,7 +2,7 @@ import pytest
 
 from claude_proxy import db as dbm, orders, tickets
 from claude_proxy.config import EmailConfig
-from tests.tickets_helpers import DAY, NOW, seeded, user
+from tests.tickets_helpers import DAY, NOW, live, seeded, user
 
 
 def visitor(conn, cfg, n=0, now=NOW, **kw):
@@ -33,7 +33,9 @@ def refused(status, needle=None):
 
 @pytest.fixture
 def env(db):
-    return seeded(db)
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)   # a fresh weekly report: a sale needs one (2026-11-04 spec)
+    return conn, cfg, ids
 
 
 @pytest.fixture
@@ -126,6 +128,7 @@ def test_html_in_name_and_message_is_stored_verbatim(env):
 def test_sold_out_is_refused_with_409(env):
     conn, cfg, ids = env
     cfg.tickets.max_sold_pct = 5
+    cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=NOW, terms_version="v1")
     with refused(409, "sold out") as e:
         visitor(conn, cfg)
@@ -152,6 +155,7 @@ def test_visitor_limit_per_ip(env):
     with refused(429) as e:
         visitor(conn, cfg, 9, ip="1.2.3.4")
     assert e.value.status == 429 and str(e.value) == "Too many orders today; try again tomorrow or sign in."
+    live(conn, NOW + DAY + 1)
     assert visitor(conn, cfg, 9, ip="1.2.3.4", now=NOW + DAY + 1)["status"] == "new"   # 24 hours later
 
 
@@ -289,6 +293,7 @@ def test_ip_is_kept_on_contacted(env):
 def test_clear_old_ips_after_30_days(env):
     conn, cfg, ids = env
     old = visitor(conn, cfg, 1)
+    live(conn, NOW + 20 * DAY)
     new = visitor(conn, cfg, 2, now=NOW + 20 * DAY)
     assert orders.clear_old_ips(conn, now=NOW + 29 * DAY) == 0
     assert orders.clear_old_ips(conn, now=NOW + 31 * DAY) == 1
@@ -641,6 +646,7 @@ def test_a_failed_grant_leaves_the_order_unchanged(env):
     conn, cfg, ids = env
     o = signed_in(conn, cfg, ids["alice"])
     cfg.tickets.max_sold_pct = 5
+    cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=NOW, terms_version="v1")
     with pytest.raises(tickets.CapacityError):
         grant(conn, cfg, ids, ids["alice"], o["id"])

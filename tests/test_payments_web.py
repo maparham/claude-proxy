@@ -10,11 +10,13 @@ from tests.conftest import asgi_client
 from tests.test_payments import MID, FakeZP
 from tests.test_tickets_web import env as tickets_env  # noqa: F401  (the fixture)
 from tests.test_web import admin_client, bearer
+from tests.tickets_helpers import live
 
 
 @pytest.fixture
 def env(tickets_env, monkeypatch):
     gw, conn, cfg, ids, keys = tickets_env
+    live(conn, time.time())   # a fresh weekly report: a sale needs one (2026-11-04 spec)
     cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
     tickets.set_rate(conn, cfg, "IRT", 156250, ids["admin"], now=int(time.time()) - 3600)
     cfg.zarinpal = ZarinpalConfig()

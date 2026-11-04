@@ -8,13 +8,20 @@ from claude_proxy import cli, mail, orders, tickets, turnstile, web
 from claude_proxy.config import EmailConfig
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
-from tests.test_tickets_web import env, grant  # noqa: F401  (the fixture)
+from tests.test_tickets_web import env as _tickets_env, grant  # noqa: F401  (the fixture)
 from tests.test_web import admin_client, bearer
-from tests.tickets_helpers import user
+from tests.tickets_helpers import live, user
 
 ORDER = {"tier": "lite", "length": "week", "currency": "EUR", "terms_version": "v1"}
 VISITOR = ORDER | {"name": "Vera Visitor", "email": "vera@example.com", "message": "Hello", "turnstile_token": "tok"}
 HIDDEN = ("ip", "admin_note", "admin_mail", "buyer_mail", "ticket_id")
+
+
+@pytest.fixture
+def env(_tickets_env):
+    """tickets_web's env, plus a fresh weekly report: an order needs one to go through (2026-11-04 spec)."""
+    live(_tickets_env[1], time.time())
+    return _tickets_env
 
 
 @pytest.fixture
@@ -217,6 +224,7 @@ async def test_order_endpoints_refuse_missing_or_stale_terms(env, ts):
 async def test_sold_out_is_409(env):
     gw, conn, cfg, ids, keys = env
     cfg.tickets.max_sold_pct = 5
+    cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["admin"]), "lite", "week", "EUR", now=time.time(), terms_version="v1")
     async with client(gw) as c:
         r = await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER | {"email": "a@b.cd"})

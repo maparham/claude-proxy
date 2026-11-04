@@ -8,7 +8,7 @@ import pytest
 from claude_proxy import orders, payments, tickets, zarinpal
 from claude_proxy.config import Currency, ZarinpalConfig
 from claude_proxy.db import create_user
-from tests.tickets_helpers import seeded, user
+from tests.tickets_helpers import DAY, live, seeded, user
 
 MID = "00000000-0000-0000-0000-000000000000"
 
@@ -39,6 +39,7 @@ class FakeZP:
 def env(db, monkeypatch):
     conn, cfg, ids = seeded(db)
     now = int(time.time())
+    live(conn, now)   # a fresh weekly report: a sale needs one (2026-11-04 spec)
     conn.execute("UPDATE fx_rates SET set_at=?", (now - 3600,))
     cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
     tickets.set_rate(conn, cfg, "IRT", 156250, ids["admin"], now=now - 3600)   # $8 -> 1,250,000 T
@@ -466,6 +467,7 @@ async def test_reconcile_grants_a_payment_whose_verify_was_unreachable(env, monk
     p0, p = await paid_flow(conn, cfg, ids)
     assert p["status"] == "started"
     zp.verify_answer = {"code": 101, "ref_id": 201, "card_pan": "x"}
+    live(conn, later())   # the grant reconcile triggers needs a report fresh at its own, later `now`
     out = await payments.reconcile(conn, cfg, now=later())
     assert out["changed"] == [p0["id"]] and out["paid"] == 1
     assert zp.verifies[-1] == (1250000, p0["authority"])
@@ -547,6 +549,7 @@ async def test_reconcile_one_bad_row_does_not_stop_the_rest(env, monkeypatch):
         return {"code": 100, "ref_id": 202, "card_pan": "x"}
     monkeypatch.setattr(zarinpal, "verify", first_explodes)
     conn.execute("UPDATE orders SET status='new' WHERE id=(SELECT order_id FROM payments WHERE id=?)", (r1["payment_id"],))
+    live(conn, later())   # the grant reconcile triggers needs a report fresh at its own, later `now`
     out = await payments.reconcile(conn, cfg, now=later())
     assert out["errors"] == 1 and out["paid"] == 1 and len(calls) == 2
 
@@ -645,9 +648,13 @@ async def test_cli_reconcile_survives_a_failure(monkeypatch, caplog):
 
 
 def full_at_alices_end(conn, cfg, ids):
-    """Alice's lite week runs now; bob's standard week is queued from its end. A ceiling of 28 has room now (10) but
-    none for another 5 at alice's end (25)."""
+    """Alice's lite week runs now; bob's standard week is queued from its end. A ceiling of 28 leaves room now (room
+    13: 28 - 10 owed - margin 5) but none for another 5 at alice's end (bob's standard alone sells 25 of the 28 there).
+    A full, unstarted Anthropic week ahead of `now` (not whatever real wall-clock position live() would land on) is
+    what the 25 and the 5 need to line up exactly on a week boundary, so this reports its own snapshot."""
     now = int(time.time())
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (now - 30, "header", "7d", 0, now + 7 * DAY))
     cfg.tickets.max_sold_pct = 28
     bob, _ = create_user(conn, "bob")
     a = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now, terms_version="v1")
@@ -666,7 +673,7 @@ async def test_paid_order_for_a_queued_pass_that_stopped_fitting_while_paying_is
     r = await start(conn, cfg, ids)
     conn.execute("UPDATE tickets SET cancelled_at=NULL WHERE id=?", (bobs,))        # and taken while she pays
     p = await payments.callback(conn, cfg, payments.get(conn, r["payment_id"])["authority"], "OK")
-    assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and "Not enough capacity" in p["error"]
+    assert p["status"] == "paid_unfulfilled" and p["ref_id"] == "201" and "would hold" in p["error"]
     assert orders.get(conn, p["order_id"])["status"] == "new"
     assert [t["id"] for t in tickets.user_tickets(conn, ids["alice"])] == [a["id"]]
 

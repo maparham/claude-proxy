@@ -44,6 +44,7 @@ USER_TOO_MANY = "Too many orders today; try again tomorrow."
 BUSY = "Orders are busy today; please sign in to order."
 CHANGED = "This order was withdrawn or changed; reload."
 LINK_INVALID = "This payment link is no longer valid."
+UNAVAILABLE = "Passes are temporarily unavailable; try again in a few minutes."
 # A visitor order: placed without an account (user_id NULL until linked) or still carrying its IP (cleared on close).
 # One the admin has both linked and closed drops out of the visitor limits, which only loosens them for a handled buyer.
 # A payment link is the admin's, never a visitor's, though it has no account until claimed.
@@ -105,6 +106,22 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
         raise OrderError(429, BUSY)
 
 
+def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float, user_id: int | None, start_now: bool) -> None:
+    """Judged as the price list judges it (spec section 2, Sold out; 2026-11-04 spec §2): without a fresh weekly
+    report nothing is on sale; else a pass starting now, without the buyer's used-up tickets, and one starting
+    where the grant will put it."""
+    from . import capacity
+    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+        raise OrderError(409, UNAVAILABLE)
+    mine = [t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]] if user_id is not None else None
+    if tickets.sold_out(conn, cfg, tier, length, now, None, mine):
+        raise OrderError(409, "That pass is sold out.")
+    if user_id is not None:
+        starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now)
+        if starts_at > now and tickets.sold_out(conn, cfg, tier, length, now, starts_at, [t["id"] for t in replaces]):
+            raise OrderError(409, "That pass is sold out for when your current pass ends.")
+
+
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
            terms_version: str | None = None, lang: str = "en", start_now: bool = False) -> dict:
@@ -150,16 +167,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             if _count(conn, f"{VISITOR} AND created_at>?", (since,)) >= VISITOR_GLOBAL:
                 raise OrderError(429, BUSY)
         rate = tickets.current_rate(conn, currency)
-        # Judged as the price list judges it: for a ticket starting now (spec section 2, Sold out), without the buyer's
-        # used-up tickets, which one starting now replaces (next_start).
-        mine = [t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]] if user_id is not None else None
-        if tickets.sold_out(conn, cfg, tier, length, now, None, mine):
-            raise OrderError(409, "That pass is sold out.")
-        if user_id is not None:
-            # And where the grant will put it: after the buyer's last pass, so no one pays for a pass that cannot start then.
-            starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now)
-            if starts_at > now and tickets.sold_out(conn, cfg, tier, length, now, starts_at, [t["id"] for t in replaces]):
-                raise OrderError(409, "That pass is sold out for when your current pass ends.")
+        _check_on_sale(conn, cfg, tier, length, now, user_id, start_now)
         if rate is None:
             raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
         usd = tickets.price_now(conn, tier, length, now)["usd"]

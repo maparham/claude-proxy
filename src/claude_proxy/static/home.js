@@ -72,7 +72,7 @@ function card(t_, i, len, currency) {
   const p = priceIn(l, currency);
   const off = l.discount_ends_at && l.list_usd > 0 ? Math.round((1 - l.usd / l.list_usd) * 100) : 0;
   const save = savePct(t_, len);
-  return `<article class="tier${isFeatured(data, t_, i, len) ? " featured" : ""}${l.sold_out ? " sold-out" : ""}">
+  return `<article class="tier${isFeatured(data, t_, i, len) ? " featured" : ""}${l.sold_out || l.unavailable ? " sold-out" : ""}">
     ${off > 0 ? `<span class="ribbon">${t("home.off_pct", { n: nf0.format(off) })}</span>` : ""}
     <h3>${tierName(t_)}${rec ? ` <span class="rec">${t("home.recommended")}</span>` : ""}</h3>
     ${t_.compare_pct != null ? `<p class="share">${shareOfPlan(t_, len)}</p>` : ""}
@@ -80,7 +80,7 @@ function card(t_, i, len, currency) {
     <p class="per">${t(LENGTHS[len][0])}</p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
-    ${l.sold_out ? `<span class="btn get" aria-disabled="true">${t("home.sold_out")}</span>`
+    ${l.sold_out || l.unavailable ? `<span class="btn get" aria-disabled="true">${t(l.unavailable ? "home.unavailable" : "home.sold_out")}</span>`
       : `<button type="button" class="btn primary get" data-order="${esc(t_.tier)}:${len}">${t("home.get_it")}</button>`}
   </article>`;
 }

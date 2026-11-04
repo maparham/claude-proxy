@@ -3,12 +3,13 @@ import pytest
 
 from claude_proxy import orders, tickets
 from claude_proxy.config import Currency
-from tests.tickets_helpers import NOW, seeded, user
+from tests.tickets_helpers import NOW, live, seeded, user
 
 
 @pytest.fixture
 def env(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)   # a fresh weekly report: a sale needs one (2026-11-04 spec)
     cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
     tickets.set_rate(conn, cfg, "IRT", 100000, ids["admin"], now=NOW - 3600)
     return conn, cfg, ids
@@ -43,6 +44,7 @@ def test_paid_grant_uses_the_order_quote(env):
 def test_paid_grant_ignores_a_stale_rate(env):
     conn, cfg, ids = env
     o = irt_order(conn, cfg, ids)
+    live(conn, NOW + 40 * 3600)
     t = tickets.grant(conn, cfg, None, user(conn, ids["alice"]), "lite", "week", "IRT", order_id=o["id"], paid=True,
                       now=NOW + 40 * 3600)
     assert t["amount"] == 800000

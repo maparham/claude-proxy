@@ -9,18 +9,20 @@ from claude_proxy.config import Currency
 from tests.test_orders_web import client
 from tests.test_tickets_web import env, grant  # noqa: F401  (the fixture)
 from tests.test_web import admin_client, bearer
-from tests.tickets_helpers import DAY, NOW, seeded, user
+from tests.tickets_helpers import DAY, NOW, live, seeded, user
 
 
 @pytest.fixture
 def core(db):
     conn, cfg, ids = seeded(db)
+    live(conn, NOW)   # a fresh weekly report: a sale needs one (2026-11-04 spec)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=NOW, terms_version="v1")
     return conn, cfg, ids, t
 
 
 def test_quote_is_the_difference_for_the_time_left(core):
     conn, cfg, ids, t = core
+    live(conn, NOW + 3.5 * DAY)
     q = tickets.upgrade_quote(conn, cfg, tickets.get(conn, t["id"]), "standard", "EUR", NOW + 3.5 * DAY)
     assert (q["usd"], q["amount"], q["from_tier"]) == (13.5, 12.5, "lite")      # ($35 - $8) / 2, at 0.92 to the half euro
     assert (q["share_pct"], q["share_5h_pct"], q["ends_at"], q["sold_out"]) == (20, 20, t["effective_end"], False)
@@ -40,6 +42,7 @@ def test_no_upgrade_sideways_late_or_on_a_queued_ticket(core):
 def test_upgrade_raises_the_tier_and_the_limits(core):
     conn, cfg, ids, t = core
     at = NOW + 3.5 * DAY
+    live(conn, at)
     tickets.upgrade(conn, cfg, ids["admin"], user(conn, ids["alice"]), t["id"], "standard", "EUR", now=at)
     tk = tickets.get(conn, t["id"])
     assert tickets.tier_now(conn, tk) == "standard"
@@ -61,6 +64,7 @@ def test_upgrade_order_and_paid_fulfilment(core):
     conn.execute("INSERT INTO payments(id, order_id, user_id, created_at, updated_at, amount, authority, status) "
                  "VALUES(1, ?, ?, 0, 0, 1350000, 'A1', 'started')", (o["id"], ids["alice"]))
     p = payments.get(conn, 1)
+    live(conn, NOW + 3.5 * DAY + 60)
     r = payments._fulfil(conn, cfg, p, "REF", None, NOW + 3.5 * DAY + 60)
     assert r["status"] == "paid"
     assert orders.get(conn, o["id"])["status"] == "done"
@@ -71,6 +75,7 @@ def test_upgrade_order_and_paid_fulfilment(core):
 
 async def test_an_upgrade_order_placed_before_is_sold_by_the_admin(env):
     gw, conn, cfg, ids, keys = env
+    live(conn, time.time())
     async with admin_client(gw) as c:
         assert (await grant(c, {"user": ids["alice"], "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
     async with client(gw) as c:
@@ -102,6 +107,7 @@ def legacy_order(conn, ids, t, currency, usd, rate, amount, now=NOW + 3.5 * DAY)
 def test_bonus_days_after_an_upgrade_run_at_the_upgraded_tier(core):
     conn, cfg, ids, t = core
     at = NOW + 3.5 * DAY
+    live(conn, at)
     tickets.upgrade(conn, cfg, ids["admin"], user(conn, ids["alice"]), t["id"], "standard", "EUR", now=at)
     tickets.add_bonus(conn, cfg, ids["admin"], t["id"], extra_days=2, now=at + 60)
     end = tickets.get(conn, t["id"])["effective_end"]

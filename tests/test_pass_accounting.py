@@ -8,7 +8,7 @@ from tests.conftest import asgi_client, make_gateway, seed_oauth
 from tests.test_tickets_limits import fresh, req, snap
 from tests.test_tickets_web import env, grant  # noqa: F401  (the fixture)
 from tests.test_web import admin_client, bearer
-from tests.tickets_helpers import NOW, seeded, user
+from tests.tickets_helpers import NOW, live, seeded, user
 
 MSG = {"model": "claude-sonnet-5", "max_tokens": 64, "messages": [{"role": "user", "content": "hi"}]}
 
@@ -23,6 +23,7 @@ def side_by_side(conn, cfg, ids, at):
 
 def test_the_5h_attribution_splits_by_pass(db):
     conn, cfg, ids = seeded(db)
+    fresh(conn, NOW - 1000)
     a, b = side_by_side(conn, cfg, ids, NOW - 900)
     fresh(conn, NOW - 600)
     req(conn, ids["alice"], NOW - 500, i=3000, ticket=a["id"])
@@ -38,6 +39,7 @@ def test_the_5h_attribution_splits_by_pass(db):
 def test_old_rows_are_backfilled_to_the_pass_that_covered_them(db):
     conn, cfg, ids = seeded(db)
     at = time.time() - 3600
+    live(conn, at)
     a, b = side_by_side(conn, cfg, ids, at)
     conn.execute("DROP INDEX idx_requests_ticket")
     conn.execute("ALTER TABLE requests DROP COLUMN ticket_id")
