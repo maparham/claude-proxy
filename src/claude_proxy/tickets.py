@@ -575,13 +575,13 @@ def _exclude(exclude) -> tuple[str, list]:
 
 
 def sold_at(conn: sqlite3.Connection, account_id: int, t: float, exclude=None) -> float:
-    """sold(t): shares of the non-cancelled tickets and bonus shares covering `t` (half-open periods).
-    `exclude` (an id or several, _exclude) leaves those tickets and their bonuses out, for re-checking a ticket at a new
-    place or replacing used-up ones."""
+    """sold(t) for the 5-hour bucket (2026-11-04 spec, §2 check 3): 5-hour shares of the non-cancelled tickets and
+    bonus shares covering `t` (half-open periods), each falling back to its weekly share. `exclude` leaves those
+    tickets and their bonuses out."""
     ex, args = _exclude(exclude)
-    a = conn.execute(f"SELECT COALESCE(SUM(t.share_pct), 0) FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
+    a = conn.execute(f"SELECT COALESCE(SUM(COALESCE(t.share_5h_pct, t.share_pct)), 0) FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
                      f"AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?{ex}", (account_id, t, t, *args)).fetchone()[0]
-    b = conn.execute(f"SELECT COALESCE(SUM(b.share_pct), 0) FROM ticket_bonuses b JOIN tickets t ON t.id=b.ticket_id "
+    b = conn.execute(f"SELECT COALESCE(SUM(COALESCE(b.share_5h_pct, b.share_pct)), 0) FROM ticket_bonuses b JOIN tickets t ON t.id=b.ticket_id "
                      f"WHERE t.account_id=? AND t.cancelled_at IS NULL AND b.cancelled_at IS NULL AND b.starts_at<=? AND b.ends_at>?{ex}",
                      (account_id, t, t, *args)).fetchone()[0]
     return a + b
@@ -598,27 +598,26 @@ def _starts_within(conn, account_id: int, starts_at: int, ends_at: int, exclude=
     return pts
 
 
-def check_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, starts_at: int, ends_at: int,
+def check_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, share_5h: float, starts_at: int, ends_at: int,
                    exclude=None) -> None:
-    """sold(t) + share <= max_sold_pct at the period's start and at every start inside it, else CapacityError."""
-    ceiling = cfg.tickets.max_sold_pct
+    """The 5-hour check (2026-11-04 spec, §2 check 3): sold(t) + share_5h <= max_sold_5h_pct at the period's start and
+    at every start inside it, else CapacityError."""
+    ceiling = cfg.tickets.max_sold_5h_pct
     for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at, exclude)}):
         sold = sold_at(conn, account_id, point, exclude)
-        if sold + share > ceiling + 1e-9:
-            raise CapacityError(f"Not enough capacity: {sold:g}% is sold at {_date(point)}, and {share:g}% more would pass the "
-                                f"{ceiling:g}% ceiling (max_sold_pct).")
+        if sold + share_5h > ceiling + 1e-9:
+            raise CapacityError(f"5-hour shares would reach {sold + share_5h:g}% at {_date(point)}, over max_sold_5h_pct "
+                                f"({ceiling:g}%).")
 
 
 def verify_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, starts_at: int, ends_at: int) -> None:
-    """sold(t) <= max_sold_pct at the range's start and at every start inside it, with the changes already written.
-    For changes made of several pieces (a bonus with share and days, a ticket moved with its bonuses), which
-    check_capacity sees one at a time; call it inside the transaction or savepoint, so CapacityError undoes them."""
-    ceiling = cfg.tickets.max_sold_pct
+    """The 5-hour check over rows already written, for changes of several pieces; call it inside the transaction or
+    savepoint, so CapacityError undoes them."""
+    ceiling = cfg.tickets.max_sold_5h_pct
     for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at)}):
         sold = sold_at(conn, account_id, point)
         if sold > ceiling + 1e-9:
-            raise CapacityError(f"Not enough capacity: {sold:g}% would be sold at {_date(point)}, over the {ceiling:g}% "
-                                "ceiling (max_sold_pct).")
+            raise CapacityError(f"5-hour shares would reach {sold:g}% at {_date(point)}, over max_sold_5h_pct ({ceiling:g}%).")
 
 
 # ---------- tickets ----------

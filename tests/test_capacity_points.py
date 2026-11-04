@@ -65,3 +65,18 @@ def test_fresh_needs_a_young_snapshot_with_a_future_reset():
     assert not capacity.fresh(att | {"stale": True}, NOW)
     assert not capacity.fresh(att | {"resets_at": NOW - 1}, NOW)
     assert not capacity.fresh(att | {"utilization_pct": None}, NOW)
+
+
+def test_the_5h_sum_reads_5h_shares_and_its_own_ceiling(db):
+    conn, cfg, ids = seeded(db)
+    tickets.set_share_5h(conn, cfg, "lite", 30, ids["admin"])
+    from tests.test_tickets_capacity import grant
+    t = grant(conn, cfg, ids, tier="lite", length="day")          # weekly 5, 5-hour 30
+    assert tickets.sold_at(conn, 1, NOW) == 30
+    conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, share_5h_pct, extra_days, starts_at, ends_at, granted_at) "
+                 "VALUES(?,?,?,?,?,?,?)", (t["id"], 10, None, 0, NOW, NOW + 3600, NOW))
+    assert tickets.sold_at(conn, 1, NOW) == 40                     # a bonus without a 5-hour share counts its share
+    cfg.tickets.max_sold_5h_pct = 60
+    tickets.check_capacity(conn, cfg, 1, 20, NOW, NOW + DAY)       # 40 + 20 = 60: fits
+    with pytest.raises(tickets.CapacityError, match="5-hour shares would reach 61% .* over max_sold_5h_pct"):
+        tickets.check_capacity(conn, cfg, 1, 21, NOW, NOW + DAY)
