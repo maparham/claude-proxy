@@ -392,6 +392,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .tier-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--s1); }
 .tier-row-name { display: grid; gap: 2px; }
 .tier-row-name .muted { font-size: 13px; }
+.tier-row .badge { white-space: nowrap; }
 .tier-row-price { text-align: end; font-variant-numeric: tabular-nums; }
 .tier-row:has(input:checked) { border-color: var(--s1); background: color-mix(in srgb, var(--s1) 9%, transparent); }
 .tier-row:has(input:disabled) { cursor: not-allowed; opacity: 0.55; }
