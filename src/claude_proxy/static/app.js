@@ -572,6 +572,13 @@ async function renderOverview(main) {
   if (ov.credential && !ov.credential.healthy) banners.push(`<div class="banner critical"><span class="icon">!</span><span>${t("ov.cred_fail")} ${isAdmin() ? `${t("ov.cred_fail_admin")}${ov.credential.detail ? ` <span class="muted">(${esc(ov.credential.detail)})</span>` : ""}` : t("ov.cred_fail_user")}</span></div>`);
   const stale = (ov.quota || []).filter((q) => q.utilization_pct != null && q.stale);
   if (stale.length) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.stale", { buckets: stale.map((q) => esc(labelOf("bucket.", q.bucket))).join(t("app.list_sep")) })}</span></div>`);
+  // Which model a pass holder picks sets how fast it goes; the ratios come from the price table. Closed per browser.
+  const fc = S.settings.family_cost || {};
+  if (!isAdmin() && !S.prefs.fableNoteSeen && fc.fable && fc.opus && fc.sonnet) {
+    const ratio = (x) => nfFix(x % 1 ? 1 : 0).format(x);
+    banners.push(`<div class="banner" id="fable-note"><span class="icon">i</span><span>${t("ov.fable_note", { opus: ratio(fc.fable / fc.opus), sonnet: ratio(fc.fable / fc.sonnet) })}</span>
+      <button class="close" id="fable-close" aria-label="${esc(t("ov.fable_close"))}"${tipAttr(esc(t("ov.fable_close")))}>✕</button></div>`);
+  }
   const up = ov.upstream;
   if (up) {
     const sp = up.status_page;
@@ -604,6 +611,8 @@ async function renderOverview(main) {
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
+  const fableClose = $("#fable-close", main);
+  if (fableClose) fableClose.onclick = () => { S.prefs.fableNoteSeen = true; savePrefs(); $("#fable-note", main).remove(); };
   if (tk) wireOrdering(main, tk, order);
   if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">${t("ov.no_figures")}</p>`;
   if (isAdmin()) {
@@ -681,16 +690,10 @@ function passLeft(end) {
   const from = parts.findIndex(([n], k) => n > 0 || k === 2);
   return t("pass.left", { d: parts.slice(from).map(([n, u]) => t(`pass.left_${u}`, { n: nf0.format(n) })).join(t("pass.left_join")) });
 }
-// A pass's colour on the timeline: a hue per tier, in the order they first appear, shaded by length: a day light, a
-// week the hue itself, a month dark; the number tells apart passes of the same kind.
-const PASS_SHADE = { day: (h) => `color-mix(in oklab, ${h} 50%, white)`, week: (h) => h, month: (h) => `color-mix(in oklab, ${h} 65%, black)` };
+// Every pass's bar on the timeline is the same blue: the number and name tell them apart, a queued one is hatched and
+// a used-up one dimmed.
 function passColors(tl) {
-  const tiers = [];
-  return (tl ? tl.passes : []).map((p) => {
-    if (!tiers.includes(p.tier)) tiers.push(p.tier);
-    const hue = `var(--s${(tiers.indexOf(p.tier) % 8) + 1})`;
-    return `background:${(PASS_SHADE[p.length] || PASS_SHADE.week)(hue)};color:${p.length === "day" ? "#1a1a1a" : "#fff"}`;
-  });
+  return (tl ? tl.passes : []).map(() => "background:var(--s1);color:#fff");
 }
 const passNo = (n) => `<span class="pass-no">${nf0.format(n)}.</span> `;
 // Passes are numbered, and their cards and timeline rows ordered, by when they were bought. `no[i]` is the number of
@@ -801,13 +804,13 @@ function passTimeline(tk, inUseAt = -1, no = []) {
     // fitBarLabels); a used-up pass's bar is dimmed.
     const cp = cps[i] && !cps[i].queued ? cps[i] : null;
     const pct = cp ? cp.pct_pass ?? cp.pct_7d : null;
-    const used = pct == null ? "" : ` · ${t("tl.used", { pct: `${nf0.format(Math.round(Math.min(100, pct)))}${PCT}` })}`;
+    const used = pct == null ? "" : t("tl.used", { pct: `${nf0.format(Math.round(Math.min(100, pct)))}${PCT}` });
     const len = fmtDur(p.ends_at - from);
-    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)} · ${len}${used}`;
+    const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)} · ${len}${used && ` · ${used}`}`;
     const cls = [p.starts_at > tl.start ? "later" : "", cp && cp.used_up ? "spent" : ""].filter(Boolean).join(" ");
     return `<div class="gantt-name${i === inUseAt ? " in-use" : ""}" data-pass="${i}">${esc(name)}</div><div class="gantt-track" data-pass="${i}">
       <i class="${cls}" style="${colors[i]};inset-inline-start:${at(from).toFixed(2)}%;width:${(at(p.ends_at) - at(from)).toFixed(2)}%"
-        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><span>${esc(len + used)}</span></i></div>`;
+        title="${esc(tip)}" aria-label="${esc(tip)}" role="img"><span><em>${esc(len)}</em>${used && `<b>${esc(used)}</b>`}</span></i></div>`;
   }).join("");
   // A timestamp at now and at each start and end, all on one line. One close to the label before, on the same day,
   // adds its time under that label; on another day it is left out. A bar's hover names its own times.
@@ -848,7 +851,8 @@ function shareOfPlan(tier, len) {
   }
   return t("home.share_of", { pct: nf0.format(tier.compare_pct), what, period: t(`home.usage_${len}`) });
 }
-// `renew`: in the Renew dialog, the line saying when the next ticket starts; no card around it there.
+// `renew`: in the Renew dialog, the line saying when the next ticket starts; no card around it there, and Continue
+// sits beside Cancel in the dialog's action row. A length toggle over one tier list per length; a row is a radio.
 function priceListCard(tk, order, renew) {
   const p = tk.prices;
   const pick = takePick();
@@ -857,17 +861,28 @@ function priceListCard(tk, order, renew) {
   const now = Date.now() / 1000 + S.tkSkew;
   // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
   const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
-  const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]];
-  // The home page's pick is the highlighted Order button; a sold-out price has none.
-  const orderBtn = (tier, k) => `<div><button class="btn small${pick && pick.tier === tier.tier && pick.length === k ? " primary" : ""} order-btn" data-order="${esc(tier.tier)}:${k}"${open ? ` disabled title="${esc(t("price.open_order"))}"` : ""}>${t("price.order")}</button></div>`;
+  // Only the lengths some tier sells get a toggle; shown first is the home page's pick, else the first offered.
+  const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]].filter(([k]) => p.tiers.some((x) => x.lengths[k]));
+  const len0 = pick && L.some(([k]) => k === pick.length) ? pick.length : L.length ? L[0][0] : "";
+  const canOrder = (tier, k) => !!tier.lengths[k] && !tier.lengths[k].sold_out;
   // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
-  const planShare = (tier, k) => tier.compare_pct != null ? `<div class="muted">${shareOfPlan(tier, k)}</div>` : "";
-  const cell = (tier, k) => { const l = tier.lengths[k]; if (!l) return `<td class="r muted">${t("price.off_sale")}</td>`; return `<td class="r">${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}
-    ${planShare(tier, k)}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}${l.sold_out ? "" : orderBtn(tier, k)}</td>`; };
-  return `<div${renew ? "" : ` class="card" id="prices"`}><h3>${renew ? t(tk.replaces ? "new.title" : "renew.title") : t("tab.tickets")}</h3><p class="sub">${renew || `${t("price.sub", { lengths: lengthsList(p.tiers, "price.a_") })}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}`}</p>
-    <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${L.map(([, n]) => `<th class="r">${n}</th>`).join("")}</tr></thead><tbody>
-    ${p.tiers.map((tier) => `<tr><td><b>${tierName(tier.tier, tier.label)}</b></td>${L.map(([k]) => cell(tier, k)).join("")}</tr>`).join("")}
-    </tbody></table></div><p class="sub">${t("price.terms_note")}${p.vat_percent ? ` ${t("pay.vat", { pct: fmtNum(p.vat_percent) })}` : ""}</p>${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
+  const planShare = (tier, k) => tier.compare_pct != null ? `<span class="muted">${shareOfPlan(tier, k)}</span>` : "";
+  const price = (l) => `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`;
+  // The checked row: the pick's tier while it can be ordered, else the first tier on sale; a sold-out row can't be picked.
+  const list = (k) => {
+    const tiers = p.tiers.filter((x) => x.lengths[k]);
+    const first = (pick && pick.length === k && tiers.find((x) => x.tier === pick.tier && canOrder(x, k))) || tiers.find((x) => canOrder(x, k));
+    return `<div class="tier-list" data-len="${k}"${k === len0 ? "" : " hidden"}>${tiers.map((tier) => `<label class="tier-row" data-order="${esc(tier.tier)}:${k}">
+      <input type="radio" name="tier-${k}" value="${esc(tier.tier)}"${tier === first ? " checked" : ""}${canOrder(tier, k) ? "" : " disabled"}>
+      <span class="tier-row-name"><b>${tierName(tier.tier, tier.label)}</b>${planShare(tier, k)}</span><span class="tier-row-price">${price(tier.lengths[k])}</span></label>`).join("")}</div>`;
+  };
+  const goBtn = `<button class="btn primary" type="button" id="order-go"${open ? " disabled" : ""}>${t("price.continue")}</button>`;
+  const go = open ? `<span class="blocked"${tipAttr(esc(t("price.open_order")))}>${goBtn}</span>` : goBtn;
+  const actions = renew ? `<div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>${go}</div>` : `<p class="price-go">${go}</p>`;
+  return `<div class="price-list${renew ? "" : " card"}"${renew ? "" : ` id="prices"`}><h3>${renew ? t(tk.replaces ? "new.title" : "renew.title") : t("tab.tickets")}</h3><p class="sub">${renew || `${t("price.sub", { lengths: lengthsList(p.tiers, "price.a_") })}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}`}</p>
+    <div class="len-pick"><div class="seg" role="group" aria-label="${esc(t("tk.length"))}">${L.map(([k, n]) => `<button type="button" data-len="${k}" aria-pressed="${k === len0}">${n}</button>`).join("")}</div>${tipH("", t("price.terms_note"))}</div>
+    ${L.map(([k]) => list(k)).join("")}
+    ${actions}${p.vat_percent ? `<p class="sub">${t("pay.vat", { pct: fmtNum(p.vat_percent) })}</p>` : ""}${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
 }
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
@@ -958,14 +973,19 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
     } catch (err) { pb.disabled = false; pb.textContent = payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
   };
 }
-// A timeline bar's label shows only when it fits inside the bar, checked again as the timeline's width changes.
+// A timeline bar's label shows only when it fits inside the bar, checked again as the timeline's width changes: the
+// length and the usage share, or on a narrower bar the usage share alone, or nothing.
 function fitBarLabels(root) {
   root.querySelectorAll(".gantt").forEach((g) => {
     const fit = () => g.querySelectorAll(".gantt-track i").forEach((bar) => {
-      const label = bar.querySelector("span");
+      const label = bar.querySelector("span"), len = label && label.querySelector("em"), used = label && label.querySelector("b");
       if (!label) return;
       label.hidden = false;   // a hidden label measures nothing
-      label.hidden = label.scrollWidth + 8 > bar.clientWidth;
+      if (len) len.hidden = false;
+      const fits = () => label.scrollWidth + 8 <= bar.clientWidth;
+      if (fits()) return;
+      if (len && used) { len.hidden = true; if (fits()) return; }
+      label.hidden = true;
     });
     fit();
     if (window.ResizeObserver) new ResizeObserver(fit).observe(g);
@@ -997,24 +1017,29 @@ function wireOrdering(root, tk, order) {
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
     const sub = tk.replaces ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.next_start) });
-    const d = openDialog(`${priceListCard(tk, order, sub)}
-      <p><button class="btn" data-close>${t("app.cancel")}</button></p>`);
+    const d = openDialog(priceListCard(tk, order, sub));
     wireOrdering(d, tk, order);
     startCountdowns(d);
   };
-  root.querySelectorAll("[data-order]").forEach((b) => (b.onclick = () => {
-    const [tierId, len] = b.dataset.order.split(":");
-    const tier = tk.prices.tiers.find((x) => x.tier === tierId);
-    // A used-up ticket's replacement starts now either way: no choice to offer.
-    const c = tk.current, start = c && !tk.replaces ? { date: tk.next_start, splitNow: tk.split_now } : null;
-    if (tier) orderDialog(tk.prices, tier, len, tk.pay, tk.terms_version, tk.manual, start);
-  }));
-  // The home page's pick, once: its Order button exists only while it can be ordered (not sold out, no open order).
+  // The price list: the length toggle shows that length's tier list, and Continue orders its checked tier.
+  const pl = root.querySelector(".price-list"), go = pl && pl.querySelector("#order-go");
+  const showLen = (k) => pl.querySelectorAll("[data-len]").forEach((el) => (el.tagName === "BUTTON" ? el.setAttribute("aria-pressed", String(el.dataset.len === k)) : (el.hidden = el.dataset.len !== k)));
+  if (pl) {
+    pl.querySelectorAll(".seg [data-len]").forEach((b) => (b.onclick = () => showLen(b.dataset.len)));
+    go.onclick = () => {
+      const list = pl.querySelector(".tier-list:not([hidden])"), r = list && list.querySelector("input:checked");
+      const tier = r && tk.prices.tiers.find((x) => x.tier === r.value);
+      // A used-up ticket's replacement starts now either way: no choice to offer.
+      const c = tk.current, start = c && !tk.replaces ? { date: tk.next_start, splitNow: tk.split_now } : null;
+      if (tier) orderDialog(tk.prices, tier, list.dataset.len, tk.pay, tk.terms_version, tk.manual, start);
+    };
+  }
+  // The home page's pick, once: it opens straight away while it can be ordered (not sold out, no open order).
   const pick = takePick();
   // With a running ticket the price list is in the Renew dialog: open that, and its own wiring opens the pick.
   if (pick && pick.open) {
-    const b = root.querySelector(`[data-order="${CSS.escape(`${pick.tier}:${pick.length}`)}"]:not([disabled])`);
-    if (b) { pick.open = false; b.click(); } else if (rb && !rb.disabled) rb.click(); else pick.open = false;
+    const r = go && !go.disabled && pl.querySelector(`.tier-list[data-len="${CSS.escape(pick.length)}"] input[value="${CSS.escape(pick.tier)}"]:not(:disabled)`);
+    if (r) { pick.open = false; r.checked = true; showLen(pick.length); go.click(); } else if (rb && !rb.disabled) rb.click(); else pick.open = false;
   }
   root.querySelectorAll("[data-my-order]").forEach((b) => (b.onclick = async () => {
     const act = b.dataset.myOrder;
