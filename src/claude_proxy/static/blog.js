@@ -2,7 +2,11 @@
 // sits above the post instead of beside it.
 const toc = document.querySelector(".toc");
 if (toc) {
-  if (matchMedia("(max-width: 959px)").matches) toc.querySelector("details").open = false;
+  // folded while narrow, open again once wide (the wide layout's summary takes no clicks, so it must not stay folded)
+  const narrow = matchMedia("(max-width: 959px)");
+  const fold = () => { toc.querySelector("details").open = !narrow.matches; };
+  narrow.addEventListener("change", fold);
+  fold();
   const links = new Map([...toc.querySelectorAll("a")].map(a => [a.hash.slice(1), a]));
   const heads = [...links.keys()].map(id => document.getElementById(id));
   const mark = () => {
