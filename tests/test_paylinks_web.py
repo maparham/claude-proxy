@@ -73,3 +73,25 @@ async def test_someone_else_sees_only_the_masked_email(env):
         r = await c.post(f"/api/me/paylinks/{code}/pay", headers=bearer(keys["alice"]), json={"terms_version": "v1"})
         assert r.status_code == 403
         assert (await c.get(f"/api/me/paylinks/{code}")).status_code == 401
+
+
+def test_paylink_messages_escape_the_email(tmp_path):
+    # esc() is a `const`, not a `function`, so _app_fn's by-name extraction can't pull it from app.js; stub it
+    # in the script instead, as test_tickets_web.APP_ESC already does for the same reason.
+    from tests.test_tickets_web import APP_ESC, _app_fn
+    out = _app_fn(tmp_path, ["payLinkMsg"],
+                  APP_ESC + 'var out = [payLinkMsg({state: "other_email", email: "<b>@x.io"}), payLinkMsg({state: "paid", unfulfilled: true}),'
+                  ' payLinkMsg({state: "invalid"}), payLinkMsg({state: "other_order"}), payLinkMsg({state: "paid", unfulfilled: false})];')
+    assert "&lt;b&gt;@x.io" in out[0] and "<b>@" not in out[0]
+    assert len(set(out)) == 5 and all(out)
+
+
+def test_link_orders_show_their_deadline_and_copy_action(tmp_path):
+    import json
+    from tests.test_orders_web import APP_STUBS
+    from tests.test_tickets_web import _app_fn
+    o = {"id": 7, "created_at": 1800000000, "name": "a@x.io", "email": "a@x.io", "user_id": None, "tier": "lite", "label": "Lite",
+         "length": "week", "currency": "IRT", "quoted_amount": 1250000, "message": "", "status": "new", "payment": None,
+         "admin_mail": "off", "buyer_mail": "off", "admin_note": "", "pay_code": "c", "pay_url": "https://d/pay/c", "pay_by": 1800086400}
+    html = _app_fn(tmp_path, ["orderRow", "mailState", "orderActions", "tierName"], APP_STUBS + f"var out = orderRow({json.dumps(o)});")
+    assert 'data-oact="copylink"' in html and 'data-oact="grant"' not in html and 'data-oact="decline"' in html

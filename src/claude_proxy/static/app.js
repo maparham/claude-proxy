@@ -10,6 +10,7 @@ const S = {
   tkSkew: 0,                 // server clock minus this browser's, from /api/me/tickets: discounts end on the server's clock
   discountsEnded: new Set(), // discount ends already re-rendered for, so a server still listing one can't loop renders
   paymentId: null,           // #payment/<id> from the ZarinPal callback redirect: shown once, then cleared
+  payLink: null,             // #paylink/<code>: opened once over the overview
 };
 const $ = (sel, root = document) => root.querySelector(sel);
 const tzOffset = () => -new Date().getTimezoneOffset() * 60;
@@ -624,6 +625,7 @@ async function renderOverview(main) {
     const id = S.paymentId; S.paymentId = null;
     api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
+  if (S.payLink) { const code = S.payLink; S.payLink = null; payLinkDialog(code, tk); }
 }
 // The usage totals as tiles: on the admin's overview over 24 h / 7 d / 30 d, with their own switch; under everyone else's
 // usage history, `tot` is the chart's range summed, so the chart's range switch drives both.
@@ -943,6 +945,39 @@ function orderTerms(p, tier, len, start, after) {
 function goPay(url) {
   const a = Object.assign(document.createElement("a"), { href: url, referrerPolicy: "origin" });
   document.body.append(a); a.click();
+}
+// A payment link's notice for every state but open. HTML: the masked email is escaped here.
+function payLinkMsg(r) {
+  if (r.state === "paid") return t(r.unfulfilled ? "pl.paid_unfulfilled" : "pl.paid");
+  if (r.state === "other_email") return t("pl.other_email", { email: esc(r.email) });
+  if (r.state === "other_order") return t("pl.other_order");
+  return t("pl.invalid");
+}
+// The link's pass at its price, with the order dialog's terms for this account: it starts after the current passes.
+async function payLinkDialog(code, tk) {
+  let r;
+  try { r = await api(`/api/me/paylinks/${encodeURIComponent(code)}`); } catch (e) { return alertInline(e.message); }
+  if (r.state !== "open") return openDialog(`<h3>${t("pl.title")}</h3><p>${payLinkMsg(r)}</p><p><button class="btn primary" data-close>${t("app.ok")}</button></p>`);
+  const tier = tk && tk.prices && tk.prices.tiers.find((x) => x.tier === r.tier);
+  const after = !!(tk && tk.current && !tk.replaces);
+  const terms = tier ? orderTerms(tk.prices, tier, r.length, after ? { date: tk.next_start, splitNow: tk.split_now } : null, after) : "";
+  const price = esc(money(r.amount, r.currency));
+  const d = openDialog(`<h3>${t("ord.title", { what: t("ord.what", { label: tierName(r.tier, r.label), len: lengthName(r.length) }) })}</h3>
+    <p class="order-price"><b>${price}</b></p><p class="muted">${t("pl.pay_by", { date: esc(fmtDate(r.pay_by)) })}</p>
+    <form id="f-paylink" class="form-grid order-form">${terms ? `<p class="terms muted wide">${terms}</p>` : ""}
+      <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
+      <div class="error wide" id="pl-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="submit">${t("pay.button", { amount: price })}</button></div></form>`);
+  const f = $("#f-paylink", d);
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    if (!f.terms.checked) { $("#pl-err", d).textContent = t("ord.terms_needed"); return; }
+    const b = f.querySelector('button[type="submit"]');
+    b.disabled = true; b.textContent = t("pay.going");
+    try { goPay((await api(`/api/me/paylinks/${encodeURIComponent(code)}/pay`, { method: "POST", body: { terms_version: r.terms_version } })).url); }
+    catch (err) { b.disabled = false; b.textContent = t("pay.button", { amount: price }); $("#pl-err", d).textContent = err.message; }
+  };
 }
 // Without a Toman price (no IRT rate yet) the button has no amount; the server says why paying fails.
 function payLabel(payL, pay) {
@@ -1362,6 +1397,7 @@ async function renderOrders(main) {
   main.innerHTML = `<section class="view"><h2>${t("tab.orders")}</h2>
     <p class="lede">${t("ord.lede")}</p>
     <div class="controls"><label for="order-status">${t("ord.show")}</label><select id="order-status">${ORDER_STATUSES.map((k) => `<option value="${k}"${k === status ? " selected" : ""}>${t(`ord.filter_${k}`)}</option>`).join("")}</select>
+      ${mode && mode !== "manual" && !down ? `<button class="btn small" id="paylink-new">${t("pl.new")}</button>` : ""}
       <span class="spacer"></span>${mode ? `<label for="pay-mode">${t("ord.pay_mode")}</label><select id="pay-mode">${PAY_MODES.map((k) => `<option value="${k}"${k === mode ? " selected" : ""}>${t(`ord.pay_mode_${k}`)}</option>`).join("")}</select>${tipI("pay_mode")}` : ""}
       ${servers ? `<label for="mail-server">${t("ord.mail_via")}</label><select id="mail-server">${servers.map((m) => `<option value="${m.id}"${m.first ? " selected" : ""}>${esc(m.label)}</option>`).join("")}</select>${tipI("mail_server")}` : ""}</div>
     ${mode && down && mode !== "manual" ? `<p class="sub">${t("ord.zarinpal_down")}</p>` : ""}
@@ -1377,11 +1413,13 @@ async function renderOrders(main) {
     try { await api("/api/admin/orders/mail_server", { method: "POST", body: { server: e.target.value } }); }
     catch (err) { e.target.value = servers.find((m) => m.first).id; alertInline(err.message); }
   };
+  if ($("#paylink-new")) $("#paylink-new").onclick = () => payLinkNewDialog();
   main.querySelectorAll("[data-oact]").forEach((b) => b.addEventListener("click", () => orderAction(b.dataset.oact, orders.find((o) => o.id === +b.dataset.id), users)));
 }
 // Every field a buyer typed (name, email, message) and the admin note go through esc().
 function orderRow(o) {
-  const account = o.user_id != null ? `<div class="muted">${t("ord.account")} <a class="user-link" href="#user/${o.user_id}">${bdi(o.user_name || `#${o.user_id}`)}</a></div>`
+  const account = o.pay_code ? `<div class="muted">${t("pl.row", { date: esc(fmtDate(o.pay_by)) })}${o.user_id == null ? ` · ${t("pl.unclaimed")}` : ""}</div>`
+    : o.user_id != null ? `<div class="muted">${t("ord.account")} <a class="user-link" href="#user/${o.user_id}">${bdi(o.user_name || `#${o.user_id}`)}</a></div>`
     : `<div class="muted">${t("ord.visitor")}</div>`;
   return `<tr><td class="nowrap"><span title="${esc(fmtDate(o.created_at))}">${esc(fmtAgo(o.created_at))}</span></td>
     <td><b>${bdi(o.name)}</b><div><a href="mailto:${encodeURIComponent(o.email)}">${bdi(o.email)}</a></div>${account}</td>
@@ -1404,14 +1442,17 @@ function stateBadge2(s) {
   const cls = { paid: " state-active", paid_unfulfilled: " state-cancelled", started: " state-queued" };
   return `<span class="badge${cls[s] || ""}">${t(`pay.st_${s}`)}</span>`;
 }
-// Exactly the status table: Contacted from new; Decline and Grant while open; Note always.
+// Exactly the status table: Contacted from new; Decline and Grant while open; Note always. A payment link: Copy link
+// while open instead of Contacted and Grant, since its buyer pays it.
 function orderActions(o) {
   const b = (act, label, cls = "") => `<button class="btn small${cls}" data-oact="${act}" data-id="${o.id}">${label}</button>`;
   const open = o.status === "new" || o.status === "contacted";
+  if (o.pay_code) return `<div class="row-actions">${open ? b("copylink", t("pl.copy")) + b("decline", t("ord.act_decline"), " danger") : ""}${b("note", t("tk.note"))}</div>`;
   return `<div class="row-actions">${o.status === "new" ? b("contacted", t("ord.act_contacted")) : ""}${open ? b("decline", t("ord.act_decline"), " danger") : ""}${b("note", t("tk.note"))}${open ? (o.upgrade_of ? b("upgrade", t("up.act"), " primary") : b("grant", t("ord.act_grant"), " primary")) : ""}</div>`;
 }
 async function orderAction(act, o, users) {
   if (!o) return;
+  if (act === "copylink") return linkShownDialog(o.pay_url);
   const post = (body) => api(`/api/admin/orders/${o.id}`, { method: "POST", body });
   if (act === "contacted") { try { await post({ action: "contacted" }); render(); } catch (e) { alertInline(e.message); } return; }
   if (act === "decline" || act === "note") return orderNoteDialog(o, act, post);
@@ -1423,6 +1464,46 @@ async function orderAction(act, o, users) {
   if (act !== "grant") return;
   if (o.user_id == null) return linkDialog(o, users);
   grantDialog(users, { order_id: o.id, user: o.user_id, tier: o.tier, length: o.length, currency: o.currency, start_now: !!o.start_now });
+}
+// A payment link (spec 2026-11-04): email, pass, the list price (editable), a deadline 3 days ahead by default, a note.
+async function payLinkNewDialog() {
+  let tiers, lengths;
+  try { ({ tiers, lengths } = await api("/api/admin/prices")); } catch (e) { return alertInline(e.message); }
+  const d = openDialog(`<h3>${t("pl.new")}</h3>
+    <form id="f-pl" class="form-grid">
+      <label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254"></label>
+      <label>${t("pl.tier")}<select name="tier">${Object.entries(tiers).map(([id, x]) => `<option value="${esc(id)}">${tierName(id, x.label)}</option>`).join("")}</select></label>
+      <label>${t("pl.length")}<select name="length">${Object.keys(lengths).map((k) => `<option value="${esc(k)}">${lengthName(k)}</option>`).join("")}</select></label>
+      <label>${t("pl.price")}<input type="number" name="amount" min="1000" step="1" dir="ltr" required></label>
+      <label>${t("pl.pay_by_label")}<input type="datetime-local" name="pay_by" required value="${toLocal(Date.now() / 1000 + 3 * 86400)}"></label>
+      <label class="wide">${t("tk.note")}<input type="text" name="note" maxlength="200"></label>
+      <div class="error wide" id="pl-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="submit">${t("pl.create")}</button></div>
+    </form>`);
+  const f = $("#f-pl", d);
+  let listed = null;
+  const quote = async () => {
+    try { listed = (await api(`/api/admin/orders/link_quote?tier=${encodeURIComponent(f.tier.value)}&length=${encodeURIComponent(f.length.value)}`)).amount; f.amount.value = listed; $("#pl-err", d).textContent = ""; }
+    catch (e) { $("#pl-err", d).textContent = e.message; }
+  };
+  f.tier.onchange = f.length.onchange = quote;
+  quote();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    const go = f.querySelector('button[type="submit"]'), amount = +f.amount.value;
+    go.disabled = true;
+    try {
+      const r = await api("/api/admin/orders/link", { method: "POST", body: { email: f.email.value, tier: f.tier.value, length: f.length.value,
+        pay_by: Math.floor(new Date(f.pay_by.value).getTime() / 1000), note: f.note.value, ...(amount !== listed ? { amount } : {}) } });
+      linkShownDialog(r.url);
+    } catch (err) { go.disabled = false; $("#pl-err", d).textContent = err.message; }
+  };
+}
+function linkShownDialog(url) {
+  openDialog(`<h3>${t("pl.made")}</h3><p>${t("pl.send_it")}</p><code class="key" dir="ltr">${esc(url)}</code>
+    <p><button class="btn" id="pl-copy">${t("pl.copy")}</button> <button class="btn primary" data-close>${t("app.done")}</button></p>`);
+  $("#pl-copy").onclick = async () => { try { await navigator.clipboard.writeText(url); $("#pl-copy").textContent = t("key.copied"); } catch { /* clipboard blocked */ } };
 }
 function orderNoteDialog(o, act, post) {
   const decline = act === "decline";
@@ -1900,6 +1981,12 @@ function rememberAuthorize(code) { try { sessionStorage.setItem("cp-authorize", 
 function forgetAuthorize() { try { sessionStorage.removeItem("cp-authorize"); } catch { /* private mode */ } }
 function rememberedAuthorize() {
   try { const v = JSON.parse(sessionStorage.getItem("cp-authorize")); return v && Date.now() - v.at < 600000 ? v.code : null; } catch { return null; }
+}
+// #paylink/<code> survives Clerk's sign-in (which may drop the hash) in this tab for 30 minutes, as #authorize does.
+function rememberPayLink(code) { try { sessionStorage.setItem("cp-paylink", JSON.stringify({ code, at: Date.now() })); } catch { /* private mode */ } }
+function forgetPayLink() { try { sessionStorage.removeItem("cp-paylink"); } catch { /* private mode */ } }
+function rememberedPayLink() {
+  try { const v = JSON.parse(sessionStorage.getItem("cp-paylink")); return v && Date.now() - v.at < 1800000 ? v.code : null; } catch { return null; }
 }
 
 // ---------- sign-in with Clerk (Google, GitHub, email code), when the gateway has it ----------
@@ -2566,6 +2653,8 @@ function showLogin() {
   disposeCharts();
   const m = /^#authorize\/([A-Za-z-]+)$/.exec(location.hash);
   if (m) rememberAuthorize(m[1]);
+  const pm = /^#paylink\/([A-Za-z0-9_-]{1,64})$/.exec(location.hash);
+  if (pm) rememberPayLink(pm[1]);
   const code = rememberedAuthorize();
   $("#authorize-hint").classList.toggle("hidden", !code);
   $("#login").classList.toggle("for-authorize", !!code);
@@ -2587,6 +2676,8 @@ async function boot() {
   if (POPUP && S.user) { popupSignedIn(); return; }
   const pending = rememberedAuthorize();
   if (pending && !location.hash.startsWith("#authorize/")) history.replaceState(null, "", `#authorize/${pending}`);
+  const link = rememberedPayLink();
+  if (link && !pending && !location.hash.startsWith("#paylink/")) history.replaceState(null, "", `#paylink/${link}`);
   $("#login").classList.add("hidden");
   $("#app").classList.remove("hidden");
   showWho();
@@ -2603,6 +2694,8 @@ function route() {
   if (h === "pricing" && !isAdmin()) { S.tab = "overview"; S.toPrices = true; history.replaceState(null, "", "#overview"); return true; }
   const pm = /^payment\/(\d+)$/.exec(h);
   if (pm) { S.tab = "overview"; S.paymentId = +pm[1]; history.replaceState(null, "", "#overview"); return true; }
+  const pl = /^paylink\/([A-Za-z0-9_-]{1,64})$/.exec(h);
+  if (pl) { S.tab = "overview"; S.payLink = pl[1]; forgetPayLink(); history.replaceState(null, "", "#overview"); return true; }
   const sm = /^([a-z]+)\/([a-z]+)$/.exec(h);   // a sub-tab: #apiadmin/credit
   if (sm && VIEWS[sm[1]] && !VIEWS[sm[1]].hidden) { S.tab = sm[1]; S.sub[sm[1]] = sm[2]; return true; }
   if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
