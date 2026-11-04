@@ -215,6 +215,14 @@ def create_app(gw: Gateway) -> FastAPI:
     return app
 
 
+def _refusal(status: int, raw: bytes) -> str:
+    try:
+        err = json.loads(raw).get("error") or {}
+        return f"{status} {err.get('type')}: {err.get('message')}"
+    except (ValueError, AttributeError):
+        return f"{status} {raw[:200]!r}"
+
+
 async def read_body(request: Request, cap: int) -> bytes | None:
     """The request body, or None once it is known to exceed `cap`: by its Content-Length before reading a byte, else
     as it streams in, so an unbounded upload never sits in memory."""
@@ -399,6 +407,10 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         resp_headers = filter_response_headers(dict(resp.headers))
         error_type = quota.classify_429(resp.headers) if status == 429 else None
 
+        if route is None and resp.status_code in (401, 403):
+            # Users are told only that the gateway can't serve them; the log keeps Anthropic's reason.
+            logger.warning("Anthropic refused %s %s: %s (%s)", request.method, path,
+                           _refusal(resp.status_code, await resp.aread()), resp.headers.get("request-id"))
         if not is_admin:
             resp_headers = strip_account_headers(resp_headers)
             # Anthropic's own 429/401/403 bodies speak of the account and its login; say it the gateway's way.

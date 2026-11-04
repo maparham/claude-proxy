@@ -271,6 +271,18 @@ async def test_every_users_device_id_reaches_anthropic_as_one_gateway_id(setup, 
     assert sent[2] == "my-own-label"   # not Claude Code's: the client's own, left alone
 
 
+async def test_anthropics_refusal_is_logged_though_the_user_sees_the_gateways_words(setup, anthropic, caplog):
+    # A user's 503 says only "can't serve Claude requests"; the log keeps why, so the admin needn't reproduce it.
+    gw, conn, uid, h = setup
+    anthropic.queue.append(lambda req: JSONResponse({"type": "error", "error": {"type": "permission_error",
+                                                     "message": "CORS requests are not allowed for this organization"}},
+                                                    status_code=403, headers={"request-id": "req_abc"}))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers=h)
+    assert r.status_code == 503 and "CORS" not in r.text
+    assert "403 permission_error: CORS requests are not allowed for this organization (req_abc)" in caplog.text
+
+
 async def test_any_web_page_can_call_the_api(setup, anthropic):
     # The key travels in a header, never a cookie, so allowing every origin lends no one a user's session.
     gw, conn, uid, h = setup
