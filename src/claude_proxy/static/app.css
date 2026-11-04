@@ -140,8 +140,6 @@ input.search { width: 18rem; max-width: 100%; }
 
 .meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin-top: 4px; min-width: 90px; }
 .meter > span { display: block; height: 100%; border-radius: 3px; background: var(--s1); }
-.meter.warn > span { background: var(--warning); }
-.meter.over > span { background: var(--critical); }
 /* A meter with its figure under the fill's end: start-aligned there, or end-aligned once the fill nears the end. */
 .meter-at { position: relative; padding-bottom: 16px; }
 .meter-at small { position: absolute; top: 12px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -385,6 +383,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 @media (forced-colors: active) { .order-steps li.done::before, .order-steps li.now::before { forced-color-adjust: none; } }
 .len-pick { display: flex; align-items: center; gap: 8px; margin: 12px 0 10px; }
 .tier-list { display: grid; gap: 8px; }
+.tier-list[hidden] { display: none; }
 .tier-row { display: grid; grid-template-columns: auto 1fr auto; column-gap: 10px; align-items: center; border: 1.5px solid var(--border);
             border-radius: 10px; padding: 10px 12px; cursor: pointer; }
 .tier-row input { width: 16px; height: 16px; margin: 0; accent-color: var(--s1); }

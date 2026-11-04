@@ -375,11 +375,11 @@ function wireSegs(root, rerender) {
   }));
 }
 
-// `at`: the figure written under the fill's end, {fill, label}, filling to `fill` while the colour stays `pct`'s.
+// Every meter is the same blue, whatever its level: the figure beside it says how full it is.
+// `at`: the figure written under the fill's end, {fill, label}, filling to `fill` rather than `pct`.
 function meter(pct, at) {
-  const cls = pct >= 100 ? "over" : pct >= 80 ? "warn" : "";
   const v = Math.min(100, Math.max(0, (at ? at.fill : pct) || 0));
-  const bar = `<div class="meter ${cls}"><span style="width:${v.toFixed(1)}%"></span></div>`;
+  const bar = `<div class="meter"><span style="width:${v.toFixed(1)}%"></span></div>`;
   if (!at || !at.label) return bar;
   const pos = v > 70 ? `inset-inline-end:${(100 - v).toFixed(1)}%` : `inset-inline-start:${v.toFixed(1)}%`;
   return `<div class="meter-at">${bar}<small style="${pos}">${at.label}</small></div>`;
