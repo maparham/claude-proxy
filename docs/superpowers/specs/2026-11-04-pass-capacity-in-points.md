@@ -1,7 +1,7 @@
 # Passes are sold in points of the week, against Anthropic's reported usage
 
 - **Date:** 2026-11-04
-- **Status:** proposed (revision 3: unused points of ended passes are sold again, 2026-11-04).
+- **Status:** accepted (revision 3, implemented 2026-11; see the plan of the same name for the amendments made while implementing).
 - **Builds on:** `2026-10-03-paid-tickets-design.md` §5 (capacity), `2026-10-13-ticket-weekly-pieces.md` §1.1 (the
   prorated piece), `2026-10-18-gateway-capacity.md` (capacity scaling), `2026-10-30-pass-borrow-across-reset.md` §1
   (free room).

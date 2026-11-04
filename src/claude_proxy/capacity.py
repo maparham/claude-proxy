@@ -264,3 +264,45 @@ class Guard:
             raise tickets.CapacityError(NO_REPORT)
         if ends_at > starts_at:
             tickets.verify_capacity(self.conn, self.cfg, self.account_id, int(starts_at), int(ends_at))
+
+
+def _returned(conn, cfg, account_id: int, week, att: dict, rate: float | None, now: float) -> float:
+    """Unused points of passes that ended this week: their sold piece of the week less their use."""
+    ws, we = week
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT {tickets.TICKET_COLS}, {SOLD_END} AS sold_end FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}<=? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, we, now, ws))]
+    uses = _week_use(conn, cfg, [p["id"] for p in rows], ws, now) if rate and rows else {}
+    total = 0.0
+    for p in rows:
+        piece = pieces(week, p["share_pct"], max(ws, p["starts_at"]), p["sold_end"]).get(ws, 0.0)
+        use = uses.get(p["id"], 0.0) / rate if rate else att["ticket_shares"].get(p["id"], 0.0)
+        total += max(0.0, piece - use)
+    return total
+
+
+def summary(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) -> dict:
+    """The capacity panel (spec §6)."""
+    from . import limits   # here, not at the top: limits imports capacity
+    ctx = context(conn, cfg, account_id, now)
+    att = _att(conn, cfg, now)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now) if ctx.week else None
+    ws = ctx.week[0] if ctx.week else None
+    later = {w: v for w, v in ctx.sold.items() if ws is not None and ws < w < now + 30 * DAY}
+    peak = max(later.items(), key=lambda kv: kv[1]) if later else None
+    points = {now, *tickets._starts_within(conn, account_id, now, now + 30 * DAY)}
+    hand = sum(float(r["value"]) for r in conn.execute("SELECT user_id, value FROM limits WHERE kind='share_7d'")
+               if not limits._gated(conn, cfg, r["user_id"]))
+    return {
+        "week": {"start": ws, "end": ctx.week[1] if ctx.week else None, "fresh": ctx.fresh, "used": ctx.used,
+                 "owed": ctx.owed, "margin": cfg.tickets.sell_margin_pct,
+                 "free": max(0.0, ctx.room) if ctx.room is not None else 0.0,
+                 "sold": ctx.sold.get(ws, 0.0) if ws is not None else 0.0,
+                 "returned": _returned(conn, cfg, account_id, ctx.week, att, rate, now) if ctx.week else 0.0,
+                 "max_sold_pct": cfg.tickets.max_sold_pct},
+        "peak_week": {"start": peak[0], "sold": peak[1]} if peak else None,
+        "five_hour": {"now": tickets.sold_at(conn, account_id, now),
+                      "peak_30d": max(tickets.sold_at(conn, account_id, p) for p in points),
+                      "max_sold_5h_pct": cfg.tickets.max_sold_5h_pct},
+        "hand_set_7d_pct": hand,
+    }

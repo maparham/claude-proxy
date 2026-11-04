@@ -145,35 +145,39 @@ def test_5h_check_samples_every_start_inside_the_period(db):
     assert tickets.sold_out(conn, cfg, "lite", "day", NOW + 8 * DAY) is False
 
 
-@pytest.mark.skip(reason="asserts the old per-instant rule (summed running shares against max_sold_pct) and the "
-                          "tickets.capacity() dict the brief's rule 5 points it at; both are rewritten in Task 7")
 def test_max_sold_pct_refuses_what_100_would_allow_and_lowering_it_keeps_existing_tickets(db):
+    # Task 7 fix: the old body granted at NOW, 3 days into its Anthropic week, so a week pass's current-week piece was
+    # only 3/7 of its share; under the points rule (2026-11-04 spec) that left far more room than the per-instant rule
+    # this test was written for, and the margin term (sell_margin_pct, new in this spec) ate into "exactly 80" besides.
+    # Granting at the week's own start (`ws`) makes a week pass's piece equal its full share again, and zeroing the
+    # margin isolates max_sold_pct the way the rest of the test expects; sell_margin_pct is covered by its own tests.
     conn, cfg, ids = seeded(db)
-    live(conn, NOW)
+    cfg.tickets.sell_margin_pct = 0
+    ws = NOW - 4 * DAY
+    live(conn, ws)
     for n in range(3):
         add_user(conn, ids, f"u{n}")
-        grant(conn, cfg, ids, who=f"u{n}", tier="standard", length="week")                   # 3 × 25 = 75%
+        grant(conn, cfg, ids, who=f"u{n}", tier="standard", length="week", now=ws)            # 3 × 25 = 75%
     with pytest.raises(tickets.CapacityError):                                               # 75 + 25 = 100 > 80
-        grant(conn, cfg, ids, tier="standard", length="week")
-    assert grant(conn, cfg, ids, tier="lite", length="week")["share_pct"] == 5             # 80: exactly the ceiling fits
+        grant(conn, cfg, ids, tier="standard", length="week", now=ws)
+    assert grant(conn, cfg, ids, tier="lite", length="week", now=ws)["share_pct"] == 5     # 80: exactly the ceiling fits
     cfg.tickets.max_sold_pct = 50
     bob = add_user(conn, ids, "bob")
     with pytest.raises(tickets.CapacityError):
-        grant(conn, cfg, ids, who="bob", tier="lite", length="day")
+        grant(conn, cfg, ids, who="bob", tier="lite", length="day", now=ws)
     assert conn.execute("SELECT COUNT(*) FROM tickets WHERE cancelled_at IS NULL").fetchone()[0] == 4   # nothing cancelled
-    assert tickets.capacity(conn, cfg, NOW) == {"sold_now_pct": 80, "peak_30d_pct": 80, "max_sold_pct": 50}
+    assert tickets.capacity(conn, cfg, ws)["five_hour"]["now"] == 80
 
 
-@pytest.mark.skip(reason="rewritten in Task 7")
-def test_capacity_panel_reports_sold_now_and_the_peak_over_30_days(db):
+def test_capacity_panel_reports_the_5h_sum_now_and_its_peak_over_30_days(db):
     conn, cfg, ids = seeded(db)
-    live(conn, NOW)
     bob = add_user(conn, ids, "bob")
+    live(conn, NOW)
     grant(conn, cfg, ids, tier="lite", length="month")
-    # the EUR rate from seeded() is days old by now
+    live(conn, NOW + 10 * DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 10 * DAY, confirm_stale_rate=True)
-    assert tickets.capacity(conn, cfg, NOW) == {"sold_now_pct": 5, "peak_30d_pct": 30, "max_sold_pct": 80}
-    assert tickets.capacity(conn, cfg, NOW + 31 * DAY)["sold_now_pct"] == 0   # expired tickets stop counting by themselves
+    assert tickets.capacity(conn, cfg, NOW)["five_hour"] == {"now": 5, "peak_30d": 30, "max_sold_5h_pct": 100}
+    assert tickets.capacity(conn, cfg, NOW + 31 * DAY)["five_hour"]["now"] == 0
 
 
 def test_two_concurrent_grants_cannot_oversell(db):

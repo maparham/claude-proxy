@@ -1229,14 +1229,23 @@ async function renderTickets(main) {
   const [cap, { tickets, deleted_users }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
   const pct = (v, max) => meter((100 * v) / max);
   const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${fmtPct(cap.utilization[b].utilization_pct)}${cap.utilization[b].stale ? ` (${t("quota.stale")})` : ""}`);
-  const of = (v) => t("tk.of", { v: fmtPct(v, 1), max: fmtShare(cap.max_sold_pct) });
+  const pts = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
+  const w = cap.week, f = cap.five_hour;
+  const seg = (cls, v) => `<span class="${cls}" style="width:${Math.max(0, Math.min(100, v))}%"></span>`;
+  const weekMeter = w.fresh
+    ? `<div class="meter stack">${seg("seg-used", w.used)}${seg("seg-owed", w.owed)}${seg("seg-margin", w.margin)}${seg("seg-free", w.free)}${seg("seg-headroom", 100 - w.max_sold_pct)}</div>
+       <p class="sub">${t("tk.seg_legend", { used: pts(w.used), owed: pts(w.owed), margin: pts(w.margin), free: pts(w.free), headroom: pts(100 - w.max_sold_pct) })}</p>`
+    : `<div class="meter"></div><p class="sub">${t("tk.no_report")}</p>`;
   main.innerHTML = `<section class="view"><h2>${t("tab.tickets")}</h2>
     <p class="lede">${t("tk.lede")}</p>
     <div class="grid cols-2">
       <div class="card"><h3>${t("tk.capacity")}${tipI("capacity_sold")}</h3>
-        <div class="limit-row"><span>${t("tk.sold_now")}</span><span class="num">${of(cap.sold_now_pct)}</span></div>${pct(cap.sold_now_pct, cap.max_sold_pct)}
-        <div class="limit-row" style="margin-top:8px"><span>${t("tk.peak")}</span><span class="num">${of(cap.peak_30d_pct)}</span></div>${pct(cap.peak_30d_pct, cap.max_sold_pct)}
-        <p class="sub" style="margin-top:12px">${t("tk.headroom", { v: fmtShare(100 - cap.max_sold_pct) })}</p></div>
+        <div class="limit-row"><span>${t("tk.week")}${w.end ? ` · ${t("tk.week_resets", { date: fmtDate(w.end) })}` : ""}</span><span class="num">${w.fresh ? t("tk.free_to_sell", { v: pts(w.free) }) : "—"}</span></div>${weekMeter}
+        <p class="sub">${t("tk.sold_week", { sold: pts(w.sold), returned: pts(w.returned) })}</p>
+        ${cap.peak_week ? `<div class="limit-row" style="margin-top:8px"><span>${t("tk.peak_week", { date: fmtDate(cap.peak_week.start) })}</span><span class="num">${t("tk.of", { v: pts(cap.peak_week.sold), max: fmtShare(w.max_sold_pct) })}</span></div>${pct(cap.peak_week.sold, w.max_sold_pct)}` : ""}
+        <div class="limit-row" style="margin-top:8px"><span>${t("tk.five_now")}</span><span class="num">${t("tk.of", { v: fmtPct(f.now, 1), max: fmtShare(f.max_sold_5h_pct) })}</span></div>${pct(f.now, f.max_sold_5h_pct)}
+        <div class="limit-row" style="margin-top:8px"><span>${t("tk.five_peak")}</span><span class="num">${t("tk.of", { v: fmtPct(f.peak_30d, 1), max: fmtShare(f.max_sold_5h_pct) })}</span></div>${pct(f.peak_30d, f.max_sold_5h_pct)}
+        ${cap.hand_set_7d_pct ? `<p class="sub" style="margin-top:12px">${t("tk.hand_set", { v: fmtShare(cap.hand_set_7d_pct) })}</p>` : ""}</div>
       <div class="card"><h3>${t("tk.util_title")}${tipI("capacity_util")}</h3>
         <div class="limit-row"><span>${t("tk.bucket_5h")}</span><span class="num">${util("5h")}</span></div>
         <div class="limit-row"><span>${t("tk.bucket_7d")}</span><span class="num">${util("7d")}</span></div>

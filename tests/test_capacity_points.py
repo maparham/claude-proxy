@@ -375,3 +375,32 @@ def test_an_order_without_a_report_is_refused_as_unavailable(db):
     conn, cfg, ids = seeded(db)
     with pytest.raises(orders.OrderError, match="temporarily unavailable"):
         orders._check_on_sale(conn, cfg, "lite", "day", NOW, ids["alice"], False)
+
+
+def test_summary_reports_the_week_in_points(acct):                      # spec test 18
+    conn, cfg, ids = acct
+    add_user(conn, ids, "a")
+    live(conn, NOW - 3 * DAY, 1)
+    ended = grant(conn, cfg, ids, who="a", tier="standard", length="day", now=NOW - 3 * DAY)
+    use(conn, ids["a"], ended["id"], 1, NOW - 3 * DAY + 3600)
+    report(conn, ids, 2)
+    grant(conn, cfg, ids, tier="lite", length="week")
+    add_user(conn, ids, "h")
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)",
+                 (ids["h"], "share_7d", "*", "93", "pct"))
+    s = capacity.summary(conn, cfg, 1, NOW)
+    w = s["week"]
+    assert (w["start"], w["end"], w["fresh"], w["used"], w["margin"], w["max_sold_pct"]) == (W[0], W[1], True, 2, 5, 100)
+    assert w["owed"] == pytest.approx(20 * 3 / 7)
+    assert w["free"] == pytest.approx(100 - 2 - 20 * 3 / 7 - 5)
+    assert w["sold"] == pytest.approx(40 / 7 + 20 * 3 / 7)
+    assert w["returned"] == pytest.approx(40 / 7 - 1)
+    assert s["peak_week"] == {"start": W[1], "sold": pytest.approx(20 * 4 / 7)}
+    assert s["five_hour"] == {"now": 20, "peak_30d": 20, "max_sold_5h_pct": 100}
+    assert s["hand_set_7d_pct"] == 93
+
+
+def test_summary_without_a_report_is_not_fresh_and_frees_nothing(db):
+    conn, cfg, ids = seeded(db)
+    w = capacity.summary(conn, cfg, 1, NOW)["week"]
+    assert (w["fresh"], w["free"]) == (False, 0)

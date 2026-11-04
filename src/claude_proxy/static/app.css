@@ -140,6 +140,12 @@ input.search { width: 18rem; max-width: 100%; }
 
 .meter { height: 6px; border-radius: 3px; background: var(--grid); overflow: hidden; margin-top: 4px; min-width: 90px; }
 .meter > span { display: block; height: 100%; border-radius: 3px; background: var(--s1); }
+.meter.stack { display: flex; }
+.meter.stack > span { border-radius: 0; }
+.meter.stack > .seg-owed { opacity: .5; }
+.meter.stack > .seg-margin { background: var(--ink-2); opacity: .35; }
+.meter.stack > .seg-free { background: transparent; }
+.meter.stack > .seg-headroom { background: var(--ink-2); opacity: .15; }
 /* A meter with its figure under the fill's end: start-aligned there, or end-aligned once the fill nears the end. */
 .meter-at { position: relative; padding-bottom: 16px; }
 .meter-at small { position: absolute; top: 12px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }

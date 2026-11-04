@@ -870,11 +870,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
 # ---------- what the panels and /pricing ask ----------
 
 def capacity(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:
-    """Share sold now and the highest sold(t) over the next 30 days, against max_sold_pct."""
-    now = _now(now)
-    points = {now, *_starts_within(conn, ACCOUNT_ID, now, now + 30 * DAY)}
-    return {"sold_now_pct": sold_at(conn, ACCOUNT_ID, now), "peak_30d_pct": max(sold_at(conn, ACCOUNT_ID, p) for p in points),
-            "max_sold_pct": cfg.tickets.max_sold_pct}
+    """The capacity panel's figures (2026-11-04 spec, §6)."""
+    from . import capacity as cap   # here, not at the top: capacity imports tickets
+    return cap.summary(conn, cfg, ACCOUNT_ID, _now(now))
 
 
 def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float, starts_at: float | None = None,

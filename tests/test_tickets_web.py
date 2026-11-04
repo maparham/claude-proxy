@@ -205,11 +205,11 @@ async def test_cancel_bonus_capacity_and_ungate(env):
         assert (await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": 0, "extra_days": 0})).status_code == 400
         assert (await c.post(f"/api/admin/tickets/{t['id']}/bonus", json={"share_pct": "five"})).status_code == 400
         cap = (await c.get("/api/admin/capacity")).json()
-        assert (cap["sold_now_pct"], cap["peak_30d_pct"], cap["max_sold_pct"]) == (30, 30, 80) and set(cap["utilization"]) == {"5h", "7d"}
+        assert set(cap) == {"week", "peak_week", "five_hour", "hand_set_7d_pct", "utilization"}
         assert (await c.post(f"/api/admin/users/{ids['alice']}/ungate")).status_code == 400          # live ticket
         r = await c.post(f"/api/admin/tickets/{t['id']}/cancel")
         assert r.status_code == 200 and r.json()["moved"] == 0 and r.json()["dates_kept"] is False
-        assert (await c.get("/api/admin/capacity")).json()["sold_now_pct"] == 0
+        assert (await c.get("/api/admin/capacity")).json()["five_hour"]["now"] == 0
         assert (await c.post(f"/api/admin/tickets/{t['id']}/cancel")).status_code == 400
         assert (await c.post(f"/api/admin/users/{ids['alice']}/ungate")).status_code == 200
         users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
