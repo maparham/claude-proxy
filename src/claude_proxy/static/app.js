@@ -805,7 +805,8 @@ function passTimeline(tk, inUseAt = -1, no = []) {
     const cp = cps[i] && !cps[i].queued ? cps[i] : null;
     const pct = cp ? cp.pct_pass ?? cp.pct_7d : null;
     const used = pct == null ? "" : t("tl.used", { pct: `${nf0.format(Math.round(Math.min(100, pct)))}${PCT}` });
-    const len = fmtDur(p.ends_at - from);
+    // A running pass's bar reads the time it has left; a queued one's, its length.
+    const len = p.starts_at > tl.start ? fmtDur(p.ends_at - from) : t("tl.left", { d: fmtDur(p.ends_at - from) });
     const tip = `${name}: ${p.starts_at > tl.start ? fmtDate(p.starts_at) : t("tl.now")} – ${fmtDate(p.ends_at)} · ${len}${used && ` · ${used}`}`;
     const cls = [p.starts_at > tl.start ? "later" : "", cp && cp.used_up ? "spent" : ""].filter(Boolean).join(" ");
     return `<div class="gantt-name${i === inUseAt ? " in-use" : ""}" data-pass="${i}">${esc(name)}</div><div class="gantt-track" data-pass="${i}">
