@@ -584,11 +584,11 @@ def test_an_open_toman_order_can_be_paid_online(tmp_path):
 PRICE_LIST_FNS = ["priceListCard", "pickedLine", "takePick", "tierName", "tierNameText"]
 
 
-def _price_list(tmp_path, order=None, pick=None, sold_out_week=False):
+def _price_list(tmp_path, order=None, pick=None, sold_out_week=False, current=None):
     import json
     from tests.test_tickets_web import _tier
     from tests.test_tickets_web import _app_fn
-    tk = {"how_to_buy": "", "prices": {"currency": "EUR", "rate_set_at": None, "tiers": [_tier(week={"sold_out": sold_out_week})]}}
+    tk = {"how_to_buy": "", "current": current, "prices": {"currency": "EUR", "rate_set_at": None, "tiers": [_tier(week={"sold_out": sold_out_week})]}}
     script = APP_STUBS + f"S.pick = {json.dumps(pick)}; var out = priceListCard({json.dumps(tk)}, {json.dumps(order)});"
     return _app_fn(tmp_path, PRICE_LIST_FNS, script)
 
@@ -602,6 +602,24 @@ def test_the_price_list_offers_a_row_per_tier_under_a_length_toggle(tmp_path):
     sold = _price_list(tmp_path, sold_out_week=True)
     row = next(r for r in sold.split("<label")[1:] if 'data-order="lite:week"' in r)
     assert "disabled" in row and "sold out" in row and "checked" not in row                                        # a sold-out row can't be picked
+
+
+def test_a_longer_length_shows_its_price_a_day(tmp_path):
+    html = _price_list(tmp_path)
+    rows = {k: next(r for r in html.split("<label")[1:] if f'data-order="lite:{k}"' in r) for k in ("day", "week", "month")}
+    assert " a day" not in rows["day"]
+    assert "EUR 1.1428571428571428 a day" in rows["week"] and "EUR 0.6666666666666666 a day" in rows["month"]   # the stub's money() doesn't round
+
+
+def test_the_running_pass_tier_is_tagged_and_checked(tmp_path):
+    import json
+    from tests.test_tickets_web import _tier
+    from tests.test_tickets_web import _app_fn
+    tk = {"how_to_buy": "", "current": {"tier": "big"}, "prices": {"currency": "EUR", "rate_set_at": None, "tiers": [_tier(), _tier() | {"tier": "big", "label": "Big"}]}}
+    html = _app_fn(tmp_path, PRICE_LIST_FNS, APP_STUBS + f"var out = priceListCard({json.dumps(tk)}, null);")
+    rows = [r for r in html.split("<label")[1:] if 'data-order="big:day"' in r or 'data-order="lite:day"' in r]
+    assert len(rows) == 2 and "checked" in rows[1] and "current pass" in rows[1] and "checked" not in rows[0] and "current pass" not in rows[0]
+    assert "current pass" not in _price_list(tmp_path)                                                        # no running pass: no tag
 
 
 def test_the_terms_sit_behind_a_tip_and_the_vat_note_stays(tmp_path):

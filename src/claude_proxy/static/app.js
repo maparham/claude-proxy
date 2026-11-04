@@ -690,10 +690,10 @@ function passLeft(end) {
   const from = parts.findIndex(([n], k) => n > 0 || k === 2);
   return t("pass.left", { d: parts.slice(from).map(([n, u]) => t(`pass.left_${u}`, { n: nf0.format(n) })).join(t("pass.left_join")) });
 }
-// Every pass's bar on the timeline is the same blue: the number and name tell them apart, a queued one is hatched and
-// a used-up one dimmed.
+// Every pass's bar on the timeline is the same gray (the cards' blue meters are usage, these are spans of time): the
+// number and name tell them apart, a queued one is hatched and a used-up one dimmed.
 function passColors(tl) {
-  return (tl ? tl.passes : []).map(() => "background:var(--s1);color:#fff");
+  return (tl ? tl.passes : []).map(() => "background:var(--ink-2);color:var(--surface)");
 }
 const passNo = (n) => `<span class="pass-no">${nf0.format(n)}.</span> `;
 // Passes are numbered, and their cards and timeline rows ordered, by when they were bought. `no[i]` is the number of
@@ -868,14 +868,18 @@ function priceListCard(tk, order, renew) {
   const canOrder = (tier, k) => !!tier.lengths[k] && !tier.lengths[k].sold_out;
   // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
   const planShare = (tier, k) => tier.compare_pct != null ? `<span class="muted">${shareOfPlan(tier, k)}</span>` : "";
-  const price = (l) => `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(live(l) || !l.discount_ends_at ? l.amount : l.list_amount, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`;
-  // The checked row: the pick's tier while it can be ordered, else the first tier on sale; a sold-out row can't be picked.
+  // The price, and under a longer length what that is a day, so the longer lengths' discount shows.
+  const price = (l) => { const a = live(l) || !l.discount_ends_at ? l.amount : l.list_amount;
+    return `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(a, p.currency))}</b>${l.sold_out ? ` <span class="badge">${t("price.sold_out")}</span>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, p.currency)) })}</div>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`; };
+  // The tier of the running pass is tagged, and checked when there is no pick.
+  const cur = tk.current ? tk.current.tier : null;
+  // The checked row: the pick's tier while it can be ordered, else the running pass's, else the first tier on sale.
   const list = (k) => {
     const tiers = p.tiers.filter((x) => x.lengths[k]);
-    const first = (pick && pick.length === k && tiers.find((x) => x.tier === pick.tier && canOrder(x, k))) || tiers.find((x) => canOrder(x, k));
+    const first = (pick && pick.length === k && tiers.find((x) => x.tier === pick.tier && canOrder(x, k))) || tiers.find((x) => x.tier === cur && canOrder(x, k)) || tiers.find((x) => canOrder(x, k));
     return `<div class="tier-list" data-len="${k}"${k === len0 ? "" : " hidden"}>${tiers.map((tier) => `<label class="tier-row" data-order="${esc(tier.tier)}:${k}">
       <input type="radio" name="tier-${k}" value="${esc(tier.tier)}"${tier === first ? " checked" : ""}${canOrder(tier, k) ? "" : " disabled"}>
-      <span class="tier-row-name"><b>${tierName(tier.tier, tier.label)}</b>${planShare(tier, k)}</span><span class="tier-row-price">${price(tier.lengths[k])}</span></label>`).join("")}</div>`;
+      <span class="tier-row-name"><b>${tierName(tier.tier, tier.label)}${tier.tier === cur ? ` <span class="badge">${t("price.current")}</span>` : ""}</b>${planShare(tier, k)}</span><span class="tier-row-price">${price(tier.lengths[k])}</span></label>`).join("")}</div>`;
   };
   const goBtn = `<button class="btn primary" type="button" id="order-go"${open ? " disabled" : ""}>${t("price.continue")}</button>`;
   const go = open ? `<span class="blocked"${tipAttr(esc(t("price.open_order")))}>${goBtn}</span>` : goBtn;
@@ -1017,8 +1021,7 @@ function wireOrdering(root, tk, order) {
   }));
   const rb = root.querySelector("#renew-btn");
   if (rb) rb.onclick = () => {
-    const sub = tk.replaces ? t("new.sub") : t("renew.sub", { date: fmtDate(tk.next_start) });
-    const d = openDialog(priceListCard(tk, order, sub));
+    const d = openDialog(priceListCard(tk, order, t(tk.replaces ? "new.sub" : "renew.sub")));
     wireOrdering(d, tk, order);
     startCountdowns(d);
   };
