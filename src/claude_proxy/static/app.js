@@ -1311,7 +1311,7 @@ function grantDialog(users, pre = null) {
       <label class="check grant-now wide"><input type="checkbox" name="start_now"${!pre || pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
       <div id="grant-limits" class="wide"></div>
-      ${pre ? "" : `<div class="terms wide"><ul class="muted"><li>${t("ord.terms_l1")}</li><li>${t("ord.terms_l3")}</li></ul>
+      ${pre ? "" : `<div class="terms wide"><ul class="muted"><li id="grant-terms-l1"></li><li>${t("ord.terms_l3")}</li></ul>
         <label class="check"><input type="checkbox" name="terms"> ${t("tk.terms_accept")}</label></div>`}
       <label id="grant-stale" class="check grant-stale wide hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
       <div class="error wide" id="grant-err"></div>
@@ -1326,6 +1326,8 @@ function grantDialog(users, pre = null) {
   let preview = null;
   const refresh = async () => {
     $("#grant-err", d).textContent = "";
+    // A day pass is one allowance whatever reset it crosses (2026-10-30): no parts to mention, as in the order dialog.
+    if (!pre) $("#grant-terms-l1", d).innerHTML = t(f.length.value === "day" ? "ord.split_open" : "ord.terms_l1");
     try {
       preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
