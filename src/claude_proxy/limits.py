@@ -69,6 +69,7 @@ class LimitState:
     own_pts: float | None = None  # that limit as recorded for the debt it runs up
     rate: float | None = None     # the 7-day rate its use was measured at
     pass_end: float | None = None # a pass's end, so a used-up pass that won't refill before it ends can say so
+    spent: bool = False           # a day pass at its limit that borrowed all of its next part: the reset frees nothing
 
     @property
     def pct(self) -> float | None:
@@ -301,7 +302,13 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
         if free is not None:
             nxt = _pass_cap(conn, t, week_end, week_end + 7 * DAY, now) * capacity / 100
             st.limit = min(st.own + nxt, max(st.own, st.current + free))
-    return _finish(st)
+    _finish(st)
+    # Used up although it runs past the reset: it has used all of its next part at today's rate (so it can't borrow
+    # more) and recorded taking all of it (_debt, which the next part's limit subtracts), so nothing comes back then.
+    if st.exceeded and t["length"] == "day" and t["effective_end"] > week_end and not st.no_live_data:
+        nxt = _pass_cap(conn, t, week_end, week_end + 7 * DAY, now) * capacity / 100
+        st.spent = st.current - st.own >= nxt and _debt(conn, cfg, t, week_end, capacity, now) >= nxt
+    return st
 
 
 def pass_states(conn, cfg: Config, t: dict, now: float) -> list[LimitState]:
@@ -415,11 +422,7 @@ def used_up(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None 
     run = run if run is not None else tickets.running(conn, user_id, now)
     if not run:
         return False
-    for t in run:
-        st = _ticket_7d(conn, cfg, t, now)
-        if not (st.exceeded and st.resets_at is not None and t["effective_end"] <= st.resets_at):
-            return False
-    return True
+    return all(spent(_ticket_7d(conn, cfg, t, now)) for t in run)
 
 
 def hand_over(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> bool:
@@ -477,9 +480,10 @@ NO_RATE = "no usage rate observed yet"
 PAUSED = "Passes are paused; ask the admin."   # a ticket-gated user while [tickets] is switched off
 
 
-def _ends_first(st: LimitState) -> bool:
-    """A pass's weekly limit that would refill only after the pass has ended."""
-    return st.pass_end is not None and st.resets_at is not None and st.pass_end <= st.resets_at
+def spent(st: LimitState) -> bool:
+    """A pass's weekly limit used up with nothing back before the pass ends: it refills only after the pass has
+    ended, or the pass borrowed all of its next part (st.spent)."""
+    return st.exceeded and (st.spent or st.pass_end is not None and st.resets_at is not None and st.pass_end <= st.resets_at)
 
 
 def _describe(st: LimitState) -> str:
@@ -488,7 +492,7 @@ def _describe(st: LimitState) -> str:
     scope = f" for models {st.scope}" if st.scope != "*" else ""
     wait = f"; retry in {human(st.reset_in)}" if st.reset_in else ""
     if st.kind in SHARE_LABELS:
-        if st.tier is not None and st.kind == "share_7d" and _ends_first(st):   # it ends before it refills: no point in waiting
+        if st.tier is not None and st.kind == "share_7d" and spent(st):   # it ends before it refills: no point in waiting
             return f"Your {st.tier} pass is used up. Buy another pass on your dashboard to continue."
         whose = f"Your {st.tier} pass's" if st.tier is not None else "Your"
         what = {"share_5h": "5-hour allowance", "share_7d": "allowance"}[st.kind] if st.tier is not None else \
@@ -511,7 +515,7 @@ def user_view(st: LimitState) -> dict:
     d = st.to_dict()
     d.pop("resets_at", None)   # an account-side reset time; reset_in (already relative) is what a non-admin gets,
     if st.kind == "share_7d":   # nor the weekly one's, unless it is what the user waits for: when they are back
-        d["used_up"] = st.exceeded and _ends_first(st)
+        d["used_up"] = spent(st)
         if not st.exceeded or d["used_up"]:
             d["reset_in"] = None
     if st.kind not in SHARE_LABELS:

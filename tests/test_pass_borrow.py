@@ -403,3 +403,32 @@ def test_a_week_pass_over_its_part_shows_no_phantom_debt_on_the_next(db):
     use(conn, ids["alice"], t, 200, 1.2)                  # over its 2-hour part (a race, say): it waits, it borrows nothing
     w = limits.pass_weeks(conn, cfg, t, AT, week(conn, cfg, ids["alice"]))
     assert [x["share"] for x in w["weeks"]] == pytest.approx([2 * 3600 / (7 * DAY), 1 - 2 * 3600 / (7 * DAY)])
+
+
+def test_a_day_pass_that_borrowed_all_its_next_part_is_used_up_not_back_at_the_reset(env):
+    conn, cfg, ids, t = env
+    use(conn, ids["alice"], t, 100, 1.1)                  # past its own part: borrows from the next
+    assert check(conn, cfg, ids["alice"]) is None
+    tokens = int((OWN + NEXT) * 1000) + 10                # then past both its parts
+    use(conn, ids["alice"], t, tokens, 1.1 + tokens / 1000, when=AT - 50)
+    assert check(conn, cfg, ids["alice"]).kind == "share_7d"
+    assert limits.pass_weeks(conn, cfg, t, AT)["ticket_pct"] >= 100
+    assert limits.used_up(conn, cfg, ids["alice"], AT)    # the reset frees nothing: its next part is spent
+    view = next(limits.user_view(s) for s in limits.states(conn, cfg, ids["alice"], now=AT) if s.kind == "share_7d")
+    assert view["used_up"] and view["reset_in"] is None   # not "back in" at the reset
+    assert "pass is used up. Buy another" in check(conn, cfg, ids["alice"]).body["error"]["message"]
+
+
+def test_a_day_pass_that_can_still_borrow_at_todays_rate_is_not_used_up(env):
+    """Its borrow was recorded at 1000 tokens a point; the rate has since tripled, so the same tokens are fewer points."""
+    conn, cfg, ids, t = env
+    bob, _ = create_user(conn, "bob")
+    use(conn, ids["alice"], t, 100, 1.1, when=AT - 1000)
+    assert check(conn, cfg, ids["alice"], now=AT - 990) is None   # records its borrow at 1000 tokens a point
+    req(conn, bob, AT - 900, i=3000)
+    at(conn, AT - 890, 2.1)
+    req(conn, bob, AT - 800, i=3000)
+    at(conn, AT - 790, 3.1)
+    use(conn, ids["alice"], t, int((OWN + NEXT) * 1000) + 10, 3.2)
+    assert limits.serving(conn, cfg, ids["alice"], AT)[0] is not None   # still served, by borrowing
+    assert not limits.used_up(conn, cfg, ids["alice"], AT)

@@ -1405,7 +1405,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 hit = [s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded]
                 if hit:
                     back = None if None in hit else max(hit)
-                    out |= {"back_at": back, "used_up": back is not None and back >= t["effective_end"]}
+                    out |= {"back_at": back, "used_up": back is not None and back >= t["effective_end"]
+                            or any(s.kind == "share_7d" and limits.spent(s) for s in sts)}
                 return out
 
             # With more than one live pass the card lists them all, the queued ones after the running ones (`queued`).
