@@ -312,8 +312,10 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
 
 
 def pass_states(conn, cfg: Config, t: dict, now: float) -> list[LimitState]:
-    """One pass's two share limits, measured on the requests it served alone."""
-    return [_ticket_5h(conn, cfg, t, now), _ticket_7d(conn, cfg, t, now)]
+    """One pass's two share limits, measured on the requests it served alone. A day pass running past the weekly reset
+    borrows from its next part whenever the week has free room (2026-11-05): the room the user's other passes may
+    still draw is held back from it as owed, so borrowing never takes theirs and need not wait for them."""
+    return [_ticket_5h(conn, cfg, t, now), _ticket_7d(conn, cfg, t, now, borrow=True)]
 
 
 def pass_order(conn, user_id: int, run: list[dict]) -> list[dict]:
@@ -336,22 +338,14 @@ def _pick(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = 
     """serving's choice, with the pass kept when none serves: (the pass, its limits, whether it serves). With every pass
     at a limit, the one that frees up soonest, so a stopped user's status line still has a pass to describe."""
     run = run if run is not None else tickets.running(conn, user_id, now)
-    best, at_limit = None, []
+    best = None
     for t in pass_order(conn, user_id, run):
         sts = pass_states(conn, cfg, t, now)
         if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):
             return t, sts, True
-        at_limit.append((t, sts))
-    # Every pass is at its own limits: a day pass running past the weekly reset may borrow from its next part (2026-10-30
-    # spec, §4), the first in pass_order that can. Only then, so no pass borrows while another still has room of its own.
-    for t, (s5, s7) in at_limit:
-        if not s5.exceeded:
-            s7 = _ticket_7d(conn, cfg, t, now, borrow=True)
-            if not s7.exceeded:
-                return t, [s5, s7], True
-        wait = max(st.reset_in or 60 for st in (s5, s7) if st.exceeded)
+        wait = max(st.reset_in or 60 for st in sts if st.exceeded)
         if best is None or wait < best[0]:
-            best = (wait, t, [s5, s7])
+            best = (wait, t, sts)
     return (best[1], best[2], False) if best else (None, [], False)
 
 

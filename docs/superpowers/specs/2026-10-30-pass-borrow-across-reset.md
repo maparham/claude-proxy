@@ -96,21 +96,15 @@ to measure the debt, in the old week's terms:
 
 ## 4. Several passes per user
 
-`serving` picks the pass for the next request in two rounds:
-
-1. Every running pass in `pass_order`, limited to its own limit. The first one with room serves the request, as
-   today.
-2. Only if none has room: every pass again in the same order, now with §2 borrowing. "Room" still means that
-   neither limit is exceeded: round two reuses round one's `share_5h` state and recomputes only `share_7d`. The first
-   pass with room serves.
-
-So a pinned pass never borrows from next week while another of the user's passes still has room this week. That
-room would otherwise be held back from the borrowing as owed. When every pass is at its limit, the "frees up soonest"
-answer is built from round two's states, so a borrowing limit that refills sooner counts.
+**Amended 2026-11-05:** `serving` picks the first pass in `pass_order` with room, a day pass across the reset
+measured with §2 borrowing. A day pass bought for a day must be usable for that day whenever the week has free
+room, not only once the user's other passes run out. Borrowing never takes the other passes' room: §1's free room
+already holds back what they may still draw as owed. (Before: two rounds, borrowing only once every pass was at its
+own limit, which left a day pass "back at the reset" while free room was unused.)
 
 **Cards:** the dashboard pass cards (`web.py` around line 1374) show the serving pass with the states `serving`
 returned, including any borrowing, so they don't mark a pass as at its limit while it is serving. The other passes
-show `pass_states` (without borrowing), as today.
+show `pass_states`, which borrows too (2026-11-05), so "back in" is when the pass can serve again.
 
 ## 5. Display
 
@@ -167,7 +161,7 @@ part refills.
 7. Debt after the reset: the next part's own limit is its part minus the recorded debt. Capacity jumping at the
    reset and a bonus that ended before it don't change the debt. A pass that never borrowed has its full next part.
 8. A week pass across the reset never borrows, room or no room; nothing is recorded for it.
-9. Two passes on one user: the second pass's own room is used before the first one borrows.
+9. Two passes on one user: the first borrows while the second still has room, and the second keeps its room.
 10. `ticket_weeks`: the split bar moves by the debt and by what has been borrowed, the parts add up to the whole,
     `ticket_pct` is unchanged, and the 80% warning follows the own limit.
 11. `resets_at` moved by 60 seconds after the reset: the debt row is still found.
