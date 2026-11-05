@@ -142,10 +142,17 @@ input.search { width: 18rem; max-width: 100%; }
 .meter > span { display: block; height: 100%; border-radius: 3px; background: var(--s1); }
 .meter.stack { display: flex; }
 .meter.stack > span { border-radius: 0; }
-.meter.stack > .seg-owed { opacity: .5; }
-.meter.stack > .seg-margin { background: var(--ink-2); opacity: .35; }
-.meter.stack > .seg-free { background: transparent; }
-.meter.stack > .seg-headroom { background: var(--ink-2); opacity: .15; }
+/* The Capacity card's week: one colour per piece, the same on the bar and on its legend chip. */
+.meter > span.seg-used, .legend i.seg-used { background: var(--s1); }
+.meter > span.seg-owed, .legend i.seg-owed { background: var(--s4); }
+.meter > span.seg-margin, .legend i.seg-margin { background: color-mix(in srgb, var(--ink-2) 45%, transparent); }
+.meter > span.seg-free, .legend i.seg-free { background: var(--s3); }
+.meter > span.seg-headroom, .legend i.seg-headroom { background: color-mix(in srgb, var(--ink-2) 18%, transparent); }
+.meter.stack.week { height: 12px; border-radius: 4px; gap: 2px; }
+.meter.stack.week > span { cursor: help; }
+.meter.stack.week > span:hover, .meter.stack.week > span:focus-visible { filter: brightness(1.15); outline: none; box-shadow: inset 0 0 0 2px var(--ink); }
+.week-legend { margin-top: 6px; }
+.week-legend .tip-i { margin-inline-start: 0; }
 /* A meter with its figure under the fill's end: start-aligned there, or end-aligned once the fill nears the end. */
 .meter-at { position: relative; padding-bottom: 16px; }
 .meter-at small { position: absolute; top: 12px; font-size: 11px; line-height: 14px; color: var(--ink-2); white-space: nowrap; font-variant-numeric: tabular-nums; }

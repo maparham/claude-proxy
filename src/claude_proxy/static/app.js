@@ -131,7 +131,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_owed", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -1231,10 +1231,13 @@ async function renderTickets(main) {
   const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${fmtPct(cap.utilization[b].utilization_pct)}${cap.utilization[b].stale ? ` (${t("quota.stale")})` : ""}`);
   const pts = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
   const w = cap.week, f = cap.five_hour;
-  const seg = (cls, v) => `<span class="${cls}" style="width:${Math.max(0, Math.min(100, v))}%"></span>`;
+  // The week's 100 points, piece by piece; each piece and its legend chip carry the same tip, on hover or tap.
+  const pieces = [["used", w.used], ["owed", w.owed], ["margin", w.margin], ["free", w.free], ["headroom", 100 - w.max_sold_pct]];
+  const seg = ([k, v]) => `<span class="seg-${k}" style="width:${Math.max(0, Math.min(100, v))}%" data-tip="seg_${k}" tabindex="0" role="button" aria-label="${esc(t(`tk.seg_${k}`, { v: pts(v) }))}"></span>`;
+  const chip = ([k, v]) => `<span><i class="seg-${k}"></i>${t(`tk.seg_${k}`, { v: pts(v) })}${tipI(`seg_${k}`)}</span>`;
   const weekMeter = w.fresh
-    ? `<div class="meter stack">${seg("seg-used", w.used)}${seg("seg-owed", w.owed)}${seg("seg-margin", w.margin)}${seg("seg-free", w.free)}${seg("seg-headroom", 100 - w.max_sold_pct)}</div>
-       <p class="sub">${t("tk.seg_legend", { used: pts(w.used), owed: pts(w.owed), margin: pts(w.margin), free: pts(w.free), headroom: pts(100 - w.max_sold_pct) })}</p>`
+    ? `<div class="meter stack week">${pieces.filter(([, v]) => v > 0).map(seg).join("")}</div>
+       <div class="legend week-legend">${pieces.map(chip).join("")}</div>`
     : `<div class="meter"></div><p class="sub">${t("tk.no_report")}</p>`;
   main.innerHTML = `<section class="view"><h2>${t("tab.tickets")}</h2>
     <p class="lede">${t("tk.lede")}</p>
