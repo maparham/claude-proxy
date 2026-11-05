@@ -32,6 +32,7 @@ TEXT_MAX = 3500
 ANON = "Turn off 'Remain anonymous' to answer: the bot can't tell who you are."
 NOT_DELIVERED = "Not delivered; try again."
 NOT_DELIVERED_BLOCKED = "Not delivered: the user blocked the bot."
+NOT_DELIVERED_UNSUPPORTED = "Not delivered: that message type isn't supported."
 
 
 class Blocked(Exception):
@@ -233,9 +234,14 @@ def claim(conn: sqlite3.Connection, code: str, chat_id: int, now: float | None =
         if user is None:
             conn.execute("COMMIT")
             return None
+        displaced = conn.execute("SELECT user_id FROM telegram_chats WHERE chat_id=?", (chat_id,)).fetchone()
         old = conn.execute("SELECT chat_id FROM telegram_chats WHERE user_id=? AND chat_id!=?", (user["id"], chat_id)).fetchone()
         conn.execute("UPDATE telegram_chats SET user_id=NULL WHERE user_id=?", (user["id"],))
         conn.execute("UPDATE telegram_chats SET user_id=? WHERE chat_id=?", (user["id"], chat_id))
+        # This chat was already linked to a different account (B): claiming it for this code's account (A) drops
+        # B's link silently unless audited here (final review, finding 2).
+        if displaced is not None and displaced["user_id"] is not None and displaced["user_id"] != user["id"]:
+            db.audit(conn, user["id"], "telegram_unlink", db._user_name(conn, displaced["user_id"]), {"chat_id": chat_id})
         db.audit(conn, user["id"], "telegram_relink" if old else "telegram_link", user["name"], {"chat_id": chat_id})
         conn.execute("COMMIT")
     except BaseException:
@@ -272,10 +278,16 @@ async def after_payment(conn: sqlite3.Connection, cfg: Config, http: httpx.Async
             return
         lang = chat["lang"]
         tk = next((x for x in tickets.user_tickets(conn, p["user_id"]) if x["id"] == o["ticket_id"]), None) if o["ticket_id"] else None
-        if p["status"] == "paid" and tk is not None:
+        if p["status"] == "paid":
+            if tk is None:
+                # A settled payment with no ticket to show: the payment stands either way, so this is only ever
+                # logged, never shown as "unfulfilled" (which is reserved for paid_unfulfilled itself).
+                logger.warning("telegram notice for payment #%d: status is 'paid' but no ticket (order #%d, ticket_id=%r) was found",
+                               pid, o["id"], o["ticket_id"])
+                return
             text = t(lang, "paid", ref=p["ref_id"], start=tickets.terms_date(tk["starts_at"], lang),
                      end=tickets.terms_date(tk["effective_end"], lang))
-        elif p["status"] in ("paid", "paid_unfulfilled"):
+        elif p["status"] == "paid_unfulfilled":
             text = t(lang, "unfulfilled", ref=p["ref_id"])
         else:
             return
@@ -456,8 +468,10 @@ class Telegram:
             cmd, _, arg = text.partition(" ")
             cmd = cmd.split("@")[0]
             if cmd == "/start" and arg.strip():
+                self.set_state(chat, None, None)
                 return await self.start_code(chat, arg.strip())
             if cmd == "/unlink":
+                self.set_state(chat, None, None)
                 if chat["user_id"] is not None and unlink(self.conn, chat["user_id"], chat["user_id"]):
                     chat["user_id"] = None
                     return await self.say(chat, "unlinked")
@@ -686,6 +700,10 @@ class Telegram:
             r = await payments.pay_order(self.conn, self.cfg, user, oid)
         except orders.OrderError as e:
             return await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=self.error_text(chat["lang"], e))
+        # The order may have been placed from the dashboard (via='web'); paying it from the bot means its buyer
+        # now expects the settlement notice here too (final review, finding 1). payments.pay_order itself is
+        # untouched: only the bot stamps this, and only for the order's own user.
+        self.conn.execute("UPDATE orders SET via='telegram' WHERE id=? AND user_id=?", (oid, user["id"]))
         await self.send_pay_link(chat, r["url"])
 
     async def cancel_order(self, chat: dict, oid: int) -> None:
@@ -769,9 +787,12 @@ class Telegram:
             return await self.bot.call("sendMessage", chat_id=self.admin_chat, text=ANON, reply_to_message_id=msg["message_id"])
         admin = self.conn.execute("SELECT u.* FROM telegram_chats c JOIN users u ON u.id=c.user_id WHERE c.chat_id=? "
                                   "AND u.role='admin' AND u.enabled=1 AND u.revoked_at IS NULL", (frm.get("id"),)).fetchone()
-        got = _content(msg)
-        if admin is None or got is None:
+        if admin is None:
             return
+        got = _content(msg)
+        if got is None:
+            return await self.bot.call("sendMessage", chat_id=self.admin_chat, text=NOT_DELIVERED_UNSUPPORTED,
+                                       reply_to_message_id=msg["message_id"])
         note = NOT_DELIVERED
         try:
             sent = await self.bot.call("copyMessage", chat_id=row["chat_id"], from_chat_id=self.admin_chat, message_id=msg["message_id"])

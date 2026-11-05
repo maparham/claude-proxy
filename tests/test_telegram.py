@@ -240,6 +240,17 @@ async def test_relink_moves_the_account_and_tells_the_old_chat(tg):
     assert tg.conn.execute("SELECT action FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()[0] == "telegram_relink"
 
 
+async def test_claiming_a_code_moves_a_chat_linked_to_someone_else_and_audits_them(tg):   # Final review finding 2
+    link(tg.conn, ALICE, tg.ids["admin"])   # this chat already belongs to a different account (B)
+    async with app(tg) as c:
+        code = (await link_url(c, tg)).split("=", 1)[1]   # a code for alice's own account (A)
+        await post(c, msg(ALICE, f"/start {code}"))
+    assert tg.conn.execute("SELECT user_id FROM telegram_chats WHERE chat_id=?", (ALICE,)).fetchone()[0] == tg.ids["alice"]
+    from claude_proxy import db as dbm
+    rows = tg.conn.execute("SELECT action, target FROM audit_log WHERE action='telegram_unlink' ORDER BY id DESC").fetchall()
+    assert rows and rows[0]["target"] == dbm._user_name(tg.conn, tg.ids["admin"])
+
+
 async def test_unlink_from_bot_and_dashboard(tg):
     link(tg.conn, ALICE, tg.ids["alice"])
     async with app(tg) as c:
@@ -398,6 +409,22 @@ async def test_payment_starts_are_rate_limited(tg, monkeypatch):
     assert len(tg.zp.requests) == 1
 
 
+async def test_continuing_a_web_order_from_the_bot_gets_a_telegram_notice(tg):   # Final review finding 1
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        await c.post("/api/orders/pay", headers=bearer(tg.keys["alice"]),
+                     json={"tier": "lite", "length": "week", "terms_version": "v1"})
+        oid = tg.conn.execute("SELECT id FROM orders ORDER BY id DESC LIMIT 1").fetchone()[0]
+        assert orders.get(tg.conn, oid)["via"] == "web"
+        await post(c, cb(ALICE, f"oc:{oid}"))
+        assert orders.get(tg.conn, oid)["via"] == "telegram"
+        auth = buttons(tg.fake.sent(chat_id=ALICE)[-1])[0].rsplit("/", 1)[1]
+        r = await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        await asyncio.gather(*list(web._mail_tasks))
+    assert r.status_code == 302
+    assert tg.fake.texts(ALICE)[-1].startswith("پرداخت انجام شد")
+
+
 async def test_my_passes(tg):
     link(tg.conn, ALICE, tg.ids["alice"])
     async with app(tg) as c:
@@ -423,6 +450,35 @@ async def test_leaving_the_email_prompt_clears_its_state(tg, leave):   # Review 
         await post(c, msg(ALICE, "not an email"))
     assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
     # Task 9: with no pending state, plain text is support, not the menu (section 7).
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "got_support")
+
+
+async def test_unlink_clears_the_email_prompts_state(tg):   # Final review finding 3
+    tg.conn.execute("UPDATE users SET email=NULL WHERE id=?", (tg.ids["alice"],))
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "ask_email")
+        await post(c, msg(ALICE, "/unlink"))
+        await post(c, msg(ALICE, "not an email"))
+    assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "got_support")
+
+
+async def test_start_with_a_bad_code_clears_the_email_prompts_state(tg):   # Final review finding 3
+    # An expired/bad code returns "link_bad" without ever reaching menu() (whose own set_state would otherwise
+    # have cleared the state as a side effect), so this is the path that actually exercises the bug.
+    tg.conn.execute("UPDATE users SET email=NULL WHERE id=?", (tg.ids["alice"],))
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "ask_email")
+        await post(c, msg(ALICE, "/start bogus-code"))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "link_bad")
+        await post(c, msg(ALICE, "not an email"))
+    assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
     assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "got_support")
 
 
@@ -491,6 +547,24 @@ async def test_unfulfilled_payment_message(tg):
     tg.conn.execute("UPDATE payments SET status='paid_unfulfilled', ref_id='555' WHERE id=?", (pid,))
     await telegram.after_payment(tg.conn, tg.cfg, tg.gw.http, pid)
     assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "unfulfilled", ref="555")
+
+
+async def test_paid_with_no_ticket_found_sends_nothing(tg, caplog):   # Final review finding: 'paid' with no ticket
+    caplog.set_level(logging.WARNING)
+    async with app(tg) as c:
+        auth = await paid_via_bot(c, tg)
+    pid = tg.conn.execute("SELECT id FROM payments WHERE authority=?", (auth,)).fetchone()[0]
+    oid = tg.conn.execute("SELECT order_id FROM payments WHERE id=?", (pid,)).fetchone()[0]
+    tg.conn.execute("UPDATE payments SET status='paid', ref_id='555' WHERE id=?", (pid,))
+    # A real ticket, but not this buyer's: tickets.user_tickets(user_id=alice) won't find it, same as a lookup
+    # that comes up empty.
+    admin_user = tg.conn.execute("SELECT * FROM users WHERE id=?", (tg.ids["admin"],)).fetchone()
+    other = tickets.grant(tg.conn, tg.cfg, tg.ids["admin"], admin_user, "lite", "week", "IRT", terms_version="v1")
+    tg.conn.execute("UPDATE orders SET ticket_id=? WHERE id=?", (other["id"], oid))
+    before = len(tg.fake.sent("sendMessage", ALICE))
+    await telegram.after_payment(tg.conn, tg.cfg, tg.gw.http, pid)
+    assert len(tg.fake.sent("sendMessage", ALICE)) == before
+    assert any(r.levelno >= logging.WARNING for r in caplog.records)
 
 
 async def test_a_blocked_buyer_does_not_break_the_payment(tg):   # Review Focus 5
@@ -605,6 +679,14 @@ async def test_reply_to_a_user_who_blocked_the_bot(tg):
         assert tg.conn.execute("SELECT blocked FROM telegram_chats WHERE chat_id=?", (ALICE,)).fetchone()[0] == 1
         await post(c, msg(ALICE, "back"))
     assert tg.conn.execute("SELECT blocked FROM telegram_chats WHERE chat_id=?", (ALICE,)).fetchone()[0] == 0
+
+
+async def test_admin_reply_in_an_unsupported_type_is_reported_not_delivered(tg):   # Final review finding 4
+    admin_linked(tg)
+    async with app(tg) as c:
+        await admin_reply(c, tg, text=None, sticker={"file_id": "S"})
+    assert tg.fake.sent("copyMessage", ALICE) == []
+    assert tg.fake.texts(ADMIN_CHAT)[-1] == telegram.NOT_DELIVERED_UNSUPPORTED
 
 
 async def test_group_chatter_is_ignored(tg):   # Review Focus 3
