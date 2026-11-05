@@ -371,6 +371,7 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 
 .badge.state-active { border-color: var(--good); color: var(--good-text); }
 .badge.state-queued, .badge.state-upcoming { border-color: var(--s1); color: var(--s1); }
+.num.over { color: var(--critical-text); }
 .badge.state-cancelled { border-color: var(--critical); color: var(--critical-text); }
 .good { color: var(--good-text); } .critical { color: var(--critical-text); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }

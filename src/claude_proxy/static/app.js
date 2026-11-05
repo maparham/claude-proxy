@@ -131,7 +131,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_owed", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_owed", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -1273,13 +1273,20 @@ async function renderTickets(main) {
       ${searchBox("ticket-q", S.ticketQ, t("tk.search"))}</div>
     <div class="card table-wrap" id="tk-list"></div>
   </section>`;
+  // Who used the week's points, in the "Used" tip: passes, each user off a pass, and use outside the gateway.
+  const by = cap.used_by;
+  if (by) {
+    const line = (name, v) => `<div class="limit-row"><span>${name}</span><span class="num">${pts(v)}</span></div>`;
+    const who = `<p class="tm">${t("tk.used_by")}</p>${line(t("tk.used_by_passes"), by.passes)}${by.users.map((u) => line(bdi(u.name), u.pts)).join("")}${line(t("tk.used_by_outside"), by.outside)}`;
+    main.querySelectorAll('[data-tip="seg_used"]').forEach((el) => { el.dataset.tipHtml = `${TIPS.seg_used}${who}`; });
+  }
   const fill = () => {
     const q = (S.ticketQ || "").trim().toLowerCase();
     const shown = tickets.filter((tk) => (!S.ticketState || tk.state === S.ticketState)
       && (!q || [tk.user_name, tk.note, tk.tier].some((v) => (v || "").toLowerCase().includes(q))));
     const list = $("#tk-list");
-    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
-      <tbody>${foldRows(shown.map(ticketRow)) || `<tr><td colspan="8" class="muted">${t(tickets.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
+    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th class="r">${t("tk.this_week")}${tipI("week_col")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${foldRows(shown.map(ticketRow)) || `<tr><td colspan="9" class="muted">${t(tickets.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
     wireMore(list);
     list.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
   };
@@ -1289,6 +1296,14 @@ async function renderTickets(main) {
   $("#ticket-state").onchange = (e) => { S.ticketState = e.target.value; fill(); };
   wireSearch($("#ticket-q"), (v) => { S.ticketQ = v; fill(); });
 }
+// A pass's points of this week: used of its part, over it in red (borrowing, or Anthropic's whole-point rounding), and
+// what it may still draw. Nothing for a pass outside the week.
+function weekCell(w) {
+  if (!w) return `<span class="muted">—</span>`;
+  const n = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
+  const over = w.used > w.sold + 0.05;
+  return `<span class="num${over ? " over" : ""}">${t("tk.week_use", { used: n(w.used), sold: n(w.sold) })}</span>${w.owed > 0.05 ? `<div class="muted">${t("tk.week_owed", { v: n(w.owed) })}</div>` : ""}`;
+}
 function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "queued";
   const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
@@ -1296,7 +1311,7 @@ function ticketRow(tk) {
     <td>${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
     <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${tk.effective_end !== tk.ends_at ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(Math.round((tk.effective_end - tk.ends_at) / 86400)) })})</span>` : ""}</td>
     <td class="r">${esc(money(tk.amount, tk.currency))}${tk.discount_id ? `<div class="muted"><s>${fmtPrice(tk.list_usd)}</s> ${fmtPrice(tk.usd)}</div>` : `<div class="muted">${fmtPrice(tk.usd)}</div>`}</td>
-    <td>${stateBadge(tk.state)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
+    <td>${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
     <td><div class="row-actions">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
       ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${tk.id}" data-tip="act_ticket_cancel">${t("app.cancel_ticket")}</button>` : ""}</div></td></tr>`;
 }

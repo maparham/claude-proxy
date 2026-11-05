@@ -143,19 +143,69 @@ def owed(conn: sqlite3.Connection, cfg: Config, account_id: int, week: tuple[flo
         return 0.0
     ids = [p["id"] for p in others]
     uses = _week_use(conn, cfg, ids, week_start, now) if rate else {}
-    bonuses: dict[int, list] = {}
-    for b in conn.execute(f"SELECT ticket_id, share_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id IN "
-                          f"({','.join('?' * len(ids))}) AND cancelled_at IS NULL AND share_pct>0", ids):
-        bonuses.setdefault(b["ticket_id"], []).append(b)
+    bonuses = _bonuses(conn, ids)
     total = 0.0
     for p in others:
-        span = lambda s, e: max(0.0, min(week_end, e) - max(week_start, s)) / DAY / 7   # noqa: E731
-        part = p["share_pct"] * span(p["starts_at"], p["effective_end"])
-        part += sum(b["share_pct"] * span(b["starts_at"], b["ends_at"]) for b in bonuses.get(p["id"], []))
-        own = part * scale / 100 - _debt(conn, cfg, p, week_start, scale, now)
+        own = _own(conn, cfg, p, bonuses.get(p["id"], []), week, scale, now)
         use = uses.get(p["id"], 0.0) / rate if rate else att["ticket_shares"].get(p["id"], 0.0)
         total += max(0.0, own - use)
     return total
+
+
+def _bonuses(conn, ids) -> dict[int, list]:
+    out: dict[int, list] = {}
+    for b in conn.execute(f"SELECT ticket_id, share_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id IN "
+                          f"({','.join('?' * len(ids))}) AND cancelled_at IS NULL AND share_pct>0", ids):
+        out.setdefault(b["ticket_id"], []).append(b)
+    return out
+
+
+def _own(conn, cfg, p, bonuses, week, scale, now) -> float:
+    """A pass's points of the current week: its piece over the week (overlapping share bonuses counted) scaled to the
+    gateway's capacity, less what it borrowed from this week in the last."""
+    span = lambda s, e: max(0.0, min(week[1], e) - max(week[0], s)) / DAY / 7   # noqa: E731
+    part = p["share_pct"] * span(p["starts_at"], p["effective_end"])
+    part += sum(b["share_pct"] * span(b["starts_at"], b["ends_at"]) for b in bonuses)
+    return part * scale / 100 - _debt(conn, cfg, p, week[0], scale, now)
+
+
+def week_use(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) -> dict:
+    """The admin's view of this week's points (passes tab): who used them, as Anthropic's figure splits by attribution
+    (passes, each user's use off a pass, use outside the gateway), and per pass overlapping the week its points of it,
+    what it used and what it may still draw (owed's terms). Empty without a known week."""
+    week = tickets.week_bounds(conn, cfg, now)
+    if week is None:
+        return {"by": None, "passes": {}}
+    att = _att(conn, cfg, now)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    scale = _capacity(att, now)
+    rows = [dict(r) for r in conn.execute(
+        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, week[1], week[0]))]
+    ids = [p["id"] for p in rows]
+    bonuses = _bonuses(conn, ids) if ids else {}
+    uses = _week_use(conn, cfg, ids, week[0], now) if rate and ids else {}
+    ts = att["ticket_shares"]
+    passes = {}
+    for p in rows:
+        own = _own(conn, cfg, p, bonuses.get(p["id"], []), week, scale, now)
+        use = uses.get(p["id"], 0.0) / rate if rate else ts.get(p["id"], 0.0)
+        passes[p["id"]] = {"sold": own, "used": ts.get(p["id"], 0.0),
+                           "owed": max(0.0, own - use) if p["effective_end"] > now else 0.0}
+    if att["utilization_pct"] is None:
+        return {"by": None, "passes": passes}
+    on_pass: dict[int, float] = {}
+    for tid, pts in ts.items():
+        uid = next((p["user_id"] for p in rows if p["id"] == tid), None)
+        if uid is None:
+            row = conn.execute("SELECT user_id FROM tickets WHERE id=?", (tid,)).fetchone()
+            uid = row[0] if row else None
+        on_pass[uid] = on_pass.get(uid, 0.0) + pts
+    names = {r[0]: r[1] for r in conn.execute("SELECT id, name FROM users")}
+    off = [{"name": names.get(uid, "?"), "pts": v - on_pass.get(uid, 0.0)} for uid, v in att["shares"].items()]
+    return {"by": {"passes": sum(ts.values()), "outside": att["unattributed"] or 0.0,
+                   "users": sorted([u for u in off if u["pts"] >= 0.05], key=lambda u: -u["pts"])},
+            "passes": passes}
 
 
 def room(conn: sqlite3.Connection, cfg: Config, account_id: int, week, att: dict, rate: float | None, scale: float,
@@ -314,4 +364,5 @@ def summary(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) 
                       "peak_30d": max(tickets.sold_at(conn, account_id, p) for p in points),
                       "max_sold_5h_pct": cfg.tickets.max_sold_5h_pct},
         "hand_set_7d_pct": hand,
+        "used_by": week_use(conn, cfg, account_id, now)["by"],
     }

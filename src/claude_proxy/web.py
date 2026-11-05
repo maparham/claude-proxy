@@ -39,6 +39,7 @@ import httpx
 from . import api_credit, blog, clerk, contents, db, limits, mail, orders, passcard, payments, quota, telegram, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
+from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
 from .capacity import NO_REPORT
 from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
 from .config import LENGTHS
@@ -1259,8 +1260,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if deleted is not None:   # a deleted user's tickets keep only the name stored at grant
             where, params = "WHERE t.user_id IS NULL AND t.user_name=?", (deleted,)
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
+        week = capacity_mod.week_use(conn, cfg, tickets.ACCOUNT_ID, now)["passes"]   # each pass's points of this week
         for t in rows:
-            t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"])}
+            t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"]),
+                  "week": week.get(t["id"])}
             if t["user_id"] is not None:   # the user's current name, falling back to the name stored at grant for a deleted user
                 t["user_name"] = n.get(t["user_id"], t["user_name"])
         gone = [r[0] for r in conn.execute("SELECT DISTINCT user_name FROM tickets WHERE user_id IS NULL ORDER BY user_name")]

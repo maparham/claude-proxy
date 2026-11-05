@@ -436,3 +436,15 @@ def test_a_day_pass_that_can_still_borrow_at_todays_rate_is_not_used_up(env):
     use(conn, ids["alice"], t, int((OWN + NEXT) * 1000) + 10, 3.2)
     assert limits.serving(conn, cfg, ids["alice"], AT)[0] is not None   # still served, by borrowing
     assert not limits.used_up(conn, cfg, ids["alice"], AT)
+
+
+def test_the_admin_sees_who_used_the_week_and_each_pass_s_part_of_it(env):
+    from claude_proxy import capacity
+    conn, cfg, ids, t = env
+    use(conn, ids["alice"], t, 100, 1.1)                  # 1 point off a pass before it, then 0.1 on it
+    w = capacity.week_use(conn, cfg, 1, AT)
+    assert w["by"]["passes"] == pytest.approx(0.1) and w["by"]["outside"] == pytest.approx(0)
+    assert [(u["name"], round(u["pts"], 2)) for u in w["by"]["users"]] == [("alice", 1.0)]
+    assert w["passes"][t["id"]] == pytest.approx({"sold": OWN, "used": 0.1, "owed": 0.0})   # over its part: borrowing
+    assert capacity.summary(conn, cfg, 1, AT)["used_by"] == w["by"]
+
