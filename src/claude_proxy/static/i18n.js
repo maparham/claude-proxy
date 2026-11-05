@@ -2332,6 +2332,7 @@ const ERR_FA = {
   "Could not reach Clerk to check the sign-in; try again.": "برای بررسی ورود به Clerk دسترسی نبود؛ دوباره تلاش کنید.",
   "Expected a JSON body.": "بدنه JSON انتظار می‌رفت.",
   "Expected a JSON object.": "شیء JSON انتظار می‌رفت.",
+  "Forbidden.": "اجازه نیست.",
   "Missing or wrong CSRF token.": "توکن CSRF نیست یا نادرست است.",
   "Need a daily amount in dollars above 0.": "یک مبلغ روزانه دلاری بیشتر از ۰ لازم است.",
   "Need a name of 1-64 characters and role user or admin.": "نامی ۱ تا ۶۴ نویسه‌ای و نقش user یا admin لازم است.",

@@ -36,7 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, contents, db, limits, mail, orders, passcard, payments, quota, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, contents, db, limits, mail, orders, passcard, payments, quota, telegram, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from .capacity import NO_REPORT
@@ -1558,6 +1558,24 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         else:
             fail(404, f"Unknown action {action!r}.")
         return {"ok": True, "order": my_order(user["id"])}
+
+    # ---------- Telegram bot (design 2026-11-05) ----------
+
+    tg = telegram.Telegram(conn, cfg, gw.http) if telegram.on(cfg) else None
+    app.state.telegram = tg
+
+    if tg is not None:
+        @app.post("/telegram/webhook")
+        async def telegram_webhook(request: Request):
+            # No session: Telegram's secret-token header is the only credential (section 2).
+            if not hmac.compare_digest(request.headers.get("x-telegram-bot-api-secret-token", ""), cfg.telegram.webhook_secret()):
+                fail(403, "Forbidden.")
+            try:
+                update = await request.json()
+            except ValueError:
+                return {"ok": True}   # nothing to handle, and a retry would not help
+            await tg.handle(update)
+            return {"ok": True}
 
     @app.get("/api/admin/orders")
     async def orders_list(request: Request, status: str = "open"):
