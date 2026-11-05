@@ -101,9 +101,10 @@ TEXTS = {
         "menu": "چه کاری برایتان انجام دهم؟\nهر پیامی که اینجا بنویسید به پشتیبانی می‌رسد.",
         "btn_buy": "خرید بسته", "btn_mine": "بسته‌های من", "btn_feedback": "ارسال نظر", "btn_lang": "English",
         "btn_prices": "قیمت‌ها", "btn_site": "سایت رهکار",
-        "prices_head": "قیمت بسته‌ها:", "prices_share": "حدود {pct}٪ از مصرف هفتگی {plan}",
-        "prices_line": "{length}: {amount}", "prices_off": "{length}: {amount} (به‌جای {list}، {pct}٪ تخفیف)",
-        "prices_sold": "{length}: فروخته شد", "prices_vat": "مالیات بر ارزش افزوده ({vat}٪) در قیمت‌ها حساب شده است.",
+        "prices_head": "💳 قیمت بسته‌ها",
+        "prices_same": "هم‌اندازه {plan}", "prices_times": "{n} برابر {plan}", "prices_pct": "حدود {pct}٪ {plan}",
+        "per_day": "روزانه", "per_week": "هفتگی", "per_month": "ماهانه",
+        "prices_off": "🏷 {pct}٪ تخفیف", "prices_sold": "⛔ فعلاً تمام شده", "prices_vat": "قیمت‌ها با {vat}٪ مالیات",
         "prices_site": "قیمت‌ها را در سایت ببینید:\n{url}",
         "lang_set": "زبان: فارسی",
         "cancelled": "لغو شد.",
@@ -143,9 +144,10 @@ TEXTS = {
         "menu": "What would you like to do?\nAny message you type here goes to support.",
         "btn_buy": "Buy a pass", "btn_mine": "My passes", "btn_feedback": "Feedback", "btn_lang": "فارسی",
         "btn_prices": "Prices", "btn_site": "Rahkar website",
-        "prices_head": "Pass prices:", "prices_share": "about {pct}% of {plan}'s weekly usage",
-        "prices_line": "{length}: {amount}", "prices_off": "{length}: {amount} (was {list}, {pct}% off)",
-        "prices_sold": "{length}: sold out", "prices_vat": "VAT ({vat}%) is included.",
+        "prices_head": "💳 Pass prices",
+        "prices_same": "same as {plan}", "prices_times": "{n}× {plan}", "prices_pct": "about {pct}% of {plan}",
+        "per_day": "Daily", "per_week": "Weekly", "per_month": "Monthly",
+        "prices_off": "🏷 {pct}% off", "prices_sold": "⛔ sold out for now", "prices_vat": "prices include {vat}% VAT",
         "prices_site": "See the prices on the website:\n{url}",
         "lang_set": "Language: English",
         "cancelled": "Cancelled.",
@@ -548,30 +550,34 @@ class Telegram:
     # ---------- prices ----------
 
     async def prices(self, chat: dict) -> None:
-        """The Toman price list the site shows, for anyone: each tier's share of its plan and each length on sale."""
+        """The Toman price list the site shows, for anyone: a compact table of each tier's lengths on sale."""
         lang, table = chat["lang"], payments.prices(self.conn, self.cfg, time.time())
         if table is None:
             return await self.say(chat, "prices_site", url=self.site())
         num = (lambda n: tickets.fa_num(str(n))) if lang != "en" else str
-        lines = [t(lang, "prices_head")]
+        lines, sold = [t(lang, "prices_head")], False
         for x in table["tiers"]:
             on_sale = [(n, p) for n, p in x["lengths"].items() if p is not None]
             if not on_sale:
                 continue
-            lines += ["", x["label"]]
-            if x.get("compare_pct") is not None:
-                lines.append(t(lang, "prices_share", pct=num(x["compare_pct"]), plan=x["compare"]))
+            head, pct = x["label"], x.get("compare_pct")
+            if pct is not None:   # a whole number of plans reads as plans, as on the home page
+                share = (t(lang, "prices_same", plan=x["compare"]) if pct == 100 else
+                         t(lang, "prices_times", n=num(pct // 100), plan=x["compare"]) if pct > 100 and pct % 100 == 0 else
+                         t(lang, "prices_pct", pct=num(pct), plan=x["compare"]))
+                head += f" ({share})"
+            lines += ["", head]
             for n, p in on_sale:
-                length = self.length_name(lang, n)
+                line = f"  {t(lang, f'per_{n}')}  {self.amount(lang, p['amount'])}"
                 if p["sold_out"]:
-                    lines.append("• " + t(lang, "prices_sold", length=length))
+                    line, sold = line + "  ⛔", True
                 elif p["list_amount"] > p["amount"] and p["list_usd"] > 0:
-                    lines.append("• " + t(lang, "prices_off", length=length, amount=self.amount(lang, p["amount"]),
-                                          list=self.amount(lang, p["list_amount"]), pct=num(round((1 - p["usd"] / p["list_usd"]) * 100))))
-                else:
-                    lines.append("• " + t(lang, "prices_line", length=length, amount=self.amount(lang, p["amount"])))
-        if table.get("vat_percent"):
-            lines += ["", t(lang, "prices_vat", vat=num(table["vat_percent"]))]
+                    line += "  " + t(lang, "prices_off", pct=num(round((1 - p["usd"] / p["list_usd"]) * 100)))
+                lines.append(line)
+        foot = ([t(lang, "prices_sold")] if sold else []) + ([t(lang, "prices_vat", vat=num(round(table["vat_percent"])))]
+                                                             if table.get("vat_percent") else [])
+        if foot:
+            lines += ["", " · ".join(foot)]
         await self.bot.call("sendMessage", chat_id=chat["chat_id"], text="\n".join(lines), reply_markup={"inline_keyboard": [
             [self.btn(chat, "btn_buy", "buy"), {"text": t(lang, "btn_site"), "url": self.site()}]]})
 

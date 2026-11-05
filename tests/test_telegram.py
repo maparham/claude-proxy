@@ -750,7 +750,7 @@ async def test_prices_for_anyone_with_buy_and_the_site(tg, update):
         assert x["label"] in text
         for n, p in x["lengths"].items():
             if p is not None:
-                assert f"{telegram.t('fa', f'len_{n}')}: {orders.fa_amount(p['amount'], 'IRT')}" in text
+                assert f"{telegram.t('fa', f'per_{n}')}  {orders.fa_amount(p['amount'], 'IRT')}" in text
     assert buttons(sent) == ["buy", "https://rahkar.pro"]
 
 
@@ -764,7 +764,7 @@ async def test_prices_in_english_show_a_discount(tg):
     p = next(x for x in price_list(tg.conn, tg.cfg)["tiers"] if x["tier"] == "lite")["lengths"]["week"]
     assert p["list_amount"] > p["amount"]
     pct = round((1 - p["usd"] / p["list_usd"]) * 100)
-    assert f"A week: {payments._toman(p['amount'])} (was {payments._toman(p['list_amount'])}, {pct}% off)" in text
+    assert f"Weekly  {payments._toman(p['amount'])}  🏷 {pct}% off" in text
 
 
 async def test_prices_mark_sold_out_and_the_plan_share(tg, monkeypatch):
@@ -776,9 +776,9 @@ async def test_prices_mark_sold_out_and_the_plan_share(tg, monkeypatch):
     async with app(tg) as c:
         await post(c, cb(ALICE, "prices"))
     text = tg.fake.texts(ALICE)[-1]
-    assert "Lite" in text and "about 60% of Claude Pro's weekly usage" in text
-    assert "A week: sold out" in text and "A day" not in text
-    assert "VAT (10%) is included." in text
+    assert "Lite (about 60% of Claude Pro)" in text
+    assert "Weekly  900,000 Toman  ⛔" in text and "Daily" not in text
+    assert text.endswith("⛔ sold out for now · prices include 10% VAT")
 
 
 async def test_prices_without_a_toman_rate_point_to_the_site(tg):
@@ -786,3 +786,15 @@ async def test_prices_without_a_toman_rate_point_to_the_site(tg):
     async with app(tg) as c:
         await post(c, cb(ALICE, "prices"))
     assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "prices_site", url="https://rahkar.pro")
+
+
+@pytest.mark.parametrize("pct, head", [(100, "Lite (same as Claude Pro)"), (200, "Lite (2× Claude Pro)")])
+async def test_prices_read_a_whole_number_of_plans_as_plans(tg, monkeypatch, pct, head):
+    table = {"vat_percent": 0, "tiers": [{"tier": "lite", "label": "Lite", "compare": "Claude Pro", "compare_pct": pct, "lengths": {
+        "week": {"amount": 900000, "list_amount": 900000, "usd": 6, "list_usd": 6, "sold_out": False, "unavailable": False}}}]}
+    monkeypatch.setattr(payments, "prices", lambda conn, cfg, now: table)
+    link(tg.conn, ALICE, tg.ids["alice"], lang="en")
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "prices"))
+    text = tg.fake.texts(ALICE)[-1]
+    assert head in text and "VAT" not in text and "⛔" not in text
