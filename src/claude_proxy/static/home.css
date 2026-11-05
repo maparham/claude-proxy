@@ -68,11 +68,14 @@ html[dir="rtl"] .home-brand { order: 1; margin-inline-end: 0; margin-inline-star
 .faq-sec details[open] summary .ic { transform: rotate(180deg); }
 .faq-sec details p { margin: 0; padding: 0 18px 16px; color: var(--ink-2); line-height: 1.8; }
 /* The support button: stays in the bottom-right corner in both languages and opens the ways to reach us. */
-.support { position: fixed; bottom: 20px; right: 20px; z-index: 10; }
+.support { position: fixed; bottom: 20px; inset-inline-end: 20px; z-index: 10; }
+/* bottom-right in both languages: in Persian that corner is the inline start */
+html[dir="rtl"] .support { inset-inline: 20px auto; }
+html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .support summary { display: flex; align-items: center; gap: 8px; padding: 12px 18px; border-radius: 999px; background: #229ed9; color: #fff; font-weight: 600; cursor: pointer; list-style: none; box-shadow: 0 10px 24px -8px rgba(34, 158, 217, 0.6); }
 .support summary::-webkit-details-marker { display: none; }
 .support summary:hover { background: #1c8cc2; }
-.support-menu { position: absolute; bottom: calc(100% + 8px); right: 0; min-width: 200px; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 14px 30px -12px rgba(0, 0, 0, 0.3); }
+.support-menu { position: absolute; bottom: calc(100% + 8px); inset-inline-end: 0; min-width: 200px; display: flex; flex-direction: column; padding: 6px; border: 1px solid var(--border); border-radius: 12px; background: var(--surface); box-shadow: 0 14px 30px -12px rgba(0, 0, 0, 0.3); }
 .support-menu a { display: flex; align-items: center; gap: 10px; padding: 9px 12px; border-radius: 8px; color: var(--ink); text-decoration: none; font-size: 14px; }
 .support-menu a:hover { background: var(--wash); }
 .support-menu .ic { width: 18px; height: 18px; color: var(--muted); }
