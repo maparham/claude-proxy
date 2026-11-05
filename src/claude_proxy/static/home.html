@@ -23,6 +23,20 @@
 <script src="/static/home.js" defer></script>
 </head>
 <body class="home">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" translate="no">
+  <symbol id="i-card" viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="2"/><path d="M2 10h20M6 15h4"/></symbol>
+  <symbol id="i-novpn" viewBox="0 0 26 24"><text x="13" y="16" text-anchor="middle" direction="ltr" font-family="system-ui, -apple-system, sans-serif" font-size="11.5" font-weight="800" fill="currentColor" stroke="none" letter-spacing="-0.4">VPN</text><path d="M3 21 23 3" stroke-width="1.8" stroke="var(--critical)"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-term" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M12 15h5"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/></symbol>
+  <symbol id="i-plane" viewBox="0 0 24 24"><path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/></symbol>
+  <symbol id="i-grad" viewBox="0 0 24 24"><path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/></symbol>
+  <symbol id="i-browser" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/><path d="m10 13 2.5 2.5L10 18M14 18h2"/></symbol>
+  <symbol id="i-chev" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/></symbol>
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 11.5a8.4 8.4 0 0 1-12.4 7.4L3 21l2.1-5.6A8.4 8.4 0 1 1 21 11.5z"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></symbol>
+</svg>
 <header class="home-top">
   <span class="home-top-right">
     <a class="btn small" href="/blog" data-i18n="home.blog">Blog</a>
@@ -31,10 +45,44 @@
   </span>
 </header>
 <main>
-  <section class="hero">
-    <h1 data-i18n="login.about_title">Your Claude Code access, in one place.</h1>
-    <p class="hero-lede" id="hero-lede"></p>
-    <p class="hero-cta"><a class="btn primary" href="/dashboard" data-i18n="home.signin">Sign in</a></p>
+  <div class="hero-wrap">
+    <section class="hero">
+      <h1 data-i18n="login.about_title">Your Claude Code access, in one place.</h1>
+      <p class="hero-lede" id="hero-lede"></p>
+      <p class="hero-cta"><a class="btn primary" href="/dashboard" data-i18n="home.signin">Sign in</a></p>
+    </section>
+    <!-- A Claude Code session as it looks in the terminal, in English like the real one. -->
+    <div class="term" aria-hidden="true" translate="no">
+      <div class="term-bar"><i></i><i></i><i></i></div>
+      <div class="cc">
+        <div class="p">~/project % <span class="w">gclaude</span></div>
+        <div class="cc-head"><svg class="cc-mascot" viewBox="0 0 11 5" fill="#d77757" shape-rendering="crispEdges"><rect x="1" y="0" width="1.02" height="1.02"/><rect x="2" y="0" width="1.02" height="1.02"/><rect x="3" y="0" width="1.02" height="1.02"/><rect x="4" y="0" width="1.02" height="1.02"/><rect x="5" y="0" width="1.02" height="1.02"/><rect x="6" y="0" width="1.02" height="1.02"/><rect x="7" y="0" width="1.02" height="1.02"/><rect x="8" y="0" width="1.02" height="1.02"/><rect x="9" y="0" width="1.02" height="1.02"/><rect x="0" y="1" width="1.02" height="1.02"/><rect x="1" y="1" width="1.02" height="1.02"/><rect x="2" y="1" width="1.02" height="1.02" fill="#111"/><rect x="3" y="1" width="1.02" height="1.02"/><rect x="4" y="1" width="1.02" height="1.02"/><rect x="5" y="1" width="1.02" height="1.02"/><rect x="6" y="1" width="1.02" height="1.02"/><rect x="7" y="1" width="1.02" height="1.02"/><rect x="8" y="1" width="1.02" height="1.02" fill="#111"/><rect x="9" y="1" width="1.02" height="1.02"/><rect x="10" y="1" width="1.02" height="1.02"/><rect x="1" y="2" width="1.02" height="1.02"/><rect x="2" y="2" width="1.02" height="1.02"/><rect x="3" y="2" width="1.02" height="1.02"/><rect x="4" y="2" width="1.02" height="1.02"/><rect x="5" y="2" width="1.02" height="1.02"/><rect x="6" y="2" width="1.02" height="1.02"/><rect x="7" y="2" width="1.02" height="1.02"/><rect x="8" y="2" width="1.02" height="1.02"/><rect x="9" y="2" width="1.02" height="1.02"/><rect x="1" y="3" width="1.02" height="1.02"/><rect x="2" y="3" width="1.02" height="1.02"/><rect x="3" y="3" width="1.02" height="1.02"/><rect x="4" y="3" width="1.02" height="1.02"/><rect x="5" y="3" width="1.02" height="1.02"/><rect x="6" y="3" width="1.02" height="1.02"/><rect x="7" y="3" width="1.02" height="1.02"/><rect x="8" y="3" width="1.02" height="1.02"/><rect x="9" y="3" width="1.02" height="1.02"/><rect x="1" y="4" width="1.02" height="1.02"/><rect x="3" y="4" width="1.02" height="1.02"/><rect x="7" y="4" width="1.02" height="1.02"/><rect x="9" y="4" width="1.02" height="1.02"/></svg><div><b>Claude Code</b> <span class="m">v2.1.312</span><br><span class="m">Opus 5.5 · API Usage Billing</span><br><span class="m">~/project</span></div></div>
+        <div class="cc-user">&gt; add a dark mode toggle to the settings page</div>
+        <div><span class="ok">⏺</span> <b>Update</b>(src/theme.ts)</div>
+        <div class="m">  ⎿  Updated src/theme.ts with <span class="add">24 additions</span> and <span class="del">3 removals</span></div>
+        <div><span class="ok">⏺</span> <b>Bash</b>(npm test)</div>
+        <div class="m">  ⎿  Tests: 42 passed, 42 total</div>
+        <div><span class="w">⏺</span> Dark mode toggle added to settings.</div>
+        <div class="cc-box">&gt; <span class="cursor"></span></div>
+      </div>
+    </div>
+  </div>
+
+  <section class="features" aria-label="Why Claude here" data-i18n-attr="aria-label:home.feat_label">
+    <div class="feat" style="--c: var(--s1)"><div class="feat-ic"><svg class="ic"><use href="#i-card"/></svg></div><div><b data-i18n="home.feat_pay">Pay in rials</b><span data-i18n="home.feat_pay_text">No foreign card or account</span></div></div>
+    <div class="feat" style="--c: var(--s3)"><div class="feat-ic"><svg class="ic" style="width:30px;height:28px"><use href="#i-novpn"/></svg></div><div><b data-i18n="home.feat_vpn">No VPN</b><span data-i18n="home.feat_vpn_text">Connect straight from Iran</span></div></div>
+    <div class="feat" style="--c: var(--s2)"><div class="feat-ic"><svg class="ic"><use href="#i-clock"/></svg></div><div><b id="feat-lengths"></b><span data-i18n="home.feat_len_text">Only for as long as you need it</span></div></div>
+    <div class="feat" style="--c: var(--s7)"><div class="feat-ic"><svg class="ic"><use href="#i-term"/></svg></div><div><b data-i18n="home.feat_term">Terminal and VS Code</b><span data-i18n="home.feat_term_text">Set up with one command</span></div></div>
+  </section>
+
+  <section class="who-sec" aria-labelledby="who-h">
+    <h2 id="who-h" data-i18n="home.who">Who is Claude Code for?</h2>
+    <div class="who">
+      <a href="/blog/mvp-in-a-day-standard-pass" style="--c: var(--s2)"><div class="feat-ic"><svg class="ic"><use href="#i-code"/></svg></div><b data-i18n="home.who_dev">Developers</b><span data-i18n="home.who_dev_text"></span><em data-i18n="home.who_standard"></em></a>
+      <a href="/blog/visa-documents-lite-pass" style="--c: var(--s1)"><div class="feat-ic"><svg class="ic"><use href="#i-plane"/></svg></div><b data-i18n="home.who_visa">Applying abroad</b><span data-i18n="home.who_visa_text"></span><em data-i18n="home.who_lite"></em></a>
+      <a href="#pricing" style="--c: var(--s7)"><div class="feat-ic"><svg class="ic"><use href="#i-grad"/></svg></div><b data-i18n="home.who_student">Students</b><span data-i18n="home.who_student_text"></span><em data-i18n="home.who_lite"></em></a>
+      <a href="/blog/browser-automation-playwright" style="--c: var(--s3)"><div class="feat-ic"><svg class="ic"><use href="#i-browser"/></svg></div><b data-i18n="home.who_auto">Automation and data</b><span data-i18n="home.who_auto_text"></span><em data-i18n="home.who_standard"></em></a>
+    </div>
   </section>
 
 
@@ -46,6 +94,15 @@
     <p id="vat-note" hidden></p>
   </section>
 
+  <section class="faq-sec" aria-labelledby="faq-h">
+    <h2 id="faq-h" data-i18n="home.faq">Questions</h2>
+    <details><summary><span data-i18n="home.faq_vpn_q"></span><svg class="ic"><use href="#i-chev"/></svg></summary><p data-i18n="home.faq_vpn_a"></p></details>
+    <details><summary><span data-i18n="home.faq_models_q"></span><svg class="ic"><use href="#i-chev"/></svg></summary><p data-i18n="home.faq_models_a"></p></details>
+    <details><summary><span data-i18n="home.faq_tiers_q"></span><svg class="ic"><use href="#i-chev"/></svg></summary><p data-i18n="home.faq_tiers_a"></p></details>
+    <details><summary><span data-i18n="home.faq_used_q"></span><svg class="ic"><use href="#i-chev"/></svg></summary><p data-i18n="home.faq_used_a"></p></details>
+    <details><summary><span data-i18n="home.faq_setup_q"></span><svg class="ic"><use href="#i-chev"/></svg></summary><p data-i18n="home.faq_setup_a"></p></details>
+  </section>
+
   <section class="latest-sec" aria-labelledby="latest-h">
     <h2 id="latest-h" data-i18n="home.latest">From the blog</h2>
     <!--latest-posts-->
@@ -54,6 +111,14 @@
 
 </main>
 <dialog id="order-dialog" class="order-dialog" aria-labelledby="order-h"></dialog>
+<details class="support">
+  <summary><svg class="ic"><use href="#i-chat"/></svg><span data-i18n="home.support">Questions?</span></summary>
+  <div class="support-menu">
+    <a href="https://t.me/rahkar_claude" target="_blank" rel="noopener"><svg class="ic"><use href="#i-send"/></svg><span data-i18n="home.support_telegram">Telegram</span></a>
+    <a href="https://wa.me/message/MPIP56C5KEOOD1" target="_blank" rel="noopener"><svg class="ic"><use href="#i-chat"/></svg><span data-i18n="home.support_whatsapp">WhatsApp</span></a>
+    <a href="mailto:support@rahkar.pro"><svg class="ic"><use href="#i-mail"/></svg><bdi translate="no">support@rahkar.pro</bdi></a>
+  </div>
+</details>
 <footer class="home-foot">
   <p><a href="/dashboard" data-i18n="home.signin">Sign in</a> · <a href="/blog" data-i18n="home.blog">Blog</a> · <a href="/privacy" data-i18n="login.privacy">Privacy</a></p>
   <p class="foot-currency"><label for="currency-select" data-i18n="home.currency_label">Currency</label> <select id="currency-select"></select></p>

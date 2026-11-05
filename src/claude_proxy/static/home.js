@@ -97,8 +97,11 @@ function initCurrencySelect(d) {
   document.getElementById("currency-select").innerHTML = [...new Set([d.currency, "USD"])]
     .map((c) => `<option value="${esc(c)}"${c === currency ? " selected" : ""}>${esc(currencyLabel(c))}</option>`).join("");
 }
-// The lede names only the lengths on sale; before the price list arrives, or without one, all three.
-function lede(d) { document.getElementById("hero-lede").innerHTML = t("home.hero_lede", { lengths: lengthsList(d && d.tiers, "home.hero_len_", t("home.hero_list")) }); }
+// The lede and the lengths tile name only the lengths on sale; before the price list arrives, or without one, all three.
+function lede(d) {
+  document.getElementById("hero-lede").innerHTML = t("home.hero_lede", { lengths: lengthsList(d && d.tiers, "home.hero_len_", t("home.hero_list")) });
+  document.getElementById("feat-lengths").textContent = t("home.feat_lengths", { lengths: lengthsList(d && d.tiers, "home.feat_len_", t("home.feat_list")) });
+}
 function render() {
   document.getElementById("cards").innerHTML = cardsHtml(data, length, currency);
   const vat = document.getElementById("vat-note"), pct = data && data.vat_percent;

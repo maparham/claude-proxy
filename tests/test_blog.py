@@ -1,5 +1,7 @@
 import datetime
 
+import pytest
+
 from claude_proxy import blog
 
 
@@ -49,3 +51,24 @@ def test_a_post_gets_a_table_of_contents_linking_its_headings():
     assert body == '<h2 id="s1">یک</h2><p>.</p><h3 id="s2">دو</h3><h2 id="s3">سه</h2>'
     assert '<li class="toc-h2"><a href="#s1">یک</a></li><li class="toc-h3"><a href="#s2">دو</a></li>' in toc
     assert blog.contents("<h2>تنها</h2>")[1] == ""
+
+
+def test_home_cards_show_each_posts_cover_icon_badge_tag_and_color():
+    out = blog.latest()
+    visa = out[out.index('href="/blog/visa-documents-lite-pass"'):]
+    visa = visa[:visa.index("</li>")]
+    assert 'style="--c: var(--s1)"' in visa and '<span class="tag">مهاجرت</span>' in visa
+    assert visa.index(blog.ICONS["plane"]) < visa.index('class="post-ic"') < visa.index(blog.ICONS["doc"])
+
+
+def test_a_post_header_with_an_unknown_icon_or_color_is_refused(tmp_path):
+    head = "<!--\ntitle: t\ndescription: d\ndate: 2026-11-03\n{}\n-->\n<p>.</p>"
+    plain = tmp_path / "plain.html"
+    plain.write_text(head.format("tag: x"), encoding="utf-8")
+    p = blog._parse(plain)
+    assert (p.icon, p.badge, p.color, p.tag) == ("doc", "doc", "s1", "x")
+    for bad in ("icon: kite", "badge: kite", "color: red"):
+        path = tmp_path / "bad.html"
+        path.write_text(head.format(bad), encoding="utf-8")
+        with pytest.raises(ValueError):
+            blog._parse(path)

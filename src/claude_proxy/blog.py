@@ -5,10 +5,15 @@ crawler sees the whole text. Each post is blog/<slug>.html, an HTML fragment und
     title: ...
     description: ...
     date: 2026-11-03
+    icon: plane
+    tag: مهاجرت
+    color: s1
     -->
     <p>...</p>
 
-The slug is the file name, in Latin letters so links stay readable once copied.
+The slug is the file name, in Latin letters so links stay readable once copied. icon and badge (the cover's large icon and
+the small one on the card, from ICONS; badge defaults to icon), tag and color (a series color, s1 to s8) are optional
+and dress the post's card on the home page.
 
 A post can carry a table of the packages that suit its tasks; the server fills in each package's name, usage and
 today's price, so the table follows the rate and discounts. Each row names its task and package:
@@ -32,6 +37,16 @@ FA_TIERS = {"lite": "اقتصادی", "standard": "استاندارد"}
 FA_LENGTHS = {"day": ("یک‌روزه", "یک روز"), "week": ("هفتگی", "یک هفته"), "month": ("ماهانه", "یک ماه")}
 FA_PLANS = {"Claude Pro": "کلاود پرو", "Claude Max": "کلاود مکس"}
 PACKAGE_ROW = re.compile(r'<tr data-package="([a-z0-9_]+)/(day|week|month)"><td>(.*?)</td></tr>', re.S)
+COLORS = {f"s{i}" for i in range(1, 9)}
+# Card icons as 24×24 stroke paths (Lucide shapes), drawn inline so the card needs no sprite on the page.
+ICONS = {
+    "doc": '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M9 13h6M9 17h4"/>',
+    "plane": '<path d="M17.8 19.2 16 11l3.5-3.5C21 6 21.5 4 21 3c-1-.5-3 0-4.5 1.5L13 8 4.8 6.2c-.5-.1-.9.1-1.1.5l-.3.5c-.2.5-.1 1 .3 1.3L9 12l-2 3H4l-1 1 3 2 2 3 1-1v-3l3-2 3.5 5.3c.3.4.8.5 1.3.3l.5-.2c.4-.3.6-.7.5-1.2z"/>',
+    "rocket": '<path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/>',
+    "browser": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M7 6.5h.01M10 6.5h.01"/><path d="m10 13 2.5 2.5L10 18M14 18h2"/>',
+    "code": '<path d="m16 18 6-6-6-6M8 6l-6 6 6 6"/>',
+    "grad": '<path d="M22 10 12 5 2 10l10 5 10-5z"/><path d="M6 12v5c3 2 9 2 12 0v-5"/>',
+}
 FA_MONTHS = ("فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور", "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند")
 
 
@@ -42,6 +57,10 @@ class Post:
     description: str
     date: datetime.date
     body: str
+    icon: str = "doc"
+    badge: str = "doc"   # the small icon on the card; the cover shows `icon` large
+    tag: str = ""
+    color: str = "s1"
 
 
 def _parse(path: Path) -> Post:
@@ -50,7 +69,14 @@ def _parse(path: Path) -> Post:
     if not m:
         raise ValueError(f"{path.name}: no header comment")
     meta = dict(line.split(": ", 1) for line in m.group(1).splitlines())
-    return Post(path.stem, meta["title"], meta["description"], datetime.date.fromisoformat(meta["date"]), text[m.end():])
+    look = {k: meta[k] for k in ("icon", "badge", "tag", "color") if k in meta}
+    for k in ("icon", "badge"):
+        if look.get(k, "doc") not in ICONS:
+            raise ValueError(f"{path.name}: unknown {k} {look[k]!r}")
+    if look.get("color", "s1") not in COLORS:
+        raise ValueError(f"{path.name}: unknown color {look['color']!r}")
+    look.setdefault("badge", look.get("icon", "doc"))
+    return Post(path.stem, meta["title"], meta["description"], datetime.date.fromisoformat(meta["date"]), text[m.end():], **look)
 
 
 @lru_cache(maxsize=1)
@@ -179,12 +205,20 @@ def index_page(base: str) -> str:
     return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main)
 
 
+def icon(name: str, cls: str) -> str:
+    return f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>'
+
+
 def latest(n: int = 3) -> str:
-    """The newest posts as cards for the home page, in Persian whichever language the page is shown in."""
+    """The newest posts as cards for the home page, in Persian whichever language the page is shown in: a cover in
+    the post's color with its icon, a badge icon, its tag, title, date and description."""
     items = "".join(
-        f'<li><a href="/blog/{p.slug}"><h3>{html.escape(p.title)}</h3>'
+        f'<li><a href="/blog/{p.slug}" style="--c: var(--{p.color})">'
+        f'<div class="cover">{icon(p.icon, "ic big")}</div><div class="post-ic">{icon(p.badge, "ic")}</div><div class="card-body">'
+        + (f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else "")
+        + f'<h3>{html.escape(p.title)}</h3>'
         f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>'
-        f"<p>{html.escape(p.description)}</p></a></li>" for p in posts()[:n])
+        f"<p>{html.escape(p.description)}</p></div></a></li>" for p in posts()[:n])
     return f'<ul class="latest-list" lang="fa" dir="rtl">{items}</ul>' if items else ""
 
 

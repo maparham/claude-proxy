@@ -107,7 +107,8 @@ _HOME_VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "
 
 
 class _TextCoverageParser(HTMLParser):
-    """Walks an HTML document; `uncovered` collects visible text outside any data-i18n(-attr) element or dynamic placeholder."""
+    """Walks an HTML document; `uncovered` collects visible text outside any data-i18n(-attr) element, dynamic placeholder
+    or translate="no" element (text that reads the same in every language, like the hero's terminal)."""
 
     def __init__(self):
         super().__init__()
@@ -120,7 +121,7 @@ class _TextCoverageParser(HTMLParser):
         attrs = dict(attrs)
         _, parent_covered, parent_skip = self.stack[-1]
         covered = parent_covered or "data-i18n" in attrs or "data-i18n-attr" in attrs
-        skip = parent_skip or tag in ("script", "style", "title") or attrs.get("id") in _HOME_DYNAMIC_IDS
+        skip = parent_skip or tag in ("script", "style", "title") or attrs.get("id") in _HOME_DYNAMIC_IDS or attrs.get("translate") == "no"
         self.stack.append((tag, covered, skip))
 
     def handle_endtag(self, tag):
