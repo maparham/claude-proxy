@@ -8,14 +8,17 @@ from __future__ import annotations
 
 import asyncio
 import collections
+import hashlib
 import json
 import logging
+import secrets
 import sqlite3
 import time
 import weakref
 
 import httpx
 
+from . import db, orders
 from .config import Config
 
 logger = logging.getLogger("claude_proxy")
@@ -169,6 +172,64 @@ def t(lang: str, key: str, **kw) -> str:
     return TEXTS["en" if lang == "en" else "fa"][key].format(**kw)
 
 
+LINK_TTL_S = 600
+
+
+def _hash(code: str) -> str:
+    return hashlib.sha256(code.encode()).hexdigest()
+
+
+def new_link_code(conn: sqlite3.Connection, user_id: int, now: float | None = None) -> str:
+    """A single-use code for t.me/<bot>?start=<code>, valid 10 minutes; replaces the user's earlier one (section 4).
+    Only its hash is stored."""
+    now = int(time.time() if now is None else now)
+    code = secrets.token_urlsafe(16)   # 22 characters of [A-Za-z0-9_-]: what a start parameter allows
+    conn.execute("DELETE FROM telegram_link_codes WHERE user_id=?", (user_id,))
+    conn.execute("INSERT INTO telegram_link_codes(code_hash, user_id, expires_at) VALUES(?,?,?)", (_hash(code), user_id, now + LINK_TTL_S))
+    return code
+
+
+def claim(conn: sqlite3.Connection, code: str, chat_id: int, now: float | None = None) -> tuple[dict, int | None] | None:
+    """Link `chat_id` (its row exists) to the code's account and use the code up. Returns (the account, the chat it
+    was linked to before, if another), or None for a bad, used or expired code, or an account no longer enabled."""
+    now = int(time.time() if now is None else now)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        row = conn.execute("SELECT * FROM telegram_link_codes WHERE code_hash=?", (_hash(code),)).fetchone()
+        user = None
+        if row is not None:
+            conn.execute("DELETE FROM telegram_link_codes WHERE code_hash=?", (row["code_hash"],))
+            if row["expires_at"] > now:
+                user = conn.execute("SELECT * FROM users WHERE id=? AND enabled=1 AND revoked_at IS NULL", (row["user_id"],)).fetchone()
+        if user is None:
+            conn.execute("COMMIT")
+            return None
+        old = conn.execute("SELECT chat_id FROM telegram_chats WHERE user_id=? AND chat_id!=?", (user["id"], chat_id)).fetchone()
+        conn.execute("UPDATE telegram_chats SET user_id=NULL WHERE user_id=?", (user["id"],))
+        conn.execute("UPDATE telegram_chats SET user_id=? WHERE chat_id=?", (user["id"], chat_id))
+        db.audit(conn, user["id"], "telegram_relink" if old else "telegram_link", user["name"], {"chat_id": chat_id})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return dict(user), old["chat_id"] if old else None
+
+
+def unlink(conn: sqlite3.Connection, user_id: int, actor: int | None) -> bool:
+    n = conn.execute("UPDATE telegram_chats SET user_id=NULL WHERE user_id=?", (user_id,)).rowcount
+    if n:
+        db.audit(conn, actor, "telegram_unlink", db._user_name(conn, user_id))
+    return bool(n)
+
+
+def connected(conn: sqlite3.Connection, user_id: int) -> str | None:
+    """How the dashboard names the linked Telegram account: @username, else its first name."""
+    row = conn.execute("SELECT username, first_name FROM telegram_chats WHERE user_id=?", (user_id,)).fetchone()
+    if row is None:
+        return None
+    return f"@{row['username']}" if row["username"] else row["first_name"] or "Telegram"
+
+
 class Telegram:
     def __init__(self, conn: sqlite3.Connection, cfg: Config, http: httpx.AsyncClient):
         self.conn, self.cfg = conn, cfg
@@ -276,6 +337,21 @@ class Telegram:
         await self.say(chat, "lang_set")
         await self.menu(chat)
 
+    async def start_code(self, chat: dict, code: str) -> None:
+        got = claim(self.conn, code, chat["chat_id"])
+        if got is None:
+            return await self.say(chat, "link_bad")
+        user, old = got
+        chat["user_id"] = user["id"]
+        if old is not None:
+            row = self.conn.execute("SELECT * FROM telegram_chats WHERE chat_id=?", (old,)).fetchone()
+            try:
+                await self.say(dict(row), "relinked_away")
+            except Blocked:
+                self.conn.execute("UPDATE telegram_chats SET blocked=1 WHERE chat_id=?", (old,))
+        await self.say(chat, "linked", who=orders.mask_email(user["email"]) if user["email"] else user["name"])
+        await self.menu(chat)
+
     # ---------- incoming ----------
 
     async def private_message(self, msg: dict) -> None:
@@ -286,6 +362,13 @@ class Telegram:
         if text.startswith("/"):
             cmd, _, arg = text.partition(" ")
             cmd = cmd.split("@")[0]
+            if cmd == "/start" and arg.strip():
+                return await self.start_code(chat, arg.strip())
+            if cmd == "/unlink":
+                if chat["user_id"] is not None and unlink(self.conn, chat["user_id"], chat["user_id"]):
+                    chat["user_id"] = None
+                    return await self.say(chat, "unlinked")
+                return await self.say(chat, "not_linked")
             if cmd in ("/start", "/menu"):
                 return await self.menu(chat)
             if cmd == "/lang":

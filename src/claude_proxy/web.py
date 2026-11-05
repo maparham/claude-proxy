@@ -1580,6 +1580,30 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             await tg.handle(update)
             return {"ok": True}
 
+    def need_telegram():
+        if tg is None:
+            fail(404, "The Telegram bot is not set up on this gateway.")
+
+    @app.get("/api/telegram")
+    async def telegram_status(request: Request):
+        user = principal(request)
+        if tg is None:
+            return {"on": False}
+        return {"on": True, "bot": cfg.telegram.bot_username, "connected": telegram.connected(conn, user["id"])}
+
+    @app.post("/api/telegram/link")
+    async def telegram_link(request: Request):
+        user = principal(request, write=True)
+        need_telegram()
+        return {"url": f"https://t.me/{cfg.telegram.bot_username}?start={telegram.new_link_code(conn, user['id'])}"}
+
+    @app.post("/api/telegram/unlink")
+    async def telegram_unlink(request: Request):
+        user = principal(request, write=True)
+        need_telegram()
+        telegram.unlink(conn, user["id"], user["id"])
+        return {"ok": True}
+
     @app.get("/api/admin/orders")
     async def orders_list(request: Request, status: str = "open"):
         admin(request)

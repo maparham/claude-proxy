@@ -2360,6 +2360,7 @@ const ERR_FA = {
   "Sign-ups are closed. Ask the gateway admin for an account.": "ثبت‌نام بسته است. برای حساب از ادمین سرویس بخواهید.",
   "That account was just created; sign in again.": "آن حساب همین حالا ساخته شد؛ دوباره وارد شوید.",
   "That request was answered already.": "به آن درخواست قبلاً پاسخ داده شده است.",
+  "The Telegram bot is not set up on this gateway.": "ربات تلگرام روی این سرویس راه‌اندازی نشده است.",
   "The verification failed; please try again.": "تأیید ناموفق بود؛ لطفاً دوباره تلاش کنید.",
   "This account is disabled. Ask the gateway admin.": "این حساب غیرفعال است. از ادمین سرویس بپرسید.",
   "An admin account cannot delete itself.": "حساب ادمین نمی‌تواند خودش را حذف کند.",
