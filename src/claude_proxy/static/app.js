@@ -1341,7 +1341,7 @@ function grantDialog(users, pre = null) {
     $("#grant-preview", d).innerHTML = `<div class="grant-amount"><b>${esc(money(p.amount, p.currency))}</b>
         <span class="muted">${price} ${t("tk.at_rate", { rate: nfFull.format(p.rate) })}${p.vat_percent ? ` ${t("tk.plus_vat", { pct: fmtNum(p.vat_percent) })}` : ""}${p.rate_set_at ? ` · ${t("tk.rate_of", { date: fmtDate(p.rate_set_at) })}` : ""}</span>
         ${p.stale_rate ? `<span class="badge stale">${t("quota.stale")}</span>` : ""}</div>
-      <ul><li>${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}, ${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}</li>${fit}${soldOut}${weeks}
+      <ul><li>${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}${t("app.list_sep")}${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}</li>${fit}${soldOut}${weeks}
       ${p.credit ? `<li class="muted">${t("tk.credit_removed")}</li>` : ""}</ul>`;
     $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
     $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">${t("tk.remove_limits")}</p>` +
