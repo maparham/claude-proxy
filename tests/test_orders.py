@@ -737,3 +737,15 @@ async def test_order_received_html_copy_carries_the_same_undated_terms(mailing, 
     await orders.dispatch(conn, cfg, o["id"])
     h = htmls[-1]
     assert tickets.terms_html(conn, cfg, "en", "week", None) in h and "<table" not in h
+
+
+# ---------- where the order came from (Telegram bot, via) ----------
+
+def test_order_records_where_it_came_from(env):
+    conn, cfg, ids = env
+    kw = dict(tier="lite", length="week", currency="EUR", name="Alice", email="alice@example.com", user_id=ids["alice"],
+              notify=False, now=NOW, terms_version=tickets.TERMS_VERSION)
+    o = orders.create(conn, cfg, **kw, via="telegram")
+    assert o["via"] == "telegram"
+    orders.withdraw(conn, ids["alice"], o["id"], now=NOW)
+    assert orders.create(conn, cfg, **kw, via="nonsense")["via"] == "web"

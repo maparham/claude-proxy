@@ -685,3 +685,10 @@ async def test_a_queued_pass_that_does_not_fit_is_refused_before_paying(env):
     with pytest.raises(orders.OrderError):
         await start(conn, cfg, ids)
     assert zp.requests == []
+
+
+async def test_start_records_via(env):
+    conn, cfg, ids, zp = env
+    r = await payments.start(conn, cfg, user(conn, ids["alice"]), "lite", "week", "alice@example.com",
+                             terms_version=tickets.TERMS_VERSION, via="telegram")
+    assert orders.get(conn, payments.get(conn, r["payment_id"])["order_id"])["via"] == "telegram"
