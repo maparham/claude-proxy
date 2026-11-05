@@ -2116,7 +2116,7 @@ const I18N = {
     "home.hero_list": "conjunction",
     "home.signin": "ورود یا ثبت نام",
     "home.blog": "وبلاگ",
-    "home.brand": "راهکار",
+    "home.brand": "راهکار هوش برتر",
     "home.latest": "مطالب کاربردی",
     "home.all_posts": "همه مطالب",
     "home.feat_label": "ویژگی‌ها",

@@ -181,7 +181,7 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 </head>
 <body class="home blog{' blog-wide' if wide else ''}">
 <header class="home-top">
-  <a class="home-brand" href="/"><img src="/static/rahkar-icon.svg" alt="" width="36" height="36"><span>راهکار</span></a>
+  <a class="home-brand" href="/"><img src="/static/rahkar-icon.svg" alt="" width="36" height="36"><span>راهکار هوش برتر</span></a>
   <span class="home-top-right">
     <a class="btn small" href="/blog">وبلاگ</a>
     <a class="btn small" href="/#pricing">قیمت‌ها</a>
