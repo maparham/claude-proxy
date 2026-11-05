@@ -18,7 +18,7 @@ import weakref
 
 import httpx
 
-from . import db, orders
+from . import db, orders, passcard, payments, tickets
 from .config import Config
 
 logger = logging.getLogger("claude_proxy")
@@ -170,6 +170,20 @@ TEXTS = {
 
 def t(lang: str, key: str, **kw) -> str:
     return TEXTS["en" if lang == "en" else "fa"][key].format(**kw)
+
+
+# Persian for the refusals a buyer in the bot can meet; any other message is shown as it is.
+FA_ERRORS = {
+    payments.PAUSED: "پرداخت آنلاین فعلاً متوقف است؛ کمی بعد دوباره امتحان کنید.",
+    payments.MANUAL_ONLY: "پرداخت آنلاین فعلاً خاموش است.",
+    payments.UNAVAILABLE: "زرین‌پال الان در دسترس نیست؛ کمی بعد دوباره امتحان کنید.",
+    payments.ALREADY_PAID: "این سفارش قبلاً پرداخت شده است.",
+    orders.UNAVAILABLE: "بسته‌ها موقتاً در دسترس نیستند؛ چند دقیقه دیگر امتحان کنید.",
+    orders.CHANGED: "این سفارش لغو یا عوض شده است.",
+    orders.USER_TOO_MANY: "امروز سفارش زیادی ثبت شده؛ فردا دوباره امتحان کنید.",
+    orders.LINK_INVALID: "این لینک پرداخت دیگر معتبر نیست.",
+    "You already have an open order.": "یک سفارش باز دارید.",
+}
 
 
 LINK_TTL_S = 600
@@ -379,6 +393,8 @@ class Telegram:
         await self.on_text(chat, msg)
 
     async def on_text(self, chat: dict, msg: dict) -> None:
+        if chat["state"] == "email":
+            return await self.got_email(chat, msg)
         await self.menu(chat)
 
     async def callback(self, q: dict) -> None:
@@ -394,9 +410,226 @@ class Telegram:
             await self.menu(chat)
         elif action == "lang":
             await self.toggle_lang(chat)
+        elif action == "buy":
+            await self.buy(chat)
+        elif action == "mine":
+            await self.mine(chat)
+        elif action == "t":
+            await self.pick_tier(chat, arg)
+        elif action == "l":
+            return await self.pick_length(chat, arg)
+        elif action == "s" and arg in ("a", "n"):
+            return await self.pick_start(chat, arg)
+        elif action == "p":
+            return await self.pay(chat, arg)
+        elif action in ("oc", "ox") and arg.isdigit():
+            await (self.continue_order if action == "oc" else self.cancel_order)(chat, int(arg))
         else:
             return False
         return True
+
+    # ---------- buying (section 6) ----------
+
+    def error_text(self, lang: str, e: Exception) -> str:
+        return FA_ERRORS.get(str(e), str(e)) if lang != "en" else str(e)
+
+    def amount(self, lang: str, n) -> str:
+        return orders.fa_amount(n, payments.CURRENCY) if lang != "en" else payments._toman(n)
+
+    def length_name(self, lang: str, length: str) -> str:
+        return t(lang, f"len_{length}")
+
+    def label(self, tier: str) -> str:
+        x = self.cfg.tickets.tiers.get(tier)
+        return x.label if x else tier
+
+    @staticmethod
+    def _buyable(p) -> bool:
+        return p is not None and not p["sold_out"] and not p["unavailable"]
+
+    def tiers_on_sale(self, now: float) -> list[dict] | None:
+        """The Toman price list's tiers with something buyable; None while ZarinPal can't take a payment."""
+        if not self.cfg.tickets.enabled or not payments.online(payments.pay_mode(self.conn, self.cfg)) \
+                or not payments.ready(self.conn, self.cfg, now):
+            return None
+        table = payments.prices(self.conn, self.cfg, now)
+        if table is None:
+            return None
+        # callback_data is at most 64 bytes: "t:" + a tier id of at most 40
+        return [x for x in table["tiers"] if len(x["tier"]) <= 40 and any(self._buyable(p) for p in x["lengths"].values())]
+
+    def open_order(self, user_id: int) -> dict | None:
+        row = self.conn.execute(f"SELECT * FROM orders WHERE user_id=? AND status IN {orders.OPEN} ORDER BY id DESC LIMIT 1",
+                                (user_id,)).fetchone()
+        return dict(row) if row else None
+
+    async def need_account(self, chat: dict) -> dict | None:
+        user = self.account(chat)
+        if user is None:
+            await self.say(chat, "need_link", url=self.dashboard())
+        return user
+
+    async def buy(self, chat: dict) -> None:
+        user = await self.need_account(chat)
+        if user is None:
+            return
+        o = self.open_order(user["id"])
+        if o is not None:
+            if o["currency"] == payments.CURRENCY and not payments._has_paid(self.conn, o["id"]):
+                return await self.say(chat, "open_order", [[self.btn(chat, "btn_continue", f"oc:{o['id']}")],
+                                                           [self.btn(chat, "btn_cancel_order", f"ox:{o['id']}")]],
+                                      label=self.label(o["tier"]), length=self.length_name(chat["lang"], o["length"]),
+                                      amount=self.amount(chat["lang"], o["quoted_amount"]))
+            return await self.say(chat, "order_busy")
+        tiers = self.tiers_on_sale(time.time())
+        if tiers is None:
+            return await self.say(chat, "paused")
+        if not tiers:
+            return await self.say(chat, "sold_out")
+        self.set_state(chat, None, None)
+        await self.say(chat, "choose_tier", [[{"text": x["label"], "callback_data": f"t:{x['tier']}"}] for x in tiers])
+
+    def _tier(self, tier: str) -> dict | None:
+        return next((x for x in self.tiers_on_sale(time.time()) or [] if x["tier"] == tier), None)
+
+    async def pick_tier(self, chat: dict, tier: str) -> None:
+        if await self.need_account(chat) is None:
+            return
+        x = self._tier(tier)
+        if x is None:
+            return await self.buy(chat)
+        self.set_state(chat, None, {"tier": tier})
+        lang = chat["lang"]
+        await self.say(chat, "choose_length", [[{"text": f"{self.length_name(lang, n)} · {self.amount(lang, p['amount'])}",
+                                                 "callback_data": f"l:{n}"}] for n, p in x["lengths"].items() if self._buyable(p)])
+
+    async def pick_length(self, chat: dict, length: str) -> bool:
+        user, pend = await self.need_account(chat), self.pending(chat)
+        if user is None:
+            return True
+        if not pend or "tier" not in pend:
+            return False
+        x = self._tier(pend["tier"])
+        if x is None or not self._buyable(x["lengths"].get(length)):
+            await self.buy(chat)
+            return True
+        pend = {"tier": pend["tier"], "length": length}
+        now = time.time()
+        _, replaces = tickets.next_start(self.conn, self.cfg, user["id"], now)
+        if tickets.running(self.conn, user["id"], now) and not replaces:   # as the dashboard's order dialog offers it
+            self.set_state(chat, None, pend)
+            await self.say(chat, "choose_start", [[self.btn(chat, "btn_after", "s:a")], [self.btn(chat, "btn_now", "s:n")]])
+            return True
+        await self.summary(chat, pend | {"start_now": False})
+        return True
+
+    async def pick_start(self, chat: dict, arg: str) -> bool:
+        pend = self.pending(chat)
+        if not pend or "length" not in pend:
+            return False
+        await self.summary(chat, pend | {"start_now": arg == "n"})
+        return True
+
+    async def summary(self, chat: dict, pend: dict) -> None:
+        user = await self.need_account(chat)
+        if user is None:
+            return
+        x = self._tier(pend["tier"])
+        p = x and x["lengths"].get(pend["length"])
+        if not self._buyable(p):
+            return await self.buy(chat)
+        now, lang = time.time(), chat["lang"]
+        start, _ = tickets.next_start(self.conn, self.cfg, user["id"], now, pend["start_now"])
+        pend = pend | {"nonce": secrets.token_urlsafe(6)}
+        self.set_state(chat, None, pend)
+        site = (self.cfg.listener.home_url or self.cfg.listener.dashboard_url).rstrip("/")
+        await self.say(chat, "summary", [[self.btn(chat, "btn_pay", f"p:{pend['nonce']}")]],
+                       label=x["label"], length=self.length_name(lang, pend["length"]), amount=self.amount(lang, p["amount"]),
+                       start=tickets.terms_date(start, lang), terms=f"{site}/privacy#terms")
+
+    async def pay(self, chat: dict, nonce: str) -> bool:
+        pend = self.pending(chat)
+        if not pend or not nonce or pend.get("nonce") != nonce:
+            return False   # a second tap, or an old summary
+        self.set_state(chat, None, None)
+        user = await self.need_account(chat)
+        if user is None:
+            return True
+        if not user["email"]:
+            self.set_state(chat, "email", {k: v for k, v in pend.items() if k != "nonce"})
+            await self.say(chat, "ask_email")
+            return True
+        await self.start_payment(chat, user, pend, user["email"])
+        return True
+
+    async def got_email(self, chat: dict, msg: dict) -> None:
+        try:
+            email = orders._email(msg.get("text") or "")
+        except orders.OrderError:
+            return await self.say(chat, "bad_email")
+        pend = self.pending(chat) or {}
+        self.set_state(chat, None, None)
+        user = await self.need_account(chat)
+        if user is None or "length" not in pend:
+            return await self.menu(chat) if user is not None else None
+        await self.start_payment(chat, user, pend, email)
+
+    async def send_pay_link(self, chat: dict, url: str) -> None:
+        await self.say(chat, "pay_ready", [[{"text": t(chat["lang"], "btn_open_pay"), "url": url}]])
+
+    async def start_payment(self, chat: dict, user: dict, pend: dict, email: str) -> None:
+        if not self.allow(chat["chat_id"], "pay", PAY_PER_HOUR):
+            return await self.too_many(chat)
+        try:
+            r = await payments.start(self.conn, self.cfg, user, pend["tier"], pend["length"], email,
+                                     terms_version=tickets.TERMS_VERSION, lang=chat["lang"],
+                                     start_now=bool(pend.get("start_now")), via="telegram")
+        except orders.OrderError as e:
+            return await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=self.error_text(chat["lang"], e))
+        await self.send_pay_link(chat, r["url"])
+
+    async def continue_order(self, chat: dict, oid: int) -> None:
+        user = await self.need_account(chat)
+        if user is None:
+            return
+        if not self.allow(chat["chat_id"], "pay", PAY_PER_HOUR):
+            return await self.too_many(chat)
+        try:
+            r = await payments.pay_order(self.conn, self.cfg, user, oid)
+        except orders.OrderError as e:
+            return await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=self.error_text(chat["lang"], e))
+        await self.send_pay_link(chat, r["url"])
+
+    async def cancel_order(self, chat: dict, oid: int) -> None:
+        user = await self.need_account(chat)
+        if user is None:
+            return
+        try:
+            orders.withdraw(self.conn, user["id"], oid)
+        except orders.OrderError as e:
+            return await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=self.error_text(chat["lang"], e))
+        await self.buy(chat)
+
+    async def mine(self, chat: dict) -> None:
+        user = await self.need_account(chat)
+        if user is None:
+            return
+        lang, lines = chat["lang"], []
+        if self.cfg.tickets.enabled:
+            card = passcard.build(self.conn, self.cfg, user["id"], time.time())
+            cur = card["current"]
+            if cur and cur["passes"]:
+                for p in cur["passes"]:
+                    lines.append(t(lang, "mine_queued", label=p["label"], start=tickets.terms_date(p["starts_at"], lang)) if p.get("queued")
+                                 else t(lang, "mine_running", label=p["label"], end=tickets.terms_date(p["effective_end"], lang)))
+            else:
+                if cur:
+                    lines.append(t(lang, "mine_running", label=cur["label"], end=tickets.terms_date(cur["effective_end"], lang)))
+                if card["queued"]:
+                    q = card["queued"]
+                    lines.append(t(lang, "mine_queued", label=q["label"], start=tickets.terms_date(q["starts_at"], lang)))
+        text = "\n".join(lines) if lines else t(lang, "mine_none")
+        await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}")
 
     async def admin_message(self, msg: dict) -> None:
         """A message in the admin group (section 7); answering is added with the support relay."""

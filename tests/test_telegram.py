@@ -265,7 +265,6 @@ async def test_link_api_off_without_the_bot(tg, monkeypatch):
         assert (await c.get("/api/telegram", headers=bearer(tg.keys["alice"]))).json() == {"on": False}
 
 
-@pytest.mark.skip(reason="needs Task 7")
 async def test_a_revoked_account_counts_as_unlinked(tg):
     from claude_proxy import db as dbm
     link(tg.conn, ALICE, tg.ids["alice"])
@@ -273,3 +272,138 @@ async def test_a_revoked_account_counts_as_unlinked(tg):
     async with app(tg) as c:
         await post(c, cb(ALICE, "buy"))
     assert tg.fake.texts(ALICE)[0].startswith(telegram.t("fa", "need_link", url="").split("\n")[0])
+
+
+# ---------- Task 7: buying ----------
+
+from claude_proxy import orders, payments, tickets  # noqa: E402
+
+
+def buttons(sent) -> list[str]:
+    return [b.get("callback_data") or b.get("url") for row in sent["reply_markup"]["inline_keyboard"] for b in row]
+
+
+async def buy_week(c, tg, chat=ALICE):
+    """Buy, Lite, a week, then return the summary's buttons."""
+    await post(c, cb(chat, "buy"))
+    await post(c, cb(chat, "t:lite"))
+    await post(c, cb(chat, "l:week"))
+    return buttons(tg.fake.sent(chat_id=chat)[-1])
+
+
+async def test_buy_needs_a_linked_account(tg):
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "buy"))
+    assert tg.fake.texts(ALICE) == [telegram.t("fa", "need_link", url="https://dash.rahkar.pro/dashboard")]
+
+
+async def test_buy_paused_when_zarinpal_cannot_take_it(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    payments.set_pay_mode(tg.conn, tg.ids["admin"], "manual")
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "buy"))
+    assert tg.fake.texts(ALICE) == [telegram.t("fa", "paused")]
+
+
+async def test_buy_to_a_zarinpal_link(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "buy"))
+        tiers = buttons(tg.fake.sent(chat_id=ALICE)[-1])
+        assert "t:lite" in tiers
+        await post(c, cb(ALICE, "t:lite"))
+        assert "l:week" in buttons(tg.fake.sent(chat_id=ALICE)[-1])
+        await post(c, cb(ALICE, "l:week"))
+        summary = tg.fake.sent(chat_id=ALICE)[-1]
+        (pay,) = buttons(summary)
+        assert pay.startswith("p:") and "/privacy#terms" in summary["text"]
+        await post(c, cb(ALICE, pay))
+    ready = tg.fake.sent(chat_id=ALICE)[-1]
+    assert ready["text"] == telegram.t("fa", "pay_ready")
+    assert buttons(ready)[0].startswith("https://payment.zarinpal.com/pg/StartPay/")
+    o = tg.conn.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 1").fetchone()
+    assert (o["via"], o["tier"], o["length"], o["lang"], o["email"]) == ("telegram", "lite", "week", "fa", "alice@example.com")
+
+
+async def test_a_double_tap_opens_one_payment(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        await post(c, cb(ALICE, pay))
+    assert len(tg.zp.requests) == 1
+    assert tg.fake.sent("answerCallbackQuery")[-1]["text"] == telegram.t("fa", "stale")
+
+
+async def test_an_open_order_offers_continue_or_cancel(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        await post(c, cb(ALICE, "buy"))
+        offer = tg.fake.sent(chat_id=ALICE)[-1]
+        oid = tg.conn.execute("SELECT id FROM orders ORDER BY id DESC LIMIT 1").fetchone()[0]
+        assert buttons(offer) == [f"oc:{oid}", f"ox:{oid}"]
+        await post(c, cb(ALICE, f"oc:{oid}"))
+        assert tg.fake.sent(chat_id=ALICE)[-1]["text"] == telegram.t("fa", "pay_ready")
+        await post(c, cb(ALICE, f"ox:{oid}"))
+    assert orders.get(tg.conn, oid)["status"] == "withdrawn"
+    assert "t:lite" in buttons(tg.fake.sent(chat_id=ALICE)[-1])   # back to choosing
+
+
+async def test_no_email_asks_for_one(tg):
+    tg.conn.execute("UPDATE users SET email=NULL WHERE id=?", (tg.ids["alice"],))
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "ask_email")
+        await post(c, msg(ALICE, "not an email"))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "bad_email")
+        await post(c, msg(ALICE, "alice@mail.example"))
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "pay_ready")
+    assert tg.conn.execute("SELECT email FROM orders ORDER BY id DESC LIMIT 1").fetchone()[0] == "alice@mail.example"
+    assert tg.conn.execute("SELECT email FROM users WHERE id=?", (tg.ids["alice"],)).fetchone()[0] is None
+
+
+@pytest.mark.parametrize("data", ["t:nope", "l:year"])   # a tier, a length no longer (or never) on sale
+async def test_an_old_button_shows_the_tiers_again(tg, data):   # Review Focus 2
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "buy"))
+        await post(c, cb(ALICE, "t:lite"))
+        await post(c, cb(ALICE, data))
+    assert "t:lite" in buttons(tg.fake.sent(chat_id=ALICE)[-1])
+
+
+async def test_a_zarinpal_failure_is_shown_in_persian(tg):
+    from claude_proxy import zarinpal
+    link(tg.conn, ALICE, tg.ids["alice"])
+    tg.zp.request_answer = zarinpal.ZarinpalUnavailable("down")
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+    assert tg.fake.texts(ALICE)[-1] == telegram.FA_ERRORS[payments.UNAVAILABLE]
+
+
+async def test_payment_starts_are_rate_limited(tg, monkeypatch):
+    monkeypatch.setattr(telegram, "PAY_PER_HOUR", 1)
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        oid = tg.conn.execute("SELECT id FROM orders ORDER BY id DESC LIMIT 1").fetchone()[0]
+        await post(c, cb(ALICE, f"oc:{oid}"))
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "too_many")
+    assert len(tg.zp.requests) == 1
+
+
+async def test_my_passes(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "mine"))
+        assert tg.fake.texts(ALICE)[-1].startswith(telegram.t("fa", "mine_none"))
+        user = tg.conn.execute("SELECT * FROM users WHERE id=?", (tg.ids["alice"],)).fetchone()
+        tickets.grant(tg.conn, tg.cfg, tg.ids["admin"], user, "lite", "week", "IRT", terms_version="v1")
+        await post(c, cb(ALICE, "mine"))
+    assert tg.fake.texts(ALICE)[-1].startswith("Lite: تا ")
