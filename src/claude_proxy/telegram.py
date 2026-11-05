@@ -18,7 +18,7 @@ import weakref
 
 import httpx
 
-from . import db, orders, passcard, payments, tickets
+from . import blog, db, orders, passcard, payments, tickets
 from .config import Config
 
 logger = logging.getLogger("claude_proxy")
@@ -575,11 +575,11 @@ class Telegram:
             on_sale = [(n, p) for n, p in x["lengths"].items() if p is not None]
             if not on_sale:
                 continue
-            head, pct = x["label"], x.get("compare_pct")
+            head, pct, plan = self.label(x["tier"], lang), x.get("compare_pct"), self.plan(x["compare"], lang)
             if pct is not None:   # a whole number of plans reads as plans, as on the home page
-                share = (t(lang, "prices_same", plan=x["compare"]) if pct == 100 else
-                         t(lang, "prices_times", n=num(pct // 100), plan=x["compare"]) if pct > 100 and pct % 100 == 0 else
-                         t(lang, "prices_pct", pct=num(pct), plan=x["compare"]))
+                share = (t(lang, "prices_same", plan=plan) if pct == 100 else
+                         t(lang, "prices_times", n=num(pct // 100), plan=plan) if pct > 100 and pct % 100 == 0 else
+                         t(lang, "prices_pct", pct=num(pct), plan=plan))
                 head += f" ({share})"
             lines += ["", head]
             for n, p in on_sale:
@@ -607,9 +607,16 @@ class Telegram:
     def length_name(self, lang: str, length: str) -> str:
         return t(lang, f"len_{length}")
 
-    def label(self, tier: str) -> str:
+    def label(self, tier: str, lang: str) -> str:
+        """The tier's name in the chat's language: Persian as the site words it while the label is the default."""
+        if lang != "en":
+            return orders.fa_label(self.cfg, tier)
         x = self.cfg.tickets.tiers.get(tier)
         return x.label if x else tier
+
+    @staticmethod
+    def plan(name: str, lang: str) -> str:
+        return blog.FA_PLANS.get(name, name) if lang != "en" else name
 
     @staticmethod
     def _buyable(p) -> bool:
@@ -649,7 +656,7 @@ class Telegram:
             if o["currency"] == payments.CURRENCY and not payments._has_paid(self.conn, o["id"]):
                 return await self.say(chat, "open_order", [[self.btn(chat, "btn_continue", f"oc:{o['id']}")],
                                                            [self.btn(chat, "btn_cancel_order", f"ox:{o['id']}")]],
-                                      label=self.label(o["tier"]), length=self.length_name(chat["lang"], o["length"]),
+                                      label=self.label(o["tier"], chat["lang"]), length=self.length_name(chat["lang"], o["length"]),
                                       amount=self.amount(chat["lang"], o["quoted_amount"]))
             return await self.say(chat, "order_busy")
         tiers = self.tiers_on_sale(time.time())
@@ -657,7 +664,7 @@ class Telegram:
             return await self.say(chat, "paused")
         if not tiers:
             return await self.say(chat, "sold_out")
-        await self.say(chat, "choose_tier", [[{"text": x["label"], "callback_data": f"t:{x['tier']}"}] for x in tiers])
+        await self.say(chat, "choose_tier", [[{"text": self.label(x["tier"], chat["lang"]), "callback_data": f"t:{x['tier']}"}] for x in tiers])
 
     def _tier(self, tier: str) -> dict | None:
         return next((x for x in self.tiers_on_sale(time.time()) or [] if x["tier"] == tier), None)
@@ -715,7 +722,7 @@ class Telegram:
         self.set_state(chat, None, pend)
         site = self.site()
         await self.say(chat, "summary", [[self.btn(chat, "btn_pay", f"p:{pend['nonce']}")]],
-                       label=x["label"], length=self.length_name(lang, pend["length"]), amount=self.amount(lang, p["amount"]),
+                       label=self.label(x["tier"], lang), length=self.length_name(lang, pend["length"]), amount=self.amount(lang, p["amount"]),
                        start=tickets.terms_date(start, lang), terms=f"{site}/privacy#terms")
 
     async def pay(self, chat: dict, nonce: str) -> bool:
@@ -797,14 +804,14 @@ class Telegram:
             cur = card["current"]
             if cur and cur["passes"]:
                 for p in cur["passes"]:
-                    lines.append(t(lang, "mine_queued", label=p["label"], start=tickets.terms_date(p["starts_at"], lang)) if p.get("queued")
-                                 else t(lang, "mine_running", label=p["label"], end=tickets.terms_date(p["effective_end"], lang)))
+                    lines.append(t(lang, "mine_queued", label=self.label(p["tier"], lang), start=tickets.terms_date(p["starts_at"], lang)) if p.get("queued")
+                                 else t(lang, "mine_running", label=self.label(p["tier"], lang), end=tickets.terms_date(p["effective_end"], lang)))
             else:
                 if cur:
-                    lines.append(t(lang, "mine_running", label=cur["label"], end=tickets.terms_date(cur["effective_end"], lang)))
+                    lines.append(t(lang, "mine_running", label=self.label(cur["tier"], lang), end=tickets.terms_date(cur["effective_end"], lang)))
                 if card["queued"]:
                     q = card["queued"]
-                    lines.append(t(lang, "mine_queued", label=q["label"], start=tickets.terms_date(q["starts_at"], lang)))
+                    lines.append(t(lang, "mine_queued", label=self.label(q["tier"], lang), start=tickets.terms_date(q["starts_at"], lang)))
         text = "\n".join(lines) if lines else t(lang, "mine_none")
         await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}")
 

@@ -433,7 +433,7 @@ async def test_my_passes(tg):
         user = tg.conn.execute("SELECT * FROM users WHERE id=?", (tg.ids["alice"],)).fetchone()
         tickets.grant(tg.conn, tg.cfg, tg.ids["admin"], user, "lite", "week", "IRT", terms_version="v1")
         await post(c, cb(ALICE, "mine"))
-    assert tg.fake.texts(ALICE)[-1].startswith("Lite: تا ")
+    assert tg.fake.texts(ALICE)[-1].startswith("اقتصادی: تا ")
 
 
 # ---------- Task 7 review fix round 1 ----------
@@ -783,7 +783,7 @@ async def test_prices_for_anyone_with_buy_and_the_site(tg, update):
     text, table = sent["text"], price_list(tg.conn, tg.cfg)
     assert text.startswith(telegram.t("fa", "prices_head"))
     for x in table["tiers"]:
-        assert x["label"] in text
+        assert orders.fa_label(tg.cfg, x["tier"]) in text and x["label"] not in text
         for n, p in x["lengths"].items():
             if p is not None:
                 assert f"{telegram.t('fa', f'per_{n}')}  {orders.fa_amount(p['amount'], 'IRT')}" in text
@@ -824,12 +824,13 @@ async def test_prices_without_a_toman_rate_point_to_the_site(tg):
     assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "prices_site", url="https://rahkar.pro")
 
 
-@pytest.mark.parametrize("pct, head", [(100, "Lite (same as Claude Pro)"), (200, "Lite (2× Claude Pro)")])
-async def test_prices_read_a_whole_number_of_plans_as_plans(tg, monkeypatch, pct, head):
+@pytest.mark.parametrize("lang, pct, head", [("en", 100, "Lite (same as Claude Pro)"), ("en", 200, "Lite (2× Claude Pro)"),
+                                             ("fa", 200, "اقتصادی (۲ برابر کلاود پرو)")])
+async def test_prices_read_a_whole_number_of_plans_as_plans(tg, monkeypatch, lang, pct, head):
     table = {"vat_percent": 0, "tiers": [{"tier": "lite", "label": "Lite", "compare": "Claude Pro", "compare_pct": pct, "lengths": {
         "week": {"amount": 900000, "list_amount": 900000, "usd": 6, "list_usd": 6, "sold_out": False, "unavailable": False}}}]}
     monkeypatch.setattr(payments, "prices", lambda conn, cfg, now: table)
-    link(tg.conn, ALICE, tg.ids["alice"], lang="en")
+    link(tg.conn, ALICE, tg.ids["alice"], lang=lang)
     async with app(tg) as c:
         await post(c, cb(ALICE, "prices"))
     text = tg.fake.texts(ALICE)[-1]
