@@ -1456,6 +1456,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             task = asyncio.create_task(payments.send_mails(conn, cfg, p["id"]))
             _mail_tasks.add(task)
             task.add_done_callback(_mail_done)
+        if p.get("changed") and p["status"] in ("paid", "paid_unfulfilled") and tg is not None:
+            task = asyncio.create_task(telegram.after_payment(conn, cfg, gw.http, p["id"]))
+            _mail_tasks.add(task)
+            task.add_done_callback(_mail_done)
         return RedirectResponse(f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#payment/{p['id']}", status_code=302)
 
     @app.get("/pay/{code}")

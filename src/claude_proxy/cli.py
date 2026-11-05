@@ -11,7 +11,7 @@ import time
 
 import httpx
 
-from . import db, estimates, limits, orders, payments
+from . import db, estimates, limits, orders, payments, telegram
 from .config import Config, ConfigError
 from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
@@ -297,7 +297,7 @@ async def _serve(cfg: Config):
         async def serve():
             # Reconciling payments runs here, beside the dashboard's payment callback: both settle a payment on a
             # "no await between check and grant" guard, which holds only on one loop and one connection.
-            reconcile = asyncio.create_task(_reconcile_payments(dash_conn, cfg))
+            reconcile = asyncio.create_task(_reconcile_payments(dash_conn, cfg, dash_gw.http))
             try:
                 await dashboard.serve()
             finally:
@@ -358,14 +358,14 @@ async def _maintenance(conn, cfg: Config):
 RECONCILE_EVERY_S = 300
 
 
-async def _reconcile_payments(conn, cfg: Config):
+async def _reconcile_payments(conn, cfg: Config, http=None):
     """Payments design, section 4 (Expiry): settle payments left `started`, every few minutes."""
     while True:
-        await _reconcile_once(conn, cfg)
+        await _reconcile_once(conn, cfg, http)
         await asyncio.sleep(RECONCILE_EVERY_S)
 
 
-async def _reconcile_once(conn, cfg: Config):
+async def _reconcile_once(conn, cfg: Config, http=None):
     try:
         out = await payments.reconcile(conn, cfg)
     except Exception:
@@ -376,6 +376,9 @@ async def _reconcile_once(conn, cfg: Config):
     if cfg.email is not None:
         for pid in out["changed"]:   # each moved to paid/paid_unfulfilled by this run only: mail once
             await payments.send_mails(conn, cfg, pid)
+    if http is not None:
+        for pid in out["changed"]:   # a bot order's buyer hears it in Telegram too (Telegram bot design, 6.6)
+            await telegram.after_payment(conn, cfg, http, pid)
 
 
 def main(argv=None):

@@ -244,6 +244,34 @@ def connected(conn: sqlite3.Connection, user_id: int) -> str | None:
     return f"@{row['username']}" if row["username"] else row["first_name"] or "Telegram"
 
 
+async def after_payment(conn: sqlite3.Connection, cfg: Config, http: httpx.AsyncClient, pid: int) -> None:
+    """Section 6.6: a bot order's payment just settled (paid or paid_unfulfilled); tell the buyer in Telegram.
+    Does not depend on [email]. Never raises: the payment is settled whatever happens here."""
+    if not on(cfg):
+        return
+    try:
+        p = payments.get(conn, pid)
+        o = orders.get(conn, p["order_id"])
+        chat = conn.execute("SELECT * FROM telegram_chats WHERE user_id=?", (p["user_id"],)).fetchone()
+        if o["via"] != "telegram" or chat is None:
+            return
+        lang = chat["lang"]
+        tk = next((x for x in tickets.user_tickets(conn, p["user_id"]) if x["id"] == o["ticket_id"]), None) if o["ticket_id"] else None
+        if p["status"] == "paid" and tk is not None:
+            text = t(lang, "paid", ref=p["ref_id"], start=tickets.terms_date(tk["starts_at"], lang),
+                     end=tickets.terms_date(tk["effective_end"], lang))
+        elif p["status"] in ("paid", "paid_unfulfilled"):
+            text = t(lang, "unfulfilled", ref=p["ref_id"])
+        else:
+            return
+        try:
+            await Bot(cfg.telegram.token(), http).call("sendMessage", chat_id=chat["chat_id"], text=text)
+        except Blocked:
+            conn.execute("UPDATE telegram_chats SET blocked=1 WHERE chat_id=?", (chat["chat_id"],))
+    except Exception:
+        logger.exception("telegram notice for payment #%d failed", pid)
+
+
 class Telegram:
     def __init__(self, conn: sqlite3.Connection, cfg: Config, http: httpx.AsyncClient):
         self.conn, self.cfg = conn, cfg

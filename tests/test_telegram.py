@@ -439,3 +439,65 @@ async def test_choosing_when_to_start_sets_the_orders_start_now(tg, data, start_
         (pay,) = buttons(tg.fake.sent(chat_id=ALICE)[-1])
         await post(c, cb(ALICE, pay))
     assert tg.conn.execute("SELECT start_now FROM orders ORDER BY id DESC LIMIT 1").fetchone()[0] == start_now
+
+
+# ---------- Task 8: after payment ----------
+
+import asyncio  # noqa: E402
+
+from claude_proxy import cli, web  # noqa: E402
+
+
+async def paid_via_bot(c, tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    (pay,) = await buy_week(c, tg)
+    await post(c, cb(ALICE, pay))
+    return buttons(tg.fake.sent(chat_id=ALICE)[-1])[0].rsplit("/", 1)[1]   # the authority
+
+
+async def test_callback_tells_the_buyer_without_email(tg):
+    assert tg.cfg.email is None
+    async with app(tg) as c:
+        auth = await paid_via_bot(c, tg)
+        r = await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        await asyncio.gather(*list(web._mail_tasks))
+    assert r.status_code == 302
+    assert tg.fake.texts(ALICE)[-1].startswith("پرداخت انجام شد (کد پیگیری زرین‌پال: 201). بسته شما از ")
+
+
+async def test_a_web_order_gets_no_telegram_message(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        r = await c.post("/api/orders/pay", headers=bearer(tg.keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
+        auth = r.json()["url"].rsplit("/", 1)[1]
+        await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        await asyncio.gather(*list(web._mail_tasks))
+    assert tg.fake.sent(chat_id=ALICE) == []
+
+
+async def test_reconcile_tells_the_buyer(tg):
+    async with app(tg) as c:
+        await paid_via_bot(c, tg)
+    tg.conn.execute("UPDATE payments SET created_at=created_at-7200")
+    await cli._reconcile_once(tg.conn, tg.cfg, tg.gw.http)
+    assert tg.fake.texts(ALICE)[-1].startswith("پرداخت انجام شد")
+
+
+async def test_unfulfilled_payment_message(tg):
+    async with app(tg) as c:
+        auth = await paid_via_bot(c, tg)
+    pid = tg.conn.execute("SELECT id FROM payments WHERE authority=?", (auth,)).fetchone()[0]
+    tg.conn.execute("UPDATE payments SET status='paid_unfulfilled', ref_id='555' WHERE id=?", (pid,))
+    await telegram.after_payment(tg.conn, tg.cfg, tg.gw.http, pid)
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "unfulfilled", ref="555")
+
+
+async def test_a_blocked_buyer_does_not_break_the_payment(tg):   # Review Focus 5
+    async with app(tg) as c:
+        auth = await paid_via_bot(c, tg)
+        tg.fake.fail["sendMessage"] = [{"error_code": 403, "description": "Forbidden: bot was blocked by the user"}]
+        r = await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        await asyncio.gather(*list(web._mail_tasks))
+    assert r.status_code == 302
+    assert tg.conn.execute("SELECT status FROM payments WHERE authority=?", (auth,)).fetchone()[0] == "paid"
+    assert tg.conn.execute("SELECT blocked FROM telegram_chats WHERE chat_id=?", (ALICE,)).fetchone()[0] == 1
