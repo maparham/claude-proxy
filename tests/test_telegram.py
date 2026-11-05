@@ -106,6 +106,16 @@ async def test_webhook_needs_the_secret(tg):
     assert tg.fake.calls == []
 
 
+async def test_webhook_rejects_a_non_ascii_secret(tg):
+    # A non-ASCII header value (httpx itself won't send a str one, so pass raw bytes) must fail the comparison,
+    # not raise and bubble up as a 500.
+    async with app(tg) as c:
+        r = await c.post("/telegram/webhook", json=msg(ALICE, "/start"),
+                         headers={"X-Telegram-Bot-Api-Secret-Token": "wrong-é-token".encode("utf-8")})
+    assert r.status_code == 403
+    assert tg.fake.calls == []
+
+
 async def test_no_route_when_off(tg, monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN")
     async with app(tg) as c:
@@ -180,3 +190,5 @@ async def test_the_token_is_never_logged(tg, caplog):
     async with app(tg) as c:
         await post(c, msg(ALICE, "/menu"))
     assert "sendMessage" in caplog.text and TOKEN not in caplog.text
+    # httpx's own "HTTP Request: ..." INFO line carries the URL, which holds the token; it must be masked, not dropped.
+    assert "HTTP Request" in caplog.text and "<token>" in caplog.text

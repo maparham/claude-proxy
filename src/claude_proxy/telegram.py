@@ -36,14 +36,24 @@ def on(cfg: Config) -> bool:
 
 
 class _MaskToken(logging.Filter):
-    """httpx logs every request URL at INFO, and a Bot API URL holds the token (section 8)."""
+    """httpx logs every request URL at INFO, and a Bot API URL holds the token (section 8). Only the arg(s) that
+    actually hold the token are rewritten (to a masked str); every other arg is left with its original type, since
+    httpx's own format string mixes %s and %d placeholders and a stray str there breaks logging entirely."""
     def __init__(self, token: str):
         super().__init__()
         self.token = token
 
+    def _mask(self, value):
+        s = str(value)
+        return s.replace(self.token, "<token>") if self.token in s else value
+
     def filter(self, record: logging.LogRecord) -> bool:
-        if record.args and any(self.token in str(a) for a in record.args):
-            record.args = tuple(str(a).replace(self.token, "<token>") for a in record.args)
+        if isinstance(record.msg, str) and self.token in record.msg:
+            record.msg = record.msg.replace(self.token, "<token>")
+        if isinstance(record.args, dict):
+            record.args = {k: self._mask(v) for k, v in record.args.items()}
+        elif record.args:
+            record.args = tuple(self._mask(a) for a in record.args)
         return True
 
 

@@ -1567,8 +1567,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     if tg is not None:
         @app.post("/telegram/webhook")
         async def telegram_webhook(request: Request):
-            # No session: Telegram's secret-token header is the only credential (section 2).
-            if not hmac.compare_digest(request.headers.get("x-telegram-bot-api-secret-token", ""), cfg.telegram.webhook_secret()):
+            # No session: Telegram's secret-token header is the only credential (section 2). Compared as bytes: a
+            # non-ASCII header must fail the comparison, not raise (hmac.compare_digest rejects mixed/non-ASCII str).
+            header = request.headers.get("x-telegram-bot-api-secret-token", "").encode("utf-8", "surrogateescape")
+            secret = (cfg.telegram.webhook_secret() or "").encode("utf-8")
+            if not hmac.compare_digest(header, secret):
                 fail(403, "Forbidden.")
             try:
                 update = await request.json()
