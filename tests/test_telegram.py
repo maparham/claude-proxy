@@ -127,7 +127,7 @@ async def test_start_shows_the_menu_in_persian(tg):
         assert (await post(c, msg(ALICE, "/start"))).status_code == 200
     (sent,) = tg.fake.sent(chat_id=ALICE)
     assert sent["text"] == telegram.t("fa", "menu")
-    assert [b["callback_data"] for row in sent["reply_markup"]["inline_keyboard"] for b in row] == ["buy", "mine", "feedback", "lang"]
+    assert [b["callback_data"] for row in sent["reply_markup"]["inline_keyboard"] for b in row] == ["buy", "prices", "mine", "feedback", "lang"]
     row = tg.conn.execute("SELECT * FROM telegram_chats WHERE chat_id=?", (ALICE,)).fetchone()
     assert (row["username"], row["first_name"], row["lang"], row["user_id"]) == ("alice_tg", "Alice", "fa", None)
 
@@ -731,3 +731,58 @@ def test_cli_refuses_when_off(monkeypatch, tmp_path):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     with pytest.raises(SystemExit, match="The bot is off"):
         cli.main(["telegram", "set-webhook"])
+
+
+# ---------- Prices (2026-11-05, after launch) ----------
+
+def price_list(conn, cfg):
+    return payments.prices(conn, cfg, __import__("time").time())
+
+
+@pytest.mark.parametrize("update", [cb(ALICE, "prices"), msg(ALICE, "/prices")])
+async def test_prices_for_anyone_with_buy_and_the_site(tg, update):
+    async with app(tg) as c:   # Alice's chat is not linked: prices need no account
+        await post(c, update)
+    sent = tg.fake.sent(chat_id=ALICE)[-1]
+    text, table = sent["text"], price_list(tg.conn, tg.cfg)
+    assert text.startswith(telegram.t("fa", "prices_head"))
+    for x in table["tiers"]:
+        assert x["label"] in text
+        for n, p in x["lengths"].items():
+            if p is not None:
+                assert f"{telegram.t('fa', f'len_{n}')}: {orders.fa_amount(p['amount'], 'IRT')}" in text
+    assert buttons(sent) == ["buy", "https://rahkar.pro"]
+
+
+async def test_prices_in_english_show_a_discount(tg):
+    link(tg.conn, ALICE, tg.ids["alice"], lang="en")
+    now = __import__("time").time()
+    tickets.create_discount(tg.conn, tg.cfg, "lite", "week", 6, now - 60, now + 86400, tg.ids["admin"], now=now)
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "prices"))
+    text = tg.fake.texts(ALICE)[-1]
+    p = next(x for x in price_list(tg.conn, tg.cfg)["tiers"] if x["tier"] == "lite")["lengths"]["week"]
+    assert p["list_amount"] > p["amount"]
+    pct = round((1 - p["usd"] / p["list_usd"]) * 100)
+    assert f"A week: {payments._toman(p['amount'])} (was {payments._toman(p['list_amount'])}, {pct}% off)" in text
+
+
+async def test_prices_mark_sold_out_and_the_plan_share(tg, monkeypatch):
+    table = {"vat_percent": 10, "tiers": [{"tier": "lite", "label": "Lite", "compare": "Claude Pro", "compare_pct": 60, "lengths": {
+        "day": None,
+        "week": {"amount": 900000, "list_amount": 900000, "usd": 6, "list_usd": 6, "sold_out": True, "unavailable": False}}}]}
+    monkeypatch.setattr(payments, "prices", lambda conn, cfg, now: table)
+    link(tg.conn, ALICE, tg.ids["alice"], lang="en")
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "prices"))
+    text = tg.fake.texts(ALICE)[-1]
+    assert "Lite" in text and "about 60% of Claude Pro's weekly usage" in text
+    assert "A week: sold out" in text and "A day" not in text
+    assert "VAT (10%) is included." in text
+
+
+async def test_prices_without_a_toman_rate_point_to_the_site(tg):
+    del tg.cfg.tickets.currencies["IRT"]
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "prices"))
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "prices_site", url="https://rahkar.pro")

@@ -100,6 +100,11 @@ TEXTS = {
     "fa": {
         "menu": "چه کاری برایتان انجام دهم؟\nهر پیامی که اینجا بنویسید به پشتیبانی می‌رسد.",
         "btn_buy": "خرید بسته", "btn_mine": "بسته‌های من", "btn_feedback": "ارسال نظر", "btn_lang": "English",
+        "btn_prices": "قیمت‌ها", "btn_site": "سایت رهکار",
+        "prices_head": "قیمت بسته‌ها:", "prices_share": "حدود {pct}٪ از مصرف هفتگی {plan}",
+        "prices_line": "{length}: {amount}", "prices_off": "{length}: {amount} (به‌جای {list}، {pct}٪ تخفیف)",
+        "prices_sold": "{length}: فروخته شد", "prices_vat": "مالیات بر ارزش افزوده ({vat}٪) در قیمت‌ها حساب شده است.",
+        "prices_site": "قیمت‌ها را در سایت ببینید:\n{url}",
         "lang_set": "زبان: فارسی",
         "cancelled": "لغو شد.",
         "stale": "این دکمه دیگر معتبر نیست.",
@@ -137,6 +142,11 @@ TEXTS = {
     "en": {
         "menu": "What would you like to do?\nAny message you type here goes to support.",
         "btn_buy": "Buy a pass", "btn_mine": "My passes", "btn_feedback": "Feedback", "btn_lang": "فارسی",
+        "btn_prices": "Prices", "btn_site": "Rahkar website",
+        "prices_head": "Pass prices:", "prices_share": "about {pct}% of {plan}'s weekly usage",
+        "prices_line": "{length}: {amount}", "prices_off": "{length}: {amount} (was {list}, {pct}% off)",
+        "prices_sold": "{length}: sold out", "prices_vat": "VAT ({vat}%) is included.",
+        "prices_site": "See the prices on the website:\n{url}",
         "lang_set": "Language: English",
         "cancelled": "Cancelled.",
         "stale": "This button is no longer valid.",
@@ -300,8 +310,8 @@ async def after_payment(conn: sqlite3.Connection, cfg: Config, http: httpx.Async
 
 
 COMMANDS = {
-    "fa": [("menu", "منو"), ("lang", "English / فارسی"), ("cancel", "لغو"), ("unlink", "قطع اتصال حساب")],
-    "en": [("menu", "Menu"), ("lang", "English / فارسی"), ("cancel", "Cancel"), ("unlink", "Disconnect the account")],
+    "fa": [("menu", "منو"), ("prices", "قیمت‌ها"), ("lang", "English / فارسی"), ("cancel", "لغو"), ("unlink", "قطع اتصال حساب")],
+    "en": [("menu", "Menu"), ("prices", "Prices"), ("lang", "English / فارسی"), ("cancel", "Cancel"), ("unlink", "Disconnect the account")],
 }
 
 
@@ -419,6 +429,9 @@ class Telegram:
     def dashboard(self) -> str:
         return f"{self.cfg.listener.dashboard_url.rstrip('/')}/dashboard"
 
+    def site(self) -> str:
+        return (self.cfg.listener.home_url or self.cfg.listener.dashboard_url).rstrip("/")
+
     # ---------- sending ----------
 
     def btn(self, chat: dict, key: str, data: str) -> dict:
@@ -434,7 +447,8 @@ class Telegram:
         # A top-level action: see buy()'s comment (review finding 2).
         self.set_state(chat, None, None)
         b = lambda key, data: self.btn(chat, key, data)  # noqa: E731
-        await self.say(chat, "menu", [[b("btn_buy", "buy"), b("btn_mine", "mine")], [b("btn_feedback", "feedback"), b("btn_lang", "lang")]])
+        await self.say(chat, "menu", [[b("btn_buy", "buy"), b("btn_prices", "prices")], [b("btn_mine", "mine"), b("btn_feedback", "feedback")],
+                                      [b("btn_lang", "lang")]])
 
     async def toggle_lang(self, chat: dict) -> None:
         chat["lang"] = "en" if chat["lang"] == "fa" else "fa"
@@ -480,6 +494,8 @@ class Telegram:
                 return await self.menu(chat)
             if cmd == "/lang":
                 return await self.toggle_lang(chat)
+            if cmd == "/prices":
+                return await self.prices(chat)
             if cmd == "/cancel":
                 self.set_state(chat, None, None)
                 return await self.say(chat, "cancelled")
@@ -510,6 +526,8 @@ class Telegram:
             await self.buy(chat)
         elif action == "mine":
             await self.mine(chat)
+        elif action == "prices":
+            await self.prices(chat)
         elif action == "t":
             await self.pick_tier(chat, arg)
         elif action == "l":
@@ -526,6 +544,36 @@ class Telegram:
         else:
             return False
         return True
+
+    # ---------- prices ----------
+
+    async def prices(self, chat: dict) -> None:
+        """The Toman price list the site shows, for anyone: each tier's share of its plan and each length on sale."""
+        lang, table = chat["lang"], payments.prices(self.conn, self.cfg, time.time())
+        if table is None:
+            return await self.say(chat, "prices_site", url=self.site())
+        num = (lambda n: tickets.fa_num(str(n))) if lang != "en" else str
+        lines = [t(lang, "prices_head")]
+        for x in table["tiers"]:
+            on_sale = [(n, p) for n, p in x["lengths"].items() if p is not None]
+            if not on_sale:
+                continue
+            lines += ["", x["label"]]
+            if x.get("compare_pct") is not None:
+                lines.append(t(lang, "prices_share", pct=num(x["compare_pct"]), plan=x["compare"]))
+            for n, p in on_sale:
+                length = self.length_name(lang, n)
+                if p["sold_out"]:
+                    lines.append("• " + t(lang, "prices_sold", length=length))
+                elif p["list_amount"] > p["amount"] and p["list_usd"] > 0:
+                    lines.append("• " + t(lang, "prices_off", length=length, amount=self.amount(lang, p["amount"]),
+                                          list=self.amount(lang, p["list_amount"]), pct=num(round((1 - p["usd"] / p["list_usd"]) * 100))))
+                else:
+                    lines.append("• " + t(lang, "prices_line", length=length, amount=self.amount(lang, p["amount"])))
+        if table.get("vat_percent"):
+            lines += ["", t(lang, "prices_vat", vat=num(table["vat_percent"]))]
+        await self.bot.call("sendMessage", chat_id=chat["chat_id"], text="\n".join(lines), reply_markup={"inline_keyboard": [
+            [self.btn(chat, "btn_buy", "buy"), {"text": t(lang, "btn_site"), "url": self.site()}]]})
 
     # ---------- buying (section 6) ----------
 
@@ -644,7 +692,7 @@ class Telegram:
         start = now if pend["start_now"] else passcard.start_offer(self.conn, self.cfg, user["id"], now)["next_start"]
         pend = pend | {"nonce": secrets.token_urlsafe(6)}
         self.set_state(chat, None, pend)
-        site = (self.cfg.listener.home_url or self.cfg.listener.dashboard_url).rstrip("/")
+        site = self.site()
         await self.say(chat, "summary", [[self.btn(chat, "btn_pay", f"p:{pend['nonce']}")]],
                        label=x["label"], length=self.length_name(lang, pend["length"]), amount=self.amount(lang, p["amount"]),
                        start=tickets.terms_date(start, lang), terms=f"{site}/privacy#terms")
