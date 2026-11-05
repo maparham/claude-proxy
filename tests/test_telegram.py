@@ -407,3 +407,35 @@ async def test_my_passes(tg):
         tickets.grant(tg.conn, tg.cfg, tg.ids["admin"], user, "lite", "week", "IRT", terms_version="v1")
         await post(c, cb(ALICE, "mine"))
     assert tg.fake.texts(ALICE)[-1].startswith("Lite: تا ")
+
+
+# ---------- Task 7 review fix round 1 ----------
+
+@pytest.mark.parametrize("leave", ["menu", "mine"])
+async def test_leaving_the_email_prompt_clears_its_state(tg, leave):   # Review finding 2
+    tg.conn.execute("UPDATE users SET email=NULL WHERE id=?", (tg.ids["alice"],))
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        await post(c, cb(ALICE, pay))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "ask_email")
+        await post(c, cb(ALICE, leave))
+        await post(c, msg(ALICE, "not an email"))
+    assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "menu")
+
+
+@pytest.mark.parametrize("data,start_now", [("s:a", 0), ("s:n", 1)])
+async def test_choosing_when_to_start_sets_the_orders_start_now(tg, data, start_now):   # Review finding 3
+    link(tg.conn, ALICE, tg.ids["alice"])
+    user = tg.conn.execute("SELECT * FROM users WHERE id=?", (tg.ids["alice"],)).fetchone()
+    tickets.grant(tg.conn, tg.cfg, tg.ids["admin"], user, "lite", "week", "IRT", terms_version="v1")
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "buy"))
+        await post(c, cb(ALICE, "t:lite"))
+        await post(c, cb(ALICE, "l:week"))
+        assert buttons(tg.fake.sent(chat_id=ALICE)[-1]) == ["s:a", "s:n"]
+        await post(c, cb(ALICE, data))
+        (pay,) = buttons(tg.fake.sent(chat_id=ALICE)[-1])
+        await post(c, cb(ALICE, pay))
+    assert tg.conn.execute("SELECT start_now FROM orders ORDER BY id DESC LIMIT 1").fetchone()[0] == start_now

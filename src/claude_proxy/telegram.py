@@ -342,6 +342,8 @@ class Telegram:
         return await self.bot.call("sendMessage", **params)
 
     async def menu(self, chat: dict) -> None:
+        # A top-level action: see buy()'s comment (review finding 2).
+        self.set_state(chat, None, None)
         b = lambda key, data: self.btn(chat, key, data)  # noqa: E731
         await self.say(chat, "menu", [[b("btn_buy", "buy"), b("btn_mine", "mine")], [b("btn_feedback", "feedback"), b("btn_lang", "lang")]])
 
@@ -470,6 +472,9 @@ class Telegram:
         return user
 
     async def buy(self, chat: dict) -> None:
+        # A top-level action: whatever the chat was waiting for (an email for an earlier attempt, a pending tier or
+        # length) is dropped, so stray text afterwards is never read as that email (review finding 2).
+        self.set_state(chat, None, None)
         user = await self.need_account(chat)
         if user is None:
             return
@@ -486,7 +491,6 @@ class Telegram:
             return await self.say(chat, "paused")
         if not tiers:
             return await self.say(chat, "sold_out")
-        self.set_state(chat, None, None)
         await self.say(chat, "choose_tier", [[{"text": x["label"], "callback_data": f"t:{x['tier']}"}] for x in tiers])
 
     def _tier(self, tier: str) -> dict | None:
@@ -515,8 +519,7 @@ class Telegram:
             return True
         pend = {"tier": pend["tier"], "length": length}
         now = time.time()
-        _, replaces = tickets.next_start(self.conn, self.cfg, user["id"], now)
-        if tickets.running(self.conn, user["id"], now) and not replaces:   # as the dashboard's order dialog offers it
+        if passcard.start_offer(self.conn, self.cfg, user["id"], now)["offer"]:   # as the dashboard's order dialog offers it
             self.set_state(chat, None, pend)
             await self.say(chat, "choose_start", [[self.btn(chat, "btn_after", "s:a")], [self.btn(chat, "btn_now", "s:n")]])
             return True
@@ -539,7 +542,9 @@ class Telegram:
         if not self._buyable(p):
             return await self.buy(chat)
         now, lang = time.time(), chat["lang"]
-        start, _ = tickets.next_start(self.conn, self.cfg, user["id"], now, pend["start_now"])
+        # The bot offers no choice to split from a used-up running pass (start_offer's "offer" False): next_start
+        # already means "now" then, same as start_now=True (tickets.next_start's own start_now=True branch).
+        start = now if pend["start_now"] else passcard.start_offer(self.conn, self.cfg, user["id"], now)["next_start"]
         pend = pend | {"nonce": secrets.token_urlsafe(6)}
         self.set_state(chat, None, pend)
         site = (self.cfg.listener.home_url or self.cfg.listener.dashboard_url).rstrip("/")
@@ -611,6 +616,8 @@ class Telegram:
         await self.buy(chat)
 
     async def mine(self, chat: dict) -> None:
+        # A top-level action: see buy()'s comment (review finding 2).
+        self.set_state(chat, None, None)
         user = await self.need_account(chat)
         if user is None:
             return

@@ -6,9 +6,22 @@ from __future__ import annotations
 from . import limits, payments, tickets
 
 
+def start_offer(conn, cfg, user_id: int, now: float) -> dict:
+    """Shared with the Telegram bot (design 2026-11-05, section 6), so a new ticket's start never disagrees with the
+    dashboard's order dialog: hand a used-up running ticket to its queued one first (as `build` does, side effect
+    included), then `next_start` and `replaces` (`tickets.next_start`'s own meaning), and `offer`, whether the order
+    dialog's After the current one / Now choice applies at all (a current pass that `next_start` would not replace,
+    exactly `tk.current && !tk.replaces` in app.js)."""
+    limits.hand_over(conn, cfg, user_id, now)
+    next_start, replaces = tickets.next_start(conn, cfg, user_id, now)
+    replaces = bool(replaces)
+    offer = tickets.covering(conn, user_id, now) is not None and not replaces
+    return {"offer": offer, "next_start": next_start, "replaces": replaces}
+
+
 def build(conn, cfg, user_id: int, now: float) -> dict:
     """The card for an enabled gateway; the caller checks cfg.tickets.enabled."""
-    limits.hand_over(conn, cfg, user_id, now)   # used-up tickets give way to a queued one here too, not only on a request
+    so = start_offer(conn, cfg, user_id, now)   # used-up tickets give way to a queued one here too, not only on a request
     st = tickets.user_state(conn, user_id, now)
     label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
     # No ticket ids: they number every sale on the account.
@@ -77,8 +90,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     # A new ticket queues after the last, or starts now in place of a used-up one: the order dialog's "after" date.
     # `replaces`: the latter, so the dialog offers no start choice. Not merely `used_up`: with a ticket queued that
     # had no room to move up (hand_over), a new one still queues after it.
-    out["next_start"], replaces = tickets.next_start(conn, cfg, user_id, now)
-    out["replaces"] = bool(replaces)
+    out["next_start"], out["replaces"] = so["next_start"], so["replaces"]
     out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"],
                                         exclude=[t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]])
     # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
