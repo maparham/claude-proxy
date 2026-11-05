@@ -283,6 +283,7 @@ SCHEMA = [
         buyer_mail TEXT NOT NULL CHECK(buyer_mail IN ('pending','sent','failed','off','skipped')),
         terms_version TEXT NOT NULL DEFAULT 'v1',   -- ticket terms the buyer accepted (2026-10-13 spec, §3)
         lang TEXT NOT NULL DEFAULT 'en',    -- the page's language at order time: the buyer's emails use it ('en' or 'fa')
+        via TEXT NOT NULL DEFAULT 'web',    -- where the buyer ordered: 'web' or 'telegram' (where they hear back)
         seen_at INTEGER,                    -- the buyer dismissed this closed order
         upgrade_of INTEGER REFERENCES tickets(id),  -- set: an upgrade of this ticket to `tier` for its time left
         start_now INTEGER NOT NULL DEFAULT 0        -- 1: the ticket starts when granted, beside the buyer's running ones
@@ -365,6 +366,42 @@ SCHEMA = [
         updated_at INTEGER NOT NULL,
         PRIMARY KEY (ticket_id, week_end)
     )""",
+    # Telegram bot (design 2026-11-05, section 3). A private chat's id is the Telegram user's id.
+    """CREATE TABLE IF NOT EXISTS telegram_chats (
+        chat_id INTEGER PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,   -- NULL until linked; at most one chat per account
+        username TEXT,
+        first_name TEXT,
+        lang TEXT NOT NULL DEFAULT 'fa',
+        state TEXT,                       -- what the next plain text means: 'feedback' | 'email' | NULL (support)
+        pending TEXT,                     -- JSON: the purchase being chosen (tier, length, start_now, nonce)
+        blocked INTEGER NOT NULL DEFAULT 0,
+        last_seen INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+    )""",
+    "CREATE UNIQUE INDEX IF NOT EXISTS telegram_chats_user ON telegram_chats(user_id) WHERE user_id IS NOT NULL",
+    """CREATE TABLE IF NOT EXISTS telegram_link_codes (
+        code_hash TEXT PRIMARY KEY,       -- sha256 of the code; the code itself is never stored
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at INTEGER NOT NULL
+    )""",
+    "CREATE TABLE IF NOT EXISTS telegram_updates (update_id INTEGER PRIMARY KEY, at INTEGER NOT NULL)",
+    """CREATE TABLE IF NOT EXISTS inbox_messages (
+        id INTEGER PRIMARY KEY,
+        chat_id INTEGER NOT NULL REFERENCES telegram_chats(chat_id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,               -- 'support' | 'feedback'
+        direction TEXT NOT NULL,          -- 'in' (from the user) | 'out' (an admin's answer)
+        media TEXT,                       -- NULL (text) | 'photo' | 'document' | 'voice'
+        text TEXT NOT NULL,               -- the text, or a file's caption ('' when none)
+        actor INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        created_at INTEGER NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS inbox_chat ON inbox_messages(chat_id, id)",
+    # Each admin-group message posted for an incoming one (its header and its copy): a reply to either maps back.
+    """CREATE TABLE IF NOT EXISTS inbox_admin_msgs (
+        admin_msg_id INTEGER PRIMARY KEY,
+        inbox_id INTEGER NOT NULL REFERENCES inbox_messages(id) ON DELETE CASCADE
+    )""",
 
 ]
 
@@ -434,6 +471,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN terms_version TEXT NOT NULL DEFAULT 'v1'")
     if "lang" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN lang TEXT NOT NULL DEFAULT 'en'")
+    if "via" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN via TEXT NOT NULL DEFAULT 'web'")
     for table in ("ticket_tier_shares", "tickets", "ticket_bonuses"):
         if "share_5h_pct" not in _columns(conn, table):
             conn.execute(f"ALTER TABLE {table} ADD COLUMN share_5h_pct REAL")
@@ -662,6 +701,8 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
     conn.execute("DELETE FROM request_contents WHERE request_id IN (SELECT id FROM requests WHERE user_id=?)", (user_id,))
     n = conn.execute("UPDATE requests SET user_id=NULL, session_id=NULL, client_version=NULL WHERE user_id=?",
                      (user_id,)).rowcount
+    # Their Telegram chat and its messages go too (cascade); the FK alone would only unlink the chat.
+    conn.execute("DELETE FROM telegram_chats WHERE user_id=?", (user_id,))
     conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits, sessions and titles cascade; tickets keep user_name
     audit(conn, actor, "delete_user", u["name"], {"anonymized_requests": n})
     return n
@@ -736,5 +777,10 @@ def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = Fa
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
         "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
         "device_requests": conn.execute("DELETE FROM device_requests WHERE expires_at<?", (int(now),)).rowcount,
+        "telegram_link_codes": conn.execute("DELETE FROM telegram_link_codes WHERE expires_at<?", (int(now),)).rowcount,
+        "telegram_updates": conn.execute("DELETE FROM telegram_updates WHERE at<?", (int(now) - 86400,)).rowcount,
+        # A chat that never linked and has been silent 180 days, with its messages (cascade).
+        "telegram_chats": conn.execute("DELETE FROM telegram_chats WHERE user_id IS NULL AND last_seen<?",
+                                       (int(now) - 180 * 86400,)).rowcount,
     }
     return out
