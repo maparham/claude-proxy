@@ -1,4 +1,4 @@
-# Deploying on a shared Lightsail host behind a Cloudflare tunnel
+# Deploying on a Lightsail host behind a Cloudflare tunnel
 
 From the repo root on the Mac that currently runs the gateway (`<server-ip>` here and below is the
 instance's public address, shown in the Lightsail console):
@@ -7,9 +7,9 @@ instance's public address, shown in the Lightsail console):
 deploy/lightsail/migrate-from-mac.sh ec2-user@<server-ip>     # moves grant + data, starts the container
 ```
 
-Then publish the two listeners through the tunnel. The `aws-vps` tunnel on this box is **managed from
+Then publish the two listeners through the tunnel. The `claude-gateway` tunnel on this box is **managed from
 the Cloudflare dashboard**, so its local `config.yml` ingress is ignored: add them under Networking →
-Tunnels → aws-vps → Routes → Add route → Published application:
+Tunnels → claude-gateway → Routes → Add route → Published application:
 
 | Hostname | Service URL |
 |---|---|
@@ -19,7 +19,8 @@ Tunnels → aws-vps → Routes → Add route → Published application:
 
 (`apply-tunnel.sh` is for a tunnel run from a local config file.)
 
-Live since 2026-09-23: `ANTHROPIC_BASE_URL=https://claude.rahkar.pro`, dashboard at
+The gateway has its own Lightsail nano (`claude-gateway`, us-east-2, static IP `3.18.205.89`, only SSH open) since
+2026-11-05; before that it shared a box with other services. Live since 2026-09-23: `ANTHROPIC_BASE_URL=https://claude.rahkar.pro`, dashboard at
 `https://dash.rahkar.pro/dashboard`. Streams of over 90 s pass through Cloudflare intact, and the dashboard
 sees real client IPs.
 
@@ -149,7 +150,7 @@ Enable online payment for Toman orders:
 3. On the dashboard's **Pricing** tab, set the USD→IRT exchange rate.
 4. Users will see the **Pay with ZarinPal** button in the order dialog.
 
-The payment callback is `https://rahkar.pro/pay/callback`. The server's outgoing IP must be the one registered with ZarinPal (`3.139.146.5`).
+The payment callback is `https://rahkar.pro/pay/callback`. The server's outgoing IP must be the one registered with ZarinPal (`3.18.205.89`).
 
 ### Restore
 
