@@ -26,6 +26,7 @@ logger = logging.getLogger("claude_proxy")
 API = "https://api.telegram.org"
 MSG_PER_HOUR, PAY_PER_HOUR = 20, 5
 CONFIRM_EVERY_S = 600   # a support message is confirmed at most this often per chat
+SUPPORT_WINDOW_S = 1800   # after the Support button (or an admin's reply), messages go to support for this long
 TEXT_MAX = 3500
 
 # The admin group reads English (section 7).
@@ -98,8 +99,10 @@ class Bot:
 
 TEXTS = {
     "fa": {
-        "menu": "چه کاری برایتان انجام دهم؟\nهر پیامی که اینجا بنویسید به پشتیبانی می‌رسد.",
+        "menu": "چه کاری برایتان انجام دهم؟\nبرای پیام به پشتیبانی، «پشتیبانی» را بزنید.",
         "btn_buy": "خرید بسته", "btn_mine": "بسته‌های من", "btn_feedback": "ارسال نظر", "btn_lang": "English",
+        "btn_support": "پشتیبانی",
+        "ask_support": "پیامتان را برای پشتیبانی بنویسید (متن، عکس، فایل یا پیام صوتی):",
         "btn_prices": "قیمت‌ها", "btn_site": "سایت رهکار",
         "prices_head": "💳 قیمت بسته‌ها",
         "prices_same": "هم‌اندازه {plan}", "prices_times": "{n} برابر {plan}", "prices_pct": "حدود {pct}٪ {plan}",
@@ -116,7 +119,7 @@ TEXTS = {
         "relinked_away": "حساب شما به تلگرام دیگری وصل شد. اگر کار شما نبود، از داشبورد آن را تغییر دهید.",
         "unlinked": "اتصال این تلگرام به حسابتان برداشته شد.",
         "not_linked": "این تلگرام به حسابی وصل نیست.",
-        "paused": "خرید آنلاین فعلاً متوقف است. هر پیامی اینجا بنویسید به پشتیبانی می‌رسد.",
+        "paused": "خرید آنلاین فعلاً متوقف است. اگر سؤالی دارید «پشتیبانی» را بزنید.",
         "sold_out": "همه بسته‌ها فعلاً فروخته شده‌اند.",
         "choose_tier": "کدام بسته؟", "choose_length": "چه مدت؟", "choose_start": "از کی شروع شود؟",
         "btn_after": "بعد از بسته فعلی", "btn_now": "همین حالا، کنار بسته فعلی",
@@ -126,11 +129,11 @@ TEXTS = {
         "pay_ready": "لینک پرداخت آماده است:", "btn_open_pay": "پرداخت با زرین‌پال",
         "open_order": "یک سفارش پرداخت‌نشده دارید: {label}، {length}، {amount}.",
         "btn_continue": "ادامه پرداخت", "btn_cancel_order": "لغو و انتخاب دوباره",
-        "order_busy": "یک سفارش در جریان دارید. اگر سؤالی دارید همین‌جا بنویسید.",
+        "order_busy": "یک سفارش در جریان دارید. اگر سؤالی دارید «پشتیبانی» را بزنید.",
         "ask_email": "حسابتان ایمیل ندارد. یک ایمیل برای رسید پرداخت بفرستید (یا /cancel):",
         "bad_email": "این ایمیل درست به نظر نمی‌رسد؛ دوباره بفرستید یا /cancel.",
         "paid": "پرداخت انجام شد (کد پیگیری زرین‌پال: {ref}). بسته شما از {start} تا {end} فعال است.",
-        "unfulfilled": "پرداخت انجام شد (کد پیگیری زرین‌پال: {ref})، اما بسته خودکار شروع نشد. آن را شروع می‌کنیم یا مبلغ را برمی‌گردانیم؛ اگر سؤالی دارید همین‌جا بنویسید.",
+        "unfulfilled": "پرداخت انجام شد (کد پیگیری زرین‌پال: {ref})، اما بسته خودکار شروع نشد. آن را شروع می‌کنیم یا مبلغ را برمی‌گردانیم؛ اگر سؤالی دارید «پشتیبانی» را بزنید.",
         "mine_none": "بسته فعال یا در صفی ندارید.",
         "mine_running": "{label}: تا {end}", "mine_queued": "{label}: در صف، از {start}",
         "mine_more": "جزئیات در داشبورد:\n{url}",
@@ -141,8 +144,10 @@ TEXTS = {
         "unsupported": "لطفاً متن، عکس، فایل یا پیام صوتی بفرستید.",
     },
     "en": {
-        "menu": "What would you like to do?\nAny message you type here goes to support.",
+        "menu": "What would you like to do?\nTo message support, tap Support.",
         "btn_buy": "Buy a pass", "btn_mine": "My passes", "btn_feedback": "Feedback", "btn_lang": "فارسی",
+        "btn_support": "Support",
+        "ask_support": "Write your message for support (text, a photo, a file or a voice note):",
         "btn_prices": "Prices", "btn_site": "Rahkar website",
         "prices_head": "💳 Pass prices",
         "prices_same": "same as {plan}", "prices_times": "{n}× {plan}", "prices_pct": "about {pct}% of {plan}",
@@ -159,7 +164,7 @@ TEXTS = {
         "relinked_away": "Your account was connected to another Telegram account. If this wasn't you, change it in the dashboard.",
         "unlinked": "This Telegram is no longer connected to your account.",
         "not_linked": "This Telegram is not connected to an account.",
-        "paused": "Buying is paused for now. Any message you type here goes to support.",
+        "paused": "Buying is paused for now. Tap Support if you have a question.",
         "sold_out": "All passes are sold out right now.",
         "choose_tier": "Which pass?", "choose_length": "How long?", "choose_start": "When should it start?",
         "btn_after": "After the current one", "btn_now": "Now, beside the current one",
@@ -169,11 +174,11 @@ TEXTS = {
         "pay_ready": "Your payment link is ready:", "btn_open_pay": "Pay with ZarinPal",
         "open_order": "You have an unpaid order: {label}, {length}, {amount}.",
         "btn_continue": "Continue paying it", "btn_cancel_order": "Cancel it and choose again",
-        "order_busy": "You have an order in progress. Write here if you have a question.",
+        "order_busy": "You have an order in progress. Tap Support if you have a question.",
         "ask_email": "Your account has no email. Send an address for the payment receipt (or /cancel):",
         "bad_email": "That email address does not look right; send it again or /cancel.",
         "paid": "Payment received (ZarinPal reference {ref}). Your pass is active from {start} until {end}.",
-        "unfulfilled": "Payment received (ZarinPal reference {ref}), but the pass could not start automatically. We'll start it or refund you; reply here with any questions.",
+        "unfulfilled": "Payment received (ZarinPal reference {ref}), but the pass could not start automatically. We'll start it or refund you; tap Support with any questions.",
         "mine_none": "You have no running or queued pass.",
         "mine_running": "{label}: until {end}", "mine_queued": "{label}: queued, from {start}",
         "mine_more": "Details in the dashboard:\n{url}",
@@ -449,8 +454,8 @@ class Telegram:
         # A top-level action: see buy()'s comment (review finding 2).
         self.set_state(chat, None, None)
         b = lambda key, data: self.btn(chat, key, data)  # noqa: E731
-        await self.say(chat, "menu", [[b("btn_buy", "buy"), b("btn_prices", "prices")], [b("btn_mine", "mine"), b("btn_feedback", "feedback")],
-                                      [b("btn_lang", "lang")]])
+        await self.say(chat, "menu", [[b("btn_buy", "buy"), b("btn_prices", "prices")], [b("btn_mine", "mine"), b("btn_support", "support")],
+                                      [b("btn_feedback", "feedback"), b("btn_lang", "lang")]])
 
     async def toggle_lang(self, chat: dict) -> None:
         chat["lang"] = "en" if chat["lang"] == "fa" else "fa"
@@ -503,13 +508,20 @@ class Telegram:
                 return await self.say(chat, "cancelled")
         await self.on_text(chat, msg)
 
+    def open_support(self, chat: dict) -> None:
+        self.set_state(chat, "support", {"until": time.time() + SUPPORT_WINDOW_S})
+
     async def on_text(self, chat: dict, msg: dict) -> None:
         if chat["state"] == "email":
             return await self.got_email(chat, msg)
-        kind = "feedback" if chat["state"] == "feedback" else "support"
         if chat["state"] == "feedback":
             self.set_state(chat, None, None)
-        await self.incoming(chat, msg, kind)
+            return await self.incoming(chat, msg, "feedback")
+        if chat["state"] == "support" and (self.pending(chat) or {}).get("until", 0) > time.time():
+            self.open_support(chat)   # each message keeps the window open
+            return await self.incoming(chat, msg, "support")
+        # Only messages after the Support (or Feedback) button reach the admins; anything else gets the menu.
+        await self.menu(chat)
 
     async def callback(self, q: dict) -> None:
         chat = self.chat(q.get("from") or {}, q["message"]["chat"]["id"])
@@ -543,6 +555,9 @@ class Telegram:
         elif action == "feedback":
             self.set_state(chat, "feedback", None)
             await self.say(chat, "ask_feedback")
+        elif action == "support":
+            self.open_support(chat)
+            await self.say(chat, "ask_support")
         else:
             return False
         return True
@@ -858,5 +873,8 @@ class Telegram:
         media, text = got
         self.conn.execute("INSERT INTO inbox_messages(chat_id, kind, direction, media, text, actor, created_at) VALUES(?,?,'out',?,?,?,?)",
                           (row["chat_id"], row["kind"], media, text, admin["id"], int(time.time())))
+        # The user's next messages go to support again, unless they are in the middle of something else.
+        self.conn.execute("UPDATE telegram_chats SET state='support', pending=? WHERE chat_id=? AND (state IS NULL OR state='support')",
+                          (json.dumps({"until": time.time() + SUPPORT_WINDOW_S}), row["chat_id"]))
         await self.bot.call("setMessageReaction", chat_id=self.admin_chat, message_id=msg["message_id"],
                             reaction=[{"type": "emoji", "emoji": "👍"}])

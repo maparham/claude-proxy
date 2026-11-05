@@ -127,7 +127,7 @@ async def test_start_shows_the_menu_in_persian(tg):
         assert (await post(c, msg(ALICE, "/start"))).status_code == 200
     (sent,) = tg.fake.sent(chat_id=ALICE)
     assert sent["text"] == telegram.t("fa", "menu")
-    assert [b["callback_data"] for row in sent["reply_markup"]["inline_keyboard"] for b in row] == ["buy", "prices", "mine", "feedback", "lang"]
+    assert [b["callback_data"] for row in sent["reply_markup"]["inline_keyboard"] for b in row] == ["buy", "prices", "mine", "support", "feedback", "lang"]
     row = tg.conn.execute("SELECT * FROM telegram_chats WHERE chat_id=?", (ALICE,)).fetchone()
     assert (row["username"], row["first_name"], row["lang"], row["user_id"]) == ("alice_tg", "Alice", "fa", None)
 
@@ -449,8 +449,8 @@ async def test_leaving_the_email_prompt_clears_its_state(tg, leave):   # Review 
         await post(c, cb(ALICE, leave))
         await post(c, msg(ALICE, "not an email"))
     assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
-    # Task 9: with no pending state, plain text is support, not the menu (section 7).
-    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "got_support")
+    # With no state, plain text gets the menu (support only after its button).
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "menu")
 
 
 async def test_unlink_clears_the_email_prompts_state(tg):   # Final review finding 3
@@ -463,7 +463,7 @@ async def test_unlink_clears_the_email_prompts_state(tg):   # Final review findi
         await post(c, msg(ALICE, "/unlink"))
         await post(c, msg(ALICE, "not an email"))
     assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
-    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "got_support")
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "menu")
 
 
 async def test_start_with_a_bad_code_clears_the_email_prompts_state(tg):   # Final review finding 3
@@ -479,7 +479,7 @@ async def test_start_with_a_bad_code_clears_the_email_prompts_state(tg):   # Fin
         assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "link_bad")
         await post(c, msg(ALICE, "not an email"))
     assert telegram.t("fa", "bad_email") not in tg.fake.texts(ALICE)
-    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "got_support")
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "menu")
 
 
 @pytest.mark.parametrize("data,start_now", [("s:a", 0), ("s:n", 1)])
@@ -591,6 +591,7 @@ def inbox(tg):
 async def test_a_message_goes_to_the_admin_group(tg):
     link(tg.conn, ALICE, tg.ids["alice"])
     async with app(tg) as c:
+        await post(c, cb(ALICE, "support"))
         u = msg(ALICE, "my key does not work")
         await post(c, u)
         await post(c, msg(ALICE, "still broken"))
@@ -599,7 +600,7 @@ async def test_a_message_goes_to_the_admin_group(tg):
     copy = tg.fake.sent("copyMessage")[0]
     assert (copy["chat_id"], copy["from_chat_id"], copy["message_id"]) == (ADMIN_CHAT, ALICE, u["message"]["message_id"])
     assert [(m["kind"], m["direction"], m["text"]) for m in inbox(tg)] == [("support", "in", "my key does not work"), ("support", "in", "still broken")]
-    assert tg.fake.texts(ALICE) == [telegram.t("fa", "got_support")]   # confirmed once per 10 minutes
+    assert tg.fake.texts(ALICE) == [telegram.t("fa", "ask_support"), telegram.t("fa", "got_support")]   # confirmed once per 10 minutes
     assert tg.conn.execute("SELECT COUNT(*) FROM inbox_admin_msgs").fetchone()[0] == 4
 
 
@@ -615,14 +616,16 @@ async def test_feedback_button_then_text(tg):
 
 async def test_photo_long_text_and_stickers(tg):
     async with app(tg) as c:
+        await post(c, cb(ALICE, "support"))
         await post(c, msg(ALICE, None, photo=[{"file_id": "F"}], caption="screenshot"))
         await post(c, msg(ALICE, "x" * (telegram.TEXT_MAX + 1)))
         await post(c, msg(ALICE, None, sticker={"file_id": "S"}))
     assert [(m["media"], m["text"]) for m in inbox(tg)] == [("photo", "screenshot")]
-    assert tg.fake.texts(ALICE)[1:] == [telegram.t("fa", "too_long"), telegram.t("fa", "unsupported")]
+    assert tg.fake.texts(ALICE)[2:] == [telegram.t("fa", "too_long"), telegram.t("fa", "unsupported")]
 
 
 async def admin_reply(c, tg, text="try again now", sender=None, **extra):
+    await post(c, cb(ALICE, "support"))
     await post(c, msg(ALICE, "help"))
     copy_id = tg.conn.execute("SELECT MAX(admin_msg_id) FROM inbox_admin_msgs").fetchone()[0]
     u = group(text, reply_to=copy_id, sender=sender, **extra)
@@ -644,6 +647,7 @@ async def test_an_admin_reply_reaches_the_user(tg):
 async def test_a_reply_to_the_header_works_too(tg):
     admin_linked(tg)
     async with app(tg) as c:
+        await post(c, cb(ALICE, "support"))
         await post(c, msg(ALICE, "help"))
         header_id = tg.conn.execute("SELECT MIN(admin_msg_id) FROM inbox_admin_msgs").fetchone()[0]
         await post(c, group("on it", reply_to=header_id))
@@ -671,6 +675,7 @@ async def test_replies_that_do_not_count(tg, who):
 async def test_reply_to_a_user_who_blocked_the_bot(tg):
     admin_linked(tg)
     async with app(tg) as c:
+        await post(c, cb(ALICE, "support"))
         await post(c, msg(ALICE, "help"))
         copy_id = tg.conn.execute("SELECT MAX(admin_msg_id) FROM inbox_admin_msgs").fetchone()[0]
         tg.fake.fail["copyMessage"] = [{"error_code": 403, "description": "Forbidden: bot was blocked by the user"}]
@@ -703,6 +708,37 @@ async def test_other_groups_are_ignored(tg):
         u["message"]["chat"] = {"id": -100999, "type": "supergroup"}
         await post(c, u)
     assert tg.fake.calls == [] and inbox(tg) == []
+
+
+async def test_text_without_the_support_button_gets_the_menu(tg):
+    async with app(tg) as c:
+        await post(c, msg(ALICE, "dsaa"))
+        await post(c, msg(ALICE, None, photo=[{"file_id": "F"}]))
+    assert tg.fake.texts(ALICE) == [telegram.t("fa", "menu")] * 2
+    assert tg.fake.sent(chat_id=ADMIN_CHAT) == [] and inbox(tg) == []
+
+
+async def test_the_support_window_closes_after_30_minutes(tg):
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "support"))
+        await post(c, msg(ALICE, "first"))
+        await post(c, msg(ALICE, "second"))   # still open: follow-ups go too
+        tg.conn.execute("UPDATE telegram_chats SET pending=? WHERE chat_id=?",
+                        (json.dumps({"until": __import__("time").time() - 1}), ALICE))
+        await post(c, msg(ALICE, "much later"))
+    assert [m["text"] for m in inbox(tg)] == ["first", "second"]
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "menu")
+
+
+async def test_an_admin_reply_opens_the_window_again(tg):
+    admin_linked(tg)
+    async with app(tg) as c:
+        await admin_reply(c, tg)
+        tg.conn.execute("UPDATE telegram_chats SET state=NULL, pending=NULL WHERE chat_id=?", (ALICE,))
+        copy_id = tg.conn.execute("SELECT MAX(admin_msg_id) FROM inbox_admin_msgs").fetchone()[0]
+        await post(c, group("anything else?", reply_to=copy_id))
+        await post(c, msg(ALICE, "yes, one more thing"))
+    assert inbox(tg)[-1]["text"] == "yes, one more thing"
 
 
 # ---------- Task 10: registration ----------

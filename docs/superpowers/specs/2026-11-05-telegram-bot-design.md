@@ -134,7 +134,7 @@ should hear back.
 ## 5. The menu
 
 `/start` with no code, or `/menu`, shows inline buttons: **Buy a pass** · **My passes** · **Feedback** ·
-**Language**. A line under the buttons says that any message typed here goes to support.
+**Language** (later also **Prices** and **Support**). A line under the buttons says to tap Support to message support.
 
 - The flows use callback buttons. Callback data is a short action plus at most an id or nonce, always under
   64 bytes. The choices made so far are kept in `pending`.
@@ -152,7 +152,7 @@ should hear back.
 3. **On sale:** the tiers and lengths on sale, at Toman prices including VAT, come from `payments.prices()`, shown as
    on the site.
    - When ZarinPal can't take a payment (`payments.ready()` false, or `pay_mode` is `manual`), the bot says buying is
-     paused and that any message here goes to support.
+     paused and to tap Support with a question.
 4. **Choosing:** the user picks a tier, then a length.
    - **Start after the current one** / **Start now** is offered exactly when the dashboard's order dialog offers it,
      and with the same `replaces` meaning. Building that dialog's offer is extracted from `/api/me/tickets` into a
@@ -186,8 +186,9 @@ always agree.
 
 ## 7. Support and feedback
 
-- **Feedback** sets `state='feedback'`, and the next message is stored as feedback. Any other message, with no
-  `state`, is support. Linked and unlinked users alike can send both.
+- **Feedback** sets `state='feedback'`, and the next message is stored as feedback. **Support** sets
+  `state='support'` for 30 minutes, renewed by each message and by an admin's reply; messages in that window are
+  support. Any other message, with no `state`, gets the menu and reaches no one (changed 2026-11-05 after launch). Linked and unlinked users alike can send both.
 - **What is accepted:** text up to 3500 characters (longer gets "Please split it into shorter messages"), a photo, a
   document, or a voice note. Each message of an album arrives and is stored separately. Stickers, polls and the like
   get "Please send text, a photo, a file or a voice note".
