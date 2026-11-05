@@ -173,7 +173,7 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <meta property="og:image:alt" content="کلاد: اشتراک کلاد بدون پرداخت ارزی">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="alternate" type="application/rss+xml" title="وبلاگ کلاد" href="{html.escape(base)}/blog/feed.xml">
-<link rel="icon" href="/static/rahkar-icon.svg" type="image/svg+xml">
+<link rel="icon" href="/static/rahkar-favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/rahkar-icon-180.png">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/home.css">
