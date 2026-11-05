@@ -85,3 +85,9 @@ rpm = 60                    # requests per minute per account
 [zarinpal]
 sandbox = false
 vat_percent = 10
+
+# Telegram bot (docs/superpowers/specs/2026-11-05-telegram-bot-design.md). Off until TELEGRAM_BOT_TOKEN and
+# TELEGRAM_WEBHOOK_SECRET are in gateway.env; then run `claude-proxy telegram set-webhook` once on the box.
+[telegram]
+bot_username = "rahkar_ai_bot"
+admin_chat_id = -5520844535
