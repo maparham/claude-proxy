@@ -36,7 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, contents, db, limits, mail, orders, passcard, payments, quota, telegram, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, telegram, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -767,6 +767,29 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def install_ps1_():
         need_urls()
         return PlainTextResponse(install_ps1(cfg), headers={"Cache-Control": "no-cache"})
+
+    # The client itself, which /install and /install.ps1 download (client_dist: the repository is private).
+    def client_file(attr: str, media_type: str):
+        d = client_dist.dist()
+        if d is None:
+            fail(404, "This gateway has no client files to serve.")
+        return Response(getattr(d, attr), media_type=media_type, headers={"Cache-Control": "no-cache"})
+
+    @app.get("/client/install.sh")
+    async def client_install_sh():
+        return client_file("install_sh", "text/x-shellscript; charset=utf-8")
+
+    @app.get("/client/install.ps1")
+    async def client_install_ps1():
+        return client_file("install_ps1", "text/plain; charset=utf-8")
+
+    @app.get("/client/claude-gateway.tar.gz")
+    async def client_tarball():
+        return client_file("tarball", "application/gzip")
+
+    @app.get("/client/claude-gateway.zip")
+    async def client_zip():
+        return client_file("zip", "application/zip")
 
     def browser_user(request: Request, write: bool = False):
         """Someone signed in to this dashboard in the browser, the only one who may authorize a computer. Not a key
@@ -1843,24 +1866,33 @@ async def _json(request: Request) -> dict:
 def install_sh(cfg) -> str:
     """What `curl -fsSL <dashboard>/install | sh` runs: install.sh, then `claude-gateway on` for this gateway."""
     q = shlex.quote
+    dash = cfg.listener.dashboard_url.rstrip("/")
+    # From this gateway when it has the client files (client_dist), else from the configured installer_url.
+    url, env = ((f"{dash}/client/install.sh", f"CLAUDE_GATEWAY_TARBALL={q(dash + '/client/claude-gateway.tar.gz')} ")
+                if client_dist.dist() else (cfg.signup.installer_url, ""))
     return ("#!/bin/sh\n"
             f"# Installs claude-gateway and connects this computer to {cfg.listener.dashboard_url}: it opens the\n"
             "# browser to authorize it, then sets up gclaude.\n"
             "set -eu\n"
-            f"curl -fsSL {q(cfg.signup.installer_url)} | sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
-            f"--dashboard {q(cfg.listener.dashboard_url.rstrip('/'))} \"$@\"\n")
+            f"curl -fsSL {q(url)} | {env}sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
+            f"--dashboard {q(dash)} \"$@\"\n")
 
 
 def install_ps1(cfg) -> str:
     """What `irm <dashboard>/install.ps1 | iex` runs in Windows PowerShell 5.1 (Windows client design section 4)."""
     q = lambda s: "'" + s.replace("'", "''") + "'"
     dash = cfg.listener.dashboard_url.rstrip("/")
+    served = client_dist.dist() is not None   # as in install_sh
+    url = f"{dash}/client/install.ps1" if served else cfg.signup.installer_ps1_url
+    run = (f"& ([scriptblock]::Create((Invoke-RestMethod {q(url)}))) on "
+           f"--url {q(cfg.listener.public_url.rstrip('/'))} --dashboard {q(dash)}\n")
+    if served:   # the archive install.ps1 unpacks, for this run only
+        run = (f"$env:CLAUDE_GATEWAY_ZIP = {q(dash + '/client/claude-gateway.zip')}\n"
+               f"try {{ {run.rstrip()} }} finally {{ Remove-Item Env:CLAUDE_GATEWAY_ZIP -ErrorAction SilentlyContinue }}\n")
     return (f"# Installs claude-gateway and connects this computer to {dash}: it opens the browser to authorize it,\n"
             "# then sets up gclaude.\n"
             "[Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor "
-            "[Net.SecurityProtocolType]::Tls12\n"
-            f"& ([scriptblock]::Create((Invoke-RestMethod {q(cfg.signup.installer_ps1_url)}))) on "
-            f"--url {q(cfg.listener.public_url.rstrip('/'))} --dashboard {q(dash)}\n")
+            "[Net.SecurityProtocolType]::Tls12\n" + run)
 
 
 def _public_user(u) -> dict:

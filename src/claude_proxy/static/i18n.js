@@ -2393,6 +2393,7 @@ const ERR_FA = {
   "Type your name to confirm.": "برای تأیید، نام‌تان را بنویسید.",
   "This account was removed. Ask the gateway admin.": "این حساب حذف شده است. از ادمین سرویس بپرسید.",
   "This gateway has no [listener] public_url and dashboard_url set, so it can't authorize in the browser.": "این سرویس public_url و dashboard_url را در [listener] تنظیم نکرده، پس نمی‌تواند در مرورگر تأیید کند.",
+  "This gateway has no client files to serve.": "این سرویس فایل‌های نصب claude-gateway را ندارد.",
   "This key only works for third-party models; sign in with your Claude Code key.": "این کلید فقط برای مدل‌های شخص ثالث کار می‌کند؛ با کلید کلاد خود وارد شوید.",
   "This key only works for third-party models; use your Claude Code key for the dashboard.": "این کلید فقط برای مدل‌های شخص ثالث کار می‌کند؛ برای داشبورد از کلید کلاد خود استفاده کنید.",
   "Passes are not enabled on this gateway.": "بسته‌ها روی این سرویس فعال نیستند.",

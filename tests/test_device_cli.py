@@ -183,8 +183,8 @@ def test_the_dashboards_one_liner_installs_and_authorizes(dash, home, tmp_path, 
     """`curl -fsSL <dashboard>/install | sh`, as the dashboard serves it: install.sh, then `on`, then gclaude."""
     c = Config()
     c.listener.public_url = c.listener.dashboard_url = dash.url
-    c.signup.installer_url = f"{dash.url}/raw/install.sh"
-    dash.files = {"/install": install_sh(c).encode(), "/raw/install.sh": (ROOT / "install.sh").read_bytes()}
+    dash.files = {"/install": install_sh(c).encode(), "/client/install.sh": (ROOT / "install.sh").read_bytes(),
+                  "/client/claude-gateway.tar.gz": tarball.read_bytes()}   # the gateway serves the client itself
     dash.tokens = [(400, {"error": "authorization_pending"}), (200, {"key": "sk-proxy-machine", "user": "maya"})]
     path, log = opener(tmp_path)
     fake = tmp_path / "claudebin"   # the installer checks that Claude Code runs; CI has none

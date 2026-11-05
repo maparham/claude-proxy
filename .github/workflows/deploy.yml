@@ -37,8 +37,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # tags, for the client's version (git describe)
       - name: Build image
-        run: docker build -t "claude-proxy:$GITHUB_SHA" .
+        run: docker build --build-arg "CLIENT_VERSION=$(git describe --tags --match 'v[0-9]*')" -t "claude-proxy:$GITHUB_SHA" .
       - name: Package image and config
         run: |
           mkdir payload

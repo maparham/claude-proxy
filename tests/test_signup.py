@@ -1,7 +1,11 @@
 """Sign-up with Clerk, browser authorization for `claude-gateway on`, and machine keys."""
 import base64
+import io
 import json
+import tarfile
 import time
+import zipfile
+from pathlib import Path
 
 import httpx
 import pytest
@@ -9,13 +13,14 @@ from argon2 import PasswordHasher
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from claude_proxy import clerk, limits
+from claude_proxy import clerk, client_dist, limits
 from claude_proxy.auth import AuthError, authenticate
 from claude_proxy.db import create_user
 from claude_proxy.gateway import Gateway
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
 
+ROOT = Path(__file__).resolve().parents[1]
 PW = "correct horse battery"
 FAPI = "clerk.test.dev"
 PK = "pk_test_" + base64.b64encode(f"{FAPI}$".encode()).decode().rstrip("=")
@@ -206,7 +211,8 @@ async def test_install_script(env):
         await signed_in(c)
         assert (await c.get("/api/session")).json()["install"] == f"curl -fsSL {DASH}/install | sh"
     assert s.startswith("#!/bin/sh\n")
-    assert f"| sh -s -- on --url https://gw.test --dashboard {DASH} \"$@\"" in s
+    assert f"curl -fsSL {DASH}/client/install.sh | CLAUDE_GATEWAY_TARBALL={DASH}/client/claude-gateway.tar.gz " \
+           f"sh -s -- on --url https://gw.test --dashboard {DASH} \"$@\"" in s
     gw.cfg.listener.public_url = ""
     async with app(gw) as c:
         assert (await c.get("/install")).status_code == 503
@@ -222,7 +228,8 @@ async def test_install_script_for_windows(env):
     assert r.headers["cache-control"] == "no-cache"
     s = r.text
     assert "[Net.SecurityProtocolType]::Tls12" in s
-    assert f"(Invoke-RestMethod '{gw.cfg.signup.installer_ps1_url}')" in s
+    assert f"(Invoke-RestMethod '{DASH}/client/install.ps1')" in s           # this gateway's own: the repo is private
+    assert f"$env:CLAUDE_GATEWAY_ZIP = '{DASH}/client/claude-gateway.zip'" in s
     assert f"on --url 'https://gw.test' --dashboard '{DASH}'" in s
     assert gw.cfg.signup.installer_ps1_url.endswith("/install.ps1")
     gw.cfg.listener.public_url = "https://o'brien.test/"   # a quote is doubled, as PowerShell reads it
@@ -517,3 +524,27 @@ async def test_privacy_page(env):
     assert r.status_code == 200 and "after 90 days" in r.text and "not stored" in r.text
     assert '<meta name="retention-days" content="90">' in r.text   # what privacy.js shows, in either language
     assert "no-transform" in r.headers["cache-control"]
+
+
+async def test_the_gateway_serves_the_client_itself(env, monkeypatch):
+    """The repository is private, so /install can't send people to GitHub: the gateway serves the files."""
+    gw, *_ = env
+    async with app(gw) as c:
+        sh = await c.get("/client/install.sh")
+        ps1 = await c.get("/client/install.ps1")
+        tgz = await c.get("/client/claude-gateway.tar.gz")
+        zp = await c.get("/client/claude-gateway.zip")
+    assert sh.status_code == ps1.status_code == tgz.status_code == zp.status_code == 200
+    assert sh.content == (ROOT / "install.sh").read_bytes() and ps1.content == (ROOT / "install.ps1").read_bytes()
+    with tarfile.open(fileobj=io.BytesIO(tgz.content)) as t:
+        names = t.getnames()
+        assert t.getmember("claude-proxy/scripts/claude-gateway").mode == 0o755
+        assert t.extractfile("claude-proxy/scripts/claude-gateway").read() == (ROOT / "scripts/claude-gateway").read_bytes()
+    for f in ("scripts/statusline.sh", "scripts/gclaude-sync.py", "scripts/VERSION", "examples/opencode/muse.md"):
+        assert f"claude-proxy/{f}" in names
+    with zipfile.ZipFile(io.BytesIO(zp.content)) as z:
+        assert "claude-proxy/scripts/windows/claude-gateway.ps1" in z.namelist()
+    monkeypatch.setattr(client_dist, "dist", lambda: None)   # no client files: GitHub, as configured
+    async with app(gw) as c:
+        assert (await c.get("/client/install.sh")).status_code == 404
+        assert f"curl -fsSL {gw.cfg.signup.installer_url} | sh -s -- on" in (await c.get("/install")).text

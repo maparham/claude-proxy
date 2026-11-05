@@ -159,3 +159,17 @@ def test_install_for_opencode_only_needs_no_claude(home, tarball, tmp_path):
     r = install(home, tarball, "on", "--opencode", "--url", "http://127.0.0.1:9", path=no_claude_path(tmp_path))
     assert "Claude Code" not in r.stderr
     assert (home / ".local" / "bin" / "claude-gateway").is_symlink()
+
+
+def test_install_from_the_gateways_own_archive(home, tmp_path):
+    """The tarball the dashboard serves (client_dist) installs like GitHub's did, version included."""
+    from claude_proxy import client_dist
+    client_dist.dist.cache_clear()
+    path = tmp_path / "claude-gateway.tar.gz"
+    path.write_bytes(client_dist.dist().tarball)
+    r = install(home, path)
+    assert r.returncode == 0, r.stderr
+    share = home / ".local" / "share" / "claude-gateway"
+    for f in ("scripts/claude-gateway", "scripts/statusline.sh", "scripts/gclaude-sync.py", "examples/opencode/muse.md"):
+        assert (share / f).read_bytes() == (ROOT / f).read_bytes()
+    assert (share / "scripts" / "VERSION").read_text().startswith("v")
