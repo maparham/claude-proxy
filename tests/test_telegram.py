@@ -621,3 +621,31 @@ async def test_other_groups_are_ignored(tg):
         u["message"]["chat"] = {"id": -100999, "type": "supergroup"}
         await post(c, u)
     assert tg.fake.calls == [] and inbox(tg) == []
+
+
+# ---------- Task 10: registration ----------
+
+async def test_set_webhook_registers_our_url(tg):
+    assert await telegram.set_webhook(tg.cfg, tg.gw.http) is True
+    (hook,) = tg.fake.sent("setWebhook")
+    assert hook == {"url": "https://dash.rahkar.pro/telegram/webhook", "secret_token": SECRET,
+                    "allowed_updates": ["message", "callback_query"]}
+    assert len(tg.fake.sent("setMyCommands")) == 2
+
+
+async def test_startup_only_checks(tg, caplog):
+    tg.fake.webhook_url = "https://elsewhere.example/telegram/webhook"
+    await telegram.check_webhook(tg.cfg, tg.gw.http)
+    assert [m for m, _ in tg.fake.calls] == ["getWebhookInfo"]
+    assert "elsewhere.example" in caplog.text
+    tg.fake.calls.clear()
+    caplog.clear()
+    tg.fake.webhook_url = telegram.webhook_url(tg.cfg)
+    await telegram.check_webhook(tg.cfg, tg.gw.http)
+    assert caplog.text == ""
+
+
+def test_cli_refuses_when_off(monkeypatch, tmp_path):
+    monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
+    with pytest.raises(SystemExit, match="The bot is off"):
+        cli.main(["telegram", "set-webhook"])

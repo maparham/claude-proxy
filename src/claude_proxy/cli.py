@@ -5,6 +5,7 @@ import asyncio
 import getpass
 import logging
 import os
+import re
 import sys
 import threading
 import time
@@ -267,6 +268,20 @@ def cmd_limit_list(args, cfg):
             print(f"{u['name']:<16} {s.kind}{scope:<18} {s.value:>12} {s.unit:<8} {cur}")
 
 
+def cmd_telegram_set_webhook(args, cfg):
+    if not telegram.on(cfg):
+        sys.exit("The bot is off: it needs [telegram], TELEGRAM_BOT_TOKEN, TELEGRAM_WEBHOOK_SECRET and [listener] dashboard_url.")
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,256}", cfg.telegram.webhook_secret()):
+        sys.exit("TELEGRAM_WEBHOOK_SECRET may use only A-Z, a-z, 0-9, _ and -, at most 256 characters.")
+
+    async def run():
+        async with httpx.AsyncClient() as http:
+            return await telegram.set_webhook(cfg, http)
+    if not asyncio.run(run()):
+        sys.exit("Telegram refused the webhook; see the log above.")
+    print(f"Webhook set: {telegram.webhook_url(cfg)}")
+
+
 def cmd_serve(args, cfg):
     try:
         check_key()
@@ -298,6 +313,8 @@ async def _serve(cfg: Config):
             # Reconciling payments runs here, beside the dashboard's payment callback: both settle a payment on a
             # "no await between check and grant" guard, which holds only on one loop and one connection.
             reconcile = asyncio.create_task(_reconcile_payments(dash_conn, cfg, dash_gw.http))
+            if telegram.on(cfg):
+                await telegram.check_webhook(cfg, dash_gw.http)
             try:
                 await dashboard.serve()
             finally:
@@ -421,6 +438,9 @@ def main(argv=None):
     s.set_defaults(func=cmd_limit_set)
     s = lm.add_parser("clear"); s.add_argument("user"); s.add_argument("kind"); s.add_argument("--scope", default="*"); s.set_defaults(func=cmd_limit_clear)
     s = lm.add_parser("list"); s.add_argument("user", nargs="?"); s.set_defaults(func=cmd_limit_list)
+
+    tgp = sub.add_parser("telegram", help="the Telegram bot").add_subparsers(dest="sub", required=True)
+    tgp.add_parser("set-webhook", help="point the bot at this gateway's dashboard_url (the live gateway only)").set_defaults(func=cmd_telegram_set_webhook)
 
     args = p.parse_args(argv)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")

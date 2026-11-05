@@ -1876,8 +1876,10 @@ function nameDialog(u) {
   const d = openDialog(`<h3>${self ? t("name.your") : t("name.rename", { name: bdi(name) })}</h3><p>${self ? t("name.shown_self") : t("name.shown_other")}${admin ? ` ${self ? t("name.admin_self") : t("name.admin_other")}` : ""}</p>
     <form id="f-name" class="form-grid"><label>${t("name.name")}<input type="text" name="name" required maxlength="64" value="${esc(name)}"></label>
     <button class="btn primary" type="submit">${t("app.save")}</button></form><div class="error" id="name-err"></div>
+    ${self ? `<div id="tg-row"></div>` : ""}
     <p><button class="btn" data-close>${t("app.cancel")}</button>${self && !admin ? ` <button class="btn danger" type="button" id="delete-me">${t("me.delete")}</button>` : ""}</p>`);
   $("#f-name input", d).select();
+  if (self) telegramRow($("#tg-row", d));
   if ($("#delete-me", d)) $("#delete-me", d).onclick = () => { d.close(); deleteMeDialog(); };
   $("#f-name", d).onsubmit = async (e) => {
     e.preventDefault();
@@ -1888,6 +1890,21 @@ function nameDialog(u) {
       d.close(); render();
     } catch (err) { $("#name-err").textContent = err.message; }
   };
+}
+// Telegram bot design, section 4: connect this account to the bot (a 10-minute link), or disconnect it.
+async function telegramRow(el) {
+  let s;
+  try { s = await api("/api/telegram"); } catch { return; }
+  if (!s.on) return;
+  el.innerHTML = s.connected
+    ? `<p>${t("tg.connected", { who: bdi(s.connected) })} <button class="btn small" type="button" id="tg-unlink">${t("tg.disconnect")}</button></p>`
+    : `<p>${t("tg.lede")}</p><p id="tg-go"><button class="btn small primary" type="button" id="tg-link">${t("tg.connect")}</button></p><p class="sub">${t("tg.warn")}</p>`;
+  const link = $("#tg-link", el), unlink = $("#tg-unlink", el);
+  if (link) link.onclick = async () => {
+    const r = await apiPost("/api/telegram/link", {}, null, link);
+    if (r) $("#tg-go", el).innerHTML = `<a class="btn small primary" href="${esc(r.url)}" target="_blank" rel="noopener">${t("tg.open")}</a>`;
+  };
+  if (unlink) unlink.onclick = async () => { if (await apiPost("/api/telegram/unlink", {}, null, unlink)) telegramRow(el); };
 }
 function addUserDialog() {
   const d = openDialog(`<h3>${t("users.add")}</h3><form id="f-add" class="form-grid">

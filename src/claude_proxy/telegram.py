@@ -287,6 +287,40 @@ async def after_payment(conn: sqlite3.Connection, cfg: Config, http: httpx.Async
         logger.exception("telegram notice for payment #%d failed", pid)
 
 
+COMMANDS = {
+    "fa": [("menu", "منو"), ("lang", "English / فارسی"), ("cancel", "لغو"), ("unlink", "قطع اتصال حساب")],
+    "en": [("menu", "Menu"), ("lang", "English / فارسی"), ("cancel", "Cancel"), ("unlink", "Disconnect the account")],
+}
+
+
+def webhook_url(cfg: Config) -> str:
+    return f"{cfg.listener.dashboard_url.rstrip('/')}/telegram/webhook"
+
+
+async def set_webhook(cfg: Config, http: httpx.AsyncClient) -> bool:
+    """`claude-proxy telegram set-webhook` (section 2): point the bot at this gateway. Never called at startup, so a dev
+    gateway with a [telegram] section cannot take the live bot's webhook away."""
+    bot = Bot(cfg.telegram.token(), http)
+    ok = await bot.call("setWebhook", url=webhook_url(cfg), secret_token=cfg.telegram.webhook_secret(),
+                        allowed_updates=["message", "callback_query"]) is True
+    for lang, cmds in COMMANDS.items():   # Persian is the default list; English for a Telegram set to English
+        await bot.call("setMyCommands", commands=[{"command": c, "description": d} for c, d in cmds],
+                       **({"language_code": "en"} if lang == "en" else {}))
+    return ok
+
+
+async def check_webhook(cfg: Config, http: httpx.AsyncClient) -> None:
+    """At startup: say so when the bot's webhook points somewhere else; change nothing."""
+    try:
+        info = await Bot(cfg.telegram.token(), http).call("getWebhookInfo")
+    except Blocked:
+        info = None
+    url = (info or {}).get("url") if isinstance(info, dict) else None
+    if url != webhook_url(cfg):
+        logger.warning("telegram: the bot's webhook is %r, not %s; run `claude-proxy telegram set-webhook` on the live gateway",
+                       url, webhook_url(cfg))
+
+
 class Telegram:
     def __init__(self, conn: sqlite3.Connection, cfg: Config, http: httpx.AsyncClient):
         self.conn, self.cfg = conn, cfg
