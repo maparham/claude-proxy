@@ -4,6 +4,11 @@ body.home { font-size: 15px; }
 /* The nav toolbar stays on the visual right in both languages, so each dir gets the flex edge that lands there. */
 .home-top { display: flex; align-items: center; justify-content: flex-end; height: 64px; gap: 12px; }
 html[dir="rtl"] .home-top { justify-content: flex-start; }
+/* The brand takes the other end: first in English, after the toolbar in Persian, so it lands on the visual left in both. */
+.home-brand { display: flex; align-items: center; gap: 10px; margin-inline-end: auto; color: var(--ink); text-decoration: none; font-weight: 800; font-size: 17px; }
+.home-brand img { border-radius: 22%; }
+html[dir="rtl"] .home-brand { order: 1; margin-inline-end: 0; margin-inline-start: auto; }
+@media (max-width: 420px) { .home-brand span { display: none; } }   /* the icon alone leaves room for the toolbar on a phone */
 .home-top-right { display: flex; align-items: center; gap: 8px; }
 .home h2 { font-size: 22px; letter-spacing: -0.02em; margin: 0 0 20px; }
 .hero { padding: 72px 0 56px; max-width: 44rem; }
