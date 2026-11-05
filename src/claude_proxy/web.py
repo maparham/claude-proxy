@@ -39,6 +39,7 @@ import httpx
 from . import api_credit, blog, clerk, contents, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
+from .capacity import NO_REPORT
 from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
 from .config import LENGTHS
 from .gateway import Gateway
@@ -1594,6 +1595,31 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             pick = run[i]
         conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (pick and pick["id"], user["id"]))
         db.audit(conn, user["id"], "pass_pin", user["name"], {"ticket_id": pick and pick["id"]})
+        return {"ok": True}
+
+    @app.post("/api/me/tickets/start")
+    async def pass_start_now(request: Request):
+        """`{"pass": i, "starts_at": t}`: the i-th pass as /api/me/tickets lists them (running ones, then queued), queued
+        to start at t, starts now instead; 409 when there is no room for it now. Cannot be undone."""
+        user = principal(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        now = time.time()
+        i = body.get("pass")
+        live = tickets.running(conn, user["id"], now) + [t for t in tickets.user_tickets(conn, user["id"])
+                                                         if t["cancelled_at"] is None and t["starts_at"] > now]
+        if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(live) or live[i]["starts_at"] <= now \
+                or live[i]["starts_at"] != body.get("starts_at"):
+            fail(409, "That pass is not queued.")
+        try:
+            ticket_call(tickets.start_now, conn, cfg, user["id"], live[i]["id"], now)
+        except HTTPException as e:
+            # The user never learns about the account behind the gateway: no points or percents.
+            if e.status_code == 409 and e.detail == NO_REPORT:
+                fail(409, "Passes are temporarily unavailable; try again in a few minutes.")
+            if e.status_code == 409:
+                fail(409, "There is no free capacity to start this pass now; it will start as scheduled.")
+            raise
         return {"ok": True}
 
     @app.post("/api/me/orders/{oid}/{action}")

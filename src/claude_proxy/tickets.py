@@ -952,6 +952,44 @@ def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: 
     return {"ticket": get(conn, ticket_id), "moved": moved, "dates_kept": kept, "reason": reason}
 
 
+def start_now(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, now: float | None = None) -> dict:
+    """Start a queued ticket now, beside the user's running ones, its bonuses moved with it, as one bought to start now
+    (next_start): used-up running tickets end and it starts in their place. The user's tickets queued after it then
+    move up to close the gap, as on cancel (kept where they are if they would not fit). CapacityError, changing
+    nothing, when the ticket itself does not fit now."""
+    from . import limits   # here, not at the top: limits imports tickets
+    now = _now(now)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        t = get(conn, ticket_id)
+        if t["cancelled_at"] is not None or t["starts_at"] <= now:
+            raise TicketError("That pass is not queued.")
+        run = running(conn, t["user_id"], now)
+        if run and limits.used_up(conn, cfg, t["user_id"], now, run):   # their share no longer counts against capacity
+            for r in run:
+                end_used_up(conn, r, now)
+            db.audit(conn, actor, "ticket_used_up", t["user_name"], {"ticket_ids": [r["id"] for r in run]})
+        _shift(conn, cfg, [t], now - t["starts_at"], now)
+        moved = 0
+        chain = [x for x in _later_tickets(conn, t["user_id"], t["effective_end"]) if x["id"] != t["id"]]
+        if chain:
+            held = conn.execute(f"SELECT MAX({db.TICKET_EFFECTIVE_END}) FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
+                                "AND t.starts_at<?", (t["user_id"], chain[0]["starts_at"])).fetchone()[0]
+            shift = max(now, held or 0) - chain[0]["starts_at"]
+            if shift < 0:
+                try:
+                    _shift(conn, cfg, chain, shift, now)
+                    moved = len(chain)
+                except CapacityError:
+                    pass
+        db.audit(conn, actor, "ticket_start_now", t["user_name"], {"ticket_id": ticket_id, "was": t["starts_at"], "moved": moved})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return get(conn, ticket_id)
+
+
 def hand_over(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | None = None) -> bool:
     """The user's running tickets, used up together (limits.used_up), end now and their queued tickets move up to start
     now, so a ticket bought while the last ones ran out is usable at once. False, changing nothing, without a queued

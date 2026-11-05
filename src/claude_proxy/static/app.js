@@ -728,6 +728,7 @@ function passList(c, no) {
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100)}`}
       ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
+      ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;
 }
 function userLimitsCard(me, tk, order) {
@@ -1061,6 +1062,18 @@ function wireOrdering(root, tk, order) {
       e.target.disabled = true;
       try { await api("/api/me/tickets/pin", { method: "POST", body: { pass: +b.dataset.pin, starts_at: +b.dataset.at } }); d.close(); render(); }
       catch (err) { e.target.disabled = false; $("#pin-err", d).textContent = err.message; }
+    };
+  }));
+  // A queued pass can start now, beside the running ones, once: the server refuses when there is no room for it now.
+  root.querySelectorAll("[data-start]").forEach((b) => (b.onclick = () => {
+    const d = openDialog(`<h3>${t("pass.start_title", { pass: esc(b.dataset.name) })}</h3><p>${t("pass.confirm_start")}</p>
+      <div class="error" id="start-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="button" id="start-go">${t("pass.start_now")}</button></div>`);
+    $("#start-go", d).onclick = async (e) => {
+      e.target.disabled = true;
+      try { await api("/api/me/tickets/start", { method: "POST", body: { pass: +b.dataset.start, starts_at: +b.dataset.at } }); d.close(); render(); }
+      catch (err) { e.target.disabled = false; $("#start-err", d).textContent = err.message; }
     };
   }));
   const rb = root.querySelector("#renew-btn");

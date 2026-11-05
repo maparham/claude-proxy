@@ -83,3 +83,44 @@ async def test_a_forwarded_request_records_its_pass_and_the_pin_moves_it(env, an
         assert [(p["serving"], p["pinned"]) for p in me["passes"]] == [(False, False), (True, True)]
         assert (await c.post("/api/me/tickets/pin", headers=bearer(keys["alice"]), json={"pass": None})).status_code == 200
     assert conn.execute("SELECT pass_pin FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] is None
+
+
+async def test_a_queued_pass_starts_now_from_the_dashboard_or_says_there_is_no_room(env):
+    gw, conn, cfg, ids, keys = env
+    now = time.time()
+    snap(conn, now - 60, 0, "5h", now + 3600)
+    snap(conn, now - 60, 0, "7d", now + 3 * 86400)
+    async with admin_client(gw) as c:
+        for _ in range(2):
+            assert (await grant(c, {"user": ids["alice"], "tier": "lite", "length": "day", "currency": "EUR"})).status_code == 200
+    from tests.test_orders_web import client
+    async with client(gw) as c:
+        me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
+        q = me["passes"][1]
+        assert q["queued"]
+        bad = await c.post("/api/me/tickets/start", headers=bearer(keys["alice"]), json={"pass": 0, "starts_at": me["passes"][0]["starts_at"]})
+        assert bad.status_code == 409   # running, not queued
+        cfg.tickets.max_sold_5h_pct = 6
+        r = await c.post("/api/me/tickets/start", headers=bearer(keys["alice"]), json={"pass": 1, "starts_at": q["starts_at"]})
+        assert r.status_code == 409 and "no free capacity" in r.json()["error"]
+        cfg.tickets.max_sold_5h_pct = 100
+        r = await c.post("/api/me/tickets/start", headers=bearer(keys["alice"]), json={"pass": 1, "starts_at": q["starts_at"]})
+        assert r.status_code == 200, r.text
+        me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
+        assert not any(p.get("queued") for p in me["passes"])
+
+
+async def test_starting_a_pass_now_without_a_fresh_report_says_try_again(env):
+    gw, conn, cfg, ids, keys = env
+    now = time.time()
+    snap(conn, now - 60, 0, "5h", now + 3600)
+    snap(conn, now - 60, 0, "7d", now + 3 * 86400)
+    async with admin_client(gw) as c:
+        for _ in range(2):
+            assert (await grant(c, {"user": ids["alice"], "tier": "lite", "length": "week", "currency": "EUR"})).status_code == 200
+    conn.execute("DELETE FROM quota_snapshots")
+    from tests.test_orders_web import client
+    async with client(gw) as c:
+        q = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]["passes"][1]
+        r = await c.post("/api/me/tickets/start", headers=bearer(keys["alice"]), json={"pass": 1, "starts_at": q["starts_at"]})
+        assert r.status_code == 409 and "temporarily unavailable" in r.json()["error"]

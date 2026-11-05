@@ -299,3 +299,36 @@ def test_a_visitor_order_still_counts_every_ticket(env):
     with pytest.raises(orders.OrderError, match="sold out"):
         orders.create(conn, cfg, tier="standard", length="day", currency="USD", name="v", email="v@example.com",
                       ip="1.2.3.4", notify=False, now=NOW - 100, terms_version="v1")
+
+
+def test_a_queued_pass_starts_now_beside_the_running_one_and_the_queue_behind_it_moves_up(env):
+    conn, cfg, ids, t = env
+    q = day(conn, cfg, ids, NOW - 250)
+    q2 = day(conn, cfg, ids, NOW - 240)
+    assert (q["starts_at"], q2["starts_at"]) == (t["ends_at"], t["ends_at"] + DAY)
+    s = tickets.start_now(conn, cfg, ids["alice"], q["id"], NOW - 100)
+    assert (s["starts_at"], s["effective_end"]) == (NOW - 100, NOW - 100 + DAY)   # the whole day, from now
+    assert [x["id"] for x in tickets.running(conn, ids["alice"], NOW - 50)] == [t["id"], q["id"]]
+    assert tickets.get(conn, q2["id"])["starts_at"] == NOW - 100 + DAY   # follows the moved pass, the latest end
+    assert conn.execute("SELECT action FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()[0] == "ticket_start_now"
+    with pytest.raises(tickets.TicketError, match="not queued"):
+        tickets.start_now(conn, cfg, ids["alice"], q["id"], NOW - 50)
+
+
+def test_a_queued_pass_without_room_now_keeps_its_date(env):
+    conn, cfg, ids, t = env
+    q = day(conn, cfg, ids, NOW - 250)
+    cfg.tickets.max_sold_5h_pct = 6   # the running Lite pass's 5-hour share plus another would pass it
+    with pytest.raises(tickets.CapacityError):
+        tickets.start_now(conn, cfg, ids["alice"], q["id"], NOW - 100)
+    assert tickets.get(conn, q["id"])["starts_at"] == t["ends_at"]
+
+
+def test_a_queued_pass_started_now_replaces_a_used_up_running_one(env):
+    conn, cfg, ids, t = env
+    q = day(conn, cfg, ids, NOW - 250)
+    use_up(conn, ids)
+    s = tickets.start_now(conn, cfg, ids["alice"], q["id"], NOW - 100)
+    assert s["starts_at"] == NOW - 100
+    assert tickets.get(conn, t["id"])["used_up_at"] == NOW - 100   # ends as it starts, as on a start-now purchase
+    assert [x["id"] for x in tickets.running(conn, ids["alice"], NOW - 50)] == [q["id"]]
