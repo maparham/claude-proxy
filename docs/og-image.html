@@ -9,33 +9,55 @@
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800&display=block">
 <style>
   html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; }
-  body { font-family: Vazirmatn, sans-serif; background: #f9f9f7; color: #0b0b0b; position: relative; }
-  .frame { position: absolute; inset: 56px 72px; display: flex; flex-direction: column; }
-  .brand { display: flex; align-items: center; gap: 16px; font-size: 40px; font-weight: 800; letter-spacing: -0.01em; }
-  .dot { width: 22px; height: 22px; border-radius: 50%; background: #eb6834; }
-  h1 { margin: 64px 0 20px; font-size: 76px; line-height: 1.15; font-weight: 800; letter-spacing: -0.02em; }
-  .sub { font-size: 36px; color: #52514e; font-weight: 600; margin: 0; }
-  .foot { margin-top: auto; display: flex; justify-content: space-between; align-items: flex-end; }
-  .chips { display: flex; gap: 14px; }
-  .chip { font-size: 26px; font-weight: 600; padding: 10px 24px; border-radius: 999px; border: 2px solid rgba(11,11,11,0.12); background: #fcfcfb; }
-  .chip.on { background: #0b0b0b; color: #fcfcfb; border-color: #0b0b0b; }
-  .term { direction: ltr; font: 600 28px ui-monospace, Menlo, monospace; background: #0b0b0b; color: #fcfcfb; padding: 14px 26px; border-radius: 14px; }
-  .term b { color: #eb6834; }
-  .url { position: absolute; left: 72px; top: 64px; direction: ltr; font: 600 26px ui-monospace, Menlo, monospace; color: #898781; }
-  .bar { position: absolute; right: 0; top: 0; bottom: 0; width: 14px; background: #eb6834; }
+  body { font-family: Vazirmatn, sans-serif; color: #0b0b0b; position: relative;
+    background: radial-gradient(45% 70% at 18% 45%, rgba(42, 120, 214, 0.16), transparent 70%),
+                radial-gradient(40% 60% at 85% 20%, rgba(235, 104, 52, 0.16), transparent 70%), #f9f9f7; }
+  .text { position: absolute; right: 72px; top: 60px; bottom: 60px; width: 560px; display: flex; flex-direction: column; }
+  .brand { display: flex; align-items: center; gap: 16px; font-size: 34px; font-weight: 800; }
+  .brand img { width: 64px; height: 64px; border-radius: 16px; }
+  h1 { margin: 52px 0 14px; font-size: 84px; line-height: 1.1; font-weight: 800; letter-spacing: -0.02em; }
+  .sub { font-size: 32px; line-height: 1.5; color: #52514e; font-weight: 600; margin: 0; }
+  .chips { margin-top: auto; display: flex; gap: 10px; }
+  .chip { font-size: 22px; font-weight: 600; padding: 7px 16px; white-space: nowrap; border-radius: 999px; background: #fcfcfb; border: 2px solid rgba(11, 11, 11, 0.10); }
+  .chip i { font-style: normal; color: #eb6834; margin-inline-end: 6px; }
+  .term { position: absolute; left: 64px; top: 92px; width: 470px; direction: ltr; text-align: start; border-radius: 18px; overflow: hidden;
+    background: #161615; color: #e9e8e3; font: 17px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+    box-shadow: 0 30px 70px -24px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(255, 255, 255, 0.06); }
+  .bar { display: flex; gap: 8px; padding: 13px 16px; background: #222220; }
+  .bar i { width: 13px; height: 13px; border-radius: 50%; background: #ff5f57; }
+  .bar i:nth-child(2) { background: #febc2e; } .bar i:nth-child(3) { background: #28c840; }
+  .cc { padding: 18px 22px 20px; }
+  .cc div { white-space: pre-wrap; min-height: 1.6em; }
+  .p { color: #86b6ef; margin-bottom: 8px; } .w { color: #e9e8e3; } .m { color: #8a8984; } .ok { color: #4eba65; }
+  .cc b { color: #f4f3ef; }
+  .head { display: flex; align-items: center; gap: 18px; margin: 4px 0 12px; }
+  .head > div { white-space: normal !important; line-height: 1.5; }
+  .head svg { width: 70px; height: 32px; flex: none; }
+  .box { border: 1px solid #5a5955; border-radius: 8px; padding: 4px 12px; margin-top: 12px; }
+  .cursor { display: inline-block; width: 10px; height: 18px; background: #e9e8e3; vertical-align: -3px; }
+  .url { position: absolute; left: 64px; bottom: 56px; direction: ltr; font: 600 26px ui-monospace, Menlo, monospace; color: #898781; }
 </style>
 </head>
 <body>
-<div class="bar"></div>
-<div class="url">rahkar.pro</div>
-<div class="frame">
-  <div class="brand"><span class="dot"></span>کلاد</div>
-  <h1>اشتراک کلاد، بدون پرداخت ارزی</h1>
-  <p class="sub">بدون احراز هویت · پرداخت ریالی · شروع در چند دقیقه</p>
-  <div class="foot">
-    <div class="chips"><span class="chip on">بسته روزانه</span><span class="chip">بسته هفتگی</span></div>
-    <div class="term"><b>$</b> gclaude</div>
+<div class="term">
+  <div class="bar"><i></i><i></i><i></i></div>
+  <div class="cc">
+    <div class="p">~/project % <span class="w">gclaude</span></div>
+    <div class="head"><svg viewBox="0 0 11 5" fill="#d77757" shape-rendering="crispEdges"><rect x="1" y="0" width="1.02" height="1.02"/><rect x="2" y="0" width="1.02" height="1.02"/><rect x="3" y="0" width="1.02" height="1.02"/><rect x="4" y="0" width="1.02" height="1.02"/><rect x="5" y="0" width="1.02" height="1.02"/><rect x="6" y="0" width="1.02" height="1.02"/><rect x="7" y="0" width="1.02" height="1.02"/><rect x="8" y="0" width="1.02" height="1.02"/><rect x="9" y="0" width="1.02" height="1.02"/><rect x="0" y="1" width="1.02" height="1.02"/><rect x="1" y="1" width="1.02" height="1.02"/><rect x="2" y="1" width="1.02" height="1.02" fill="#111"/><rect x="3" y="1" width="1.02" height="1.02"/><rect x="4" y="1" width="1.02" height="1.02"/><rect x="5" y="1" width="1.02" height="1.02"/><rect x="6" y="1" width="1.02" height="1.02"/><rect x="7" y="1" width="1.02" height="1.02"/><rect x="8" y="1" width="1.02" height="1.02" fill="#111"/><rect x="9" y="1" width="1.02" height="1.02"/><rect x="10" y="1" width="1.02" height="1.02"/><rect x="1" y="2" width="1.02" height="1.02"/><rect x="2" y="2" width="1.02" height="1.02"/><rect x="3" y="2" width="1.02" height="1.02"/><rect x="4" y="2" width="1.02" height="1.02"/><rect x="5" y="2" width="1.02" height="1.02"/><rect x="6" y="2" width="1.02" height="1.02"/><rect x="7" y="2" width="1.02" height="1.02"/><rect x="8" y="2" width="1.02" height="1.02"/><rect x="9" y="2" width="1.02" height="1.02"/><rect x="1" y="3" width="1.02" height="1.02"/><rect x="2" y="3" width="1.02" height="1.02"/><rect x="3" y="3" width="1.02" height="1.02"/><rect x="4" y="3" width="1.02" height="1.02"/><rect x="5" y="3" width="1.02" height="1.02"/><rect x="6" y="3" width="1.02" height="1.02"/><rect x="7" y="3" width="1.02" height="1.02"/><rect x="8" y="3" width="1.02" height="1.02"/><rect x="9" y="3" width="1.02" height="1.02"/><rect x="1" y="4" width="1.02" height="1.02"/><rect x="3" y="4" width="1.02" height="1.02"/><rect x="7" y="4" width="1.02" height="1.02"/><rect x="9" y="4" width="1.02" height="1.02"/></svg><div><b>Claude Code</b> <span class="m">v2.1.312</span><br><span class="m">Opus 5.5</span></div></div>
+    <div class="m">&gt; build a landing page</div>
+    <div><span class="ok">⏺</span> <b>Write</b>(index.html)</div>
+    <div><span class="ok">⏺</span> <b>Bash</b>(npm test)</div>
+    <div class="m">  ⎿  42 passed</div>
+    <div><span class="w">⏺</span> Done.</div>
+    <div class="box">&gt; <span class="cursor"></span></div>
   </div>
+</div>
+<div class="url">rahkar.pro</div>
+<div class="text">
+  <div class="brand"><img src="../src/claude_proxy/static/rahkar-icon.svg" alt="">راهکار هوش برتر</div>
+  <h1>اشتراک کلاد</h1>
+  <p class="sub">بدون پرداخت ارزی، بدون احراز هویت<br>راه&nbsp;اندازی فوری</p>
+  <div class="chips"><span class="chip"><i>✓</i>پرداخت ریالی</span><span class="chip"><i>✓</i>بدون فیلترشکن</span><span class="chip"><i>✓</i>بسته روزانه و هفتگی</span></div>
 </div>
 </body>
 </html>
