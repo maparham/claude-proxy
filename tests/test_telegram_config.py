@@ -29,16 +29,20 @@ def test_secrets_missing_read_none(monkeypatch):
     assert (t.token(), t.webhook_secret()) == (None, None)
 
 
-@pytest.mark.parametrize("body", [
-    '[telegram]\nbot_username = "b"\nadmin_chat_id = -1\nbot_token = "x"\n',   # a secret in the file: refused
-    '[telegram]\nadmin_chat_id = -1\n',
-    '[telegram]\nbot_username = ""\nadmin_chat_id = -1\n',
-    '[telegram]\nbot_username = "@b"\nadmin_chat_id = -1\n',
-    '[telegram]\nbot_username = "b"\n',
-    '[telegram]\nbot_username = "b"\nadmin_chat_id = 0\n',
-    '[telegram]\nbot_username = "b"\nadmin_chat_id = true\n',
-    '[telegram]\nbot_username = "b"\nadmin_chat_id = "-1"\n',
+USERNAME_MSG = r"bot_username must be"
+CHAT_MSG = r"admin_chat_id must be"
+
+
+@pytest.mark.parametrize("body, reason", [
+    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = -1\nbot_token = "x"\n', r"takes only bot_username and admin_chat_id"),   # a secret in the file: refused
+    ('[telegram]\nadmin_chat_id = -1\n', USERNAME_MSG),
+    ('[telegram]\nbot_username = ""\nadmin_chat_id = -1\n', USERNAME_MSG),
+    ('[telegram]\nbot_username = "@bot"\nadmin_chat_id = -1\n', USERNAME_MSG),
+    ('[telegram]\nbot_username = "bot"\n', CHAT_MSG),
+    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = 0\n', CHAT_MSG),
+    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = true\n', CHAT_MSG),
+    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = "-1"\n', CHAT_MSG),
 ])
-def test_bad_section_refused(tmp_path, body):
-    with pytest.raises(ConfigError, match=r"\[telegram\]"):
+def test_bad_section_refused(tmp_path, body, reason):
+    with pytest.raises(ConfigError, match=r"\[telegram\].*" + reason):
         Config.load(write(tmp_path, body))
