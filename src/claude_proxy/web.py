@@ -36,7 +36,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, contents, db, limits, mail, orders, payments, quota, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, contents, db, limits, mail, orders, passcard, payments, quota, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from .capacity import NO_REPORT
@@ -1359,89 +1359,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.tickets.enabled:
             return {"enabled": False}
         now = time.time()
-        limits.hand_over(conn, cfg, user["id"], now)   # used-up tickets give way to a queued one here too, not only on a request
-        st = tickets.user_state(conn, user["id"], now)
-        label = lambda t: cfg.tickets.tiers[t["tier"]].label if t["tier"] in cfg.tickets.tiers else t["tier"]  # noqa: E731
-        # No ticket ids: they number every sale on the account.
-        # `manual`: whether the order dialog offers an unpaid order beside ZarinPal.
-        mode = payments.pay_mode(conn, cfg)
-        out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(mode)}
-        cur = st["current"]
-        if cur:
-            ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
-            active = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is None]   # gifts; upgrades were paid for
-            week = tickets.week_bounds(conn, cfg, now)
-            week_end = week[1] if week is not None else tickets.current_day(cur, now)[1]   # display-only fallback; enforcement is 503 then
-            # No subscription percents: the user never learns about the account behind the gateway, so a bonus reads
-            # as a percent of the ticket's own allowance (+2 points on a 5% ticket: +40%).
-            share_5h = cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"]
-            now_tier = tickets.tier_now(conn, cur)
-            out["current"] = {"tier": now_tier, "label": label({"tier": now_tier}), "starts_at": cur["starts_at"], "length": cur["length"],
-                              "upgraded_from": {"tier": cur["tier"], "label": label(cur)} if ups else None,
-                              "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
-                              "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
-                              "week_known": week is not None,
-                              # Nothing left before it ends: the card offers a new ticket, which starts at once.
-                              "used_up": limits.used_up(conn, cfg, user["id"], now),
-                              "bonus_pct": (tickets.bonus_share(conn, cur["id"], now) - sum(
-                                  b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"] for b in ups)) / share_5h * 100,
-                              "bonuses": [{"pct": b["share_pct"] / cur["share_pct"] * 100, "note": b["note"], "ends_at": b["ends_at"]}
-                                          for b in active]}
-            # Extra days with their note; a bonus that also adds a share running now is shown with that share instead.
-            shown = {b["id"] for b in active}
-            # Passes running side by side, each with limits of its own (2026-10-28): which one serves now, which the
-            # user pinned, and how much of each limit it has used. Its place in the list names one to pin (no ticket ids).
-            run = tickets.running(conn, user["id"], now)
-            serving, serving_sts = limits.serving(conn, cfg, user["id"], now, run)
-            pin = conn.execute("SELECT pass_pin FROM users WHERE id=?", (user["id"],)).fetchone()[0]
-            def pass_use(t) -> dict:
-                """A running pass's use of each limit, and at one: when it is back (`back_at`, the last of its limits
-                to refill), or `used_up` when that is after it ends."""
-                # The serving pass as it serves, which may be borrowing from its next part (2026-10-30 spec, §4).
-                sts = serving_sts if serving is not None and t["id"] == serving["id"] else limits.pass_states(conn, cfg, t, now)
-                out = {f"pct_{s.kind[6:]}": s.pct for s in sts}
-                whole = limits.pass_weeks(conn, cfg, t, now, next((s for s in sts if s.kind == "share_7d"), None))
-                out["pct_pass"] = whole["ticket_pct"] if whole else out.get("pct_7d")   # the whole pass's use, as its card reads
-                hit = [s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded]
-                if hit:
-                    back = None if None in hit else max(hit)
-                    out |= {"back_at": back, "used_up": back is not None and back >= t["effective_end"]
-                            or any(s.kind == "share_7d" and limits.spent(s) for s in sts)}
-                return out
-
-            # With more than one live pass the card lists them all, the queued ones after the running ones (`queued`).
-            later = [t for t in tickets.user_tickets(conn, user["id"]) if t["cancelled_at"] is None and t["starts_at"] > now]
-            out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
-                {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
-                 "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
-                 "pinned": t["id"] == pin, **pass_use(t)} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
-                                  "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
-            out["current"]["serving_end"] = (serving or cur)["effective_end"]
-            out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
-                                             if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]
-        if st["queued"]:
-            q = st["queued"]
-            out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
-        out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
-                        "amount": t["amount"], "currency": t["currency"]} for t in tickets.past(conn, user["id"], now)]
-        currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else display_currency()
-        # A new ticket queues after the last, or starts now in place of a used-up one: the order dialog's "after" date.
-        # `replaces`: the latter, so the dialog offers no start choice. Not merely `used_up`: with a ticket queued that
-        # had no room to move up (hand_over), a new one still queues after it.
-        out["next_start"], replaces = tickets.next_start(conn, cfg, user["id"], now)
-        out["replaces"] = bool(replaces)
-        out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"],
-                                            exclude=[t["id"] for t in tickets.next_start(conn, cfg, user["id"], now, True)[1]])
-        # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
-        out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
-        out["timeline"] = tickets.timeline(conn, cfg, user["id"], now)   # the card's chart, with more than one live ticket
-        out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
-        out["terms_version"] = tickets.TERMS_VERSION
-        # Online payment (payments design, section 4): offered by the Payment selector alone. The Toman prices are None
-        # without an IRT rate (the button then has no amount), and may be stale: paying is refused then.
-        out["pay"] = ({"currency": payments.CURRENCY, "prices": payments.prices(conn, cfg, now), "vat_percent": cfg.zarinpal.vat_percent}
-                      if payments.online(mode) else None)
-        return out
+        return passcard.build(conn, cfg, user["id"], now)
 
     # ---------- order requests (design 2026-10-04) ----------
     # OrderError raised in here becomes its own status and message (_order_error above).
