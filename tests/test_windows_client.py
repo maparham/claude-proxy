@@ -345,7 +345,9 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url,
                         "CLAUDE_GATEWAY_VERSION": "1.0.8",   # the source zip's VERSION, for the statusline to send
                         "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
-                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
+                        "DISABLE_LOGIN_COMMAND": "1", "DISABLE_LOGOUT_COMMAND": "1", "DISABLE_UPGRADE_COMMAND": "1",
+                        "DISABLE_EXTRA_USAGE_COMMAND": "1", "DISABLE_INSTALL_GITHUB_APP_COMMAND": "1"}
     assert s["disableClaudeAiConnectors"] is True
     line = s["statusLine"]["command"]
     assert line.startswith("powershell -NoProfile -ExecutionPolicy Bypass -File \"") and line.endswith("/statusline.ps1\"")
@@ -778,13 +780,13 @@ def test_adding_to_path_keeps_its_variables(win):
 # ---------- the dashboard's one-liner, end to end ----------
 
 @on_windows
-def test_the_dashboards_one_liner_installs_and_authorizes(win, stub):
+def test_the_dashboards_one_liner_installs_and_authorizes(win, stub, source_zip):
     """`irm <dashboard>/install.ps1 | iex` in the user's own PowerShell, as the dashboard serves it: install.ps1, which
     hands `on --url … --dashboard …` to claude-gateway in a child PowerShell, then gclaude."""
     c = Config()
     c.listener.public_url = c.listener.dashboard_url = stub.url
-    c.signup.installer_ps1_url = f"{stub.url}/raw/install.ps1"
-    stub.files = {"/install.ps1": install_ps1(c).encode(), "/raw/install.ps1": INSTALL.read_bytes()}
+    stub.files = {"/install.ps1": install_ps1(c).encode(), "/client/install.ps1": INSTALL.read_bytes(),
+                  "/client/claude-gateway.zip": source_zip.read_bytes()}   # the gateway serves the client itself
     stub.tokens = [(400, {"error": "authorization_pending"}), (200, {"key": "sk-proxy-new", "user": "ana"})]
     r = win.ps(f"irm {stub.url}/install.ps1 | iex; Write-Output 'session still open'")
     assert "session still open" in r.out and "claude-gateway is installed" in r.out, r.out
