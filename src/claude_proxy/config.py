@@ -202,6 +202,20 @@ class ZarinpalConfig:
 
 
 @dataclass
+class TelegramConfig:
+    """[telegram] (Telegram bot design, section 2). The bot token and the webhook secret are secrets:
+    TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in the environment."""
+    bot_username: str = ""
+    admin_chat_id: int = 0   # the private admin group (a negative id)
+
+    def token(self) -> str | None:
+        return os.environ.get("TELEGRAM_BOT_TOKEN") or None
+
+    def webhook_secret(self) -> str | None:
+        return os.environ.get("TELEGRAM_WEBHOOK_SECRET") or None
+
+
+@dataclass
 class DBConfig:
     path: str = field(default_factory=_default_db)
 
@@ -438,6 +452,7 @@ class Config:
     tickets: TicketsConfig = field(default_factory=TicketsConfig)
     email: EmailConfig | None = None      # None without an [email] section: no mail is sent
     zarinpal: ZarinpalConfig | None = None   # None without a [zarinpal] section: no online payment
+    telegram: TelegramConfig | None = None   # None without a [telegram] section: no bot
     pricing: Pricing = field(default_factory=Pricing)
     routes: list[Route] = field(default_factory=_default_routes)
     retention_days: int = 180
@@ -518,5 +533,16 @@ class Config:
             if isinstance(vat, bool) or not isinstance(vat, (int, float)) or not 0 <= vat < 100:
                 raise ConfigError(f"{toml_path}: [zarinpal] vat_percent must be a number from 0 to under 100")
             cfg.zarinpal = ZarinpalConfig(sandbox=z.get("sandbox", False), vat_percent=float(vat))
+        if "telegram" in data:
+            tg = data["telegram"]
+            if set(tg) - {"bot_username", "admin_chat_id"}:
+                raise ConfigError(f"{toml_path}: [telegram] takes only bot_username and admin_chat_id; the token and webhook "
+                                  "secret are TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in the environment")
+            name, chat = tg.get("bot_username"), tg.get("admin_chat_id")
+            if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{3,64}", name):
+                raise ConfigError(f"{toml_path}: [telegram] bot_username must be the bot's username, without the @")
+            if isinstance(chat, bool) or not isinstance(chat, int) or chat == 0:
+                raise ConfigError(f"{toml_path}: [telegram] admin_chat_id must be the admin group's chat id (a number)")
+            cfg.telegram = TelegramConfig(bot_username=name, admin_chat_id=chat)
         cfg.config_file = toml_path
         return cfg
