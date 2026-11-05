@@ -137,7 +137,7 @@ part refills.
   holds.
 - `limits._ticket_7d(…, borrow: bool)`: the own limit, with the debt taken off; with `borrow`, the §2 limit. It sets
   `own_pts` and `rate` on the state, and never writes. `pass_states` and `used_up` call it without `borrow`.
-- `limits.serving`: the two rounds of §4.
+- `limits.serving`: §4 (one round, borrowing included, since 2026-11-05).
 - `limits.evaluate`: the §3 upsert, for the pass that serves, only when it is borrowing.
 - `web` pass cards: §4.
 - `limits.ticket_weeks` and `web._ticket_weeks_text`: §5.
@@ -168,6 +168,6 @@ part refills.
 12. Only `evaluate` writes `pass_borrows`. Calling `states`, `ticket_weeks` or rendering the dashboard leaves the
     table empty, and so does a request refused by another limit.
 13. Debt larger than the second part leaves it at 0 and carries nowhere.
-14. Round two: a pass at its 5-hour limit doesn't serve even though it could borrow. With every pass at its limit,
-    the retry time comes from round two.
+14. A pass at its 5-hour limit doesn't serve even though it could borrow. With every pass at its limit,
+    the retry time counts the borrowing.
 15. The dashboard card of a borrowing pass that is serving isn't marked as at its limit.

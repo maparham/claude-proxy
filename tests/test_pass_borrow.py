@@ -263,12 +263,15 @@ def test_debt_larger_than_the_second_part_leaves_nothing_and_carries_nowhere(env
 
 def test_a_pass_borrows_while_the_users_other_pass_still_has_room(env):
     conn, cfg, ids, t = env
+    cfg.tickets.borrow_margin_pct = 93 + 5
     w = grant(conn, cfg, ids, ids["alice"], length="week", start=START - DAY)
     conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (t["id"], ids["alice"]))
     use(conn, ids["alice"], t, 100, 1.1)                  # the pinned day pass is past its own part
     served = {}
     assert check(conn, cfg, ids["alice"], served=served) is None and served["ticket_id"] == t["id"]   # it borrows, 2026-11-05
-    assert not any(s.exceeded for s in limits.pass_states(conn, cfg, w, AT))   # the other pass's room is still its own
+    free = 100 - 1.1 - 93 - piece(5, DAY + 2 * 3600) - 5  # the week pass's unused part this week is held back as owed
+    assert week(conn, cfg, ids["alice"]).limit == pytest.approx(0.1 + free)
+    assert not any(s.exceeded for s in limits.pass_states(conn, cfg, w, AT))
 
 
 def test_a_pass_at_its_5_hour_limit_does_not_borrow(env):
