@@ -200,28 +200,29 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 
 
 def index_page(base: str) -> str:
-    items = "".join(
-        f'<li><a href="/blog/{p.slug}"><h2>{html.escape(p.title)}</h2></a>'
-        f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>'
-        f"<p>{html.escape(p.description)}</p></li>" for p in posts())
-    main = f'<section class="blog-head"><h1>وبلاگ کلاد</h1><p class="hero-lede">کارهایی که با بسته‌های کلاد سریع‌تر انجام می‌شوند.</p></section>\n<ul class="post-list">{items}</ul>'
-    return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main)
+    items = "".join(card(p, "h2") for p in posts())
+    main = f'<section class="blog-head"><h1>وبلاگ کلاد</h1><p class="hero-lede">کارهایی که با بسته‌های کلاد سریع‌تر انجام می‌شوند.</p></section>\n<ul class="latest-list post-cards">{items}</ul>'
+    return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main, wide=True)
 
 
 def icon(name: str, cls: str) -> str:
     return f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>'
 
 
+def card(p: Post, heading: str) -> str:
+    """A post as a card, on the home page and the blog's list: a cover in the post's color with its icon, a badge
+    icon, its tag, title (as `heading`), date and description."""
+    tag = f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else ""
+    return (f'<li><a href="/blog/{p.slug}" style="--c: var(--{p.color})">'
+            f'<div class="cover">{icon(p.icon, "ic big")}</div><div class="post-ic">{icon(p.badge, "ic")}</div>'
+            f'<div class="card-body">{tag}<{heading}>{html.escape(p.title)}</{heading}>'
+            f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>'
+            f"<p>{html.escape(p.description)}</p></div></a></li>")
+
+
 def latest(n: int = 3) -> str:
-    """The newest posts as cards for the home page, in Persian whichever language the page is shown in: a cover in
-    the post's color with its icon, a badge icon, its tag, title, date and description."""
-    items = "".join(
-        f'<li><a href="/blog/{p.slug}" style="--c: var(--{p.color})">'
-        f'<div class="cover">{icon(p.icon, "ic big")}</div><div class="post-ic">{icon(p.badge, "ic")}</div><div class="card-body">'
-        + (f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else "")
-        + f'<h3>{html.escape(p.title)}</h3>'
-        f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>'
-        f"<p>{html.escape(p.description)}</p></div></a></li>" for p in posts()[:n])
+    """The newest posts as cards for the home page, in Persian whichever language the page is shown in."""
+    items = "".join(card(p, "h3") for p in posts()[:n])
     return f'<ul class="latest-list" lang="fa" dir="rtl">{items}</ul>' if items else ""
 
 

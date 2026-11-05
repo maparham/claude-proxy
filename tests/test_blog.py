@@ -72,3 +72,9 @@ def test_a_post_header_with_an_unknown_icon_or_color_is_refused(tmp_path):
         path.write_text(head.format(bad), encoding="utf-8")
         with pytest.raises(ValueError):
             blog._parse(path)
+
+
+def test_the_blog_list_shows_every_post_as_a_card():
+    out = blog.index_page("https://rahkar.pro")
+    assert '<ul class="latest-list post-cards">' in out and "blog-wide" in out
+    assert out.count('<div class="cover">') == len(blog.posts()) and "<h2>" in out
