@@ -112,11 +112,12 @@ class SecurityHeaders(BaseHTTPMiddleware):
         super().__init__(app)
         # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame; the home page's order
         # dialog loads that same check (Turnstile) as a script and a frame, and needs nothing else from Cloudflare.
-        # The home page shows the eNamad trust seal, an image from trustseal.enamad.ir.
+        # The home page shows the eNamad trust seal, an image from trustseal.enamad.ir, and ZarinPal's trust logo, a script
+        # from www.zarinpal.com that writes in its image.
         clerk = f" https://{clerk_host}" if clerk_host else ""
         bot = " https://challenges.cloudflare.com" if clerk_host or turnstile else ""
-        self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/{clerk}{bot}; "
-                    f"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https://trustseal.enamad.ir{clerk}{' https://img.clerk.com' if clerk else ''}; "
+        self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/ https://www.zarinpal.com{clerk}{bot}; "
+                    f"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https://trustseal.enamad.ir https://zarinpal.com https://*.zarinpal.com{clerk}{' https://img.clerk.com' if clerk else ''}; "
                     "font-src 'self' https://fonts.gstatic.com; "
                     f"connect-src 'self'{clerk}; frame-src{bot or ' ' + repr('none')}; worker-src 'self' blob:; "
                     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
