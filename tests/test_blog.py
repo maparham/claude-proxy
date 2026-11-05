@@ -54,9 +54,7 @@ def test_a_post_gets_a_table_of_contents_linking_its_headings():
 
 
 def test_home_cards_show_each_posts_cover_icon_badge_tag_and_color():
-    out = blog.latest()
-    visa = out[out.index('href="/blog/visa-documents-lite-pass"'):]
-    visa = visa[:visa.index("</li>")]
+    visa = blog.card(blog.find("visa-documents-lite-pass"), "h3")
     assert 'style="--c: var(--s1)"' in visa and '<span class="tag">مهاجرت</span>' in visa
     assert visa.index(blog.ICONS["plane"]) < visa.index('class="post-ic"') < visa.index(blog.ICONS["doc"])
 
