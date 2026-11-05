@@ -172,4 +172,5 @@ def test_install_from_the_gateways_own_archive(home, tmp_path):
     share = home / ".local" / "share" / "claude-gateway"
     for f in ("scripts/claude-gateway", "scripts/statusline.sh", "scripts/gclaude-sync.py", "examples/opencode/muse.md"):
         assert (share / f).read_bytes() == (ROOT / f).read_bytes()
-    assert (share / "scripts" / "VERSION").read_text().startswith("v")
+    version = (share / "scripts" / "VERSION").read_text().strip()   # `git describe`; empty in a checkout without tags
+    assert version == "" or version.startswith("v")
