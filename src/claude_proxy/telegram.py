@@ -488,6 +488,9 @@ class Telegram:
         if text.startswith("/"):
             cmd, _, arg = text.partition(" ")
             cmd = cmd.split("@")[0]
+            if cmd == "/start" and arg.strip() == "support":   # the site's contact link opens Support straight away
+                self.open_support(chat)
+                return await self.say(chat, "ask_support")
             if cmd == "/start" and arg.strip():
                 self.set_state(chat, None, None)
                 return await self.start_code(chat, arg.strip())

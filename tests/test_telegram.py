@@ -718,6 +718,14 @@ async def test_text_without_the_support_button_gets_the_menu(tg):
     assert tg.fake.sent(chat_id=ADMIN_CHAT) == [] and inbox(tg) == []
 
 
+async def test_the_sites_contact_link_opens_support(tg):   # t.me/<bot>?start=support
+    async with app(tg) as c:
+        await post(c, msg(ALICE, "/start support"))
+        await post(c, msg(ALICE, "a question"))
+    assert tg.fake.texts(ALICE) == [telegram.t("fa", "ask_support")] + tg.fake.texts(ALICE)[1:]
+    assert [m["text"] for m in inbox(tg)] == ["a question"]
+
+
 async def test_the_support_window_closes_after_30_minutes(tg):
     async with app(tg) as c:
         await post(c, cb(ALICE, "support"))
