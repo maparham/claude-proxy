@@ -19,7 +19,8 @@ html[dir="rtl"] .home-brand { order: 1; margin-inline-end: 0; margin-inline-star
 /* The hero: the heading beside a Claude Code session in a terminal, over a soft glow. */
 .ic { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .hero-wrap { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 460px); gap: 40px; align-items: center; }
-.hero-wrap::before { content: ""; position: absolute; inset: -40px -200px 0; z-index: -1; pointer-events: none;
+/* The glow reaches past the column, up to 200px, but never past the window's edges (with room for a scrollbar). */
+.hero-wrap::before { content: ""; position: absolute; inset: -40px max(-200px, calc(50% - 50vw + 10px)) 0; z-index: -1; pointer-events: none;
   background: radial-gradient(40% 60% at 20% 40%, color-mix(in srgb, var(--s1) 14%, transparent), transparent 70%),
               radial-gradient(35% 55% at 75% 30%, color-mix(in srgb, var(--s2) 12%, transparent), transparent 70%); }
 .hero-wrap .hero { max-width: none; }
@@ -76,11 +77,15 @@ html[dir="rtl"] .home-brand { order: 1; margin-inline-end: 0; margin-inline-star
 .support-menu a:hover { background: var(--wash); }
 .support-menu .ic { width: 18px; height: 18px; color: var(--muted); }
 .support-menu .ic.brand { width: 22px; height: 22px; }   /* each channel in its own color, drawn inside the symbol */
+/* On a dark page the terminal's own dark needs an edge to stand out. */
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .term { box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.16); } }
+:root[data-theme="dark"] .term { box-shadow: 0 24px 60px -20px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.16); }
 @media (max-width: 860px) {
   .hero-wrap { grid-template-columns: minmax(0, 1fr); gap: 8px; }
   .features, .who { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 480px) {
+  .term { font-size: 11px; }
   .features, .who { grid-template-columns: minmax(0, 1fr); }
   .support summary span { display: none; }
   .support summary { padding: 12px; }
