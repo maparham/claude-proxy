@@ -28,6 +28,11 @@ MSG_PER_HOUR, PAY_PER_HOUR = 20, 5
 CONFIRM_EVERY_S = 600   # a support message is confirmed at most this often per chat
 TEXT_MAX = 3500
 
+# The admin group reads English (section 7).
+ANON = "Turn off 'Remain anonymous' to answer: the bot can't tell who you are."
+NOT_DELIVERED = "Not delivered; try again."
+NOT_DELIVERED_BLOCKED = "Not delivered: the user blocked the bot."
+
 
 class Blocked(Exception):
     """The user blocked the bot (a 403)."""
@@ -170,6 +175,16 @@ TEXTS = {
 
 def t(lang: str, key: str, **kw) -> str:
     return TEXTS["en" if lang == "en" else "fa"][key].format(**kw)
+
+
+def _content(msg: dict) -> tuple[str | None, str] | None:
+    """(media, text) of a message the bot relays; None for a kind it does not (stickers, polls, locations...)."""
+    if isinstance(msg.get("text"), str):
+        return None, msg["text"]
+    for media in ("photo", "document", "voice"):
+        if media in msg:
+            return media, str(msg.get("caption") or "")
+    return None
 
 
 # Persian for the refusals a buyer in the bot can meet; any other message is shown as it is.
@@ -425,7 +440,10 @@ class Telegram:
     async def on_text(self, chat: dict, msg: dict) -> None:
         if chat["state"] == "email":
             return await self.got_email(chat, msg)
-        await self.menu(chat)
+        kind = "feedback" if chat["state"] == "feedback" else "support"
+        if chat["state"] == "feedback":
+            self.set_state(chat, None, None)
+        await self.incoming(chat, msg, kind)
 
     async def callback(self, q: dict) -> None:
         chat = self.chat(q.get("from") or {}, q["message"]["chat"]["id"])
@@ -454,6 +472,9 @@ class Telegram:
             return await self.pay(chat, arg)
         elif action in ("oc", "ox") and arg.isdigit():
             await (self.continue_order if action == "oc" else self.cancel_order)(chat, int(arg))
+        elif action == "feedback":
+            self.set_state(chat, "feedback", None)
+            await self.say(chat, "ask_feedback")
         else:
             return False
         return True
@@ -666,6 +687,67 @@ class Telegram:
         text = "\n".join(lines) if lines else t(lang, "mine_none")
         await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}")
 
+    # ---------- support and feedback (section 7) ----------
+
+    def _record_copy(self, sent, inbox_id: int) -> None:
+        if isinstance(sent, dict) and isinstance(sent.get("message_id"), int):
+            self.conn.execute("INSERT OR IGNORE INTO inbox_admin_msgs(admin_msg_id, inbox_id) VALUES(?,?)", (sent["message_id"], inbox_id))
+
+    async def incoming(self, chat: dict, msg: dict, kind: str) -> None:
+        got = _content(msg)
+        if got is None:
+            return await self.say(chat, "unsupported")
+        media, text = got
+        if len(text) > TEXT_MAX:
+            return await self.say(chat, "too_long")
+        cid = chat["chat_id"]
+        iid = self.conn.execute("INSERT INTO inbox_messages(chat_id, kind, direction, media, text, created_at) VALUES(?,?,'in',?,?,?)",
+                                (cid, kind, media, text, int(time.time()))).lastrowid
+        user = self.account(chat)
+        header = " · ".join(x for x in (f"#{kind}", chat["first_name"], f"@{chat['username']}" if chat["username"] else None,
+                                        (user["email"] or user["name"]) if user else "not linked") if x)
+        try:   # plain text, no parse_mode: nothing the user typed can format the admin's view
+            h = await self.bot.call("sendMessage", chat_id=self.admin_chat, text=header)
+            self._record_copy(h, iid)
+            c = await self.bot.call("copyMessage", chat_id=self.admin_chat, from_chat_id=cid, message_id=msg["message_id"],
+                                    **({"reply_to_message_id": h["message_id"]} if isinstance(h, dict) else {}))
+            self._record_copy(c, iid)
+        except Blocked:
+            logger.error("telegram: the bot cannot post in the admin group %d", self.admin_chat)
+        if kind == "feedback":
+            await self.say(chat, "got_feedback")
+        elif time.time() - self._confirmed.get(cid, 0) > CONFIRM_EVERY_S:
+            self._confirmed[cid] = time.time()
+            await self.say(chat, "got_support")
+
     async def admin_message(self, msg: dict) -> None:
-        """A message in the admin group (section 7); answering is added with the support relay."""
-        return None
+        """A reply, in the admin group, to a relayed message's header or copy: sent back to its user when the sender is
+        an enabled admin, by their linked Telegram account. Anything else in the group is ignored."""
+        r = msg.get("reply_to_message")
+        if not isinstance(r, dict):
+            return
+        row = self.conn.execute("SELECT i.* FROM inbox_admin_msgs a JOIN inbox_messages i ON i.id=a.inbox_id WHERE a.admin_msg_id=?",
+                                (r.get("message_id"),)).fetchone()
+        if row is None:
+            return
+        frm = msg.get("from") or {}
+        if msg.get("sender_chat") or frm.get("username") == "GroupAnonymousBot":
+            return await self.bot.call("sendMessage", chat_id=self.admin_chat, text=ANON, reply_to_message_id=msg["message_id"])
+        admin = self.conn.execute("SELECT u.* FROM telegram_chats c JOIN users u ON u.id=c.user_id WHERE c.chat_id=? "
+                                  "AND u.role='admin' AND u.enabled=1 AND u.revoked_at IS NULL", (frm.get("id"),)).fetchone()
+        got = _content(msg)
+        if admin is None or got is None:
+            return
+        note = NOT_DELIVERED
+        try:
+            sent = await self.bot.call("copyMessage", chat_id=row["chat_id"], from_chat_id=self.admin_chat, message_id=msg["message_id"])
+        except Blocked:
+            self.conn.execute("UPDATE telegram_chats SET blocked=1 WHERE chat_id=?", (row["chat_id"],))
+            sent, note = None, NOT_DELIVERED_BLOCKED
+        if sent is None:
+            return await self.bot.call("sendMessage", chat_id=self.admin_chat, text=note, reply_to_message_id=msg["message_id"])
+        media, text = got
+        self.conn.execute("INSERT INTO inbox_messages(chat_id, kind, direction, media, text, actor, created_at) VALUES(?,?,'out',?,?,?,?)",
+                          (row["chat_id"], row["kind"], media, text, admin["id"], int(time.time())))
+        await self.bot.call("setMessageReaction", chat_id=self.admin_chat, message_id=msg["message_id"],
+                            reaction=[{"type": "emoji", "emoji": "👍"}])
