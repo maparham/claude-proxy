@@ -147,14 +147,20 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .latest-list { list-style: none; margin: 0 0 16px; padding: 0; display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 16px; }
 .latest-list a { display: flex; flex-direction: column; height: 100%; overflow: hidden; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--ink); text-decoration: none; transition: transform 0.15s ease, box-shadow 0.15s ease; }
 .latest-list a:hover { transform: translateY(-3px); box-shadow: 0 14px 30px -14px rgba(0, 0, 0, 0.25); }
-/* A card's cover: the post's color with its icon large and faint, over a dot pattern; its badge icon overlaps the edge. */
-.latest-list .cover { position: relative; height: 96px; overflow: hidden; background: linear-gradient(135deg, color-mix(in srgb, var(--c) 85%, #fff), color-mix(in srgb, var(--c) 70%, #000)); }
-.latest-list .cover::after { content: ""; position: absolute; inset: 0; background-image: radial-gradient(rgba(255, 255, 255, 0.22) 1.2px, transparent 1.4px); background-size: 14px 14px; }
-.latest-list .cover .big { position: absolute; inset-inline-start: 16px; bottom: -18px; width: 92px; height: 92px; color: rgba(255, 255, 255, 0.22); stroke-width: 1.4; }
-.latest-list .post-ic { position: relative; z-index: 1; margin: -26px 20px 0; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; background: var(--surface); color: var(--c); box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border); }
-.latest-list .post-ic .ic { width: 26px; height: 26px; }
+/* A post's cover, on its card and above the post: the post's color with its icon large and faint, over a dot pattern;
+   its badge icon overlaps the edge. */
+.cover { position: relative; height: 96px; overflow: hidden; background: linear-gradient(135deg, color-mix(in srgb, var(--c) 85%, #fff), color-mix(in srgb, var(--c) 70%, #000)); }
+.cover::after { content: ""; position: absolute; inset: 0; background-image: radial-gradient(rgba(255, 255, 255, 0.22) 1.2px, transparent 1.4px); background-size: 14px 14px; }
+.cover .big { position: absolute; inset-inline-start: 16px; bottom: -18px; width: 92px; height: 92px; color: rgba(255, 255, 255, 0.22); stroke-width: 1.4; }
+.post-ic { position: relative; z-index: 1; margin: -26px 20px 0; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; background: var(--surface); color: var(--c); box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border); }
+.post-ic .ic { width: 26px; height: 26px; }
 .latest-list .card-body { padding: 14px 20px 20px; }
-.latest-list .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); margin-bottom: 8px; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); margin-bottom: 8px; }
+.post-cover { margin-bottom: 16px; }
+.post-cover .cover { height: 150px; border-radius: 16px; }
+.post-cover .cover .big { width: 140px; height: 140px; bottom: -28px; inset-inline-start: 28px; }
+.post-cover .post-ic { margin-top: -30px; width: 60px; height: 60px; }
+.post-cover .post-ic .ic { width: 30px; height: 30px; }
 .latest-list h2, .latest-list h3 { margin: 0 0 6px; font-size: 17px; line-height: 1.5; }
 .latest-list p { margin: 0; color: var(--ink-2); font-size: 14px; line-height: 1.7; }
 .blog-head { padding: 56px 0 24px; }

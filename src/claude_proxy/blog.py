@@ -244,7 +244,10 @@ def contents(body: str) -> tuple[str, str]:
 
 def post_page(base: str, p: Post, prices: dict | None) -> str:
     body, toc = contents(packages(p.body, prices))
-    main = (f'<div class="post-layout">{toc}<article class="post"><h1>{html.escape(p.title)}</h1>'
+    tag = f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else ""
+    main = (f'<div class="post-layout">{toc}<article class="post" style="--c: var(--{p.color})">'
+            f'<div class="post-cover"><div class="cover">{icon(p.icon, "ic big")}</div><div class="post-ic">{icon(p.badge, "ic")}</div></div>'
+            f'{tag}<h1>{html.escape(p.title)}</h1>'
             f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{body}'
             '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article></div>')
     return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article", wide=bool(toc))

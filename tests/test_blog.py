@@ -78,3 +78,10 @@ def test_the_blog_list_shows_every_post_as_a_card():
     out = blog.index_page("https://rahkar.pro")
     assert '<ul class="latest-list post-cards">' in out and "blog-wide" in out
     assert out.count('<div class="cover">') == len(blog.posts()) and "<h2>" in out
+
+
+def test_a_post_opens_with_its_cover_badge_and_tag_above_the_title():
+    p = blog.find("mvp-in-a-day-standard-pass")
+    out = blog.post_page("https://rahkar.pro", p, None)
+    assert '<article class="post" style="--c: var(--s2)"><div class="post-cover">' in out
+    assert out.index(blog.ICONS["rocket"]) < out.index('<span class="tag">ساخت محصول</span>') < out.index("<h1>")
