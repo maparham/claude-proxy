@@ -118,7 +118,7 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .home-foot p { margin: 0 0 10px; }
 .home-foot a { color: var(--muted); }
 .foot-seal { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-#zarinpal img { width: 80px; }
+.foot-seal img { height: 80px; width: auto; }
 .foot-currency { display: flex; align-items: center; gap: 6px; }
 .foot-currency select { font-size: 13px; color: var(--ink-2); background: var(--surface); border: 1px solid var(--border); border-radius: 6px; padding: 3px 6px; }
 /* The blog: server-rendered Persian posts, in a reading-width column. */
