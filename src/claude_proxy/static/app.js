@@ -727,7 +727,7 @@ function passList(c, no) {
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100)}`}
-      ${p.pinned || p.queued || full(p) ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
+      ${p.pinned || p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;
 }
@@ -1054,7 +1054,7 @@ function wireOrdering(root, tk, order) {
     card.addEventListener("pointerleave", () => light(null));
   });
   root.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = () => {
-    const d = openDialog(`<h3>${t("pass.pin_title", { pass: esc(b.dataset.name) })}</h3><p>${t("pass.confirm_pin")}</p>
+    const d = openDialog(`<h3>${t("pass.pin_title", { pass: esc(b.dataset.name) })}</h3><p>${t(b.dataset.paused ? "pass.confirm_pin_paused" : "pass.confirm_pin")}</p>
       <div class="error" id="pin-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         <button class="btn primary" type="button" id="pin-go">${t("pass.pin")}</button></div>`);

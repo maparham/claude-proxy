@@ -864,6 +864,7 @@ var PCT = "%";
 var nf0 = new Intl.NumberFormat("en-US", { maximumFractionDigits: 0 });
 var passNo = (n) => `${n}. `;
 var tierName = (tier, label) => label;
+var tierNameText = (tier, label) => label;
 var lengthName = (l) => l;
 var meter = (pct, at) => `<meter data-pct="${pct}" data-fill="${at ? at.fill : ""}"></meter>`;
 var fmtDurLong = (s) => `${s}s`;
@@ -877,3 +878,7 @@ var Date = { now: () => 0 };
     out = _app_fn(tmp_path, ["passList"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
     import re
     assert re.findall(r'class="muted num">([^<]*)<', out) == ["100%", "90%"]   # the real meter clamps its fill itself
+    # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot
+    assert 'data-pin="1"' in out and 'data-paused="1"' in out
+    c["passes"][1]["used_up"] = True
+    assert "data-pin" not in _app_fn(tmp_path, ["passList"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
