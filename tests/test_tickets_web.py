@@ -880,7 +880,7 @@ var Date = { now: () => 0 };
     assert re.findall(r'class="muted num">([^<]*)<', out) == ["100%", "90%"]   # the real meter clamps its fill itself
     # a pass paused at a limit says which in an amber chip, and that limit's meter is amber
     assert 'class="badge state-paused">Back in 5m<' in out and out.count('pass-use held') == 1
-    assert out.count('tip-i alert') == 1 and "resets in 5m" in out   # the ! on the 5-hour row, its tip with the wait
+    assert out.count('tip-i alert') == 1 and "usable again in 5m" in out   # the ! on the 5-hour row, its tip with the wait
     # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot
     assert 'data-pin="1"' in out and 'data-paused="1"' in out
     c["passes"][1]["held"] = True   # held (pinned at a limit): it is the hero, not one of the other passes
