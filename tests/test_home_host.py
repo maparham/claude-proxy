@@ -84,3 +84,17 @@ async def test_home_page_html_carries_its_persian_text_for_search_engines(env):
     assert "اشتراک کلاد<span" in html and "Your Claude Code access" not in html
     assert "به کارت ارزی یا فیلترشکن نیاز دارم؟" in html and "پرداخت ریالی است" in html
     assert '"@type": "FAQPage"' in html and '"به کارت ارزی یا فیلترشکن نیاز دارم؟"' in html
+
+
+async def test_home_host_serves_its_indexnow_key_and_lets_crawlers_fetch_it(env):
+    from claude_proxy.web import INDEXNOW_KEY
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.dashboard_url = "https://dash.example.com/"
+    cfg.listener.home_url = "https://example.com"
+    app = create_dashboard_app(gw)
+    async with client(app, "example.com") as c:
+        r = await c.get(f"/{INDEXNOW_KEY}.txt")
+        assert r.status_code == 200 and r.text == INDEXNOW_KEY
+        assert f"Allow: /{INDEXNOW_KEY}.txt" in (await c.get("/robots.txt")).text
+    async with client(app, "dash.example.com") as c:
+        assert (await c.get(f"/{INDEXNOW_KEY}.txt")).status_code == 404

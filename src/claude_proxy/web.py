@@ -164,9 +164,14 @@ class SecurityHeaders(BaseHTTPMiddleware):
         return resp
 
 
+# IndexNow (Bing, Yandex, …): the key the home host serves at /<key>.txt to prove it owns the URLs that
+# scripts/indexnow.py submits. It is public by design; it only lets someone ask for the site's own pages to be recrawled.
+INDEXNOW_KEY = "9bb774de40ed6862678aae690397f67f"
+
+
 class HomeHost(BaseHTTPMiddleware):
     """On [listener] home_url's host only the home page and what it uses are served; the rest is the dashboard's."""
-    PUBLIC = ("/", "/privacy", "/robots.txt", "/sitemap.xml", "/api/pricing", "/api/orders", "/pay/callback")
+    PUBLIC = ("/", "/privacy", "/robots.txt", "/sitemap.xml", f"/{INDEXNOW_KEY}.txt", "/api/pricing", "/api/orders", "/pay/callback")
 
     def __init__(self, app, home_host: str, dashboard: str):
         super().__init__(app)
@@ -1795,8 +1800,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def robots(request: Request):
         if not cfg.tickets.enabled or not on_home_host(request):
             return PlainTextResponse("User-agent: *\nDisallow: /\n")
-        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /blog\nAllow: /static/\nAllow: /api/pricing\nDisallow: /\n\n"
+        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /blog\nAllow: /static/\nAllow: /api/pricing\n"
+                                 f"Allow: /{INDEXNOW_KEY}.txt\nDisallow: /\n\n"
                                  f"Sitemap: {home_base(request)}/sitemap.xml\n")
+
+    @app.get(f"/{INDEXNOW_KEY}.txt")
+    async def indexnow_key(request: Request):
+        if not cfg.tickets.enabled or not on_home_host(request):
+            fail(404, "Not found.")
+        return PlainTextResponse(INDEXNOW_KEY)
 
     @app.get("/sitemap.xml")
     async def sitemap(request: Request):
