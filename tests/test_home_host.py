@@ -98,3 +98,15 @@ async def test_home_host_serves_its_indexnow_key_and_lets_crawlers_fetch_it(env)
         assert f"Allow: /{INDEXNOW_KEY}.txt" in (await c.get("/robots.txt")).text
     async with client(app, "dash.example.com") as c:
         assert (await c.get(f"/{INDEXNOW_KEY}.txt")).status_code == 404
+
+
+def test_each_post_links_the_buying_guide_and_related_posts():
+    from claude_proxy import blog
+    posts = {p.slug: p for p in blog.posts()}
+    for p in posts.values():
+        links = [q.slug for q in blog.related(p)]
+        assert len(links) == 3 and p.slug not in links
+        if p.slug != blog.GUIDE:
+            assert links[0] == blog.GUIDE
+    page = blog.post_page("https://example.com", posts["what-is-claude"], None)
+    assert 'id="related-h">مطالب مرتبط</h2>' in page and 'href="/blog/buy-claude-subscription-iran"' in page

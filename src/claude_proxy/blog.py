@@ -248,6 +248,19 @@ def contents(body: str) -> tuple[str, str]:
                   f'<nav aria-label="فهرست مطالب"><ol>{links}</ol></nav></details></aside>')
 
 
+GUIDE = "buy-claude-subscription-iran"   # the buying guide, linked under every other post
+
+
+def related(p: Post, n: int = 3) -> list[Post]:
+    """The posts to link under `p`: the buying guide first, then those closest to it (same tag, then same badge icon),
+    newest first among equals."""
+    others = [q for q in posts() if q.slug != p.slug]
+    guide = [q for q in others if q.slug == GUIDE]
+    rest = sorted((q for q in others if q.slug != GUIDE),
+                  key=lambda q: (bool(p.tag) and q.tag == p.tag, q.badge == p.badge, q.date), reverse=True)
+    return (guide + rest)[:n]
+
+
 def post_page(base: str, p: Post, prices: dict | None) -> str:
     body, toc = contents(packages(p.body, prices))
     tag = f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else ""
@@ -256,6 +269,8 @@ def post_page(base: str, p: Post, prices: dict | None) -> str:
             f'{tag}<h1>{html.escape(p.title)}</h1>'
             f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{body}'
             '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article></div>')
+    if more := "".join(card(q, "h3") for q in related(p)):
+        main += f'<section class="latest-sec related" aria-labelledby="related-h"><h2 id="related-h">مطالب مرتبط</h2><ul class="latest-list">{more}</ul></section>'
     return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article", wide=bool(toc))
 
 
