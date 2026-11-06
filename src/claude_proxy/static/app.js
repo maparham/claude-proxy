@@ -735,6 +735,7 @@ function passList(c, no) {
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && p.pct_5h >= 100)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && p.pct_5h < 100)}`}
+      ${p.pinned && full(p) && !p.used_up ? `<div class="pass-pinned">${t("pass.pinned_note")}</div>` : ""}
       ${p.pinned || p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;

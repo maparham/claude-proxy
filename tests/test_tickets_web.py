@@ -882,5 +882,10 @@ var Date = { now: () => 0 };
     assert 'class="badge state-paused">5-hour limit · back in 00h:05m<' in out and out.count('pass-use held') == 1
     # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot
     assert 'data-pin="1"' in out and 'data-paused="1"' in out
+    assert "pass-pinned" not in out
+    c["passes"][1]["pinned"] = True   # pinned while paused: the card says so instead of offering the button again
+    pinned = _app_fn(tmp_path, ["passList", "fmtHM"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
+    assert "pass-pinned" in pinned and "data-pin" not in pinned
+    c["passes"][1]["pinned"] = False
     c["passes"][1]["used_up"] = True
     assert "data-pin" not in _app_fn(tmp_path, ["passList", "fmtHM"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
