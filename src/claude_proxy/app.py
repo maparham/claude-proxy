@@ -107,6 +107,22 @@ def api_error(status: int, error_type: str, message: str, headers: dict | None =
                         headers=headers)
 
 
+def usage_limit_headers(retry_after: int | str | None, reset_at: str | None = None) -> dict[str, str]:
+    """The headers of a 429 that is a usage limit with a known end: `retry-after`, and the pair Claude Code's retry
+    watchdog (CLAUDE_CODE_RETRY_WATCHDOG=1, set by gclaude) reads to wait it out in the same turn rather than give
+    up — without it, Claude Code drops any retry-after over 60 s. `reset_at` is Anthropic's own epoch when it sent
+    one; otherwise the end is now + retry_after."""
+    if retry_after is None or retry_after == "":
+        return {}
+    h = {"retry-after": str(retry_after)}
+    if reset_at is None and str(retry_after).isdigit():
+        reset_at = str(int(time.time()) + int(retry_after))
+    if reset_at is not None:
+        h["anthropic-ratelimit-unified-status"] = "rejected"
+        h["anthropic-ratelimit-unified-reset"] = reset_at
+    return h
+
+
 def _model_of(body: bytes) -> tuple[str | None, dict | None]:
     try:
         data = json.loads(body)
@@ -346,8 +362,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             held = False
         await record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
         logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
-        return JSONResponse(status_code=decision.status, content=decision.body,
-                            headers={"retry-after": str(decision.retry_after)} if decision.retry_after else None)
+        headers = usage_limit_headers(decision.retry_after) if decision.status == 429 else (
+            {"retry-after": str(decision.retry_after)} if decision.retry_after else {})
+        return JSONResponse(status_code=decision.status, content=decision.body, headers=headers or None)
     try:
         if route is not None:
             if not route.api_key():
@@ -425,7 +442,10 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                     return api_error(429, "rate_limit_error", "Claude refused this request (not a usage limit).")
                 retry = resp.headers.get("retry-after")
                 wait = f" Try again in {limits.human(int(retry))}." if retry and retry.isdigit() else " Try again later."
-                return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers={"retry-after": retry} if retry else None)
+                headers = {"retry-after": retry} if retry else {}
+                if error_type == "upstream_quota":   # the account's limit: Claude Code may wait it out
+                    headers = usage_limit_headers(retry, resp.headers.get("anthropic-ratelimit-unified-reset"))
+                return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers=headers or None)
 
         if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:
             if is_api:

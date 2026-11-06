@@ -197,6 +197,10 @@ ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHRO
 # Code 2.1.312 also reads DISABLE_BUG_COMMAND and DISABLE_FEEDBACK_COMMAND, but /bug and /feedback stay listed.)
 GCLAUDE_ENV = {k: "1" for k in ("DISABLE_LOGIN_COMMAND", "DISABLE_LOGOUT_COMMAND", "DISABLE_UPGRADE_COMMAND",
                                 "DISABLE_EXTRA_USAGE_COMMAND", "DISABLE_INSTALL_GITHUB_APP_COMMAND")}
+# A limit 429 from the gateway carries a retry-after of hours (a pass's 5-hour or week limit). Claude Code gives up on
+# any over 60 s and the turn ends, to be resumed by hand; its retry watchdog waits it out (up to 6 h a sleep, then asks
+# again) and goes on with the same turn. Scope "capacity" keeps the long waits to 429/529: a gateway outage still fails fast.
+GCLAUDE_ENV.update({"CLAUDE_CODE_RETRY_WATCHDOG": "1", "CLAUDE_CODE_RETRY_WATCHDOG_SCOPE": "capacity"})
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}

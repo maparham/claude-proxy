@@ -105,7 +105,9 @@ async def test_upstream_quota_429_is_reworded_for_users(env, anthropic):
         a = await c.post("/v1/messages", json=MSG, headers=bearer(admin_key))
     assert r.status_code == 429 and r.headers["retry-after"] == "300"
     assert r.json()["error"] == {"type": "rate_limit_error", "message": "Usage limit reached. Try again in 5m."}
-    assert "anthropic-ratelimit-unified-status" not in r.headers
+    # The status and reset go through (Claude Code's retry watchdog waits on them); the account's figures do not.
+    assert r.headers["anthropic-ratelimit-unified-status"] == "rejected"
+    assert "anthropic-ratelimit-unified-5h-utilization" not in r.headers
     row = conn.execute("SELECT * FROM requests WHERE user_id=? ORDER BY id DESC LIMIT 1", (uid,)).fetchone()
     assert (row["status"], row["error_type"]) == (429, "upstream_quota")
     assert "Claude Max" in a.json()["error"]["message"]

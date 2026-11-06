@@ -1,4 +1,5 @@
 import json
+import time
 
 import pytest
 from fastapi.responses import JSONResponse
@@ -133,6 +134,43 @@ async def test_upstream_quota_429_passed_through_and_classified(setup, anthropic
         r = await c.post("/v1/messages", json=MSG, headers=h)
     assert r.status_code == 429 and r.headers["retry-after"] == "300"
     assert last_request(conn)["error_type"] == "upstream_quota"
+
+
+async def test_upstream_quota_429_tells_claude_code_it_is_a_usage_limit_and_when_it_lifts(setup, anthropic):
+    """Claude Code's retry watchdog (CLAUDE_CODE_RETRY_WATCHDOG=1, set by gclaude) waits out a 429 that carries
+    anthropic-ratelimit-unified-status: rejected and a -reset epoch; the account's utilization figures stay stripped."""
+    gw, conn, uid, h = setup
+    anthropic.default = lambda req: JSONResponse({"type": "error", "error": {"type": "rate_limit_error", "message": "x"}}, status_code=429,
+                                                 headers={"retry-after": "300", "anthropic-ratelimit-unified-status": "rejected",
+                                                          "anthropic-ratelimit-unified-reset": "1790000300",
+                                                          "anthropic-ratelimit-unified-5h-utilization": "1.0",
+                                                          "anthropic-ratelimit-unified-5h-reset": "1790000300"})
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers=h)
+    assert r.status_code == 429
+    assert r.headers["anthropic-ratelimit-unified-status"] == "rejected"
+    assert r.headers["anthropic-ratelimit-unified-reset"] == "1790000300"
+    assert "anthropic-ratelimit-unified-5h-utilization" not in r.headers and "anthropic-ratelimit-unified-5h-reset" not in r.headers
+
+
+async def test_upstream_quota_429_without_a_reset_header_derives_it_from_retry_after(setup, anthropic):
+    gw, conn, uid, h = setup
+    anthropic.default = lambda req: JSONResponse({"type": "error", "error": {"type": "rate_limit_error", "message": "x"}}, status_code=429,
+                                                 headers={"retry-after": "300", "anthropic-ratelimit-unified-status": "rejected"})
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers=h)
+    assert r.status_code == 429 and r.headers["anthropic-ratelimit-unified-status"] == "rejected"
+    assert abs(int(r.headers["anthropic-ratelimit-unified-reset"]) - (time.time() + 300)) <= 2
+
+
+async def test_gateway_limit_429_tells_claude_code_it_is_a_usage_limit_and_when_it_lifts(setup, anthropic):
+    """The gateway's own limit refusals (a pass's 5-hour or week share, a daily cap) are waited out the same way."""
+    gw, conn, uid, h = setup
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)", (uid, "requests_daily", "*", "0", "count"))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers=h)
+    assert r.status_code == 429 and r.headers["anthropic-ratelimit-unified-status"] == "rejected"
+    assert abs(int(r.headers["anthropic-ratelimit-unified-reset"]) - (time.time() + int(r.headers["retry-after"]))) <= 2
 
 
 async def test_limit_rejection_recorded_and_not_forwarded(setup, anthropic):

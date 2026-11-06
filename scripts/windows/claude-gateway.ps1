@@ -50,8 +50,12 @@ $OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'
 # /logout_gclaude is the way out), /upgrade and /extra-usage are for a claude.ai plan it doesn't have, and
 # /install-github-app works with Anthropic outside the gateway. These hide them, as no hook can block a built-in. (Claude
 # Code 2.1.312 also reads DISABLE_BUG_COMMAND and DISABLE_FEEDBACK_COMMAND, but /bug and /feedback stay listed.)
+# A limit 429 from the gateway carries a retry-after of hours (a pass's 5-hour or week limit). Claude Code gives up on
+# any over 60 s and the turn ends, to be resumed by hand; its retry watchdog waits it out (up to 6 h a sleep, then asks
+# again) and goes on with the same turn. Scope "capacity" keeps the long waits to 429/529: a gateway outage still fails fast.
 $GclaudeEnv = [ordered]@{ DISABLE_LOGIN_COMMAND = '1'; DISABLE_LOGOUT_COMMAND = '1'; DISABLE_UPGRADE_COMMAND = '1'
-                          DISABLE_EXTRA_USAGE_COMMAND = '1'; DISABLE_INSTALL_GITHUB_APP_COMMAND = '1' }
+                          DISABLE_EXTRA_USAGE_COMMAND = '1'; DISABLE_INSTALL_GITHUB_APP_COMMAND = '1'
+                          CLAUDE_CODE_RETRY_WATCHDOG = '1'; CLAUDE_CODE_RETRY_WATCHDOG_SCOPE = 'capacity' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 
 function Get-Version {   # MAJOR.MINOR.N, as version() in scripts/claude-gateway works it out; '' when unknown

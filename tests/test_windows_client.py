@@ -347,7 +347,8 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
                         "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
                         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
                         "DISABLE_LOGIN_COMMAND": "1", "DISABLE_LOGOUT_COMMAND": "1", "DISABLE_UPGRADE_COMMAND": "1",
-                        "DISABLE_EXTRA_USAGE_COMMAND": "1", "DISABLE_INSTALL_GITHUB_APP_COMMAND": "1"}
+                        "DISABLE_EXTRA_USAGE_COMMAND": "1", "DISABLE_INSTALL_GITHUB_APP_COMMAND": "1",
+                        "CLAUDE_CODE_RETRY_WATCHDOG": "1", "CLAUDE_CODE_RETRY_WATCHDOG_SCOPE": "capacity"}
     assert s["disableClaudeAiConnectors"] is True
     line = s["statusLine"]["command"]
     assert line.startswith("powershell -NoProfile -ExecutionPolicy Bypass -File \"") and line.endswith("/statusline.ps1\"")

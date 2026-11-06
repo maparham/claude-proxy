@@ -857,6 +857,20 @@ def test_gclaude_hides_claude_codes_account_commands_but_global_mode_does_not(st
     assert json.loads(gsettings.read_text()) == {}
 
 
+def test_gclaude_waits_out_limits_with_claude_codes_retry_watchdog_but_global_mode_does_not(stub, home):
+    """A limit 429 carries a retry-after of hours; without the watchdog Claude Code gives up on any over 60 s and the
+    turn ends. Scope "capacity" keeps the long waits to 429/529, so a gateway outage still fails fast."""
+    watchdog = {"CLAUDE_CODE_RETRY_WATCHDOG": "1", "CLAUDE_CODE_RETRY_WATCHDOG_SCOPE": "capacity"}
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    env = json.loads(gsettings.read_text())["env"]
+    assert {k: env[k] for k in watchdog} == watchdog
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert not set(watchdog) & set(json.loads((home / ".claude" / "settings.json").read_text())["env"])
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {}
+
+
 def test_gclaude_keeps_a_model_the_user_chose_for_an_alias(stub, home):
     _, gsettings, _ = gc_paths(home)
     gsettings.parent.mkdir(parents=True)
