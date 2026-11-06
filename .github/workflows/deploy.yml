@@ -11,6 +11,7 @@ on:
 
 permissions:
   contents: read
+  actions: read   # the test job looks up the last green deploy
 
 # One run per branch at a time, in push order (a newer queued run replaces an older queued one), so an
 # older commit can't deploy over a newer one and deploys never overlap.
@@ -27,8 +28,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0   # to diff against the last green deploy
       - uses: astral-sh/setup-uv@v7
-      - run: uv run --python 3.12 pytest -q
+      # A push to master that changes only src/claude_proxy/static/ since the last green deploy (not since the
+      # previous push: a queued run a newer one replaced never ran its tests) runs just the tests that cover the
+      # static files, so a frontend change goes live in about a minute. Anything else runs the whole suite.
+      - name: Pick tests
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          scope=full
+          if [ "$GITHUB_EVENT_NAME" = push ]; then
+            last=$(gh run list -R "$GITHUB_REPOSITORY" -w deploy.yml -b master -e push -s success -L 1 --json headSha -q '.[0].headSha' || true)
+            if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD 2>/dev/null; then
+              changed=$(git diff --name-only "$last" HEAD)
+              echo "Changed since the last green deploy ($last):"; echo "$changed"
+              if [ -n "$changed" ] && ! grep -qv '^src/claude_proxy/static/' <<<"$changed"; then scope=static; fi
+            fi
+          fi
+          echo "scope=$scope" >>"$GITHUB_OUTPUT"; echo "Test scope: $scope"
+      - if: steps.pick.outputs.scope == 'static'
+        run: uv run --python 3.12 pytest -q -n auto tests/test_home_host.py tests/test_i18n.py tests/test_web.py tests/test_orders_web.py tests/test_tickets_web.py
+      - if: steps.pick.outputs.scope != 'static'
+        run: uv run --python 3.12 pytest -q -n auto
 
   deploy:
     needs: test
