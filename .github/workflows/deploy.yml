@@ -1,5 +1,5 @@
 # Tests on every push and pull request. A green push to master deploys to the Lightsail box: the image is
-# built here, streamed over SSH and swapped in by deploy/lightsail/claude-gateway-deploy, which rolls back
+# built here (in the background while the tests run, so it is ready when they pass), streamed over SSH and swapped in by deploy/lightsail/claude-gateway-deploy, which rolls back
 # on a failed health check. "Run workflow" redeploys master. Setup: deploy/lightsail/install-deploy-key.sh.
 name: test and deploy
 
@@ -26,10 +26,24 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      DEPLOY: ${{ github.ref == 'refs/heads/master' && github.event_name != 'pull_request' }}
     steps:
       - uses: actions/checkout@v5
         with:
-          fetch-depth: 0   # to diff against the last green deploy
+          fetch-depth: 0   # tags, for the client's version (git describe), and the diff against the last green deploy
+      # Builds and packages the image beside the tests; "Wait for image" picks up the result.
+      - name: Start image build
+        if: env.DEPLOY == 'true'
+        run: |
+          mkdir payload
+          cp deploy/lightsail/config.toml payload/
+          version=$(git describe --tags --match 'v[0-9]*')
+          nohup bash -o pipefail -c '
+            docker build --build-arg "CLIENT_VERSION=$1" -t "claude-proxy:$GITHUB_SHA" . &&
+            docker save "claude-proxy:$GITHUB_SHA" | gzip >payload/image.tar.gz
+            echo $? >build.status' _ "$version" >build.log 2>&1 &
       - uses: astral-sh/setup-uv@v7
       # A push to master that changes only src/claude_proxy/static/ since the last green deploy (not since the
       # previous push: a queued run a newer one replaced never ran its tests) runs just the tests that cover the
@@ -53,25 +67,16 @@ jobs:
         run: uv run --python 3.12 pytest -q -n auto tests/test_home_host.py tests/test_i18n.py tests/test_web.py tests/test_orders_web.py tests/test_tickets_web.py
       - if: steps.pick.outputs.scope != 'static'
         run: uv run --python 3.12 pytest -q -n auto
-
-  deploy:
-    needs: test
-    if: github.ref == 'refs/heads/master' && github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          fetch-depth: 0   # tags, for the client's version (git describe)
-      - name: Build image
-        run: docker build --build-arg "CLIENT_VERSION=$(git describe --tags --match 'v[0-9]*')" -t "claude-proxy:$GITHUB_SHA" .
-      - name: Package image and config
+      - name: Wait for image
+        if: env.DEPLOY == 'true'
+        timeout-minutes: 10
         run: |
-          mkdir payload
-          docker save "claude-proxy:$GITHUB_SHA" | gzip >payload/image.tar.gz
-          cp deploy/lightsail/config.toml payload/
+          until [ -f build.status ]; do sleep 1; done
+          cat build.log
+          [ "$(cat build.status)" = 0 ] || { echo "image build failed" >&2; exit 1; }
           ls -l payload
       - name: Deploy
+        if: env.DEPLOY == 'true'
         env:
           SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
