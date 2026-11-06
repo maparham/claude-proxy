@@ -469,7 +469,8 @@ function limitsCompact(ls, oneWeek) {
     const shown = w ? w.ticket_pct : l.pct;
     const back = l.used_up ? ` · ${esc(t("pass.used_up"))}` : l.exceeded && l.reset_in ? ` · ${esc(t("lim.back_in", { d: fmtDur(l.reset_in) }))}` : "";
     const v = l.kind === "allowed_models" || l.skipped || l.pct == null ? esc(limitValue(l)) : `${nf0.format(Math.round(Math.min(100, shown)))}${PCT}${back}`;
-    return `<div class="pass-use"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meterShown(l, w ? { fill: shown } : null)}</div>`;
+    const held = l.exceeded && !l.used_up && l.kind !== "allowed_models";   // what holds requests back now
+    return `<div class="pass-use${held ? " held" : ""}"><span>${tipT(esc(limitLabel(l)), `kind:${l.kind}`)}${held ? limitHit(l.reset_in) : ""}</span><span class="muted num">${tipH(v, tip)}</span>${l.kind === "allowed_models" || l.skipped ? "" : meterShown(l, w ? { fill: shown } : null)}</div>`;
   }).join("");
 }
 
@@ -716,9 +717,14 @@ function passNumbers(c) {
   by.forEach((x, k) => { no[x.i] = k + 1; });
   return no;
 }
-// A running pass held back by a limit: amber, naming the limit and when it is back.
+// A running pass held back by a limit: amber, with when it is back. Which limit holds it is marked on that limit's row.
 function pausedChip(p) {
-  return `<span class="badge state-paused">${t(p.pct_5h >= 100 ? "pass.use_5h" : "pass.limit_week")}${p.back_at ? ` · ${t("pass.back_in", { d: fmtHM(p.back_at - Date.now() / 1000) })}` : ""}</span>`;
+  return `<span class="badge state-paused">${p.back_at ? t("pass.back_in", { d: fmtHM(p.back_at - Date.now() / 1000) }) : t("pass.paused")}</span>`;
+}
+// On the row of the limit holding a pass back: a red ! whose tip says requests wait for it, and for how long.
+function limitHit(secs) {
+  const tip = secs ? t("pass.limit_hit_tip", { d: fmtHM(secs) }) : t("pass.limit_hit");
+  return `<span class="tip-i alert" tabindex="0" role="button" aria-label="${esc(t("pass.limit_hit"))}" data-tip-html="${esc(esc(tip))}"></span>`;
 }
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
 function passList(c, no) {
@@ -726,13 +732,14 @@ function passList(c, no) {
   // Every pass says where it stands: in use, usable in a while (queued), used up, back in a while (at a limit, requests go on to the next
   // meanwhile), or ready behind the one in use.
   const full = (p) => p.used_up != null;
+  const wait = (p) => (p.back_at ? p.back_at - Date.now() / 1000 : null);
   const badge = (p) => p.serving ? `<span class="badge state-active">${t("pass.serving")}</span>`
     : p.queued ? `<span class="badge state-queued">${t("pass.usable_in", { d: fmtDurLong(p.starts_at - Date.now() / 1000) })}</span>`
     : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
     : full(p) ? pausedChip(p)
     : `<span class="badge">${t("pass.ready")}</span>`;
-  // the limit holding a paused pass back shows amber, like its chip
-  const use = (label, v, over, held) => `<div class="pass-use${held ? " held" : ""}"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;
+  // the limit holding a paused pass back: a red meter and a ! beside its name
+  const use = (label, v, over, held, wait) => `<div class="pass-use${held ? " held" : ""}"><span>${label}${held ? limitHit(wait) : ""}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;
   // A pass over before the weekly reset (a day pass, say): its weekly limit is simply the whole pass's use.
   const oneWeek = (p) => c.week_known && p.effective_end <= c.week_end;
   const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving && !p.held).sort((a, b) => no[a.i] - no[b.i]);
@@ -741,7 +748,7 @@ function passList(c, no) {
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
-      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && p.pct_5h >= 100)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && p.pct_5h < 100)}`}
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && p.pct_5h >= 100, wait(p))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && p.pct_5h < 100, wait(p))}`}
       ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;

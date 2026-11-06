@@ -375,7 +375,13 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .badge.state-cancelled { border-color: var(--critical); color: var(--critical-text); }
 /* a running pass held back by a limit: amber, with the meter of the limit that holds it */
 .badge.state-paused { border-color: var(--warning); color: var(--ink); background: color-mix(in srgb, var(--warning) 18%, transparent); }
-.pass-use.held .meter > span { background: var(--warning); }
+.pass-use.held .meter > span { background: var(--critical); }
+/* the ! on the row of the limit holding a pass back: the tip icon, red, with ! drawn instead of ? */
+.tip-i.alert { color: #fff; background: var(--critical); border-color: var(--critical); }
+.tip-i.alert::before { -webkit-mask-image: var(--emark); mask-image: var(--emark); }
+.tip-i.alert:dir(rtl)::before { transform: none; }
+.tip-i.alert:hover, .tip-i.alert.tip-on { color: #fff; background: var(--critical); border-color: var(--critical); }
+:root { --emark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 3v6.5' stroke='black' stroke-width='2.4' stroke-linecap='round'/%3E%3Ccircle cx='8' cy='13.2' r='1.5'/%3E%3C/svg%3E"); }
 .good { color: var(--good-text); } .critical { color: var(--critical-text); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 /* The order dialog's start choice, for a buyer with a running pass: two cards, the chosen one in the accent color. */
