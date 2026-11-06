@@ -510,7 +510,6 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .badge.stale { border-color: var(--warning); color: var(--ink); background: color-mix(in srgb, var(--warning) 18%, transparent); }
 .grant-now { border: 1px solid var(--good); border-radius: 8px; padding: 10px 12px; font-weight: 600; color: var(--ink); background: var(--wash); }
 .grant-now input { width: 18px; height: 18px; accent-color: var(--good); }
-.grant-stale { border: 1px solid var(--warning); border-radius: 8px; padding: 8px 10px; color: var(--ink); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; margin-top: 4px; }
 .dialog-actions .btn { min-width: 96px; }
 .form-grid .error:empty { display: none; }

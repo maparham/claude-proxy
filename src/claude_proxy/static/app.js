@@ -1339,9 +1339,7 @@ function grantDialog(users, pre = null) {
       <label class="check grant-now wide"><input type="checkbox" name="start_now"${!pre || pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
       <div id="grant-limits" class="wide"></div>
-      ${pre ? "" : `<div class="terms wide"><ul class="muted"><li id="grant-terms-l1"></li><li>${t("ord.terms_l3")}</li></ul>
-        <label class="check"><input type="checkbox" name="terms"> ${t("tk.terms_accept")}</label></div>`}
-      <label id="grant-stale" class="check grant-stale wide hidden"><input type="checkbox" name="confirm_stale_rate"> ${t("tk.stale_anyway")}</label>
+      ${pre ? "" : `<div class="terms wide"><ul class="muted"><li id="grant-terms-l1"></li><li>${t("ord.terms_l3")}</li></ul></div>`}
       <div class="error wide" id="grant-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         <button class="btn primary" type="submit" id="grant-go">${t("tk.grant_go")}</button></div>
@@ -1371,7 +1369,6 @@ function grantDialog(users, pre = null) {
         ${p.stale_rate ? `<span class="badge stale">${t("quota.stale")}</span>` : ""}</div>
       <ul><li>${plural("tk.n_days", p.days, { n: nf0.format(p.days) })}${t("app.list_sep")}${when}: ${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ends_at)}</li>${fit}${soldOut}${weeks}
       ${p.credit ? `<li class="muted">${t("tk.credit_removed")}</li>` : ""}</ul>`;
-    $("#grant-stale", d).classList.toggle("hidden", !p.stale_rate);
     $("#grant-limits", d).innerHTML = p.limit_rows.length ? `<p class="sub">${t("tk.remove_limits")}</p>` +
       p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(labelOf("unitname.", r.unit))}</label>`).join("") : "";
     $("#grant-go", d).disabled = !p.available;
@@ -1381,12 +1378,11 @@ function grantDialog(users, pre = null) {
   f.onsubmit = async (e) => {
     e.preventDefault();
     if (!preview) return;
-    if (!pre && !f.terms.checked) { $("#grant-err", d).textContent = t("tk.terms_needed"); return; }
     const rm = [...f.querySelectorAll('input[name="rm"]:checked')].map((c) => ({ kind: preview.limit_rows[+c.value].kind, scope: preview.limit_rows[+c.value].scope }));
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, confirm_stale_rate: f.confirm_stale_rate.checked, usd: preview.usd, rate: preview.rate,
+        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate,
         ...(pre ? { order_id: pre.order_id } : { terms_version: preview.terms_version }) } });
       d.close(); render();
     } catch (err) {
