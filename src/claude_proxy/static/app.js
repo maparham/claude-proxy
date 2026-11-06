@@ -798,7 +798,7 @@ function userLimitsCard(me, tk, order) {
       ${inUse.held ? pausedChip(inUse) : `<span class="badge state-active">${t("pass.serving")}</span>`}<span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
       ${split}${limitsCompact(me.limits, noWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
-      <div class="ticket-head"><div class="muted">${t("pass.list")}</div><div class="row-actions">${renew}</div></div>
+      <div class="ticket-head"><div class="muted">${t("pass.list", { btn: `<span class="btn small btn-ref">${t("pass.pin")}</span>` })}</div><div class="row-actions">${renew}</div></div>
       ${hero}${passList(c, no)}${extras}</div>`
     : c ? `<div class="ticket">
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
