@@ -1,9 +1,11 @@
 #!/bin/sh
 # Install or update claude-gateway, the client side of claude-proxy, for this user:
 #
-#   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh
-#   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://claude.example.com --key sk-proxy-...   # and set up gclaude
 #   curl -fsSL https://dash.example.com/install | sh    # a gateway's own: this, then `on` authorizing in the browser
+#   curl -fsSL https://dash.example.com/install | sh -s -- --key sk-proxy-...   # the same with a key
+#   curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh   # while the repo is public
+# A gateway serves this file and the archive it unpacks itself (/client/install.sh, /client/claude-gateway.tar.gz:
+# client_dist.py), so its /install works whether or not the repository is public.
 #
 # It puts claude-gateway and the files it installs from (statusline.sh, gclaude-sync.py, examples/opencode) in
 # ~/.local/share/claude-gateway, replacing an earlier copy, and links ~/.local/bin/claude-gateway to it. Anything

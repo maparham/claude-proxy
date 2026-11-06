@@ -1,8 +1,10 @@
 # Install or update claude-gateway, the client side of claude-proxy, for this Windows user (PowerShell 5.1 or later):
 #
-#   irm https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1 | iex
 #   irm https://dash.example.com/install.ps1 | iex    # a gateway's own: this, then `on` authorizing in the browser
+#   irm https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1 | iex   # while the repo is public
 #   & ([scriptblock]::Create((irm https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1))) on --url https://claude.example.com --key sk-proxy-...
+# A gateway serves this file and the zip it unpacks itself (/client/install.ps1, /client/claude-gateway.zip:
+# client_dist.py), so its /install.ps1 works whether or not the repository is public.
 #
 # It puts scripts\windows from the repository in %USERPROFILE%\.local\share\claude-gateway, replacing an earlier copy,
 # and writes %USERPROFILE%\.local\bin\claude-gateway.cmd, the folder where Claude Code's own installer puts claude.exe,

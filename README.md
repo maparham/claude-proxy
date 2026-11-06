@@ -69,11 +69,13 @@ export ANTHROPIC_AUTH_TOKEN=sk-proxy-...        # their own gateway key
 ```
 
 Or use `claude-gateway`. It needs no checkout of this repository; this installs it in `~/.local` (run it
-again to update) and sets it up:
+again to update) and sets it up, from the gateway's dashboard, which serves the client itself (`/client/…`):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh | sh -s -- on --url https://gateway.example.com --key sk-proxy-...
+curl -fsSL https://<dashboard>/install | sh -s -- --key sk-proxy-...
 ```
+
+(`raw.githubusercontent.com/maparham/claude-proxy/master/install.sh` does the same while the repository is public.)
 
 Without `--key`, `claude-gateway on --url …` authorizes in the browser instead: it opens the dashboard at a code,
 and once you click **Authorize** there, the dashboard gives this computer a key of its own. With sign-up set up
