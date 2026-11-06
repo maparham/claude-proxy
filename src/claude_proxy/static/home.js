@@ -188,6 +188,12 @@ document.getElementById("length-toggle").addEventListener("click", (e) => {
   length = b.dataset.length;
   render();
 });
+// ZarinPal's trust logo links to javascript:showZPTrust(), which the CSP blocks; open its trust page the way that function does.
+document.getElementById("zarinpal").addEventListener("click", (e) => {
+  if (!e.target.closest("a")) return;
+  e.preventDefault();
+  window.open(`https://www.zarinpal.com/trustPage/${location.hostname}`, null, "width=450, height=600, scrollbars=no, resizable=no");
+});
 document.getElementById("currency-select").addEventListener("change", (e) => {
   if (!data) return;
   currency = e.target.value;
