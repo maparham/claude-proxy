@@ -95,6 +95,13 @@ function fmtDurLong(s) {
     : [Math.floor(s / 86400), "d", Math.floor(s % 86400 / 3600), "h"];
   return small ? t("dl.join", { a: u(big, bigU), b: u(small, smallU) }) : u(big, bigU);
 }
+// A wait under a day as hours and minutes, both two digits ("01h:43m"; dur.hm). A day or more, as fmtDurLong.
+function fmtHM(s) {
+  s = Math.max(60, Math.round(s));
+  if (s >= 86400) return fmtDurLong(s);
+  const p2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2, useGrouping: false });
+  return t("dur.hm", { h: p2.format(Math.floor(s / 3600)), m: p2.format(Math.floor(s % 3600 / 60)) });
+}
 function fmtAgo(t_) { return t_ ? t("app.ago", { d: fmtDur(Date.now() / 1000 - t_) }) : t("app.never"); }
 function fmtTime(t_) { return t_ ? new Date(t_ * 1000).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }
 const fmtDate = (t_) => (t_ ? new Date(t_ * 1000).toLocaleString(LOC, { year: "numeric", month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—");
@@ -715,7 +722,7 @@ function passList(c, no) {
   const badge = (p) => p.serving ? `<span class="badge state-active">${t("pass.serving")}</span>`
     : p.queued ? `<span class="badge state-queued">${t("pass.usable_in", { d: fmtDurLong(p.starts_at - Date.now() / 1000) })}</span>`
     : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
-    : full(p) ? `<span class="badge state-paused">${t(p.pct_5h >= 100 ? "pass.use_5h" : "pass.limit_week")}${p.back_at ? ` · ${t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) })}` : ""}</span>`
+    : full(p) ? `<span class="badge state-paused">${t(p.pct_5h >= 100 ? "pass.use_5h" : "pass.limit_week")}${p.back_at ? ` · ${t("pass.back_in", { d: fmtHM(p.back_at - Date.now() / 1000) })}` : ""}</span>`
     : `<span class="badge">${t("pass.ready")}</span>`;
   // the limit holding a paused pass back shows amber, like its chip
   const use = (label, v, over, held) => `<div class="pass-use${held ? " held" : ""}"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;

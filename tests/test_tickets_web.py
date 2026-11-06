@@ -875,12 +875,12 @@ var Date = { now: () => 0 };
         {"tier": "lite", "label": "Lite", "length": "day", "starts_at": 0, "effective_end": 500, "serving": True, "bought_at": 1},
         {"tier": "lite", "label": "Lite", "length": "day", "starts_at": 0, "effective_end": 500, "serving": False, "pinned": False,
          "bought_at": 2, "pct_5h": 107.4, "pct_7d": 90, "pct_pass": 90, "back_at": 300, "used_up": False}]}
-    out = _app_fn(tmp_path, ["passList"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
+    out = _app_fn(tmp_path, ["passList", "fmtHM"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
     import re
     assert re.findall(r'class="muted num">([^<]*)<', out) == ["100%", "90%"]   # the real meter clamps its fill itself
     # a pass paused at a limit says which in an amber chip, and that limit's meter is amber
-    assert 'class="badge state-paused">5-hour limit · back in 300s<' in out and out.count('pass-use held') == 1
+    assert 'class="badge state-paused">5-hour limit · back in 00h:05m<' in out and out.count('pass-use held') == 1
     # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot
     assert 'data-pin="1"' in out and 'data-paused="1"' in out
     c["passes"][1]["used_up"] = True
-    assert "data-pin" not in _app_fn(tmp_path, ["passList"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
+    assert "data-pin" not in _app_fn(tmp_path, ["passList", "fmtHM"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
