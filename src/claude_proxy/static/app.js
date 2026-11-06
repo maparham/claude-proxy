@@ -724,7 +724,7 @@ function pausedChip(p) {
 // On the row of the limit holding a pass back: a red ! whose tip says requests wait for it, and for how long.
 function limitHit(secs) {
   const tip = secs ? t("pass.limit_hit_tip", { d: fmtHM(secs) }) : t("pass.limit_hit");
-  return `<span class="tip-i alert" tabindex="0" role="button" aria-label="${esc(t("pass.limit_hit"))}" data-tip-html="${esc(esc(tip))}"></span>`;
+  return `<span class="tip-i alert" tabindex="0" role="button" aria-label="${esc(t("pass.limit_hit"))}" data-tip-html="${esc(`<span class="tip-line">${esc(tip)}</span>`)}"></span>`;   // one line: it is short
 }
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
 function passList(c, no) {
