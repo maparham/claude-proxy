@@ -45,9 +45,11 @@ jobs:
             docker save "claude-proxy:$GITHUB_SHA" | gzip >payload/image.tar.gz
             echo $? >build.status' _ "$version" >build.log 2>&1 &
       - uses: astral-sh/setup-uv@v7
-      # A push to master that changes only src/claude_proxy/static/ since the last green deploy (not since the
-      # previous push: a queued run a newer one replaced never ran its tests) runs just the tests that cover the
-      # static files, so a frontend change goes live in about a minute. Anything else runs the whole suite.
+      # What a push to master changed since the last green deploy (not since the previous push: a queued run a
+      # newer one replaced never ran its tests) picks the tests. Only src/claude_proxy/static/: just the tests that
+      # cover the static files, so a frontend change goes live in about 30 s. Nothing the client-script tests cover
+      # (the client-scripts workflow's paths, plus client_dist.py, the Dockerfile and pyproject.toml): every test
+      # but those, the slowest part of the suite. Anything else, a pull request or "Run workflow": every test.
       - name: Pick tests
         id: pick
         env:
@@ -59,13 +61,16 @@ jobs:
             if [ -n "$last" ] && git merge-base --is-ancestor "$last" HEAD 2>/dev/null; then
               changed=$(git diff --name-only "$last" HEAD)
               echo "Changed since the last green deploy ($last):"; echo "$changed"
-              if [ -n "$changed" ] && ! grep -qv '^src/claude_proxy/static/' <<<"$changed"; then scope=static; fi
+              if [ -n "$changed" ] && ! grep -qv '^src/claude_proxy/static/' <<<"$changed"; then scope=static
+              elif [ -n "$changed" ] && ! grep -qE '^(install\.(sh|ps1)|scripts/|examples/|Dockerfile|pyproject\.toml|\.github/workflows/|tests/(conftest|test_install|test_client_scripts|test_device_cli|test_windows_client)\.py|src/claude_proxy/(web|config|client_dist)\.py)' <<<"$changed"; then scope=server; fi
             fi
           fi
           echo "scope=$scope" >>"$GITHUB_OUTPUT"; echo "Test scope: $scope"
       - if: steps.pick.outputs.scope == 'static'
         run: uv run --python 3.12 pytest -q -n auto tests/test_home_host.py tests/test_i18n.py tests/test_web.py tests/test_orders_web.py tests/test_tickets_web.py
-      - if: steps.pick.outputs.scope != 'static'
+      - if: steps.pick.outputs.scope == 'server'
+        run: uv run --python 3.12 pytest -q -n auto --ignore tests/test_client_scripts.py --ignore tests/test_install.py --ignore tests/test_device_cli.py --ignore tests/test_windows_client.py
+      - if: steps.pick.outputs.scope == 'full'
         run: uv run --python 3.12 pytest -q -n auto
       - name: Wait for image
         if: env.DEPLOY == 'true'

@@ -63,7 +63,7 @@ def gw_cfg():
 
 
 @pytest.mark.parametrize("body", [b"not json", b'{"model": ["claude-opus-5-5"], "messages": []}',
-                                  gzip.compress(b'{"model": "claude-opus-5-5", "messages": []}')])
+                                  gzip.compress(b'{"model": "claude-opus-5-5", "messages": []}', mtime=0)])
 async def test_unreadable_model_is_refused_not_forwarded(setup, anthropic, body):
     gw, conn, uid, h = setup
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,'allowed_models','*','claude-haiku-*','list',0)", (uid,))
