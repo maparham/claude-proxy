@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import json
 import logging
 import math
 import re
@@ -48,6 +49,36 @@ from .gateway import Gateway
 logger = logging.getLogger("claude_proxy")
 
 STATIC = Path(__file__).parent / "static"
+
+_I18N_LINE = re.compile(r'^\s*("[^"]+"): ("(?:[^"\\]|\\.)*")')
+_FA_TEXT: dict[str, str] = {}
+
+
+def fa_text() -> dict[str, str]:
+    """The Persian strings of static/i18n.js (its `fa:` table, one JSON string per line)."""
+    if not _FA_TEXT:
+        lines = (STATIC / "i18n.js").read_text(encoding="utf-8").splitlines()
+        start = lines.index("  fa: {") + 1
+        for line in lines[start:lines.index("  },", start)]:
+            if m := _I18N_LINE.match(line):
+                _FA_TEXT[json.loads(m[1])] = json.loads(m[2])
+    return _FA_TEXT
+
+
+_I18N_EL = re.compile(r'(<(\w+)\b[^>]*\bdata-i18n="([^"]+)"[^>]*>)(.*?)(</\2>)', re.S)
+_FAQ_KEYS = ("vpn", "models", "tiers", "used", "setup")
+
+
+def prerender_fa(html: str) -> str:
+    """Fill each data-i18n element with its Persian text and add the FAQ as structured data, so a crawler that does
+    not run i18n.js still reads the page as it shows (i18n.js redoes the same, or switches it to English)."""
+    fa = fa_text()
+    html = _I18N_EL.sub(lambda m: m[1] + fa.get(m[3], m[4]) + m[5] if m[3] in fa else m[0], html)
+    faq = {"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [
+        {"@type": "Question", "name": fa[f"home.faq_{k}_q"],
+         "acceptedAnswer": {"@type": "Answer", "text": fa[f"home.faq_{k}_a"]}} for k in _FAQ_KEYS]}
+    ld = json.dumps(faq, ensure_ascii=False, indent=1).replace("</", "<\\/")
+    return html.replace("</head>", f'<script type="application/ld+json">\n{ld}\n</script>\n</head>', 1)
 COOKIE = "cp_session"
 RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400, "365d": 365 * 86400}
 GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
@@ -1748,7 +1779,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.tickets.enabled or (signed_in and home is None):
             return RedirectResponse("/dashboard")
         html = versioned("home.html", ("i18n.js", "home.js", "home.css", "app.css"))
-        html = html.replace("https://rahkar.pro/", f"{home_base(request)}/").replace("<!--latest-posts-->", blog.latest())
+        html = prerender_fa(html).replace("https://rahkar.pro/", f"{home_base(request)}/").replace("<!--latest-posts-->", blog.latest())
         return HTMLResponse(html, headers=PAGE_HEADERS)
 
     def home_base(request: Request) -> str:

@@ -72,3 +72,15 @@ async def test_blog_is_served_on_the_home_host_and_listed_in_the_sitemap(env):
         sitemap = (await c.get("/sitemap.xml")).text
         assert "<loc>https://example.com/blog/visa-documents-lite-pass</loc><lastmod>" in sitemap
         assert "Allow: /blog" in (await c.get("/robots.txt")).text
+
+
+async def test_home_page_html_carries_its_persian_text_for_search_engines(env):
+    # Crawlers that read the HTML without running i18n.js still see the Persian headings, FAQ and keywords.
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.home_url = "https://example.com"
+    async with client(create_dashboard_app(gw), "example.com") as c:
+        html = (await c.get("/")).text
+    assert "<title>خرید اشتراک کلاد" in html
+    assert "اشتراک کلاد<span" in html and "Your Claude Code access" not in html
+    assert "به کارت ارزی یا فیلترشکن نیاز دارم؟" in html and "پرداخت ریالی است" in html
+    assert '"@type": "FAQPage"' in html and '"به کارت ارزی یا فیلترشکن نیاز دارم؟"' in html
