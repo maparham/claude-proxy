@@ -497,6 +497,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .pass-hero { border: 1px solid var(--good); box-shadow: inset 0 0 0 1px var(--good); border-radius: 8px; padding: 10px 12px; margin-top: 10px; max-width: 420px; }
 .pass-hero { display: flex; flex-direction: column; gap: 6px; }
 .pass-hero .pass-card-head { margin-bottom: 0; }
+.pass-hero.held { border-color: var(--warning); box-shadow: inset 0 0 0 1px var(--warning); }   /* paused at a limit, not in use */
 .pass-hero .pass-card-head { justify-content: flex-start; margin-bottom: 8px; }
 .pass-hero-left { margin-inline-start: auto; }
 .pass-others { font-size: 12px; font-weight: 600; color: var(--ink-2); margin: 14px 0 0; }
@@ -506,6 +507,8 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .pass-card-head b, .pass-card-head .badge { white-space: nowrap; }   /* a long status goes under the name, never splitting it */
 .pass-use { display: grid; grid-template-columns: 1fr auto; font-size: 12px; }
 .pass-use .meter { grid-column: 1 / -1; min-width: 0; }
+.pass-use > span:first-child { white-space: nowrap; }   /* a limit's name keeps its ? and ! beside it */
+.pass-use > .num { min-width: 0; text-align: end; }
 .pass-card .btn { align-self: flex-start; margin-top: 2px; }
 .pass-bought { font-size: 11px; color: var(--muted); margin-top: auto; }   /* at the card's foot, out of the way */
 /* A pass's number, in its timeline colour, so a card matches its boxes on the timeline. */
@@ -537,5 +540,6 @@ code { unicode-bidi: isolate; direction: ltr; }
 .pass-card, .pass-hero, .gantt-track i { transition: box-shadow .12s; }
 .pass-hl .pass-card.hl { box-shadow: 0 0 0 2px var(--ink-2); }
 .pass-hl .pass-hero.hl { box-shadow: inset 0 0 0 1px var(--good), 0 0 0 2px var(--ink-2); }   /* its green border kept */
+.pass-hl .pass-hero.held.hl { box-shadow: inset 0 0 0 1px var(--warning), 0 0 0 2px var(--ink-2); }
 .pass-hl .gantt-name.hl { color: var(--ink); }
 .pass-hl .gantt-track.hl i { box-shadow: 0 0 0 2px var(--ink-2); }

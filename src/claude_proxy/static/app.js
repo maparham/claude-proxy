@@ -794,7 +794,7 @@ function userLimitsCard(me, tk, order) {
   const inUse = multi && c.passes.find((p) => p.serving || p.held);
   const inUseAt = inUse ? c.passes.indexOf(inUse) : -1;
   const no = passNumbers(c);
-  const hero = inUse ? `<div class="pass-hero" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
+  const hero = inUse ? `<div class="pass-hero${inUse.held ? " held" : ""}" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
       ${inUse.held ? pausedChip(inUse) : `<span class="badge state-active">${t("pass.serving")}</span>`}<span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
       ${split}${limitsCompact(me.limits, noWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
