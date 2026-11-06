@@ -879,7 +879,7 @@ var Date = { now: () => 0 };
     import re
     assert re.findall(r'class="muted num">([^<]*)<', out) == ["100%", "90%"]   # the real meter clamps its fill itself
     # a pass paused at a limit says which in an amber chip, and that limit's meter is amber
-    assert 'class="badge state-paused">5-hour limit · back in 00h:05m<' in out and out.count('pass-use held') == 1
+    assert 'class="badge state-paused">5-hour limit · back in 5m<' in out and out.count('pass-use held') == 1
     # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot
     assert 'data-pin="1"' in out and 'data-paused="1"' in out
     c["passes"][1]["held"] = True   # held (pinned at a limit): it is the hero, not one of the other passes

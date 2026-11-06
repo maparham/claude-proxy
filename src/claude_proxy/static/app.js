@@ -95,12 +95,15 @@ function fmtDurLong(s) {
     : [Math.floor(s / 86400), "d", Math.floor(s % 86400 / 3600), "h"];
   return small ? t("dl.join", { a: u(big, bigU), b: u(small, smallU) }) : u(big, bigU);
 }
-// A wait under a day as hours and minutes, both two digits ("01h:43m"; dur.hm). A day or more, as fmtDurLong.
+// A wait under a day as hours and minutes, no leading zeros and no zero part: "1h:43m", "59m", "2h". A day or
+// more, as fmtDurLong.
 function fmtHM(s) {
   s = Math.max(60, Math.round(s));
   if (s >= 86400) return fmtDurLong(s);
-  const p2 = new Intl.NumberFormat(LOC, { minimumIntegerDigits: 2, useGrouping: false });
-  return t("dur.hm", { h: p2.format(Math.floor(s / 3600)), m: p2.format(Math.floor(s % 3600 / 60)) });
+  const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60);
+  if (!h) return t("dur.m_short", { m: nf0.format(m) });
+  if (!m) return t("dur.h_short", { h: nf0.format(h) });
+  return t("dur.hm", { h: nf0.format(h), m: nf0.format(m) });
 }
 function fmtAgo(t_) { return t_ ? t("app.ago", { d: fmtDur(Date.now() / 1000 - t_) }) : t("app.never"); }
 function fmtTime(t_) { return t_ ? new Date(t_ * 1000).toLocaleString(LOC, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "—"; }

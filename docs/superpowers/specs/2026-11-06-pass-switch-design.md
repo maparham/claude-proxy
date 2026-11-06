@@ -29,8 +29,8 @@ After that, the gateway's automatic handover applies again.
 
 - The pass in the top slot ("hero") is the one serving. When none serves, it is the `held` pass: the picked pass at
   its limit, or otherwise the pass that refills soonest. `passcard` sends `held: true` for it, from `limits.pick`.
-- A pass at a limit shows an amber chip that names the limit and when it lifts: "5-hour limit · back in 01h:43m"
-  (Persian "سقف ۵ ساعته · ۰۱س:۴۳د دیگر"). The meter of that limit is amber too. Waits of a day or more are written
+- A pass at a limit shows an amber chip that names the limit and when it lifts: "5-hour limit · back in 1h:43m"
+  (Persian "سقف ۵ ساعته · ۱س:۴۳د تا بازگشت"; no leading zeros, a zero part dropped: "59m", "2h"). The meter of that limit is amber too. Waits of a day or more are written
   in words.
 - Every other running pass that is not used up offers **Use this pass** ("از این بسته استفاده شود"). The confirm
   dialog says what happens. For a paused pass, it says requests wait from the moment you switch.
