@@ -68,18 +68,19 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
             out["pct_pass"] = whole["ticket_pct"] if whole else out.get("pct_7d")   # the whole pass's use, as its card reads
             hit = [s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded]
             if hit:
-                back = None if None in hit else max(hit)
-                out |= {"back_at": back, "used_up": back is not None and back >= t["effective_end"]
-                        or any(s.kind == "share_7d" and limits.spent(s) for s in sts)}
+                out |= {"back_at": None if None in hit else max(hit), "used_up": limits.gone(t, sts, now)}
+                # each reached limit's own reset, for the ! on its row
+                out |= {f"reset_{s.kind[6:]}": s.resets_at or (now + s.reset_in if s.reset_in else None) for s in sts if s.exceeded}
             return out
 
         # With more than one live pass the card lists them all, the queued ones after the running ones (`queued`).
         later = [t for t in tickets.user_tickets(conn, user_id) if t["cancelled_at"] is None and t["starts_at"] > now]
+        uses = {t["id"]: pass_use(t) for t in run}
         out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
             {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
              "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
-             "held": serving is None and picked is not None and t["id"] == picked["id"],
-             "pinned": t["id"] == pin, **pass_use(t)} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
+             "held": serving is None and picked is not None and t["id"] == picked["id"] and not uses[t["id"]].get("used_up"),
+             "pinned": t["id"] == pin, **uses[t["id"]]} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
                               "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
         out["current"]["serving_end"] = (serving or cur)["effective_end"]
         out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])

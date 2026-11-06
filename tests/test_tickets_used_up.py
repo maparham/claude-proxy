@@ -342,3 +342,23 @@ def test_a_queued_pass_started_now_replaces_a_used_up_running_one(env):
     assert s["starts_at"] == NOW - 100
     assert tickets.get(conn, t["id"])["used_up_at"] == NOW - 100   # ends as it starts, as on a start-now purchase
     assert [x["id"] for x in tickets.running(conn, ids["alice"], NOW - 50)] == [q["id"]]
+
+
+def test_a_pinned_pass_that_is_used_up_for_good_never_holds(env, monkeypatch):
+    """Held at a 5-hour limit that resets only after the pass ends: it is used up (limits.gone), so requests go to the
+    other pass instead of waiting for nothing."""
+    conn, cfg, ids, t = env
+    t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
+                       terms_version="v1", start_now=True)
+    t2 = tickets.get(conn, t2["id"])
+    conn.execute("UPDATE users SET pass_pin=?, pass_pin_hold=1 WHERE id=?", (t2["id"], ids["alice"]))
+    real = limits.pass_states
+
+    def states(conn_, cfg_, p, now):
+        if p["id"] != t2["id"]:
+            return real(conn_, cfg_, p, now)
+        return [limits.LimitState("share_5h", "*", "40", "pct", exceeded=True, resets_at=p["effective_end"] + 60),
+                limits.LimitState("share_7d", "*", "40", "pct")]
+    monkeypatch.setattr(limits, "pass_states", states)
+    assert limits.gone(t2, states(conn, cfg, t2, NOW), NOW)
+    assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t["id"]

@@ -732,7 +732,7 @@ function passList(c, no) {
   // Every pass says where it stands: in use, usable in a while (queued), used up, back in a while (at a limit, requests go on to the next
   // meanwhile), or ready behind the one in use.
   const full = (p) => p.used_up != null;
-  const wait = (p) => (p.back_at ? p.back_at - Date.now() / 1000 : null);
+  const wait = (at) => (at ? at - Date.now() / 1000 : null);
   const badge = (p) => p.serving ? `<span class="badge state-active">${t("pass.serving")}</span>`
     : p.queued ? `<span class="badge state-queued">${t("pass.usable_in", { d: fmtDurLong(p.starts_at - Date.now() / 1000) })}</span>`
     : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
@@ -748,7 +748,7 @@ function passList(c, no) {
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
-      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && p.pct_5h >= 100, wait(p))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && p.pct_5h < 100, wait(p))}`}
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && !p.used_up && p.pct_5h >= 100, wait(p.reset_5h))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && !p.used_up && p.pct_7d >= 100, wait(p.reset_7d))}`}
       ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;

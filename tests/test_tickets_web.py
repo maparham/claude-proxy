@@ -874,11 +874,11 @@ var Date = { now: () => 0 };
     c = {"week_known": True, "week_end": 1000, "passes": [
         {"tier": "lite", "label": "Lite", "length": "day", "starts_at": 0, "effective_end": 500, "serving": True, "bought_at": 1},
         {"tier": "lite", "label": "Lite", "length": "day", "starts_at": 0, "effective_end": 500, "serving": False, "pinned": False,
-         "bought_at": 2, "pct_5h": 107.4, "pct_7d": 90, "pct_pass": 90, "back_at": 300, "used_up": False}]}
+         "bought_at": 2, "pct_5h": 107.4, "pct_7d": 90, "pct_pass": 90, "back_at": 300, "reset_5h": 300, "used_up": False}]}
     out = _app_fn(tmp_path, ["passList", "fmtHM", "pausedChip", "limitHit"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
     import re
     assert re.findall(r'class="muted num">([^<]*)<', out) == ["100%", "90%"]   # the real meter clamps its fill itself
-    # a pass paused at a limit says which in an amber chip, and that limit's meter is amber
+    # a pass paused at a limit has an amber chip, and the limit holding it a red meter and a ! with its own reset
     assert 'class="badge state-paused">Back in 5m<' in out and out.count('pass-use held') == 1
     assert out.count('tip-i alert') == 1 and "usable again in 5m" in out   # the ! on the 5-hour row, its tip with the wait
     # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot

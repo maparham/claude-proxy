@@ -325,6 +325,15 @@ def pass_order(conn, user_id: int, run: list[dict]) -> list[dict]:
     return sorted(run, key=lambda t: t["id"] != pin)
 
 
+def gone(t: dict, sts: list[LimitState], now: float) -> bool:
+    """A pass at a limit with nothing back before it ends: its weekly piece spent, or the last of its reached limits
+    refilling only once it has ended. The dashboard calls it used up; it never holds requests (2026-11-06)."""
+    hit = [st.resets_at or (now + st.reset_in if st.reset_in else None) for st in sts if st.exceeded]
+    if any(st.kind == "share_7d" and spent(st) for st in sts):
+        return True
+    return bool(hit) and None not in hit and max(hit) >= t["effective_end"]
+
+
 def _held(conn, user_id: int, t: dict) -> bool:
     """`t` is the pass the user switched to while it was at a limit, and it has not served since (pass_pin_hold)."""
     row = conn.execute("SELECT pass_pin, pass_pin_hold FROM users WHERE id=?", (user_id,)).fetchone()
@@ -348,7 +357,7 @@ def pick(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = N
     best = None
     for k, t in enumerate(pass_order(conn, user_id, run)):
         sts = pass_states(conn, cfg, t, now)
-        if k == 0 and _held(conn, user_id, t) and not any(st.kind == "share_7d" and spent(st) for st in sts):
+        if k == 0 and _held(conn, user_id, t) and not gone(t, sts, now):
             # The user's choice holds even at a temporary limit: nothing is served until it refills.
             return t, sts, any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts)
         if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):

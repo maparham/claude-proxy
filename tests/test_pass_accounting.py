@@ -50,7 +50,7 @@ def test_old_rows_are_backfilled_to_the_pass_that_covered_them(db):
     assert [r[0] for r in conn.execute("SELECT ticket_id FROM requests ORDER BY started_at")] == [None, a["id"], None]
 
 
-async def test_a_forwarded_request_records_its_pass_and_the_pin_moves_it(env, anthropic):
+async def test_a_forwarded_request_records_its_pass_and_the_pin_moves_it(env, anthropic, monkeypatch):
     gw, conn, cfg, ids, keys = env
     seed_oauth(conn)
     gw = make_gateway(cfg, conn, anthropic)
@@ -84,6 +84,15 @@ async def test_a_forwarded_request_records_its_pass_and_the_pin_moves_it(env, an
         assert [(p["serving"], p["pinned"]) for p in me["passes"]] == [(False, False), (True, True)]
         assert (await c.post("/api/me/tickets/pin", headers=bearer(keys["alice"]), json={"pass": None})).status_code == 200
     assert conn.execute("SELECT pass_pin FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] is None
+    # switched to while at a (temporary) limit: requests wait for it (pass_pin_hold)
+    from claude_proxy import limits
+    monkeypatch.setattr(limits, "pass_states", lambda conn_, cfg_, p, now: [
+        limits.LimitState("share_5h", "*", "40", "pct", exceeded=True, resets_at=now + 600)])
+    async with client(gw) as c:
+        me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
+        r = await c.post("/api/me/tickets/pin", headers=bearer(keys["alice"]), json={"pass": 0, "starts_at": me["passes"][0]["starts_at"]})
+        assert r.status_code == 200
+    assert conn.execute("SELECT pass_pin_hold FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] == 1
 
 
 async def test_a_queued_pass_starts_now_from_the_dashboard_or_says_there_is_no_room(env):
