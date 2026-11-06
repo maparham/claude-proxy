@@ -713,6 +713,10 @@ function passNumbers(c) {
   by.forEach((x, k) => { no[x.i] = k + 1; });
   return no;
 }
+// A running pass held back by a limit: amber, naming the limit and when it is back.
+function pausedChip(p) {
+  return `<span class="badge state-paused">${t(p.pct_5h >= 100 ? "pass.use_5h" : "pass.limit_week")}${p.back_at ? ` · ${t("pass.back_in", { d: fmtHM(p.back_at - Date.now() / 1000) })}` : ""}</span>`;
+}
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
 function passList(c, no) {
   const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(Math.min(100, v)))}${PCT}`);   // the request past a limit is still served: never above 100
@@ -722,21 +726,20 @@ function passList(c, no) {
   const badge = (p) => p.serving ? `<span class="badge state-active">${t("pass.serving")}</span>`
     : p.queued ? `<span class="badge state-queued">${t("pass.usable_in", { d: fmtDurLong(p.starts_at - Date.now() / 1000) })}</span>`
     : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
-    : full(p) ? `<span class="badge state-paused">${t(p.pct_5h >= 100 ? "pass.use_5h" : "pass.limit_week")}${p.back_at ? ` · ${t("pass.back_in", { d: fmtHM(p.back_at - Date.now() / 1000) })}` : ""}</span>`
+    : full(p) ? pausedChip(p)
     : `<span class="badge">${t("pass.ready")}</span>`;
   // the limit holding a paused pass back shows amber, like its chip
   const use = (label, v, over, held) => `<div class="pass-use${held ? " held" : ""}"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;
   // A pass over before the weekly reset (a day pass, say): its weekly limit is simply the whole pass's use.
   const oneWeek = (p) => c.week_known && p.effective_end <= c.week_end;
-  const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving).sort((a, b) => no[a.i] - no[b.i]);
+  const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving && !p.held).sort((a, b) => no[a.i] - no[b.i]);
   const bought = (p) => (p.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(p.bought_at) })}</div>` : "");
   if (!others.length) return "";
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && p.pct_5h >= 100)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && p.pct_5h < 100)}`}
-      ${p.pinned && full(p) && !p.used_up ? `<div class="pass-pinned">${t("pass.pinned_note")}</div>` : ""}
-      ${p.pinned || p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
+      ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;
 }
@@ -751,7 +754,7 @@ function userLimitsCard(me, tk, order) {
   // reads as the pass's use, and each split as the next part's start.
   const tw = ((me.limits || []).find((l) => l.kind === "weekly_limit" && l.weeks) || {}).weeks;
   // The pass the parts are of: the one serving requests (the one in use, with several), as tw measures it.
-  const sp = (c && c.passes && c.passes.length > 1 && c.passes.find((p) => p.serving)) || c;
+  const sp = (c && c.passes && c.passes.length > 1 && c.passes.find((p) => p.serving || p.held)) || c;
   // A day pass across a reset borrows its next part as it needs it (2026-10-30), so it reads as one allowance: no split.
   const dayAcross = !!sp && !!tw && tw.weeks.length > 1 && sp.length === "day";
   const inParts = !!sp && !!tw && tw.weeks.length > 1 && !dayAcross;
@@ -777,11 +780,12 @@ function userLimitsCard(me, tk, order) {
       ${tk.replaces ? `<p class="sub">${t("ov.used_up")}</p>` : ""}
       ${c.bonus_pct ? `<p class="sub">${t("ov.bonus_measured", { share: `${nf0.format(Math.round(c.bonus_pct))}${PCT}` })}</p>` : ""}`;
   // With several passes, the one in use stands on its own above the others, with its limits in full.
-  const inUse = multi && c.passes.find((p) => p.serving);
+  // A pass held at a limit (the one the user chose, or the one back soonest) stands there too, paused.
+  const inUse = multi && c.passes.find((p) => p.serving || p.held);
   const inUseAt = inUse ? c.passes.indexOf(inUse) : -1;
   const no = passNumbers(c);
   const hero = inUse ? `<div class="pass-hero" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
-      <span class="badge state-active">${t("pass.serving")}</span><span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
+      ${inUse.held ? pausedChip(inUse) : `<span class="badge state-active">${t("pass.serving")}</span>`}<span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
       ${split}${limitsCompact(me.limits, noWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
       <div class="ticket-head"><div class="muted">${t("pass.list")}</div><div class="row-actions">${renew}</div></div>

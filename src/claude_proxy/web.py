@@ -1543,7 +1543,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             if not isinstance(i, int) or isinstance(i, bool) or not 0 <= i < len(run) or run[i]["starts_at"] != body.get("starts_at"):
                 fail(409, "That pass is not running.")
             pick = run[i]
-        conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (pick and pick["id"], user["id"]))
+        # Switched to while at a limit: requests wait for it from now on rather than use another pass (pass_pin_hold).
+        hold = int(pick is not None and any(st.exceeded for st in limits.pass_states(conn, cfg, pick, time.time())))
+        conn.execute("UPDATE users SET pass_pin=?, pass_pin_hold=? WHERE id=?", (pick and pick["id"], hold, user["id"]))
         db.audit(conn, user["id"], "pass_pin", user["name"], {"ticket_id": pick and pick["id"]})
         return {"ok": True}
 

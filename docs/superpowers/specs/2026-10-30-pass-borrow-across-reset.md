@@ -96,6 +96,9 @@ to measure the debt, in the old week's terms:
 
 ## 4. Several passes per user
 
+**Amended 2026-11-06:** the user can switch the serving pass, even to one at a temporary limit; requests then
+wait for it rather than spill. See `2026-11-06-pass-switch-design.md`.
+
 **Amended 2026-11-05:** `serving` picks the first pass in `pass_order` with room, a day pass across the reset
 measured with §2 borrowing. A day pass bought for a day must be usable for that day whenever the week has free
 room, not only once the user's other passes run out. Borrowing never takes the other passes' room: §1's free room

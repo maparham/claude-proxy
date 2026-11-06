@@ -344,7 +344,9 @@ rate, the USD prices and discounts; the home page (`/`, for visitors) shows the 
 
 A pass holder is limited to their share of Anthropic's 5-hour window and to one seventh of it per pass day; with no
 active pass their requests get a 402 that quotes `how_to_buy` (not a 403, which Claude Code shows as "Please run /login"). Third-party models are not covered unless a cost
-limit is set for the user. When the pass ends and the user is not buying again, **Ungate** on the Users page returns
+limit is set for the user. A user with several running passes is served by the oldest one with room, and moves on to
+the next when it reaches a limit; **Use this pass** on their dashboard switches to another, even one at a limit, in which
+case requests wait for it to refill (`docs/superpowers/specs/2026-11-06-pass-switch-design.md`). When the pass ends and the user is not buying again, **Ungate** on the Users page returns
 them to ordinary limits. Design: `docs/superpowers/specs/2026-10-03-paid-tickets-design.md`.
 
 **Online payment (ZarinPal).** When passes are on, signed-in users can pay for passes online in Iranian currency (Toman) through ZarinPal. The pass is granted as soon as the payment is verified. Payments are enabled when `ZARINPAL_MERCHANT_ID` is set in `gateway.env`, `[tickets.currencies.IRT]` is configured in `config.toml`, the `[zarinpal]` section exists, and `[listener] home_url` is set. See `docs/superpowers/specs/2026-10-05-zarinpal-payments-design.md`.

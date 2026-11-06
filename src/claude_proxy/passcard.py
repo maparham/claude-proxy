@@ -54,13 +54,15 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         # Passes running side by side, each with limits of its own (2026-10-28): which one serves now, which the
         # user pinned, and how much of each limit it has used. Its place in the list names one to pin (no ticket ids).
         run = tickets.running(conn, user_id, now)
-        serving, serving_sts = limits.serving(conn, cfg, user_id, now, run)
+        # `held`: no pass serves, and this one is next — the pinned one at a limit, or else the one back soonest.
+        picked, serving_sts, serves = limits.pick(conn, cfg, user_id, now, run)
+        serving = picked if serves else None
         pin = conn.execute("SELECT pass_pin FROM users WHERE id=?", (user_id,)).fetchone()[0]
         def pass_use(t) -> dict:
             """A running pass's use of each limit, and at one: when it is back (`back_at`, the last of its limits
             to refill), or `used_up` when that is after it ends."""
             # The serving pass as it serves, which may be borrowing from its next part (2026-10-30 spec, §4).
-            sts = serving_sts if serving is not None and t["id"] == serving["id"] else limits.pass_states(conn, cfg, t, now)
+            sts = serving_sts if picked is not None and t["id"] == picked["id"] else limits.pass_states(conn, cfg, t, now)
             out = {f"pct_{s.kind[6:]}": s.pct for s in sts}
             whole = limits.pass_weeks(conn, cfg, t, now, next((s for s in sts if s.kind == "share_7d"), None))
             out["pct_pass"] = whole["ticket_pct"] if whole else out.get("pct_7d")   # the whole pass's use, as its card reads
@@ -76,6 +78,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
             {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
              "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
+             "held": serving is None and picked is not None and t["id"] == picked["id"],
              "pinned": t["id"] == pin, **pass_use(t)} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
                               "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
         out["current"]["serving_end"] = (serving or cur)["effective_end"]

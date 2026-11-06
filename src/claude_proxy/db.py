@@ -507,6 +507,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_ticket ON requests(ticket_id, ended_at)")
     if "pass_pin" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN pass_pin INTEGER")   # the running pass the user chose to serve first
+    if "pass_pin_hold" not in _columns(conn, "users"):
+        # 1: the pinned pass was at a limit when chosen, and requests wait for it rather than use another pass, until it
+        # serves again; then a limit it reaches hands requests on to the next pass as usual (2026-11-06)
+        conn.execute("ALTER TABLE users ADD COLUMN pass_pin_hold INTEGER NOT NULL DEFAULT 0")
     if "made_order" not in _columns(conn, "payments"):
         conn.execute("ALTER TABLE payments ADD COLUMN made_order INTEGER NOT NULL DEFAULT 1")
 

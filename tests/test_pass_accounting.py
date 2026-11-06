@@ -75,6 +75,7 @@ async def test_a_forwarded_request_records_its_pass_and_the_pin_moves_it(env, an
         r = await c.post("/api/me/tickets/pin", headers=bearer(keys["alice"]), json={"pass": 1, "starts_at": me["passes"][1]["starts_at"]})
         assert r.status_code == 200
         assert (await c.post("/api/me/tickets/pin", headers=bearer(keys["alice"]), json={"pass": 0, "starts_at": 1})).status_code == 409
+    assert conn.execute("SELECT pass_pin_hold FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] == 0   # not at a limit
     async with asgi_client(create_app(gw)) as c:
         assert (await c.post("/v1/messages", json=MSG, headers=bearer(keys["alice"]))).status_code == 200
     assert conn.execute("SELECT ticket_id FROM requests ORDER BY id DESC LIMIT 1").fetchone()[0] == b["id"]

@@ -110,14 +110,24 @@ def test_a_pass_started_now_runs_beside_the_first_with_limits_of_its_own(env):
 
 
 def test_the_oldest_pass_serves_first_unless_the_user_pins_another(env):
+    """A pinned pass serves first; at a limit it reaches while serving, requests go on to the other pass. Switched to
+    while at a limit (pass_pin_hold), requests wait for it instead, until it serves again."""
     conn, cfg, ids, t = env
     t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
                        terms_version="v1", start_now=True)
     assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t["id"]
     conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (t2["id"], ids["alice"]))
     assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t2["id"]
-    req(conn, ids["alice"], NOW - 40, i=100000, ticket=t2["id"])   # the pinned one at its limit: back to the oldest
+    conn.execute("UPDATE users SET pass_pin_hold=1 WHERE id=?", (ids["alice"],))
+    assert limits.evaluate(conn, cfg, ids["alice"], "claude-sonnet-5", "/v1/messages", now=NOW - 50) is None
+    assert conn.execute("SELECT pass_pin_hold FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] == 0   # served: let go
+    req(conn, ids["alice"], NOW - 40, i=100000, ticket=t2["id"])   # the pinned one reached its limit: on to the oldest
     assert limits.serving(conn, cfg, ids["alice"], NOW - 30)[0]["id"] == t["id"]
+    conn.execute("UPDATE users SET pass_pin_hold=1 WHERE id=?", (ids["alice"],))   # switched to while at its limit
+    t_, sts = limits.serving(conn, cfg, ids["alice"], NOW - 30)
+    assert t_ is None and any(st.exceeded for st in sts)                             # requests wait for it
+    d = limits.evaluate(conn, cfg, ids["alice"], "claude-sonnet-5", "/v1/messages", now=NOW - 30)
+    assert d is not None and d.status == 429
 
 
 def test_an_order_to_start_now_is_granted_beside_the_running_ticket(env):
