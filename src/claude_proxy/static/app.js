@@ -715,9 +715,10 @@ function passList(c, no) {
   const badge = (p) => p.serving ? `<span class="badge state-active">${t("pass.serving")}</span>`
     : p.queued ? `<span class="badge state-queued">${t("pass.usable_in", { d: fmtDurLong(p.starts_at - Date.now() / 1000) })}</span>`
     : p.used_up ? `<span class="badge state-cancelled">${t("pass.used_up")}</span>`
-    : full(p) ? `<span class="badge state-queued">${p.back_at ? t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) }) : t("pass.at_limit")}</span>`
+    : full(p) ? `<span class="badge state-paused">${t(p.pct_5h >= 100 ? "pass.use_5h" : "pass.limit_week")}${p.back_at ? ` · ${t("pass.back_in", { d: fmtDurLong(p.back_at - Date.now() / 1000) })}` : ""}</span>`
     : `<span class="badge">${t("pass.ready")}</span>`;
-  const use = (label, v, over) => `<div class="pass-use"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;
+  // the limit holding a paused pass back shows amber, like its chip
+  const use = (label, v, over, held) => `<div class="pass-use${held ? " held" : ""}"><span>${label}</span><span class="muted num">${pct(v)}</span>${meter(over ? 100 : v, { fill: v })}</div>`;
   // A pass over before the weekly reset (a day pass, say): its weekly limit is simply the whole pass's use.
   const oneWeek = (p) => c.week_known && p.effective_end <= c.week_end;
   const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving).sort((a, b) => no[a.i] - no[b.i]);
@@ -726,7 +727,7 @@ function passList(c, no) {
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
-      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100)}`}
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && p.pct_5h >= 100)}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && p.pct_5h < 100)}`}
       ${p.pinned || p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;

@@ -373,6 +373,9 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .badge.state-queued, .badge.state-upcoming { border-color: var(--s1); color: var(--s1); }
 .num.over { color: var(--critical-text); }
 .badge.state-cancelled { border-color: var(--critical); color: var(--critical-text); }
+/* a running pass held back by a limit: amber, with the meter of the limit that holds it */
+.badge.state-paused { border-color: var(--warning); color: var(--ink); background: color-mix(in srgb, var(--warning) 18%, transparent); }
+.pass-use.held .meter > span { background: var(--warning); }
 .good { color: var(--good-text); } .critical { color: var(--critical-text); }
 label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 /* The order dialog's start choice, for a buyer with a running pass: two cards, the chosen one in the accent color. */
