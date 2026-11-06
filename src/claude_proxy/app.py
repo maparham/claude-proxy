@@ -107,11 +107,21 @@ def api_error(status: int, error_type: str, message: str, headers: dict | None =
                         headers=headers)
 
 
-def usage_limit_headers(retry_after: int | str | None, reset_at: str | None = None) -> dict[str, str]:
+# What Claude Code's retry line names a limit 429 by (anthropic-ratelimit-unified-representative-claim): without one it
+# reads "API error · Retrying in 2h", as if the gateway were down; with one, "5-hour limit reached (resets 3:47 PM)".
+# five_hour and seven_day are Claude Code's own names; any other text it shows as is, capitalized.
+LIMIT_CLAIMS = {"share_5h": "five_hour", "tokens_5h": "five_hour", "share_7d": "seven_day", "tokens_weekly": "seven_day",
+                "requests_daily": "daily limit", "tokens_daily": "daily limit", "cost_daily": "daily limit",
+                "requests_monthly": "monthly limit", "tokens_monthly": "monthly limit", "cost_monthly": "monthly limit"}
+UPSTREAM_CLAIM = "gateway usage limit"   # the account's own limit: not the user's pass, so not "5-hour limit"
+
+
+def usage_limit_headers(retry_after: int | str | None, reset_at: str | None = None,
+                        claim: str | None = None) -> dict[str, str]:
     """The headers of a 429 that is a usage limit with a known end: `retry-after`, and the pair Claude Code's retry
     watchdog (CLAUDE_CODE_RETRY_WATCHDOG=1, set by gclaude) reads to wait it out in the same turn rather than give
     up — without it, Claude Code drops any retry-after over 60 s. `reset_at` is Anthropic's own epoch when it sent
-    one; otherwise the end is now + retry_after."""
+    one; otherwise the end is now + retry_after. `claim` names the limit on Claude Code's retry line (LIMIT_CLAIMS)."""
     if retry_after is None or retry_after == "":
         return {}
     h = {"retry-after": str(retry_after)}
@@ -120,6 +130,8 @@ def usage_limit_headers(retry_after: int | str | None, reset_at: str | None = No
     if reset_at is not None:
         h["anthropic-ratelimit-unified-status"] = "rejected"
         h["anthropic-ratelimit-unified-reset"] = reset_at
+        if claim:
+            h["anthropic-ratelimit-unified-representative-claim"] = claim
     return h
 
 
@@ -362,7 +374,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             held = False
         await record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
         logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
-        headers = usage_limit_headers(decision.retry_after) if decision.status == 429 else (
+        headers = usage_limit_headers(decision.retry_after, claim=LIMIT_CLAIMS.get(decision.kind)) if decision.status == 429 else (
             {"retry-after": str(decision.retry_after)} if decision.retry_after else {})
         return JSONResponse(status_code=decision.status, content=decision.body, headers=headers or None)
     try:
@@ -444,7 +456,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 wait = f" Try again in {limits.human(int(retry))}." if retry and retry.isdigit() else " Try again later."
                 headers = {"retry-after": retry} if retry else {}
                 if error_type == "upstream_quota":   # the account's limit: Claude Code may wait it out
-                    headers = usage_limit_headers(retry, resp.headers.get("anthropic-ratelimit-unified-reset"))
+                    headers = usage_limit_headers(retry, resp.headers.get("anthropic-ratelimit-unified-reset"), UPSTREAM_CLAIM)
                 return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers=headers or None)
 
         if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:

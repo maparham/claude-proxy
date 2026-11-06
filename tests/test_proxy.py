@@ -150,6 +150,8 @@ async def test_upstream_quota_429_tells_claude_code_it_is_a_usage_limit_and_when
     assert r.status_code == 429
     assert r.headers["anthropic-ratelimit-unified-status"] == "rejected"
     assert r.headers["anthropic-ratelimit-unified-reset"] == "1790000300"
+    # Claude Code's retry line then reads "Gateway usage limit reached (resets …)", not "API error"
+    assert r.headers["anthropic-ratelimit-unified-representative-claim"] == "gateway usage limit"
     assert "anthropic-ratelimit-unified-5h-utilization" not in r.headers and "anthropic-ratelimit-unified-5h-reset" not in r.headers
 
 
@@ -171,6 +173,15 @@ async def test_gateway_limit_429_tells_claude_code_it_is_a_usage_limit_and_when_
         r = await c.post("/v1/messages", json=MSG, headers=h)
     assert r.status_code == 429 and r.headers["anthropic-ratelimit-unified-status"] == "rejected"
     assert abs(int(r.headers["anthropic-ratelimit-unified-reset"]) - (time.time() + int(r.headers["retry-after"]))) <= 2
+    assert r.headers["anthropic-ratelimit-unified-representative-claim"] == "daily limit"
+
+
+def test_a_pass_limit_429_names_claude_codes_own_limit():
+    """A pass's 5-hour or week share uses Claude Code's own names: "5-hour limit reached", "Weekly limit reached"."""
+    from claude_proxy.app import usage_limit_headers, LIMIT_CLAIMS
+    assert usage_limit_headers(600, claim=LIMIT_CLAIMS["share_5h"])["anthropic-ratelimit-unified-representative-claim"] == "five_hour"
+    assert usage_limit_headers(600, claim=LIMIT_CLAIMS["share_7d"])["anthropic-ratelimit-unified-representative-claim"] == "seven_day"
+    assert "anthropic-ratelimit-unified-representative-claim" not in usage_limit_headers(600)
 
 
 async def test_limit_rejection_recorded_and_not_forwarded(setup, anthropic):
