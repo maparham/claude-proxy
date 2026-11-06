@@ -334,10 +334,12 @@ def gone(t: dict, sts: list[LimitState], now: float) -> bool:
     return bool(hit) and None not in hit and max(hit) >= t["effective_end"]
 
 
-def _held(conn, user_id: int, t: dict) -> bool:
-    """`t` is the pass the user switched to while it was at a limit, and it has not served since (pass_pin_hold)."""
+def _held(conn, user_id: int, t: dict, run: list[dict]) -> bool:
+    """`t` is the pass the user switched to while it was at a limit, it has not served since, and no pass of theirs
+    started after that (pass_pin_hold, the switch's time): a pass bought, granted or started later — Start now, a
+    hand-over, a queued pass reaching its start — serves rather than wait behind the old choice."""
     row = conn.execute("SELECT pass_pin, pass_pin_hold FROM users WHERE id=?", (user_id,)).fetchone()
-    return bool(row) and row[0] == t["id"] and bool(row[1])
+    return bool(row) and row[0] == t["id"] and bool(row[1]) and not any(r["starts_at"] > row[1] for r in run)
 
 
 def serving(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = None) -> tuple[dict | None, list[LimitState]]:
@@ -357,7 +359,7 @@ def pick(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = N
     best = None
     for k, t in enumerate(pass_order(conn, user_id, run)):
         sts = pass_states(conn, cfg, t, now)
-        if k == 0 and _held(conn, user_id, t) and not gone(t, sts, now):
+        if k == 0 and _held(conn, user_id, t, run) and not gone(t, sts, now):
             # The user's choice holds even at a temporary limit: nothing is served until it refills.
             return t, sts, any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts)
         if any(st.skipped == NO_RATE for st in sts) or not any(st.exceeded for st in sts):
@@ -652,5 +654,5 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         if served is not None:
             served["ticket_id"] = t["id"]
         # A held pass serving again lets go: a limit it reaches from now on hands requests on to the next pass.
-        conn.execute("UPDATE users SET pass_pin_hold=0 WHERE id=? AND pass_pin=? AND pass_pin_hold=1", (user_id, t["id"]))
+        conn.execute("UPDATE users SET pass_pin_hold=0 WHERE id=? AND pass_pin=? AND pass_pin_hold!=0", (user_id, t["id"]))
     return None

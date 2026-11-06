@@ -13,11 +13,14 @@ is at a temporary limit. Amends the "Several passes per user" design (2026-10-28
   (`users.pass_pin`).
   - Picked while it is **not** at a limit: it serves now. A limit it reaches later hands requests on to the next
     pass that is not paused, as in automatic mode, and they come back once it refills.
-  - Picked while it **is** at a limit (5-hour or weekly): `users.pass_pin_hold` = 1. From that moment, nothing is
+  - Picked while it **is** at a limit (5-hour or weekly): `users.pass_pin_hold` = the switch's time. From that moment, nothing is
     served until it refills. Requests get the usual limit 429 with the time it lifts, and no other pass is used.
     Limits are still respected: the held pass serves nothing while it is at its limit.
   - The hold ends the first time the picked pass serves a request again (`limits.evaluate` clears it). From then on
     it behaves like a pick made while it was not at a limit.
+  - It also ends when any pass of the user's starts after the switch: bought or granted to start now, Start now, a
+    hand-over, or a queued pass reaching its start time. `pass_pin_hold` holds the switch's time, and a running pass
+    that started later voids it, so a newer pass is never left idle behind the old choice.
   - A pass that is used up for good (its weekly piece is spent and does not refill before the pass ends) never
     holds. Requests go to the other passes, and used-up passes still hand over to a queued pass
     (`limits.hand_over`).

@@ -92,7 +92,7 @@ async def test_a_forwarded_request_records_its_pass_and_the_pin_moves_it(env, an
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]
         r = await c.post("/api/me/tickets/pin", headers=bearer(keys["alice"]), json={"pass": 0, "starts_at": me["passes"][0]["starts_at"]})
         assert r.status_code == 200
-    assert conn.execute("SELECT pass_pin_hold FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] == 1
+    assert abs(conn.execute("SELECT pass_pin_hold FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] - time.time()) < 5
 
 
 async def test_a_queued_pass_starts_now_from_the_dashboard_or_says_there_is_no_room(env):

@@ -118,16 +118,20 @@ def test_the_oldest_pass_serves_first_unless_the_user_pins_another(env):
     assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t["id"]
     conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (t2["id"], ids["alice"]))
     assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t2["id"]
-    conn.execute("UPDATE users SET pass_pin_hold=1 WHERE id=?", (ids["alice"],))
+    conn.execute("UPDATE users SET pass_pin_hold=? WHERE id=?", (NOW - 60, ids["alice"]))
     assert limits.evaluate(conn, cfg, ids["alice"], "claude-sonnet-5", "/v1/messages", now=NOW - 50) is None
     assert conn.execute("SELECT pass_pin_hold FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] == 0   # served: let go
     req(conn, ids["alice"], NOW - 40, i=100000, ticket=t2["id"])   # the pinned one reached its limit: on to the oldest
     assert limits.serving(conn, cfg, ids["alice"], NOW - 30)[0]["id"] == t["id"]
-    conn.execute("UPDATE users SET pass_pin_hold=1 WHERE id=?", (ids["alice"],))   # switched to while at its limit
+    conn.execute("UPDATE users SET pass_pin_hold=? WHERE id=?", (NOW - 35, ids["alice"]))   # switched to while at its limit
     t_, sts = limits.serving(conn, cfg, ids["alice"], NOW - 30)
     assert t_ is None and any(st.exceeded for st in sts)                             # requests wait for it
     d = limits.evaluate(conn, cfg, ids["alice"], "claude-sonnet-5", "/v1/messages", now=NOW - 30)
     assert d is not None and d.status == 429
+    # a pass that starts after the switch serves instead of waiting behind it (bought, granted, Start now, its start time)
+    t3 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=NOW - 20,
+                       terms_version="v1", start_now=True)
+    assert limits.serving(conn, cfg, ids["alice"], NOW - 10)[0]["id"] in (t["id"], t3["id"])
 
 
 def test_an_order_to_start_now_is_granted_beside_the_running_ticket(env):
@@ -351,7 +355,7 @@ def test_a_pinned_pass_that_is_used_up_for_good_never_holds(env, monkeypatch):
     t2 = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "standard", "week", "USD", now=NOW - 100,
                        terms_version="v1", start_now=True)
     t2 = tickets.get(conn, t2["id"])
-    conn.execute("UPDATE users SET pass_pin=?, pass_pin_hold=1 WHERE id=?", (t2["id"], ids["alice"]))
+    conn.execute("UPDATE users SET pass_pin=?, pass_pin_hold=? WHERE id=?", (t2["id"], NOW - 60, ids["alice"]))
     real = limits.pass_states
 
     def states(conn_, cfg_, p, now):
