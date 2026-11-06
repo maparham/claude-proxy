@@ -9,10 +9,8 @@
 name: e2e
 
 on:
-  push:
-    branches: [master]
   schedule:
-    - cron: "41 5 * * *"   # daily, so a change on Anthropic's, Claude Code's or GitHub's side shows up
+    - cron: "41 5 * * *"   # daily (not on each push), so a change on ours, Anthropic's, Claude Code's or GitHub's side shows up
   workflow_dispatch:
 
 permissions:
