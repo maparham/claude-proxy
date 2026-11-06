@@ -634,6 +634,13 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         t, sts = serving(conn, cfg, user_id, now, run)
         if t is None and hand_over(conn, cfg, user_id, now, run):
             t, sts = serving(conn, cfg, user_id, now)
+        if t is None and sts and all(gone(r, pass_states(conn, cfg, r, now), now) for r in run):
+            # Every pass is used up for good: nothing frees up before they end, so no wait to retry (a 429 would have
+            # Claude Code show "Weekly limit reached · Retrying in 5h"). A new pass starts at once (2026-11-06).
+            st = next(st for st in sts if st.exceeded)
+            msg = (f"Your {st.tier} pass is used up." if len(run) == 1 and st.tier else "Your passes are used up.") + \
+                " Buy another pass on your dashboard to continue."
+            return Decision(402, st.kind, _pay(msg))
         for st in sts:
             if st.skipped == NO_RATE:
                 return Decision(503, TICKET_NO_DATA, {"type": "error", "error": {"type": "api_error", "message":

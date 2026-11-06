@@ -43,7 +43,9 @@ def test_a_used_up_ticket_hands_over_to_the_queued_one(env):
 def test_a_ticket_bought_while_the_last_is_used_up_starts_now(env):
     conn, cfg, ids, t = env
     use_up(conn, ids)
-    assert check(conn, cfg, ids["alice"], now=NOW - 150).kind == "share_7d"   # nothing queued: nothing to hand over
+    d = check(conn, cfg, ids["alice"], now=NOW - 150)   # nothing queued: nothing to hand over
+    assert (d.status, d.kind, d.retry_after) == (402, "share_7d", None)   # nothing to wait for: buy, don't retry
+    assert "used up" in d.body["error"]["message"]
     p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "USD", NOW - 100)
     assert (p["starts_at"], p["queued"], p["replaces"], p["available"]) == (NOW - 100, False, [t["id"]], True)
     nxt = day(conn, cfg, ids, NOW - 100)
