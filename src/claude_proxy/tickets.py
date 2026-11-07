@@ -878,7 +878,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             from . import orders   # here, not at the top: orders imports tickets
             orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)
             from . import referrals   # here, not at the top: referrals imports tickets
-            referrals.on_granted(conn, order_id, now)   # uses its unit; a friend's first pass earns the referrer one
+            # Uses its unit (or gives it back, when an unpaid grant's floor cut it to 0%); a friend's first pass earns one.
+            referrals.on_granted(conn, order_id, now, floored_to_zero=not paid and p.get("ref_pct_applied") == 0)
         if after is not None:
             after(tid)
         conn.execute("COMMIT")

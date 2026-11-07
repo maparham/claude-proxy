@@ -585,8 +585,9 @@ def test_off_no_new_unit_but_approve_works(env_on):
     grant_paid(conn, cfg, ids, bob, o)
     waiting = reward_of(conn, o["id"])
     carol = friend_of(conn, alice, "carol@x.com")
+    u = add_unit(conn, carol)                            # carol also holds a unit, unused: a first pass gets only the friend discount
     o2 = signed_in(conn, cfg, carol)                     # a friend order made while referrals were on
-    u = add_unit(conn, carol)                            # carol also holds a unit... unused: a first pass gets only the friend discount
+    assert (o2["ref_kind"], o2["ref_unit_id"], unit_state(conn, u)) == ("friend", None, "saved")
     referrals.set_settings(conn, admin, {"enabled": False})
     grant_paid(conn, cfg, ids, carol, o2)
     assert reward_of(conn, o2["id"]) is None and unit_state(conn, u) == "saved"
@@ -613,3 +614,34 @@ def test_friend_order_after_another_pass_earns_nothing(env_on):
     tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "day", "EUR", now=NOW, terms_version="v1")
     grant_paid(conn, cfg, ids, bob, o)
     assert reward_of(conn, o["id"]) is None and units_of(conn, alice) == []
+
+
+# ---------- Task 4, fix round 1 ----------
+
+@pytest.mark.parametrize("grant_at, expires_at, after", [(NOW, NOW + 90 * DAY, "saved"), (NOW + 200, NOW + 100, "expired")])
+def test_unit_floored_to_zero_at_manual_grant_is_not_used(env_on, grant_at, expires_at, after):
+    """The share rose after the order so far that the floor leaves no room: the pass sells at full price and the unit
+    goes back (design: The cost floor, if it is reduced to zero the unit is not used)."""
+    conn, cfg, ids = env_on
+    alice = ids["alice"]
+    u = add_unit(conn, alice, expires_at=expires_at)
+    o = signed_in(conn, cfg, alice)
+    assert o["quoted_usd"] == 7.2 and unit_state(conn, u) == "held"
+    tickets.set_share(conn, cfg, "lite", 40, ids["admin"])   # cost now 100 * 40% * 7 / 30 = $9.33, above $8
+    pv = tickets.preview(conn, cfg, user(conn, alice), "lite", "week", "EUR", grant_at, order_id=o["id"])
+    assert (pv["usd"], pv["ref_pct_applied"]) == (8.0, 0.0)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, alice), "lite", "week", "EUR", expect_usd=8.0,
+                      order_id=o["id"], now=grant_at)
+    assert t["usd"] == 8.0 and unit_state(conn, u) == after
+    assert "referral_unit_used" not in audit_actions(conn)
+
+
+def test_unit_floored_to_zero_paid_grant_still_used(env_on):
+    """Paid online at the quoted, discounted price: the unit is used whatever today's floor says."""
+    conn, cfg, ids = env_on
+    alice = ids["alice"]
+    u = add_unit(conn, alice)
+    o = signed_in(conn, cfg, alice, currency="IRT")
+    tickets.set_share(conn, cfg, "lite", 40, ids["admin"])
+    r = payments._fulfil(conn, cfg, add_payment(conn, o), "201", None, NOW)
+    assert r["status"] == "paid" and unit_state(conn, u) == "used"

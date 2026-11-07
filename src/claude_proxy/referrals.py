@@ -334,13 +334,19 @@ def _active_user(conn: sqlite3.Connection, user_id: int | None):
     return conn.execute("SELECT id FROM users WHERE id=? AND enabled=1 AND revoked_at IS NULL", (user_id,)).fetchone()
 
 
-def on_granted(conn: sqlite3.Connection, order_id: int, now: int) -> None:
+def on_granted(conn: sqlite3.Connection, order_id: int, now: int, floored_to_zero: bool = False) -> None:
     """Inside tickets.grant's transaction, right after orders.close_for_grant, for paid and manual grants alike: the
     order's held unit is used (spend, idempotent, so a paid grant's own spend changes nothing), and a friend's first
     pass records a referral_rewards row for the referrer - `waiting` for the admin with manual approval, else earned
     on the spot (earn). Nothing is recorded for an upgrade, with referrals off (no new units), when the referrer is
-    gone, disabled or revoked, or when the friend has had another pass since ordering (no longer their first)."""
-    spend(conn, order_id, now)
+    gone, disabled or revoked, or when the friend has had another pass since ordering (no longer their first).
+    `floored_to_zero`: an unpaid grant whose re-floored discount came to 0% (the share rose since the order): the pass
+    sold at full price, so its unit is not used and goes back to saved, or expired (design: The cost floor). release()
+    still spends it if a payment on the order verified."""
+    if floored_to_zero:
+        release(conn, order_id, now)
+    else:
+        spend(conn, order_id, now)
     o = conn.execute("SELECT user_id, ref_kind, upgrade_of, ticket_id FROM orders WHERE id=?", (order_id,)).fetchone()
     if o is None or o["ref_kind"] != "friend" or o["upgrade_of"] is not None or o["user_id"] is None:
         return
