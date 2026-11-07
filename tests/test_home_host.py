@@ -20,7 +20,7 @@ async def test_home_host_serves_the_home_page_and_sends_sign_in_to_the_dashboard
         assert r.status_code == 200 and "home.js" in r.text
         assert (await c.get("/privacy")).status_code == 200
         assert (await c.get("/api/pricing")).status_code == 200
-        for path in ("/dashboard?tier=lite&length=week", "/admin", "/install", "/install.ps1", "/d/ABCDEFGH"):
+        for path in ("/dashboard?tier=lite&length=week", "/admin", "/install", "/install.ps1", "/d/ABCDEFGH", "/r/ABCDEFGH"):
             r = await c.get(path)
             assert r.status_code == 302, path
             assert r.headers["location"] == "https://dash.example.com" + path, path

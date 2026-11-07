@@ -37,7 +37,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, telegram, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, telegram, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -317,14 +317,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         except httpx.HTTPError:
             fail(503, "Could not reach Clerk to check the sign-in; try again.")
         if user is None:
-            user = clerk_account(claims["sub"], email)
+            user = clerk_account(claims["sub"], email, request.cookies.get("ref"))
         if user["revoked_at"] is not None or not user["enabled"]:
             fail(403, "This account is disabled. Ask the gateway admin.")
         db.audit(conn, user["id"], "login", user["name"], {"via": "clerk"})
         return start_session(user)
 
-    def clerk_account(clerk_id: str, email: str):
-        """The gateway user for a first Clerk sign-in: an account named by (or holding) that email, else a new one."""
+    def clerk_account(clerk_id: str, email: str, ref: str | None = None):
+        """The gateway user for a first Clerk sign-in: an account named by (or holding) that email, else a new one.
+        `ref`: the `ref` cookie, attached as the new account's referrer (referrals design); linking an existing
+        account below never attaches one - the referrer is fixed only when the account is created."""
         # Admins keep signing in with their password; only a user account can be taken over by an email.
         user = conn.execute("SELECT * FROM users WHERE role='user' AND (lower(email)=? OR lower(name)=?) ORDER BY id LIMIT 1",
                             (email, email)).fetchone()
@@ -354,6 +356,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)",
                          (uid, "cost_total", "*", "0", "usd", int(time.time())))
             db.audit(conn, uid, "signup", email, {"credit_usd": 0})
+            referrals.attach(conn, uid, ref)
             conn.execute("COMMIT")
         except BaseException as e:
             conn.execute("ROLLBACK")
@@ -1847,6 +1850,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         code = "".join(c for c in code.upper() if c in USER_CODE_LETTERS)
         page = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#authorize"
         return RedirectResponse(f"{page}/{code[:4]}-{code[4:]}" if len(code) == 8 else page)
+
+    @app.get("/r/{code}")
+    async def ref_link(request: Request, code: str):
+        """A user's personal referral link (home host; the home host's HomeHost middleware sends it on here). Stores
+        the code in a cookie for 30 days, first one wins, then sends the visitor on to the home page. An unknown
+        code still redirects, just with no cookie: nothing for `clerk_account`/`referrals.attach` to resolve later."""
+        resp = RedirectResponse("/", status_code=302)
+        if not request.cookies.get("ref") and referrals.user_by_code(conn, code) is not None:
+            resp.set_cookie("ref", code, max_age=30 * 86400, httponly=True, samesite="lax",
+                            secure=cfg.listener.secure_cookies, path="/")
+        return resp
 
     def versioned(page: str, assets: tuple[str, ...]) -> str:
         """The page with each asset URL carrying its content hash, so a CDN or browser cache picks up a deploy."""

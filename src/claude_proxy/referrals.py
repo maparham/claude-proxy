@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import json
 import math
+import secrets
 import sqlite3
 from dataclasses import dataclass
 
@@ -134,3 +135,64 @@ def apply_pct(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, usd
     if pct_applied is None:
         pct_applied = (1 - new_usd / usd) * 100
     return (new_usd, pct_applied)
+
+
+# ---------- the link: codes, resolving them, and attaching a friend at sign-up ----------
+
+CODE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"   # no 0/1/l/i/o: never misread off a screen or printout
+CODE_LEN = 8
+
+
+def code_for(conn: sqlite3.Connection, user_id: int) -> str:
+    """The user's personal link code, created and stored on first call, stable after. Retried on a collision with
+    another user's code (users_ref_code, the partial unique index that ignores NULL)."""
+    row = conn.execute("SELECT ref_code FROM users WHERE id=?", (user_id,)).fetchone()
+    if row["ref_code"]:
+        return row["ref_code"]
+    for _ in range(10):
+        code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(CODE_LEN))
+        try:
+            conn.execute("UPDATE users SET ref_code=? WHERE id=?", (code, user_id))
+            return code
+        except sqlite3.IntegrityError:   # another user already has this code; try again
+            continue
+    raise RuntimeError("Could not generate a free referral code after 10 tries.")
+
+
+def user_by_code(conn: sqlite3.Connection, code: str) -> int | None:
+    """The id of the enabled, not revoked user this code belongs to (case-insensitive), or None for an unknown,
+    disabled or revoked one - the same as a code that resolves to nobody, as far as a friend's sign-up is concerned."""
+    row = conn.execute("SELECT id FROM users WHERE lower(ref_code)=lower(?) AND enabled=1 AND revoked_at IS NULL",
+                       (code,)).fetchone()
+    return row["id"] if row else None
+
+
+def attach(conn: sqlite3.Connection, friend_id: int, code: str | None) -> bool:
+    """Sets users.referred_by on a brand-new account, when referrals are on, `code` resolves to another enabled
+    user, and it is not the friend's own code (a user cannot refer themselves). Audits `referral_signup`. Must run
+    inside the sign-up transaction (web.py clerk_account), before COMMIT: referred_by is fixed at Clerk sign-up and
+    never changes after, so this is never called for an existing account."""
+    if not code:
+        return False
+    if not settings(conn).enabled:
+        return False
+    referrer_id = user_by_code(conn, code)
+    if referrer_id is None or referrer_id == friend_id:
+        return False
+    conn.execute("UPDATE users SET referred_by=? WHERE id=?", (referrer_id, friend_id))
+    db.audit(conn, friend_id, "referral_signup", db._user_name(conn, friend_id), {"referrer_id": referrer_id})
+    return True
+
+
+def first_pass(conn: sqlite3.Connection, user_id: int) -> bool:
+    """True when this account's email has never had a pass granted, by purchase or by the admin, on this account or
+    an earlier one: no ticket for this user_id, no ticket whose user_name (a snapshot taken at grant time, so it
+    survives the account being deleted) is this email, and no `done` order with that email. Checked by email, not
+    the audit log (controller ruling), so "delete the account, sign up again with the same email" gets nothing."""
+    row = conn.execute("SELECT email, name FROM users WHERE id=?", (user_id,)).fetchone()
+    email = (row["email"] or row["name"] or "").lower()
+    if conn.execute("SELECT 1 FROM tickets WHERE user_id=? OR lower(user_name)=? LIMIT 1", (user_id, email)).fetchone():
+        return False
+    if conn.execute("SELECT 1 FROM orders WHERE status='done' AND lower(email)=? LIMIT 1", (email,)).fetchone():
+        return False
+    return True

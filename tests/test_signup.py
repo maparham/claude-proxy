@@ -13,7 +13,7 @@ from argon2 import PasswordHasher
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
-from claude_proxy import clerk, client_dist, limits
+from claude_proxy import clerk, client_dist, limits, referrals
 from claude_proxy.auth import AuthError, authenticate
 from claude_proxy.db import create_user
 from claude_proxy.gateway import Gateway
@@ -167,6 +167,59 @@ async def test_sign_in_links_an_existing_account_named_by_email(env):
         assert (await signed_in(c, "user_2"))["id"] == uid
     assert conn.execute("SELECT clerk_id FROM users WHERE id=?", (uid,)).fetchone()[0] == "user_2"
     assert not conn.execute("SELECT 1 FROM limits WHERE user_id=?", (uid,)).fetchone()   # no credit for an existing account
+
+
+# ---------- referrals (design 2026-11-07), task 2: the ref cookie attaches a friend at sign-up ----------
+
+def _admin_id(conn) -> int:
+    return conn.execute("SELECT id FROM users WHERE name='admin'").fetchone()[0]
+
+
+async def test_ref_cookie_attaches_new_clerk_account(env):
+    gw, conn, fake = env
+    alice, _ = create_user(conn, "alice")
+    referrals.set_settings(conn, _admin_id(conn), {"enabled": True})
+    code = referrals.code_for(conn, alice)
+    async with app(gw) as c:
+        r = await c.get(f"/r/{code}")
+        assert r.status_code == 302 and r.headers["location"] == "/"
+        user = await signed_in(c)
+    assert conn.execute("SELECT referred_by FROM users WHERE id=?", (user["id"],)).fetchone()[0] == alice
+
+
+async def test_ref_cookie_first_wins(env):
+    gw, conn, fake = env
+    alice, _ = create_user(conn, "alice")
+    bob, _ = create_user(conn, "bob")
+    referrals.set_settings(conn, _admin_id(conn), {"enabled": True})
+    code_a, code_b = referrals.code_for(conn, alice), referrals.code_for(conn, bob)
+    async with app(gw) as c:
+        await c.get(f"/r/{code_a}")
+        await c.get(f"/r/{code_b}")   # the first code wins; this one is ignored
+        user = await signed_in(c)
+    assert conn.execute("SELECT referred_by FROM users WHERE id=?", (user["id"],)).fetchone()[0] == alice
+
+
+async def test_ref_cookie_unknown_code_sets_nothing(env):
+    gw, conn, fake = env
+    async with app(gw) as c:
+        r = await c.get("/r/zzzzzzzz")
+        assert r.status_code == 302 and r.headers["location"] == "/" and "ref" not in r.cookies
+        user = await signed_in(c)
+    assert conn.execute("SELECT referred_by FROM users WHERE id=?", (user["id"],)).fetchone()[0] is None
+
+
+async def test_existing_account_not_attached(env):
+    gw, conn, fake = env
+    alice, _ = create_user(conn, "alice")
+    referrals.set_settings(conn, _admin_id(conn), {"enabled": True})
+    code = referrals.code_for(conn, alice)
+    uid, _ = create_user(conn, "new@example.com")   # the account Clerk sign-in will link, by email
+    async with app(gw) as c:
+        await c.get(f"/r/{code}")
+        user = await signed_in(c)
+    assert user["id"] == uid
+    assert conn.execute("SELECT referred_by FROM users WHERE id=?", (uid,)).fetchone()[0] is None
 
 
 async def test_sign_in_refuses_removed_admin_unverified_and_closed(env):

@@ -1,9 +1,11 @@
-"""Referrals (design 2026-11-07), task 1: settings, schema and the cost floor."""
+"""Referrals (design 2026-11-07), task 1: settings, schema and the cost floor. Task 2: codes, the link, and
+attaching a friend at sign-up."""
 import pytest
 
 from claude_proxy import referrals, tickets
 from claude_proxy.config import ZarinpalConfig
-from tests.tickets_helpers import NOW, live, seeded
+from claude_proxy.db import create_user, delete_user
+from tests.tickets_helpers import NOW, live, seeded, user
 
 
 def audit_actions(conn):
@@ -69,3 +71,77 @@ def test_apply_pct_no_room(env):
     conn, cfg, ids = env
     tickets.set_price(conn, cfg, "lite", "day", 0.67, ids["admin"])
     assert referrals.apply_pct(conn, cfg, "lite", "day", 0.67, 10) == (0.67, 0.0)
+
+
+# ---------- Task 2: codes, the link, and attaching a friend at sign-up ----------
+
+def add_user(conn, name):
+    uid, _ = create_user(conn, name)
+    return uid
+
+
+def test_code_stable_and_resolves(env):
+    conn, cfg, ids = env
+    alice = ids["alice"]
+    c = referrals.code_for(conn, alice)
+    assert len(c) == 8 and all(ch in referrals.CODE_ALPHABET for ch in c)
+    assert c == referrals.code_for(conn, alice)   # stable: the same code on a second call
+    assert referrals.user_by_code(conn, c.upper()) == alice   # case-insensitive
+
+
+def test_user_by_code_unknown_disabled_or_revoked(env):
+    conn, cfg, ids = env
+    alice = ids["alice"]
+    code = referrals.code_for(conn, alice)
+    assert referrals.user_by_code(conn, "zzzzzzzz") is None
+    conn.execute("UPDATE users SET enabled=0 WHERE id=?", (alice,))
+    assert referrals.user_by_code(conn, code) is None
+    conn.execute("UPDATE users SET enabled=1, revoked_at=? WHERE id=?", (NOW, alice))
+    assert referrals.user_by_code(conn, code) is None
+
+
+def test_attach_needs_on_and_not_self(env):
+    conn, cfg, ids = env
+    admin, alice = ids["admin"], ids["alice"]
+    bob = add_user(conn, "bob@x.com")
+    code = referrals.code_for(conn, alice)
+    assert referrals.attach(conn, bob, code) is False            # referrals off
+    referrals.set_settings(conn, admin, {"enabled": True})
+    assert referrals.attach(conn, alice, code) is False          # own code
+    assert referrals.attach(conn, bob, code) is True
+    assert conn.execute("SELECT referred_by FROM users WHERE id=?", (bob,)).fetchone()[0] == alice
+    assert audit_actions(conn)[-1] == "referral_signup"
+
+
+def test_attach_none_or_unknown_code(env):
+    conn, cfg, ids = env
+    admin = ids["admin"]
+    referrals.set_settings(conn, admin, {"enabled": True})
+    bob = add_user(conn, "bob@x.com")
+    assert referrals.attach(conn, bob, None) is False
+    assert referrals.attach(conn, bob, "") is False
+    assert referrals.attach(conn, bob, "zzzzzzzz") is False
+    assert conn.execute("SELECT referred_by FROM users WHERE id=?", (bob,)).fetchone()[0] is None
+
+
+def test_first_pass_by_email_survives_account_delete(env):
+    conn, cfg, ids = env
+    admin = ids["admin"]
+    bob = add_user(conn, "bob@x.com")
+    assert referrals.first_pass(conn, bob) is True
+    tickets.grant(conn, cfg, admin, user(conn, bob), "lite", "day", "EUR", now=NOW, terms_version="v1")
+    assert referrals.first_pass(conn, bob) is False
+    conn.execute("UPDATE users SET revoked_at=? WHERE id=?", (NOW, bob))
+    delete_user(conn, bob, admin, now=NOW + 2 * 86400)   # the ticket has ended by then: deletion is allowed
+    bob2 = add_user(conn, "bob@x.com")
+    assert referrals.first_pass(conn, bob2) is False   # the email already had a pass, on the now-deleted account
+
+
+def test_first_pass_by_done_order_with_that_email(env):
+    conn, cfg, ids = env
+    carol = add_user(conn, "carol@x.com")
+    assert referrals.first_pass(conn, carol) is True
+    conn.execute("INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, "
+                "quoted_rate, quoted_amount, status, admin_mail, buyer_mail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (NOW, NOW, None, "Carol", "carol@x.com", "lite", "week", "EUR", 10.0, 1.0, 10.0, "done", "off", "off"))
+    assert referrals.first_pass(conn, carol) is False
