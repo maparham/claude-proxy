@@ -119,5 +119,5 @@ async def test_the_spelling_kalud_is_a_keyword_but_never_shown_on_the_home_page(
     async with client(create_dashboard_app(gw), "example.com") as c:
         html = (await c.get("/")).text
     head, body = html.split("</head>", 1)
-    assert 'name="keywords"' in head and "کلود" in head and '"alternateName"' in head
+    assert 'name="keywords"' in head and "کلود" in head and "کلاود" in head and '"alternateName"' in head
     assert "کلود" not in body

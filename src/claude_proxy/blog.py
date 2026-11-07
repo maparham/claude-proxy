@@ -31,9 +31,9 @@ from functools import lru_cache
 from pathlib import Path
 
 POSTS = Path(__file__).parent / "blog"
-# Search keywords for the meta tag, not shown on the page: Iranians also write Claude as کلود, which is less correct, so
-# it appears here and at most once per post in parentheses, never in the site's own wording.
-KEYWORDS = "کلاد, کلود, Claude, خرید کلاد, خرید کلود, اشتراک کلاد, اشتراک کلود, خرید Claude, Claude Code, Anthropic"
+# Search keywords for the meta tag, not shown on the page: Iranians also write Claude as کلود or کلاود, which are less
+# correct, so they appear here and at most once per post in parentheses, never in the site's own wording.
+KEYWORDS = "کلاد, کلود, کلاود, Claude, خرید کلاد, خرید کلود, خرید کلاود, اشتراک کلاد, اشتراک کلود, اشتراک کلاود, خرید Claude, Claude Code, Anthropic"
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 FA_TIERS = {"lite": "اقتصادی", "standard": "استاندارد"}
