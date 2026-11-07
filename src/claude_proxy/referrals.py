@@ -196,3 +196,104 @@ def first_pass(conn: sqlite3.Connection, user_id: int) -> bool:
     if conn.execute("SELECT 1 FROM orders WHERE status='done' AND lower(email)=? LIMIT 1", (email,)).fetchone():
         return False
     return True
+
+
+# ---------- the discount on an order, and the life of a unit ----------
+# A unit goes saved -> held (by the open order that took its discount) -> used (a payment on that order verified, or
+# the order was granted), or back to saved when the order is withdrawn or declined with no verified payment (design:
+# The referrer's reward). Every function here writes inside the caller's transaction, except spend's own one when it
+# is called outside any (payments._unfulfilled).
+
+def expire(conn: sqlite3.Connection, now: int) -> None:
+    """Saved units past their expires_at become `expired`, each audited. A held unit is left alone: it stays with its
+    open order even past its expiry (the buyer already saw that price); release() decides its fate when the order closes."""
+    rows = conn.execute("SELECT id, user_id FROM referral_units WHERE state='saved' AND expires_at<=?", (now,)).fetchall()
+    for r in rows:
+        conn.execute("UPDATE referral_units SET state='expired', updated_at=? WHERE id=? AND state='saved'", (now, r["id"]))
+        db.audit(conn, None, "referral_unit_expired", db._user_name(conn, r["user_id"]), {"unit_id": r["id"]})
+
+
+def quote(conn: sqlite3.Connection, cfg: Config, user_id: int, tier: str, length: str, usd: float, now: int) -> dict | None:
+    """The referral discount a new order by `user_id` would get on `usd` (the price before VAT, any sale already
+    taken off), without taking it: the friend discount on the first pass of an account signed up through a link while
+    referrals are on; otherwise the user's oldest saved, unexpired unit (usable even with referrals off, design:
+    Settings). Never both, and never more than one unit. None when neither applies. `pct_applied` is what the cost floor
+    left of `pct` (apply_pct); 0 means no discount, and hold() then takes nothing. Expires overdue units first, so an
+    expired one is never offered; nothing else is written."""
+    expire(conn, now)
+    s = settings(conn)
+    row = conn.execute("SELECT referred_by FROM users WHERE id=?", (user_id,)).fetchone()
+    if s.enabled and row is not None and row["referred_by"] is not None and first_pass(conn, user_id):
+        kind, pct, unit_id = "friend", s.friend_pct, None
+    else:
+        unit = conn.execute("SELECT id, pct FROM referral_units WHERE user_id=? AND state='saved' AND expires_at>? "
+                            "ORDER BY earned_at, id LIMIT 1", (user_id, now)).fetchone()
+        if unit is None:
+            return None
+        kind, pct, unit_id = "unit", unit["pct"], unit["id"]
+    new_usd, pct_applied = apply_pct(conn, cfg, tier, length, usd, pct)
+    return {"kind": kind, "pct": pct, "pct_applied": pct_applied, "usd": new_usd, "list_usd": usd,
+            "off_usd": round(usd - new_usd, 2), "unit_id": unit_id}
+
+
+def hold(conn: sqlite3.Connection, order_id: int, q: dict | None, now: int) -> None:
+    """Inside orders.create's transaction, right after the INSERT: record the discount `q` (quote()) on the order and,
+    for a unit, hold it for this order. A discount the cost floor took to zero records nothing and holds nothing: the
+    unit stays saved (design: The cost floor), and the order has no ref_kind and no list_usd. The buyer's one open
+    order rule, checked in the same transaction, means no unit is ever held twice."""
+    if q is None or not q["pct_applied"] > 0:
+        return
+    if q["kind"] == "unit":
+        held = conn.execute("UPDATE referral_units SET state='held', order_id=?, updated_at=? WHERE id=? AND state='saved'",
+                            (order_id, now, q["unit_id"])).rowcount
+        if held != 1:   # pragma: no cover (quote and hold share one locked transaction)
+            raise RuntimeError(f"Referral unit #{q['unit_id']} is no longer saved.")
+    conn.execute("UPDATE orders SET ref_kind=?, ref_pct=?, ref_off_usd=?, ref_unit_id=?, list_usd=? WHERE id=?",
+                 (q["kind"], q["pct"], q["off_usd"], q["unit_id"], q["list_usd"], order_id))
+    db.audit(conn, None, "referral_discount", f"order #{order_id}",
+             {"kind": q["kind"], "pct": q["pct"], "pct_applied": q["pct_applied"], "off_usd": q["off_usd"],
+              **({"unit_id": q["unit_id"]} if q["unit_id"] is not None else {})})
+
+
+def spend(conn: sqlite3.Connection, order_id: int, now: int) -> None:
+    """The unit held by this order is used for good: a payment on it verified (paid, or paid_unfulfilled), or it was
+    granted. Idempotent: no held unit, nothing happens. Runs in the caller's transaction, or in its own when there is
+    none (payments._unfulfilled), so the state change and its audit row land together."""
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        unit = conn.execute("SELECT id, user_id FROM referral_units WHERE order_id=? AND state='held'", (order_id,)).fetchone()
+        if unit is not None:
+            conn.execute("UPDATE referral_units SET state='used', updated_at=? WHERE id=?", (now, unit["id"]))
+            off = conn.execute("SELECT ref_off_usd FROM orders WHERE id=?", (order_id,)).fetchone()
+            db.audit(conn, None, "referral_unit_used", db._user_name(conn, unit["user_id"]),
+                     {"unit_id": unit["id"], "order_id": order_id, "off_usd": off["ref_off_usd"] if off else None})
+        if own:
+            conn.execute("COMMIT")
+    except BaseException:
+        if own:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def release(conn: sqlite3.Connection, order_id: int, now: int) -> None:
+    """Inside the transaction that withdraws or declines the order: its held unit goes back to saved, or to expired if
+    it is past expires_at meanwhile. If any payment on the order verified (paid or paid_unfulfilled), the buyer was
+    charged the discounted price, so the unit is spent instead (design: used as soon as any payment is verified)."""
+    if conn.execute("SELECT 1 FROM payments WHERE order_id=? AND status IN ('paid','paid_unfulfilled') LIMIT 1",
+                    (order_id,)).fetchone():
+        spend(conn, order_id, now)
+        return
+    unit = conn.execute("SELECT id, user_id, expires_at FROM referral_units WHERE order_id=? AND state='held'",
+                        (order_id,)).fetchone()
+    if unit is None:
+        return
+    if unit["expires_at"] <= now:
+        conn.execute("UPDATE referral_units SET state='expired', updated_at=? WHERE id=?", (now, unit["id"]))
+        db.audit(conn, None, "referral_unit_expired", db._user_name(conn, unit["user_id"]),
+                 {"unit_id": unit["id"], "order_id": order_id})
+    else:
+        conn.execute("UPDATE referral_units SET state='saved', order_id=NULL, updated_at=? WHERE id=?", (now, unit["id"]))
+        db.audit(conn, None, "referral_unit_returned", db._user_name(conn, unit["user_id"]),
+                 {"unit_id": unit["id"], "order_id": order_id})

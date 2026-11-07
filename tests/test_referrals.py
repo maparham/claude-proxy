@@ -145,3 +145,193 @@ def test_first_pass_by_done_order_with_that_email(env):
                 "quoted_rate, quoted_amount, status, admin_mail, buyer_mail) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (NOW, NOW, None, "Carol", "carol@x.com", "lite", "week", "EUR", 10.0, 1.0, 10.0, "done", "off", "off"))
     assert referrals.first_pass(conn, carol) is False
+
+
+# ---------- Task 3: the discount on an order, and the life of a unit ----------
+
+from claude_proxy import orders, payments   # noqa: E402
+from claude_proxy.config import Currency   # noqa: E402
+
+DAY = 86400
+
+
+@pytest.fixture
+def env_on(env):
+    """Referrals on, bob signed up through alice's link, Toman priced for the online-payment path."""
+    conn, cfg, ids = env
+    referrals.set_settings(conn, ids["admin"], {"enabled": True})
+    ids["bob"] = add_user(conn, "bob@x.com")
+    conn.execute("UPDATE users SET referred_by=? WHERE id=?", (ids["alice"], ids["bob"]))
+    cfg.tickets.currencies["IRT"] = Currency(round_to=1000)
+    tickets.set_rate(conn, cfg, "IRT", 100000, ids["admin"], now=NOW - 3600)
+    return conn, cfg, ids
+
+
+def signed_in(conn, cfg, uid, now=NOW, **kw):
+    args = {"tier": "lite", "length": "week", "currency": "EUR", "name": user(conn, uid)["name"],
+            "email": user(conn, uid)["email"] or f"u{uid}@example.com", "terms_version": "v1"} | kw
+    return orders.create(conn, cfg, user_id=uid, now=now, **args)
+
+
+def add_unit(conn, uid, pct=10.0, earned_at=NOW - DAY, expires_at=NOW + 90 * DAY):
+    return conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at) "
+                        "VALUES(?,?,?,?,'saved',?)", (uid, pct, earned_at, expires_at, earned_at)).lastrowid
+
+
+def unit_state(conn, unit_id):
+    return conn.execute("SELECT state FROM referral_units WHERE id=?", (unit_id,)).fetchone()[0]
+
+
+def add_payment(conn, o, status="started"):
+    pid = conn.execute("INSERT INTO payments(order_id, user_id, created_at, updated_at, amount, authority, status) "
+                       "VALUES(?,?,?,?,?,?,?)", (o["id"], o["user_id"], NOW, NOW, int(o["quoted_amount"]),
+                                                 f"A-{o['id']}-{status}", status)).lastrowid
+    return payments.get(conn, pid)
+
+
+def test_friend_discount_on_first_order(env_on):
+    conn, cfg, ids = env_on
+    o = signed_in(conn, cfg, ids["bob"])
+    assert (o["ref_kind"], o["quoted_usd"], o["list_usd"]) == ("friend", 7.2, 8.0)
+    assert (o["ref_pct"], o["ref_off_usd"], o["ref_unit_id"]) == (10, 0.8, None)
+    assert o["quoted_amount"] == tickets.round_local(7.2, 0.92, 0.5, 10)   # the amount is the discounted price, VAT on top
+    assert "referral_discount" in audit_actions(conn)
+
+
+def test_friend_discount_needs_referrals_on(env_on):
+    conn, cfg, ids = env_on
+    referrals.set_settings(conn, ids["admin"], {"enabled": False})
+    o = signed_in(conn, cfg, ids["bob"])
+    assert (o["ref_kind"], o["quoted_usd"], o["list_usd"]) == (None, 8.0, None)
+
+
+def test_second_order_no_friend_discount(env_on):
+    conn, cfg, ids = env_on
+    o = signed_in(conn, cfg, ids["bob"])
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["bob"]), "lite", "week", "EUR", order_id=o["id"], paid=True, now=NOW)
+    o2 = signed_in(conn, cfg, ids["bob"], now=NOW + 60)
+    assert (o2["ref_kind"], o2["quoted_usd"]) == (None, 8.0)
+
+
+def test_visitor_order_gets_nothing(env_on):
+    conn, cfg, ids = env_on
+    add_unit(conn, ids["alice"])
+    o = orders.create(conn, cfg, tier="lite", length="week", currency="EUR", name="V", email="v@example.com",
+                      ip="10.0.0.1", terms_version="v1", now=NOW)
+    assert (o["ref_kind"], o["quoted_usd"]) == (None, 8.0)
+
+
+def test_quote_changes_nothing(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    q = referrals.quote(conn, cfg, ids["alice"], "lite", "week", 8.0, NOW)
+    assert q == {"kind": "unit", "pct": 10, "pct_applied": 10, "usd": 7.2, "list_usd": 8.0, "off_usd": 0.8, "unit_id": u}
+    assert unit_state(conn, u) == "saved"
+    assert referrals.quote(conn, cfg, ids["admin"], "lite", "week", 8.0, NOW) is None
+
+
+def test_unit_held_then_used_on_payment(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"], currency="IRT")
+    assert o["ref_kind"] == "unit" and o["ref_unit_id"] == u and unit_state(conn, u) == "held"
+    assert conn.execute("SELECT order_id FROM referral_units WHERE id=?", (u,)).fetchone()[0] == o["id"]
+    p = add_payment(conn, o)
+    r = payments._fulfil(conn, cfg, p, "201", None, NOW)
+    assert r["status"] == "paid" and unit_state(conn, u) == "used"
+    row = conn.execute("SELECT detail_json FROM audit_log WHERE action='referral_unit_used'").fetchone()
+    assert '"off_usd": 0.8' in row[0]
+    referrals.spend(conn, o["id"], NOW)   # idempotent: a second spend changes nothing
+    assert audit_actions(conn).count("referral_unit_used") == 1
+
+
+def test_unit_used_when_paid_but_not_granted(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"], currency="IRT")
+    p = add_payment(conn, o)
+    payments._unfulfilled(conn, p, "201", None, NOW, "sold out")
+    assert unit_state(conn, u) == "used"
+
+
+def test_unit_used_by_referrals_off_too(env_on):
+    """Turning referrals off keeps saved units usable (design: Settings)."""
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    referrals.set_settings(conn, ids["admin"], {"enabled": False})
+    o = signed_in(conn, cfg, ids["alice"])
+    assert o["ref_kind"] == "unit" and unit_state(conn, u) == "held"
+
+
+def test_one_unit_per_order(env_on):
+    conn, cfg, ids = env_on
+    first = add_unit(conn, ids["alice"], earned_at=NOW - 3 * DAY)
+    others = [add_unit(conn, ids["alice"], earned_at=NOW - 2 * DAY), add_unit(conn, ids["alice"], earned_at=NOW - DAY)]
+    o = signed_in(conn, cfg, ids["alice"])
+    assert (o["ref_unit_id"], o["ref_pct"], o["quoted_usd"]) == (first, 10, 7.2)
+    assert [unit_state(conn, u) for u in others] == ["saved", "saved"]
+
+
+def test_withdraw_returns_unit(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"])
+    orders.withdraw(conn, ids["alice"], o["id"], now=NOW + 60)
+    assert unit_state(conn, u) == "saved"
+    assert conn.execute("SELECT order_id FROM referral_units WHERE id=?", (u,)).fetchone()[0] is None
+    assert "referral_unit_returned" in audit_actions(conn)
+    o2 = signed_in(conn, cfg, ids["alice"], now=NOW + 120)   # and the next order takes it again
+    assert o2["ref_unit_id"] == u and unit_state(conn, u) == "held"
+
+
+def test_withdraw_after_expiry_expires_unit(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"], expires_at=NOW + 100)
+    o = signed_in(conn, cfg, ids["alice"])
+    orders.withdraw(conn, ids["alice"], o["id"], now=NOW + 200)
+    assert unit_state(conn, u) == "expired"
+    assert "referral_unit_expired" in audit_actions(conn)
+
+
+def test_held_unit_survives_its_expiry(env_on):
+    """A unit held by an open order stays with it past expires_at (design: the buyer already saw that price)."""
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"], expires_at=NOW + 100)
+    signed_in(conn, cfg, ids["alice"])
+    referrals.expire(conn, NOW + 200)
+    assert unit_state(conn, u) == "held"
+
+
+def test_floored_to_zero_keeps_unit_saved(env_on):
+    conn, cfg, ids = env_on
+    tickets.set_price(conn, cfg, "lite", "week", 4.67, ids["admin"])   # cost: 100 * 20% * 7 / 30 = 4.666...
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"])
+    assert (o["ref_kind"], o["quoted_usd"], o["ref_unit_id"]) == (None, 4.67, None)
+    assert unit_state(conn, u) == "saved"
+
+
+def test_paid_unfulfilled_then_declined_keeps_unit_spent(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"], currency="IRT")
+    add_payment(conn, o, status="paid_unfulfilled")
+    orders.set_status(conn, ids["admin"], o["id"], "declined", now=NOW + 60)
+    assert unit_state(conn, u) == "used"
+
+
+def test_expired_saved_unit_not_offered(env_on):
+    conn, cfg, ids = env_on
+    old = add_unit(conn, ids["alice"], earned_at=NOW - 100 * DAY, expires_at=NOW - 1)
+    o = signed_in(conn, cfg, ids["alice"])
+    assert (o["ref_kind"], o["quoted_usd"]) == (None, 8.0)
+    assert unit_state(conn, old) == "expired" and "referral_unit_expired" in audit_actions(conn)
+
+
+def test_payment_link_untouched(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = orders.create_link(conn, cfg, ids["admin"], email="alice@example.com", tier="lite", length="week",
+                           pay_by=NOW + DAY, currency="EUR", now=NOW)
+    assert (o["ref_kind"], o["list_usd"]) == (None, None)
+    assert unit_state(conn, u) == "saved"

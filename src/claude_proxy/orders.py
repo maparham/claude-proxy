@@ -14,7 +14,7 @@ import secrets
 import sqlite3
 import time
 
-from . import db, mail, tickets
+from . import db, mail, referrals, tickets
 from .config import LENGTHS, Config
 
 logger = logging.getLogger("claude_proxy")
@@ -173,6 +173,11 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
         if rate is None:
             raise OrderError(400, f"No exchange rate for {currency} yet; choose another currency.")
         usd = tickets.price_now(conn, tier, length, now)["usd"]
+        # A signed-in buyer's referral discount (friend or unit), taken on top of any sale, inside this transaction so
+        # the unit it holds cannot be taken twice (referrals design: no double use). VAT goes on after it.
+        ref = referrals.quote(conn, cfg, user_id, tier, length, usd, now) if user_id is not None else None
+        if ref is not None and ref["pct_applied"] > 0:
+            usd = ref["usd"]
         amount = tickets.round_local(usd, rate["rate"], steps[currency], tickets.vat_percent(cfg))
         if cfg.email is None or not notify:   # notify=False: a payment order, mailed when paid instead (payments design, section 5)
             admin_mail = buyer_mail = "off"
@@ -187,6 +192,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
              None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, int(start_now), via))
         oid = cur.lastrowid
+        referrals.hold(conn, oid, ref, now)
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
                                                               "visitor": user_id is None, "terms_version": terms_version,
                                                               **({"start_now": True} if start_now else {})})
@@ -283,6 +289,8 @@ def _change(conn, actor, order_id: int, to: str, note, now: int) -> dict:
         sets.append("ip=NULL")
     conn.execute(f"UPDATE orders SET {', '.join(sets)} WHERE id=?", (*args, order_id))
     db.audit(conn, actor, f"order_{to}", f"order #{order_id}", {"from": o["status"]})
+    if to in ("declined", "withdrawn"):   # a held referral unit goes back, unless a payment on the order went through
+        referrals.release(conn, order_id, now)
     return get(conn, order_id)
 
 

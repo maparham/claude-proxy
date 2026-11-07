@@ -11,7 +11,7 @@ import logging
 import sqlite3
 import time
 
-from . import db, mail, orders, tickets, zarinpal
+from . import db, mail, orders, referrals, tickets, zarinpal
 from .config import Config, LENGTHS
 
 logger = logging.getLogger(__name__)
@@ -328,6 +328,7 @@ def _unfulfilled(conn: sqlite3.Connection, p: dict, ref_id: str, card_pan: str |
     _set(conn, p["id"], "paid_unfulfilled", now, ref_id=ref_id, card_pan=card_pan, error=reason)
     db.audit(conn, p["user_id"], "payment_unfulfilled", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id,
                                                                                      "reason": reason})
+    referrals.spend(conn, p["order_id"], now)   # verified, so charged at the discounted price: the unit is used even ungranted
     return {**get(conn, p["id"]), "changed": True}
 
 
@@ -358,6 +359,7 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
     def mark(tid):
         _set(conn, p["id"], "paid", now, ref_id=ref_id, card_pan=card_pan)
         db.audit(conn, p["user_id"], "payment_paid", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id, "ticket_id": tid})
+        referrals.spend(conn, p["order_id"], now)   # a verified payment uses the order's referral unit for good
     try:
         if buyer is None:
             raise tickets.TicketError("the account no longer exists")
