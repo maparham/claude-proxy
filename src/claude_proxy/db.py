@@ -402,6 +402,36 @@ SCHEMA = [
         admin_msg_id INTEGER PRIMARY KEY,
         inbox_id INTEGER NOT NULL REFERENCES inbox_messages(id) ON DELETE CASCADE
     )""",
+    # ---- referrals (design 2026-11-07) ----
+    # A saved discount: one unit is a percentage off one pass, earned when a friend's purchase counts. `state`
+    # tracks it through saved -> held (by an open order) -> used (the order's payment verified or it was granted),
+    # or expired / cancelled. `order_id` is the order currently holding or that used it; `reward_id` is the
+    # referral_rewards row it was earned from.
+    """CREATE TABLE IF NOT EXISTS referral_units (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        pct REAL NOT NULL,
+        earned_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        state TEXT NOT NULL CHECK(state IN ('saved','held','used','expired','cancelled')),
+        order_id INTEGER,
+        reward_id INTEGER,
+        updated_at INTEGER NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_referral_units_user ON referral_units(user_id, state)",
+    # One row per friend purchase that could earn the referrer a unit. `referrer_id` has no foreign key, so the
+    # history survives a deleted referrer (the referrer simply earns nothing further).
+    """CREATE TABLE IF NOT EXISTS referral_rewards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        referrer_id INTEGER NOT NULL,
+        friend_id INTEGER,
+        order_id INTEGER NOT NULL UNIQUE,
+        created_at INTEGER NOT NULL,
+        status TEXT NOT NULL CHECK(status IN ('waiting','earned','refused','over_limit')),
+        decided_by INTEGER,
+        decided_at INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer ON referral_rewards(referrer_id, status)",
 
 ]
 
@@ -513,6 +543,23 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN pass_pin_hold INTEGER NOT NULL DEFAULT 0")
     if "made_order" not in _columns(conn, "payments"):
         conn.execute("ALTER TABLE payments ADD COLUMN made_order INTEGER NOT NULL DEFAULT 1")
+    # ---- referrals (design 2026-11-07) ----
+    if "ref_code" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN ref_code TEXT")   # the user's personal link code; NULL until given one
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS users_ref_code ON users(ref_code) WHERE ref_code IS NOT NULL")
+    if "referred_by" not in _columns(conn, "users"):
+        # Fixed at Clerk sign-up and never changed after; survives the referrer's own account being deleted later.
+        conn.execute("ALTER TABLE users ADD COLUMN referred_by INTEGER")
+    if "ref_kind" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN ref_kind TEXT")   # 'friend', 'unit' or NULL: which discount applied
+    if "ref_pct" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN ref_pct REAL")   # the percentage asked for, before the cost floor lowered it
+    if "ref_off_usd" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN ref_off_usd REAL")
+    if "ref_unit_id" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN ref_unit_id INTEGER")   # the referral_units row a unit discount held/used
+    if "list_usd" not in _columns(conn, "orders"):
+        conn.execute("ALTER TABLE orders ADD COLUMN list_usd REAL")   # the price before the referral discount
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:

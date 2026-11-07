@@ -51,7 +51,9 @@ def test_orders_table_has_the_spec_columns(db):
     cols = {r[1] for r in db[1].execute("PRAGMA table_info(orders)")}
     assert cols == {"id", "created_at", "updated_at", "user_id", "name", "email", "tier", "length", "currency", "quoted_usd",
                     "quoted_rate", "quoted_amount", "message", "status", "admin_note", "ticket_id", "ip", "admin_mail",
-                    "buyer_mail", "terms_version", "lang", "via", "seen_at", "upgrade_of", "start_now", "pay_code", "pay_by"}
+                    "buyer_mail", "terms_version", "lang", "via", "seen_at", "upgrade_of", "start_now", "pay_code", "pay_by",
+                    # referrals (2026-11-07 design): the discount applied, if any, and the price before it
+                    "ref_kind", "ref_pct", "ref_off_usd", "ref_unit_id", "list_usd"}
 
 
 # ---------- create ----------
