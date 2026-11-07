@@ -751,3 +751,16 @@ def test_order_records_where_it_came_from(env):
     assert o["via"] == "telegram"
     orders.withdraw(conn, ids["alice"], o["id"], now=NOW)
     assert orders.create(conn, cfg, **kw, via="nonsense")["via"] == "web"
+
+
+def test_a_full_5h_window_refuses_start_now_but_not_a_pass_queued_after_the_current_one(env):
+    # Judged at its real start (2026-11-07): the queued pass starts when alice's week pass ends, long after the reset.
+    conn, cfg, ids = env
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=NOW, terms_version="v1")
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (NOW - 30, "header", "5h", 99.0, NOW + 2 * 3600))
+    kw = dict(tier="lite", length="week", currency="EUR", name="Alice", email="alice@example.com", user_id=ids["alice"],
+              notify=False, now=NOW, terms_version="v1")
+    with pytest.raises(orders.OrderError, match="sold out until the 5-hour reset; try again in 120 minutes"):
+        orders.create(conn, cfg, start_now=True, **kw)
+    assert orders.create(conn, cfg, start_now=False, **kw)["id"]

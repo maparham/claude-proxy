@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import secrets
 import sqlite3
@@ -109,17 +110,22 @@ def visitor_limited(conn: sqlite3.Connection, ip: str | None, now: float | None 
 def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float, user_id: int | None, start_now: bool) -> None:
     """Judged as the price list judges it (spec section 2, Sold out; 2026-11-04 spec §2): without a fresh weekly
     report nothing is on sale; else a pass starting now, without the buyer's used-up tickets, and one starting
-    where the grant will put it."""
+    where the grant will put it. A pass queued after the buyer's current one is judged only at that start
+    (2026-11-07): a full 5-hour window now says nothing about a pass starting after its reset."""
     from . import capacity
     if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
         raise OrderError(409, UNAVAILABLE)
-    mine = [t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]] if user_id is not None else None
-    if tickets.sold_out(conn, cfg, tier, length, now, None, mine):
-        raise OrderError(409, "That pass is sold out.")
-    if user_id is not None:
-        starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now)
-        if starts_at > now and tickets.sold_out(conn, cfg, tier, length, now, starts_at, [t["id"] for t in replaces]):
+    starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now) if user_id is not None else (now, [])
+    if starts_at > now:
+        if tickets.sold_out(conn, cfg, tier, length, now, starts_at, [t["id"] for t in replaces]):
             raise OrderError(409, "That pass is sold out for when your current pass ends.")
+        return
+    miss = tickets._misfit(conn, cfg, tier, length, now, None, [t["id"] for t in replaces] or None)
+    if isinstance(miss, tickets.FiveHourFull):
+        raise OrderError(409, f"That pass is sold out until the 5-hour reset; try again in "
+                              f"{max(1, math.ceil((miss.resets_at - now) / 60))} minutes.")
+    if miss is not None:
+        raise OrderError(409, "That pass is sold out.")
 
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",

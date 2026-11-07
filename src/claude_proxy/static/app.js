@@ -895,12 +895,14 @@ function priceListCard(tk, order, renew) {
   // Only the lengths some tier sells get a toggle; shown first is the home page's pick, else the first offered.
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]].filter(([k]) => p.tiers.some((x) => x.lengths[k]));
   const len0 = pick && L.some(([k]) => k === pick.length) ? pick.length : L.length ? L[0][0] : "";
-  const canOrder = (tier, k) => !!tier.lengths[k] && !tier.lengths[k].sold_out && !tier.lengths[k].unavailable;
+  // Sold out now but on sale after the buyer's running pass (sold_out_later false): orderable, to start then.
+  const soldOut = (l) => l.sold_out && l.sold_out_later !== false;
+  const canOrder = (tier, k) => !!tier.lengths[k] && !soldOut(tier.lengths[k]) && !tier.lengths[k].unavailable;
   // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
   const planShare = (tier, k) => tier.compare_pct != null ? `<span class="muted">${shareOfPlan(tier, k)}</span>` : "";
   // The price, and under a longer length what that is a day, so the longer lengths' discount shows.
   const price = (l) => { const a = live(l) || !l.discount_ends_at ? l.amount : l.list_amount;
-    return `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(a, p.currency))}</b>${l.sold_out || l.unavailable ? ` <span class="badge">${t(l.unavailable ? "price.unavailable" : "price.sold_out")}</span>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, p.currency)) })}</div>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`; };
+    return `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(a, p.currency))}</b>${soldOut(l) || l.unavailable ? ` <span class="badge">${t(l.unavailable ? "price.unavailable" : "price.sold_out")}</span>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, p.currency)) })}</div>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`; };
   // The tier of the running pass is tagged, and checked when there is no pick.
   const cur = tk.current ? tk.current.tier : null;
   // The checked row: the pick's tier while it can be ordered, else the running pass's, else the first tier on sale.
@@ -969,9 +971,9 @@ function orderFormHtml(p, tier, len, email, payL, pay, manual, start) {
     <form id="f-order" class="form-grid order-form">
       ${email ? "" : `<label class="wide">${t("ord.email")}<input type="email" name="email" dir="ltr" required maxlength="254" autocomplete="email" placeholder="you@example.com"></label>`}
       ${start ? `<fieldset class="wide start-choice"><legend>${t("ord.start")}</legend>
-        <label><input type="radio" name="start" value="now" checked><b>${t("ord.start_now")}</b></label>
-        <label><input type="radio" name="start" value="after"${l.sold_out_later ? " disabled" : ""}><b>${tipH(t("ord.start_after"), `${esc(t("ord.start_after_tip", { date: fmtDate(start.date) }))}<br>${esc(t("ord.start_after_tip2"))}`)}</b>${l.sold_out_later ? `<span>${t("ord.start_after_sold_out", { date: fmtDate(start.date) })}</span>` : ""}</label></fieldset>` : ""}
-      <p class="terms muted wide" id="order-split">${orderTerms(p, tier, len, start, false)}</p>
+        <label><input type="radio" name="start" value="now"${l.sold_out ? " disabled" : " checked"}><b>${t("ord.start_now")}</b>${l.sold_out ? `<span>${l.available_at ? t("ord.start_now_back", { text: fmtDur(l.available_at - Date.now() / 1000 - (S.tkSkew || 0)) }) : t("price.sold_out")}</span>` : ""}</label>
+        <label><input type="radio" name="start" value="after"${l.sold_out_later ? " disabled" : l.sold_out ? " checked" : ""}><b>${tipH(t("ord.start_after"), `${esc(t("ord.start_after_tip", { date: fmtDate(start.date) }))}<br>${esc(t("ord.start_after_tip2"))}`)}</b>${l.sold_out_later ? `<span>${t("ord.start_after_sold_out", { date: fmtDate(start.date) })}</span>` : ""}</label></fieldset>` : ""}
+      <p class="terms muted wide" id="order-split">${orderTerms(p, tier, len, start, !!start && !!l.sold_out)}</p>
       <label class="wide">${t("ord.message")}<textarea name="message" maxlength="1000" rows="1" placeholder="${esc(t("ord.message_ph"))}"></textarea></label>
       <label class="check wide"><input type="checkbox" name="terms"> ${t("ord.terms_accept")}</label>
       <div class="error wide" id="order-err"></div>

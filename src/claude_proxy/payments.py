@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import sqlite3
 import time
 
@@ -164,10 +163,6 @@ def _check_fits(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int) 
     try:
         orders._check_on_sale(conn, cfg, o["tier"], o["length"], now, user["id"], bool(o["start_now"]))
     except orders.OrderError as e:
-        miss = tickets._misfit(conn, cfg, o["tier"], o["length"], now)
-        if isinstance(miss, tickets.FiveHourFull):
-            raise PaymentError(409, f"That pass is sold out until the 5-hour reset; try again in "
-                                    f"{max(1, math.ceil((miss.resets_at - now) / 60))} minutes.") from e
         raise PaymentError(e.status, str(e)) from e
 
 
