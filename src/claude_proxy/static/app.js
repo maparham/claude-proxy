@@ -141,7 +141,8 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_owed", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended"].map((k) => [k, t(`tip.${k}`)]));
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_owed", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+  "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -484,6 +485,7 @@ const VIEWS = {
   tickets: { render: renderTickets, admin: true, feature: "tickets" },
   orders: { render: renderOrders, admin: true, feature: "tickets" },
   pricing: { render: renderPricing, admin: true, feature: "tickets" },
+  referrals: { render: renderReferrals, admin: true, feature: "tickets" },
   api: { render: renderApi, feature: "api" },
   authorize: { render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { render: renderQuota, admin: true },
@@ -1744,6 +1746,109 @@ async function renderPricing(main) {
   }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
+}
+
+// ---------- Referrals (design 2026-11-07) ----------
+
+function refSettingsRow(label, tipKey, inputHtml) {
+  return `<div class="limit-row"><span>${label}${tipI(tipKey)}</span><span class="nowrap">${inputHtml}</span></div>`;
+}
+function refPctInput(name, val) {
+  return `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-init="${val}" value="${val}" style="width:70px"> ${PCT}`;
+}
+function refWholeInput(name, val) {
+  return `<input type="text" inputmode="numeric" dir="ltr" name="${name}" data-init="${val}" value="${val}" style="width:70px">`;
+}
+function refSettingsForm(s) {
+  return `<form id="f-ref-settings">
+    ${refSettingsRow(t("ref.enabled"), "ref_enabled", `<input type="checkbox" name="enabled" data-init="${s.enabled ? 1 : 0}"${s.enabled ? " checked" : ""}>`)}
+    ${refSettingsRow(t("ref.friend_pct"), "ref_friend_pct", refPctInput("friend_pct", s.friend_pct))}
+    ${refSettingsRow(t("ref.unit_pct"), "ref_unit_pct", refPctInput("unit_pct", s.unit_pct))}
+    ${refSettingsRow(t("ref.max_held"), "ref_max_held", refWholeInput("max_held", s.max_held))}
+    ${refSettingsRow(t("ref.max_per_month"), "ref_max_per_month", refWholeInput("max_per_month", s.max_per_month))}
+    ${refSettingsRow(t("ref.unit_days"), "ref_unit_days", refWholeInput("unit_days", s.unit_days))}
+    ${refSettingsRow(t("ref.approval"), "ref_approval", `<select name="approval" data-init="${esc(s.approval)}">
+      <option value="auto"${s.approval === "auto" ? " selected" : ""}>${t("ref.approval_auto")}</option>
+      <option value="manual"${s.approval === "manual" ? " selected" : ""}>${t("ref.approval_manual")}</option></select>`)}
+    ${refSettingsRow(t("ref.account_cost_usd"), "ref_account_cost_usd", `$ <input type="text" inputmode="decimal" dir="ltr" name="account_cost_usd" data-init="${s.account_cost_usd}" value="${s.account_cost_usd}" style="width:80px">`)}
+    ${refSettingsRow(t("ref.fee_pct"), "ref_fee_pct", refPctInput("fee_pct", s.fee_pct))}
+    <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
+    <div class="error" id="ref-settings-err"></div>
+  </form>`;
+}
+function wireRefSettingsForm() {
+  $("#f-ref-settings").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target, err = $("#ref-settings-err");
+    err.textContent = "";
+    const body = {};
+    if (f.enabled.checked !== (f.enabled.dataset.init === "1")) body.enabled = f.enabled.checked;
+    for (const name of ["friend_pct", "unit_pct", "account_cost_usd", "fee_pct"]) {
+      const n = num(f[name].value);
+      if (badNum([n], err)) return;
+      if (n !== Number(f[name].dataset.init)) body[name] = n;
+    }
+    for (const name of ["max_held", "max_per_month", "unit_days"]) {
+      const n = Math.round(num(f[name].value));
+      if (badNum([n], err)) return;
+      if (n !== Number(f[name].dataset.init)) body[name] = n;
+    }
+    if (f.approval.value !== f.approval.dataset.init) body.approval = f.approval.value;
+    if (!Object.keys(body).length) return;
+    try { await api("/api/admin/referrals/settings", { method: "PUT", body }); render(); }
+    catch (x) { err.textContent = x.message; }
+  };
+}
+function refWaitingRow(r) {
+  return `<tr><td>${bdi(r.referrer_name || `#${r.referrer_id}`)}</td><td>${bdi(r.friend_name || `#${r.friend_id}`)}</td>
+    <td class="nowrap">${tierName(r.tier, r.label)} · ${lengthName(r.length)}</td>
+    <td class="r nowrap">${fmtPrice(r.quoted_usd)}</td>
+    <td><div class="row-actions"><button class="btn small primary" data-rwact="approve" data-id="${r.reward_id}">${t("ref.act_approve")}</button>
+      <button class="btn small danger" data-rwact="refuse" data-id="${r.reward_id}">${t("ref.act_refuse")}</button></div></td></tr>`;
+}
+function refSavedUnit(u) {
+  return `<div class="row-actions" style="margin-bottom:4px"><span>${t("ref.unit_row", { pct: fmtPct(u.pct), date: fmtDate(u.expires_at) })}</span>
+    <button class="btn small danger" type="button" data-runitcancel="${u.id}">${t("app.cancel_ticket")}</button></div>`;
+}
+function refReferrerRow(r) {
+  return `<tr><td>${bdi(r.name)}</td><td dir="ltr"><code>${esc(r.ref_code)}</code></td>
+    <td class="r num">${nfFull.format(r.signed_up)}</td><td class="r num">${nfFull.format(r.bought)}</td>
+    <td>${r.saved.length ? r.saved.map(refSavedUnit).join("") : `<span class="muted">—</span>`}</td>
+    <td class="r num">${nfFull.format(r.held)}</td><td class="r num">${nfFull.format(r.used)}</td><td class="r num">${nfFull.format(r.expired)}</td></tr>`;
+}
+async function refWaitingAction(act, rid) {
+  if (act === "refuse" && !confirmInline(t("ref.refuse_confirm"))) return;
+  try { await api(`/api/admin/referrals/rewards/${rid}/${act}`, { method: "POST" }); render(); }
+  catch (e) { alertInline(e.message); }
+}
+async function refCancelUnit(uid) {
+  if (!confirmInline(t("ref.cancel_unit_confirm"))) return;
+  try { await api(`/api/admin/referrals/units/${uid}/cancel`, { method: "POST" }); render(); }
+  catch (e) { alertInline(e.message); }
+}
+async function renderReferrals(main) {
+  const v = await api("/api/admin/referrals");
+  main.innerHTML = `<section class="view"><h2>${t("tab.referrals")}</h2>
+    <p class="lede">${t("ref.lede")}</p>
+    <div class="card" data-sub="settings" data-sub-label="${esc(t("sub.settings"))}"><h3>${t("sub.settings")}</h3>
+      ${refSettingsForm(v.settings)}
+    </div>
+    <div class="card table-wrap" data-sub="waiting" data-sub-label="${esc(t("sub.waiting"))}"><h3>${t("sub.waiting")}</h3><p class="sub">${t("ref.waiting_lede")}</p>
+      <table class="data"><thead><tr><th>${t("ref.referrer_col")}</th><th>${t("ref.friend_col")}</th><th>${t("ref.pass_col")}</th><th class="r">${t("ref.price_col")}</th><th></th></tr></thead>
+      <tbody>${v.waiting.map(refWaitingRow).join("") || `<tr><td colspan="5" class="muted">${t("ref.none_waiting")}</td></tr>`}</tbody></table>
+    </div>
+    <div class="card table-wrap" data-sub="referrers" data-sub-label="${esc(t("sub.referrers"))}"><h3>${t("sub.referrers")}</h3>
+      <table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("ref.code_col")}</th><th class="r">${t("ref.signed_up_col")}</th><th class="r">${t("ref.bought_col")}</th><th>${t("ref.saved_col")}</th><th class="r">${t("ref.held_col")}</th><th class="r">${t("ref.used_col")}</th><th class="r">${t("ref.expired_col")}</th></tr></thead>
+      <tbody>${v.referrers.map(refReferrerRow).join("") || `<tr><td colspan="8" class="muted">${t("ref.none_referrers")}</td></tr>`}</tbody></table>
+    </div>
+    <div class="card table-wrap" data-sub="history" data-sub-label="${esc(t("sub.history"))}"><h3>${t("sub.history")}</h3>
+      ${v.history.length ? auditTable(v.history) : `<p class="muted">${t("ref.none_history")}</p>`}
+    </div>
+  </section>`;
+  wireRefSettingsForm();
+  main.querySelectorAll("[data-rwact]").forEach((b) => (b.onclick = () => refWaitingAction(b.dataset.rwact, +b.dataset.id)));
+  main.querySelectorAll("[data-runitcancel]").forEach((b) => (b.onclick = () => refCancelUnit(+b.dataset.runitcancel)));
+  wireMore(main);
 }
 
 // ---------- API keys on prepaid credit (design 2026-10-21) ----------

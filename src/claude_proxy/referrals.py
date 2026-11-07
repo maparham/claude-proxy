@@ -441,3 +441,56 @@ def refuse(conn: sqlite3.Connection, actor: int | None, reward_id: int, now: int
                  {"reward_id": reward_id, "order_id": r["order_id"], "friend_id": r["friend_id"]})
         return "refused"
     _decide(conn, reward_id, decide)
+
+
+# ---------- the admin's own actions, and the Referrals tab's one call ----------
+
+def cancel_unit(conn: sqlite3.Connection, actor: int | None, unit_id: int, now: int) -> None:
+    """The admin cancels one of a user's saved units, from the Referrers section. Only a `saved` unit may be
+    cancelled: a unit already held by an open order stays with that order (design: a unit held by an open order
+    stays with it even if the admin cancels it meanwhile), refused with ReferralError(409) instead of taking it
+    away from a buyer who already saw that price."""
+    u = conn.execute("SELECT id, user_id, state FROM referral_units WHERE id=?", (unit_id,)).fetchone()
+    if u is None:
+        raise ReferralError(404, f"Referral unit #{unit_id} does not exist.")
+    if u["state"] != "saved":
+        raise ReferralError(409, f"Referral unit #{unit_id} is {u['state'].replace('_', ' ')}, not saved; it cannot be cancelled.")
+    conn.execute("UPDATE referral_units SET state='cancelled', updated_at=? WHERE id=? AND state='saved'", (now, unit_id))
+    db.audit(conn, actor, "referral_unit_cancelled", db._user_name(conn, u["user_id"]), {"unit_id": unit_id})
+
+
+def admin_view(conn: sqlite3.Connection, now: int) -> dict:
+    """Everything the Referrals tab shows in one call (design: Admin: the Referrals tab). Expires overdue saved
+    units first, so every count below (and the cost floor, on the next quote) is current.
+
+    - `waiting`: each reward still waiting on the admin (manual approval), with who referred whom, the pass, and
+      the order's quoted price, for Approve / Refuse.
+    - `referrers`: every user with a link code: friends signed up (`referred_by`) and friends who bought (a
+      reward of any status - waiting counts as "bought", design: Referrers), then their saved units in full (so
+      the tab can offer Cancel on each one) and how many are held, used and expired.
+    - `history`: the last 200 `referral_*` audit rows, newest first, with the actor's current name."""
+    expire(conn, now)
+    waiting = [dict(r) for r in conn.execute(
+        "SELECT rw.id AS reward_id, rw.referrer_id, ur.name AS referrer_name, rw.friend_id, uf.name AS friend_name, "
+        "rw.order_id, o.tier, o.length, o.quoted_usd, o.currency, rw.created_at "
+        "FROM referral_rewards rw JOIN orders o ON o.id = rw.order_id "
+        "LEFT JOIN users ur ON ur.id = rw.referrer_id LEFT JOIN users uf ON uf.id = rw.friend_id "
+        "WHERE rw.status='waiting' ORDER BY rw.id").fetchall()]
+    referrers = []
+    for u in conn.execute("SELECT id, name, ref_code FROM users WHERE ref_code IS NOT NULL ORDER BY name").fetchall():
+        signed_up = conn.execute("SELECT COUNT(*) FROM users WHERE referred_by=?", (u["id"],)).fetchone()[0]
+        bought = conn.execute("SELECT COUNT(*) FROM referral_rewards WHERE referrer_id=?", (u["id"],)).fetchone()[0]
+        saved = [dict(r) for r in conn.execute(
+            "SELECT id, pct, earned_at, expires_at FROM referral_units WHERE user_id=? AND state='saved' ORDER BY earned_at, id",
+            (u["id"],)).fetchall()]
+        counts = {"held": 0, "used": 0, "expired": 0}
+        for r in conn.execute("SELECT state, COUNT(*) AS n FROM referral_units WHERE user_id=? AND state IN "
+                              "('held','used','expired') GROUP BY state", (u["id"],)).fetchall():
+            counts[r["state"]] = r["n"]
+        referrers.append({"id": u["id"], "name": u["name"], "ref_code": u["ref_code"], "signed_up": signed_up,
+                          "bought": bought, "saved": saved, **counts})
+    names = {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM users")}
+    history = [{**dict(r), "actor": names.get(r["actor_user_id"])} for r in conn.execute(
+        "SELECT id, at, actor_user_id, action, target, detail_json FROM audit_log "
+        "WHERE action LIKE 'referral\\_%' ESCAPE '\\' ORDER BY id DESC LIMIT 200").fetchall()]
+    return {"settings": dataclasses.asdict(settings(conn)), "waiting": waiting, "referrers": referrers, "history": history}

@@ -14,6 +14,7 @@ Non-admins only ever see their own usage, their own limits and their own estimat
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import hashlib
 import hmac
 import json
@@ -217,6 +218,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def _order_error(request, exc: orders.OrderError):
         # A refused link carries the existing user's id, so the dialog can offer that account instead.
         return JSONResponse(status_code=exc.status, content={"error": str(exc), **exc.extra})
+
+    @app.exception_handler(referrals.ReferralError)
+    async def _referral_error(request, exc: referrals.ReferralError):
+        return JSONResponse(status_code=exc.status, content={"error": exc.message})
 
     # ---------- auth ----------
 
@@ -1305,6 +1310,41 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         ticket_call(tickets.cancel_discount, conn, did, actor["id"])
+        return {"ok": True}
+
+    # ---------- referrals (design 2026-11-07): the admin tab ----------
+
+    @app.get("/api/admin/referrals")
+    async def admin_referrals(request: Request):
+        admin(request)
+        v = referrals.admin_view(conn, time.time())
+        for r in v["waiting"]:   # the tier's display label, as orders_list gives every order (tier_label above)
+            r["label"] = tier_label(r["tier"])
+        return v
+
+    @app.put("/api/admin/referrals/settings")
+    async def admin_referrals_settings(request: Request):
+        actor = admin(request, write=True)
+        body = await _json(request)
+        s = referrals.set_settings(conn, actor["id"], body)
+        return {"ok": True, "settings": dataclasses.asdict(s)}
+
+    @app.post("/api/admin/referrals/rewards/{rid}/approve")
+    async def admin_referrals_approve(request: Request, rid: int):
+        actor = admin(request, write=True)
+        status = referrals.approve(conn, actor["id"], rid, time.time())
+        return {"ok": True, "status": status}
+
+    @app.post("/api/admin/referrals/rewards/{rid}/refuse")
+    async def admin_referrals_refuse(request: Request, rid: int):
+        actor = admin(request, write=True)
+        referrals.refuse(conn, actor["id"], rid, time.time())
+        return {"ok": True}
+
+    @app.post("/api/admin/referrals/units/{uid}/cancel")
+    async def admin_referrals_cancel_unit(request: Request, uid: int):
+        actor = admin(request, write=True)
+        referrals.cancel_unit(conn, actor["id"], uid, time.time())
         return {"ok": True}
 
     def ticket_state(t: dict, now: float) -> str:
