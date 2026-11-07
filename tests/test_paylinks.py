@@ -235,3 +235,14 @@ async def test_reconcile_leaves_an_expired_link_with_a_payment_going_or_through(
     conn.execute("UPDATE payments SET status='paid_unfulfilled', ref_id='1'")
     assert payments.expire_links(conn, t) == 0                              # went through: the admin's to handle
     assert orders.get(conn, o["id"])["status"] == "new"
+
+
+async def test_pay_link_refuses_a_pass_that_no_longer_fits_before_taking_money(env):
+    conn, cfg, ids, zp = env
+    now = int(time.time())
+    o = make(conn, cfg, ids)
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (now - 30, "header", "5h", 99.0, now + 600))
+    with pytest.raises(payments.PaymentError, match="5-hour reset; try again in 10 minutes"):
+        await payments.pay_link(conn, cfg, bob(conn), o["pay_code"], "v1")
+    assert zp.requests == [] and orders.get(conn, o["id"])["status"] in orders.OPEN

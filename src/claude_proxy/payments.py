@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import sqlite3
 import time
 
@@ -144,12 +145,38 @@ async def start(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: 
     return await _open(conn, cfg, user, o, now, withdraw=True)
 
 
+def _check_fits(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int) -> None:
+    """Just before ZarinPal takes the money, the order's pass (or upgrade) must still fit, judged as the order form
+    judged it when the order was made, which may be days ago: the 5-hour window in particular can fill in minutes, and
+    a payment the callback then could not grant leaves the order `paid_unfulfilled` (2026-11-07). A pass sold out only
+    until the 5-hour reset says when to try again."""
+    from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
+    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+        raise PaymentError(409, orders.UNAVAILABLE)
+    if o["upgrade_of"] is not None:
+        try:
+            q = tickets.upgrade_quote(conn, cfg, tickets.get(conn, o["upgrade_of"]), o["tier"], CURRENCY, now)
+        except tickets.TicketError as e:
+            raise PaymentError(409, str(e)) from e
+        if q["sold_out"]:
+            raise PaymentError(409, "That upgrade is sold out.")
+        return
+    try:
+        orders._check_on_sale(conn, cfg, o["tier"], o["length"], now, user["id"], bool(o["start_now"]))
+    except orders.OrderError as e:
+        miss = tickets._misfit(conn, cfg, o["tier"], o["length"], now)
+        if isinstance(miss, tickets.FiveHourFull):
+            raise PaymentError(409, f"That pass is sold out until the 5-hour reset; try again in "
+                                    f"{max(1, math.ceil((miss.resets_at - now) / 60))} minutes.") from e
+        raise PaymentError(e.status, str(e)) from e
+
+
 async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, now: float | None = None) -> dict:
     """Pay online for the buyer's own open Toman order at its quote: one sent unpaid, or one whose payment never came
     back (still `started` until reconcile; whichever payment verifies first grants, the other is then cancelled
     unverified). A ZarinPal failure leaves the order open, as it was. Returns what start() does.
     A payment link's order skips the stale-rate pause and refuses past its deadline; no order with a payment that
-    went through is paid again. Without a fresh weekly report this refuses before opening a payment, same as the
+    went through is paid again. A pass that no longer fits (_check_fits) or a missing fresh weekly report refuses before opening a payment, same as the
     price list and orders.create: a payment the callback could not grant (tickets.grant's NO_REPORT) would otherwise
     take the buyer's money and leave the order `paid_unfulfilled` (final review, finding 1)."""
     now = _now(now)
@@ -168,9 +195,7 @@ async def pay_order(conn: sqlite3.Connection, cfg: Config, user, order_id: int, 
         raise PaymentError(404, "Online payment is not set up on this gateway.")
     if o["pay_code"] is None and not rate_ok(conn, now):
         raise PaymentError(409, PAUSED)
-    from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
-    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
-        raise PaymentError(409, orders.UNAVAILABLE)
+    _check_fits(conn, cfg, user, o, now)
     return await _open(conn, cfg, user, o, now, withdraw=False)
 
 
@@ -245,10 +270,9 @@ async def pay_link(conn: sqlite3.Connection, cfg: Config, user, code: str, terms
     except BaseException:
         conn.execute("ROLLBACK")
         raise
-    from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
-    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
-        raise PaymentError(409, orders.UNAVAILABLE)
-    return await _open(conn, cfg, user, orders.get(conn, o["id"]), now, withdraw=False)
+    o = orders.get(conn, o["id"])
+    _check_fits(conn, cfg, user, o, now)
+    return await _open(conn, cfg, user, o, now, withdraw=False)
 
 
 async def _open(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int, withdraw: bool) -> dict:

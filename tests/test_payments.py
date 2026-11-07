@@ -692,3 +692,25 @@ async def test_start_records_via(env):
     r = await payments.start(conn, cfg, user(conn, ids["alice"]), "lite", "week", "alice@example.com",
                              terms_version=tickets.TERMS_VERSION, via="telegram")
     assert orders.get(conn, payments.get(conn, r["payment_id"])["order_id"])["via"] == "telegram"
+
+
+async def test_pay_order_refuses_a_pass_that_no_longer_fits_before_taking_money(env):
+    # Ordered while the 5-hour window had room; it filled before the buyer paid (2026-11-07).
+    conn, cfg, ids, zp = env
+    now = int(time.time())
+    o = unpaid_order(conn, cfg, ids)
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (now - 30, "header", "5h", 99.0, now + 3600))
+    with pytest.raises(payments.PaymentError) as e:
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert e.value.status == 409 and str(e.value) == "That pass is sold out until the 5-hour reset; try again in 60 minutes."
+    assert zp.requests == [] and orders.get(conn, o["id"])["status"] in orders.OPEN
+
+
+async def test_pay_order_refuses_a_pass_sold_out_on_the_week_before_taking_money(env):
+    conn, cfg, ids, zp = env
+    o = unpaid_order(conn, cfg, ids)
+    cfg.tickets.max_sold_pct = 0.5
+    with pytest.raises(payments.PaymentError, match=r"^That pass is sold out\.$"):
+        await payments.pay_order(conn, cfg, user(conn, ids["alice"]), o["id"])
+    assert zp.requests == []
