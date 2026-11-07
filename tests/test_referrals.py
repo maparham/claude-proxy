@@ -335,3 +335,52 @@ def test_payment_link_untouched(env_on):
                            pay_by=NOW + DAY, currency="EUR", now=NOW)
     assert (o["ref_kind"], o["list_usd"]) == (None, None)
     assert unit_state(conn, u) == "saved"
+
+
+# ---------- Task 3, fix round 1 ----------
+
+def test_friend_order_at_cost_still_marked_friend(env_on):
+    """The friend's first paid pass is what counts for the referrer (Task 4), discounted or not."""
+    conn, cfg, ids = env_on
+    tickets.set_price(conn, cfg, "lite", "week", 4.67, ids["admin"])   # at cost: the floor leaves no room
+    o = signed_in(conn, cfg, ids["bob"])
+    assert (o["ref_kind"], o["quoted_usd"], o["ref_off_usd"], o["ref_pct"], o["list_usd"]) == ("friend", 4.67, 0, 10, 4.67)
+    row = conn.execute("SELECT actor_user_id FROM audit_log WHERE action='referral_discount'").fetchone()
+    assert row[0] == ids["bob"]   # the buyer is the actor
+
+
+def test_friend_pct_zero_still_marked_friend(env_on):
+    conn, cfg, ids = env_on
+    referrals.set_settings(conn, ids["admin"], {"friend_pct": 0})
+    o = signed_in(conn, cfg, ids["bob"])
+    assert (o["ref_kind"], o["quoted_usd"], o["ref_off_usd"]) == ("friend", 8.0, 0)
+
+
+def test_late_verify_after_close_uses_the_returned_unit(env_on):
+    """_close withdraws the order and gives the unit back; ZarinPal then verifies late: the buyer paid the discounted
+    price, so the unit is used, not left saved for a second discount."""
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"], currency="IRT")
+    p = add_payment(conn, o)
+    payments._close(conn, p, "expired", NOW + 60)
+    assert orders.get(conn, o["id"])["status"] == "withdrawn" and unit_state(conn, u) == "saved"
+    payments._unfulfilled(conn, payments.get(conn, p["id"]), "201", None, NOW + 120, "verified after the payment was closed")
+    assert unit_state(conn, u) == "used"
+    assert conn.execute("SELECT order_id FROM referral_units WHERE id=?", (u,)).fetchone()[0] == o["id"]
+    referrals.spend(conn, o["id"], NOW + 180)   # still idempotent
+    assert audit_actions(conn).count("referral_unit_used") == 1
+
+
+def test_late_verify_when_another_order_took_the_unit_is_a_conflict(env_on):
+    conn, cfg, ids = env_on
+    u = add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["alice"], currency="IRT")
+    p = add_payment(conn, o)
+    payments._close(conn, p, "expired", NOW + 60)
+    o2 = signed_in(conn, cfg, ids["alice"], now=NOW + 90)
+    assert o2["ref_unit_id"] == u and unit_state(conn, u) == "held"
+    payments._unfulfilled(conn, payments.get(conn, p["id"]), "201", None, NOW + 120, "late")
+    assert unit_state(conn, u) == "held"   # left with the open order
+    row = conn.execute("SELECT detail_json FROM audit_log WHERE action='referral_unit_conflict'").fetchone()
+    assert f'"order_id": {o["id"]}' in row[0] and f'"other_order_id": {o2["id"]}' in row[0]

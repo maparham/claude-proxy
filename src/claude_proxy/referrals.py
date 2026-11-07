@@ -218,7 +218,7 @@ def quote(conn: sqlite3.Connection, cfg: Config, user_id: int, tier: str, length
     taken off), without taking it: the friend discount on the first pass of an account signed up through a link while
     referrals are on; otherwise the user's oldest saved, unexpired unit (usable even with referrals off, design:
     Settings). Never both, and never more than one unit. None when neither applies. `pct_applied` is what the cost floor
-    left of `pct` (apply_pct); 0 means no discount, and hold() then takes nothing. Expires overdue units first, so an
+    left of `pct` (apply_pct); 0 means no discount (hold() then takes no unit, but still marks a friend order). Expires overdue units first, so an
     expired one is never offered; nothing else is written."""
     expire(conn, now)
     s = settings(conn)
@@ -238,37 +238,55 @@ def quote(conn: sqlite3.Connection, cfg: Config, user_id: int, tier: str, length
 
 def hold(conn: sqlite3.Connection, order_id: int, q: dict | None, now: int) -> None:
     """Inside orders.create's transaction, right after the INSERT: record the discount `q` (quote()) on the order and,
-    for a unit, hold it for this order. A discount the cost floor took to zero records nothing and holds nothing: the
-    unit stays saved (design: The cost floor), and the order has no ref_kind and no list_usd. The buyer's one open
-    order rule, checked in the same transaction, means no unit is ever held twice."""
-    if q is None or not q["pct_applied"] > 0:
+    for a unit, hold it for this order. A friend's first order is always marked `friend`, even at 0% off (the cost
+    floor, or friend_pct 0): it is the friend's first paid pass that earns the referrer a unit, discounted or not.
+    A unit the cost floor took to zero records nothing and holds nothing: it stays saved (design: The cost floor), and
+    the order has no ref_kind and no list_usd. The buyer's one open order rule, checked in the same transaction, means
+    no unit is ever held twice."""
+    if q is None or (q["kind"] == "unit" and not q["pct_applied"] > 0):
         return
     if q["kind"] == "unit":
         held = conn.execute("UPDATE referral_units SET state='held', order_id=?, updated_at=? WHERE id=? AND state='saved'",
                             (order_id, now, q["unit_id"])).rowcount
         if held != 1:   # pragma: no cover (quote and hold share one locked transaction)
             raise RuntimeError(f"Referral unit #{q['unit_id']} is no longer saved.")
+    # ref_pct is the pct asked for, not pct_applied, on purpose: a grant re-floors it on the price used then (Task 4).
     conn.execute("UPDATE orders SET ref_kind=?, ref_pct=?, ref_off_usd=?, ref_unit_id=?, list_usd=? WHERE id=?",
                  (q["kind"], q["pct"], q["off_usd"], q["unit_id"], q["list_usd"], order_id))
-    db.audit(conn, None, "referral_discount", f"order #{order_id}",
+    buyer = conn.execute("SELECT user_id FROM orders WHERE id=?", (order_id,)).fetchone()["user_id"]
+    db.audit(conn, buyer, "referral_discount", f"order #{order_id}",
              {"kind": q["kind"], "pct": q["pct"], "pct_applied": q["pct_applied"], "off_usd": q["off_usd"],
               **({"unit_id": q["unit_id"]} if q["unit_id"] is not None else {})})
 
 
 def spend(conn: sqlite3.Connection, order_id: int, now: int) -> None:
     """The unit held by this order is used for good: a payment on it verified (paid, or paid_unfulfilled), or it was
-    granted. Idempotent: no held unit, nothing happens. Runs in the caller's transaction, or in its own when there is
-    none (payments._unfulfilled), so the state change and its audit row land together."""
+    granted. Idempotent: a unit already used by this order is left as it is. Runs in the caller's transaction, or in
+    its own when there is none (payments._unfulfilled), so the state change and its audit row land together.
+    A payment can verify after its order was closed (payments._close withdrew it, release() gave the unit back): the
+    buyer still paid the discounted price, so the order's ref_unit_id is used even though no longer held by it, unless
+    another order now holds or used it - then it is left there and a `referral_unit_conflict` row names both orders
+    for the admin to settle."""
     own = not conn.in_transaction
     if own:
         conn.execute("BEGIN IMMEDIATE")
     try:
         unit = conn.execute("SELECT id, user_id FROM referral_units WHERE order_id=? AND state='held'", (order_id,)).fetchone()
+        o = conn.execute("SELECT ref_kind, ref_unit_id, ref_off_usd FROM orders WHERE id=?", (order_id,)).fetchone()
+        if unit is None and o is not None and o["ref_kind"] == "unit" and o["ref_unit_id"] is not None:
+            late = conn.execute("SELECT id, user_id, state, order_id FROM referral_units WHERE id=?",
+                                (o["ref_unit_id"],)).fetchone()
+            if late is not None and late["state"] in ("saved", "expired", "cancelled"):
+                unit = late
+            elif late is not None and late["order_id"] != order_id:   # held or used by another order meanwhile
+                db.audit(conn, None, "referral_unit_conflict", db._user_name(conn, late["user_id"]),
+                         {"unit_id": late["id"], "order_id": order_id, "other_order_id": late["order_id"],
+                          "state": late["state"]})
         if unit is not None:
-            conn.execute("UPDATE referral_units SET state='used', updated_at=? WHERE id=?", (now, unit["id"]))
-            off = conn.execute("SELECT ref_off_usd FROM orders WHERE id=?", (order_id,)).fetchone()
+            conn.execute("UPDATE referral_units SET state='used', order_id=?, updated_at=? WHERE id=?",
+                         (order_id, now, unit["id"]))
             db.audit(conn, None, "referral_unit_used", db._user_name(conn, unit["user_id"]),
-                     {"unit_id": unit["id"], "order_id": order_id, "off_usd": off["ref_off_usd"] if off else None})
+                     {"unit_id": unit["id"], "order_id": order_id, "off_usd": o["ref_off_usd"] if o else None})
         if own:
             conn.execute("COMMIT")
     except BaseException:

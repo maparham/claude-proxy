@@ -176,8 +176,8 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
         # A signed-in buyer's referral discount (friend or unit), taken on top of any sale, inside this transaction so
         # the unit it holds cannot be taken twice (referrals design: no double use). VAT goes on after it.
         ref = referrals.quote(conn, cfg, user_id, tier, length, usd, now) if user_id is not None else None
-        if ref is not None and ref["pct_applied"] > 0:
-            usd = ref["usd"]
+        if ref is not None:
+            usd = ref["usd"]   # unchanged when the cost floor left no room (apply_pct returns usd itself)
         amount = tickets.round_local(usd, rate["rate"], steps[currency], tickets.vat_percent(cfg))
         if cfg.email is None or not notify:   # notify=False: a payment order, mailed when paid instead (payments design, section 5)
             admin_mail = buyer_mail = "off"
