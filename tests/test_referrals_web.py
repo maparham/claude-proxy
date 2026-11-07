@@ -128,7 +128,7 @@ async def test_me_off_hides_link(db, cfg):
     key = dbm.rotate_key(conn, ids["alice"])
     async with client(gw) as c:
         r = await c.get("/api/referrals/me", headers=bearer(key))
-        assert r.status_code == 200 and r.json() == {"enabled": False}
+        assert r.status_code == 200 and r.json() == {"enabled": False, "units": [], "waiting": 0}
 
 
 async def test_me_shows_link_and_units(env):
@@ -154,14 +154,45 @@ async def test_quote_endpoint_friend_and_unit(env):
         rb = await c.get("/api/referrals/quote?tier=lite&length=week&currency=EUR", headers=bearer(bob_key))
         assert rb.status_code == 200
         qb = rb.json()
-        assert (qb["kind"], qb["pct"], qb["pct_applied"], qb["list_usd"], qb["usd"], qb["off_usd"], qb["unit_id"]) == \
-            ("friend", 10, 10, 8.0, 7.2, 0.8, None)
+        assert (qb["kind"], qb["pct"], qb["pct_applied"], qb["list_usd"], qb["usd"], qb["off_usd"]) == \
+            ("friend", 10, 10, 8.0, 7.2, 0.8)
+        assert "unit_id" not in qb   # internal: the buyer has no use for it (final review #12)
         assert qb["currency"] == "EUR" and qb["list_amount"] > qb["amount"] > 0
 
         ra = await c.get("/api/referrals/quote?tier=lite&length=week", headers=bearer(alice_key))
         assert ra.status_code == 200 and ra.json() is None   # no referrer, no unit: nothing to quote
 
-        u = add_unit(conn, ids["alice"])
+        add_unit(conn, ids["alice"])
         ru = await c.get("/api/referrals/quote?tier=lite&length=week", headers=bearer(alice_key))
         qu = ru.json()
-        assert qu["kind"] == "unit" and qu["unit_id"] == u
+        assert qu["kind"] == "unit" and "unit_id" not in qu
+
+
+# ---------- final review fix wave ----------
+
+async def test_quote_endpoint_with_no_rate_falls_back_to_usd(env):
+    """A currency of this gateway with no rate row yet: priced in USD, never a 500 (final review #12)."""
+    gw, conn, cfg, ids, alice_key = env
+    bob_key = dbm.rotate_key(conn, ids["bob"])
+    conn.execute("DELETE FROM fx_rates")
+    async with client(gw) as c:
+        r = await c.get("/api/referrals/quote?tier=lite&length=week&currency=EUR", headers=bearer(bob_key))
+    assert r.status_code == 200 and r.json()["currency"] == "USD" and r.json()["amount"] < r.json()["list_amount"]
+
+
+async def test_quotes_batch_endpoint(env):
+    """Every priced tier and length at once, for the price list: bob's friend discount on each, nothing for a user
+    with no discount, and the same numbers as the single quote endpoint."""
+    gw, conn, cfg, ids, alice_key = env
+    bob_key = dbm.rotate_key(conn, ids["bob"])
+    async with client(gw) as c:
+        rb = (await c.get("/api/referrals/quotes?currency=EUR", headers=bearer(bob_key))).json()
+        one = (await c.get("/api/referrals/quote?tier=lite&length=week&currency=EUR", headers=bearer(bob_key))).json()
+        ra = (await c.get("/api/referrals/quotes?currency=EUR", headers=bearer(alice_key))).json()
+    priced = {(t, n) for t in cfg.tickets.tiers for n in ("day", "week", "month")
+              if conn.execute("SELECT 1 FROM ticket_prices WHERE tier=? AND length=?", (t, n)).fetchone()}
+    assert {(q["tier"], q["length"]) for q in rb["quotes"]} == priced
+    assert all(q["kind"] == "friend" and q["currency"] == "EUR" and "unit_id" not in q for q in rb["quotes"])
+    lite_week = next(q for q in rb["quotes"] if (q["tier"], q["length"]) == ("lite", "week"))
+    assert {k: v for k, v in lite_week.items() if k not in ("tier", "length")} == one
+    assert ra == {"quotes": []}

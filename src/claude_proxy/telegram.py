@@ -124,7 +124,7 @@ TEXTS = {
         "choose_tier": "کدام بسته؟", "choose_length": "چه مدت؟", "choose_start": "از کی شروع شود؟",
         "btn_after": "بعد از بسته فعلی", "btn_now": "همین حالا، کنار بسته فعلی",
         "len_day": "یک روز", "len_week": "یک هفته", "len_month": "یک ماه",
-        "summary": "{label}، {length}\nمبلغ: {amount}\nشروع: {start}\n\nبا پرداخت، شرایط استفاده را می‌پذیرید:\n{terms}",
+        "summary": "{label}، {length}\n{ref}مبلغ: {amount}\nشروع: {start}\n\nبا پرداخت، شرایط استفاده را می‌پذیرید:\n{terms}",
         "btn_pay": "شرایط را می‌پذیرم، پرداخت",
         "pay_ready": "لینک پرداخت آماده است:", "btn_open_pay": "پرداخت با زرین‌پال",
         "open_order": "یک سفارش پرداخت‌نشده دارید: {label}، {length}، {amount}.",
@@ -141,6 +141,7 @@ TEXTS = {
         "invite_lede": "لینک‌تان را به اشتراک بگذارید: دوستی که از آن طریق ثبت‌نام کند {pct}٪ تخفیف در اولین بسته‌اش می‌گیرد.\n{link}",
         "invite_unit": "{pct}٪ تخفیف، انقضا {date}",
         "invite_waiting": "{n} در انتظار تأیید ادمین.",
+        "summary_ref": "قیمت: {list}\nتخفیف معرفی دوستان ({pct}٪): −{off}",
         "ask_feedback": "نظرتان را بنویسید:",
         "got_support": "پیامتان به پشتیبانی رسید؛ جواب همین‌جا می‌آید.",
         "got_feedback": "ممنون، نظرتان رسید.",
@@ -173,7 +174,7 @@ TEXTS = {
         "choose_tier": "Which pass?", "choose_length": "How long?", "choose_start": "When should it start?",
         "btn_after": "After the current one", "btn_now": "Now, beside the current one",
         "len_day": "A day", "len_week": "A week", "len_month": "A month",
-        "summary": "{label}, {length}\nAmount: {amount}\nStarts: {start}\n\nPaying means you accept the terms:\n{terms}",
+        "summary": "{label}, {length}\n{ref}Amount: {amount}\nStarts: {start}\n\nPaying means you accept the terms:\n{terms}",
         "btn_pay": "I agree, pay",
         "pay_ready": "Your payment link is ready:", "btn_open_pay": "Pay with ZarinPal",
         "open_order": "You have an unpaid order: {label}, {length}, {amount}.",
@@ -190,6 +191,7 @@ TEXTS = {
         "invite_lede": "Share your link: a friend who signs up through it gets {pct}% off their first pass.\n{link}",
         "invite_unit": "{pct}% off, expires {date}",
         "invite_waiting": "{n} waiting for the admin's approval.",
+        "summary_ref": "Price: {list}\nReferral discount ({pct}%): −{off}",
         "ask_feedback": "Write your feedback:",
         "got_support": "Your message reached support; the answer will come here.",
         "got_feedback": "Thanks, your feedback arrived.",
@@ -736,9 +738,21 @@ class Telegram:
         pend = pend | {"nonce": secrets.token_urlsafe(6)}
         self.set_state(chat, None, pend)
         site = self.site()
+        # The referral discount orders.create will take (final review #2): the same local_quote as the dashboard's
+        # order dialog, in Toman, so the summary's amount is what ZarinPal charges.
+        amount, ref = p["amount"], ""
+        try:
+            q = referrals.local_quote(self.conn, self.cfg, user["id"], pend["tier"], pend["length"], payments.CURRENCY, now)
+        except tickets.TicketError:
+            q = None
+        if q is not None and q["off_usd"] > 0 and q["currency"] == payments.CURRENCY:
+            num = (lambda n: tickets.fa_num(str(n))) if lang != "en" else str
+            amount = q["amount"]
+            ref = t(lang, "summary_ref", list=self.amount(lang, q["list_amount"]), pct=num(round(q["pct_applied"])),
+                    off=self.amount(lang, q["list_amount"] - q["amount"])) + "\n"
         await self.say(chat, "summary", [[self.btn(chat, "btn_pay", f"p:{pend['nonce']}")]],
-                       label=self.label(x["tier"], lang), length=self.length_name(lang, pend["length"]), amount=self.amount(lang, p["amount"]),
-                       start=tickets.terms_date(start, lang), terms=f"{site}/privacy#terms")
+                       label=self.label(x["tier"], lang), length=self.length_name(lang, pend["length"]), amount=self.amount(lang, amount),
+                       ref=ref, start=tickets.terms_date(start, lang), terms=f"{site}/privacy#terms")
 
     async def pay(self, chat: dict, nonce: str) -> bool:
         pend = self.pending(chat)
@@ -840,10 +854,10 @@ class Telegram:
             return await self.say(chat, "not_linked")
         lang = chat["lang"]
         status = referrals.my_status(self.conn, self.cfg, user["id"], time.time())
-        if not status["enabled"]:
-            return await self.say(chat, "invite_off")
         num = (lambda n: tickets.fa_num(str(n))) if lang != "en" else str
-        lines = [t(lang, "invite_lede", pct=num(round(status["friend_pct"])), link=status["link"])]
+        # Off: no link, but saved units stay usable and waiting rewards can still be approved (final review #8).
+        lines = [t(lang, "invite_lede", pct=num(round(status["friend_pct"])), link=status["link"])] if status["enabled"] \
+            else [t(lang, "invite_off")]
         for u in status["units"]:
             lines.append(t(lang, "invite_unit", pct=num(round(u["pct"])), date=tickets.terms_date(u["expires_at"], lang)))
         if status["waiting"]:

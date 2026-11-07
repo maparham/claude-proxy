@@ -1357,26 +1357,36 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/referrals/quote")
     async def referrals_quote_api(request: Request, tier: str = "", length: str = "", currency: str | None = None):
         """What a new order of this tier and length would get from referrals.quote(), priced like the price list (the
-        same round_local), in `currency` when it is one of this gateway's, else the display currency: the order
-        dialog's struck-through original price, discount and final price. Changes nothing but expire (quote()'s own):
-        no unit is held, no order recorded."""
+        same round_local), in `currency` when it is one of this gateway's, else the display currency, falling back to
+        USD without a rate (referrals.local_quote): the order dialog's struck-through original price, discount and
+        final price, and its Pay button's amount in Toman. Changes nothing but expire (quote()'s own): no unit is
+        held, no order recorded."""
         user = principal(request)
         need_tickets()
-        now = time.time()
         try:
-            usd = tickets.price_now(conn, tier, length, now)["usd"]
+            return referrals.local_quote(conn, cfg, user["id"], tier, length,
+                                         currency if currency in tickets.currencies(cfg) else display_currency(), time.time())
         except tickets.TicketError as e:
             fail(400, str(e))
-        q = referrals.quote(conn, cfg, user["id"], tier, length, usd, now)
-        if q is None:
-            return None
-        cur = currency if currency in tickets.currencies(cfg) else display_currency()
-        rate = tickets.current_rate(conn, cur)
-        if rate is None:
-            cur, rate = "USD", tickets.current_rate(conn, "USD")
-        step, vat = tickets.currencies(cfg)[cur], tickets.vat_percent(cfg)
-        return {**q, "currency": cur, "amount": tickets.round_local(q["usd"], rate["rate"], step, vat),
-                "list_amount": tickets.round_local(q["list_usd"], rate["rate"], step, vat)}
+
+    @app.get("/api/referrals/quotes")
+    async def referrals_quotes_api(request: Request, currency: str | None = None):
+        """The batch form for the price list (final review #3): local_quote for every tier and length with a price,
+        in one call per render. `quotes` is empty when no discount applies to this user (none would, on any pass)."""
+        user = principal(request)
+        need_tickets()
+        now, cur = time.time(), currency if currency in tickets.currencies(cfg) else display_currency()
+        out = []
+        for tier in cfg.tickets.tiers:
+            for length in LENGTHS:
+                try:
+                    q = referrals.local_quote(conn, cfg, user["id"], tier, length, cur, now)
+                except tickets.TicketError:   # no price: not on sale, the price list leaves it out too
+                    continue
+                if q is None:   # no discount for this user at all: the same answer for every pass
+                    return {"quotes": []}
+                out.append({"tier": tier, "length": length, **q})
+        return {"quotes": out}
 
     def ticket_state(t: dict, now: float) -> str:
         if t["cancelled_at"] is not None:

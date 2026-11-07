@@ -704,3 +704,61 @@ def test_cancel_unit_rechecks_state_at_update_not_just_at_select(env):
     assert e.value.status == 409
     assert unit_state(conn, u) == "saved"   # the whole transaction - the simulated race included - rolled back
     assert "referral_unit_cancelled" not in audit_actions(conn)
+
+
+# ---------- final review fix wave ----------
+
+@pytest.mark.parametrize("key,value", [
+    ("friend_pct", True), ("friend_pct", "10"), ("friend_pct", None), ("friend_pct", float("nan")),
+    ("friend_pct", float("inf")), ("friend_pct", -1), ("friend_pct", 90.5),
+    ("unit_pct", False), ("unit_pct", [10]),
+    ("max_held", 2.5), ("max_held", True), ("max_held", -1), ("max_held", 1001), ("max_per_month", "5"),
+    ("unit_days", 0), ("unit_days", 3651), ("unit_days", True),
+    ("account_cost_usd", float("nan")), ("account_cost_usd", float("inf")), ("account_cost_usd", 0),
+    ("account_cost_usd", True), ("account_cost_usd", "100"),
+    ("fee_pct", float("nan")), ("fee_pct", float("-inf")), ("fee_pct", 20.01), ("fee_pct", -0.1), ("fee_pct", True),
+    ("enabled", 1), ("enabled", "true"), ("approval", 1), ("nope", 1),
+])
+def test_validate_refuses_bad_inputs_with_400(env, key, value):
+    """Bools, non-finite numbers, wrong types and out-of-range values are a 400 ReferralError, never a 500 (and
+    nothing is stored: a NaN account cost would silently switch the cost floor off)."""
+    conn, cfg, ids = env
+    before = referrals.settings(conn)
+    with pytest.raises(referrals.ReferralError) as e:
+        referrals.set_settings(conn, ids["admin"], {key: value})
+    assert e.value.status == 400
+    assert referrals.settings(conn) == before
+
+
+@pytest.mark.parametrize("key,value", [
+    ("friend_pct", 0), ("friend_pct", 90), ("unit_pct", 12.5), ("max_held", 0), ("max_per_month", 1000),
+    ("unit_days", 1), ("unit_days", 3650), ("account_cost_usd", 0.01), ("fee_pct", 0), ("fee_pct", 20),
+])
+def test_validate_accepts_the_range_ends(env, key, value):
+    conn, cfg, ids = env
+    assert getattr(referrals.set_settings(conn, ids["admin"], {key: value}), key) == value
+
+
+def test_my_status_off_still_lists_saved_and_held_units(env):
+    """Saved units stay usable with referrals off (design: Settings), so the card and /invite still list them, with
+    no link: only the link and the friend discount go away."""
+    conn, cfg, ids = env
+    add_unit(conn, ids["alice"], pct=15.0)
+    s = referrals.my_status(conn, cfg, ids["alice"], NOW)
+    assert s["enabled"] is False and "link" not in s
+    assert [(u["pct"], u["state"]) for u in s["units"]] == [(15.0, "saved")] and s["waiting"] == 0
+    assert conn.execute("SELECT ref_code FROM users WHERE id=?", (ids["alice"],)).fetchone()[0] is None   # no code made
+
+
+def test_local_quote_prices_the_discount_in_a_currency(env):
+    """local_quote: quote() priced like the price list in one currency (VAT in), with no unit_id, falling back to
+    USD for a currency with no rate."""
+    conn, cfg, ids = env
+    add_unit(conn, ids["alice"])
+    usd = tickets.price_now(conn, "standard", "week", NOW)["usd"]
+    q = referrals.local_quote(conn, cfg, ids["alice"], "standard", "week", "USD", NOW)
+    assert "unit_id" not in q and q["kind"] == "unit" and q["currency"] == "USD"
+    assert q["list_amount"] == tickets.round_local(usd, 1, tickets.currencies(cfg)["USD"], 10)
+    assert q["amount"] == tickets.round_local(q["usd"], 1, tickets.currencies(cfg)["USD"], 10) < q["list_amount"]
+    assert referrals.local_quote(conn, cfg, ids["alice"], "standard", "week", "XYZ", NOW)["currency"] == "USD"
+    assert referrals.local_quote(conn, cfg, ids["admin"], "standard", "week", "USD", NOW) is None

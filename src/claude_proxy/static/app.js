@@ -882,6 +882,36 @@ function shareOfPlan(tier, len) {
   }
   return t("home.share_of", { pct: nf0.format(tier.compare_pct), what, period: t(`home.usage_${len}`) });
 }
+// One price list cell: the price, and under a longer length what that is a day, so the longer lengths' discount
+// shows. `q`: the buyer's referral quote for this pass in `cur` (/api/referrals/quotes), when one applies: the price
+// before any discount struck through, then the final one, with a note naming the sale and the referral discount.
+function priceCell(l, cur, q) {
+  const now = Date.now() / 1000 + S.tkSkew;
+  // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
+  const live = !!l.discount_ends_at && l.discount_ends_at > now;
+  const sale = live || !l.discount_ends_at ? l.amount : l.list_amount;
+  const ref = !!q && q.off_usd > 0 && q.currency === cur;
+  const a = ref ? q.amount : sale;
+  const struck = live ? l.list_amount : ref ? sale : null;
+  const soldOut = l.sold_out && l.sold_out_later !== false;
+  return `${struck != null ? `<s class="muted">${esc(money(struck, cur))}</s> ` : ""}<b>${esc(money(a, cur))}</b>${soldOut || l.unavailable ? ` <span class="badge">${t(l.unavailable ? "price.unavailable" : "price.sold_out")}</span>` : ""}${ref ? `<div class="muted">${refNote(q, live ? l : null)}</div>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, cur)) })}</div>` : ""}${live ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`;
+}
+// "10% referral discount", or during a sale (`saleL`: the price list's length, its sale live) "20% sale + 10% referral discount".
+function refNote(q, saleL) {
+  const pct = fmtPct(Math.round(q.pct_applied));
+  return saleL && saleL.list_usd > 0 ? t("ord.sale_ref_discount", { sale: fmtPct(Math.round((1 - saleL.usd / saleL.list_usd) * 100)), pct }) : t("ord.ref_discount", { pct });
+}
+// The buyer's referral discount on every row of the price list (final review #3), asked for once per render.
+async function applyRefPrices(pl, p) {
+  let r;
+  try { r = await api(`/api/referrals/quotes?currency=${encodeURIComponent(p.currency)}`); } catch { return; }
+  if (!r || !document.contains(pl)) return;
+  for (const q of r.quotes || []) {
+    const tier = p.tiers.find((x) => x.tier === q.tier), l = tier && tier.lengths[q.length];
+    const cell = l && pl.querySelector(`.tier-row[data-order="${CSS.escape(`${q.tier}:${q.length}`)}"] .tier-row-price`);
+    if (cell) cell.innerHTML = priceCell(l, p.currency, q);
+  }
+}
 // `renew`: in the Renew dialog, the line saying when the next ticket starts; no card around it there, and Continue
 // sits beside Cancel in the dialog's action row. A length toggle over one tier list per length; a row is a radio.
 function priceListCard(tk, order, renew) {
@@ -889,9 +919,6 @@ function priceListCard(tk, order, renew) {
   const pick = takePick();
   const picked = pickedLine(p, pick);
   const open = !!order && (order.status === "new" || order.status === "contacted");   // one open order at a time
-  const now = Date.now() / 1000 + S.tkSkew;
-  // A discount that ended since the server answered shows the regular price; the countdown re-renders at its end.
-  const live = (l) => l.discount_ends_at && l.discount_ends_at > now;
   // Only the lengths some tier sells get a toggle; shown first is the home page's pick, else the first offered.
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]].filter(([k]) => p.tiers.some((x) => x.lengths[k]));
   const len0 = pick && L.some(([k]) => k === pick.length) ? pick.length : L.length ? L[0][0] : "";
@@ -900,9 +927,7 @@ function priceListCard(tk, order, renew) {
   const canOrder = (tier, k) => !!tier.lengths[k] && !soldOut(tier.lengths[k]) && !tier.lengths[k].unavailable;
   // What a ticket buys against its compare plan (shareOfPlan); hidden without a compare_pct.
   const planShare = (tier, k) => tier.compare_pct != null ? `<span class="muted">${shareOfPlan(tier, k)}</span>` : "";
-  // The price, and under a longer length what that is a day, so the longer lengths' discount shows.
-  const price = (l) => { const a = live(l) || !l.discount_ends_at ? l.amount : l.list_amount;
-    return `${live(l) ? `<s class="muted">${esc(money(l.list_amount, p.currency))}</s> ` : ""}<b>${esc(money(a, p.currency))}</b>${soldOut(l) || l.unavailable ? ` <span class="badge">${t(l.unavailable ? "price.unavailable" : "price.sold_out")}</span>` : ""}${l.days > 1 ? `<div class="muted">${t("price.per_day", { amount: esc(money(a / l.days, p.currency)) })}</div>` : ""}${live(l) ? `<div class="muted countdown" data-ends="${l.discount_ends_at}"></div>` : ""}`; };
+  const price = (l) => priceCell(l, p.currency);
   // The tier of the running pass is tagged, and checked when there is no pick.
   const cur = tk.current ? tk.current.tier : null;
   // The checked row: the pick's tier while it can be ordered, else the running pass's, else the first tier on sale.
@@ -927,12 +952,13 @@ function priceListCard(tk, order, renew) {
 // `ref`: referrals.my_status's own shape ({enabled:false} or {enabled, link, friend_pct, units, waiting}), or null
 // while referrals are off or the call failed - either way, nothing shows (the same as every other buyer-only card).
 function inviteCard(ref) {
-  if (!ref || !ref.enabled) return "";
-  const units = ref.units || [];
+  const units = (ref && ref.units) || [];
+  // Off: no link, but saved units stay usable and waiting rewards can still be approved (final review #8).
+  if (!ref || (!ref.enabled && !units.length && !ref.waiting)) return "";
   const unitRow = (u) => `<div class="row-actions" style="margin-top:8px"><span>${t("ref.unit_row", { pct: fmtPct(u.pct), date: fmtDate(u.expires_at) })}${u.state === "held" ? ` <span class="muted">(${t("inv.held")})</span>` : ""}</span></div>`;
   return `<div class="card" style="margin-top:16px"><h3>${t("inv.title")}</h3>
-    <p class="sub">${t("inv.lede", { pct: fmtPct(ref.friend_pct) })}</p>
-    <div class="copy-row"><code class="key" dir="ltr">${esc(ref.link)}</code><button class="btn small" data-copy="${esc(ref.link)}">${t("key.copy")}</button></div>
+    ${ref.enabled ? `<p class="sub">${t("inv.lede", { pct: fmtPct(ref.friend_pct) })}</p>
+    <div class="copy-row"><code class="key" dir="ltr">${esc(ref.link)}</code><button class="btn small" data-copy="${esc(ref.link)}">${t("key.copy")}</button></div>` : `<p class="sub">${t("inv.off")}</p>`}
     ${units.length ? units.map(unitRow).join("") : `<p class="muted" style="margin-top:8px">${t("inv.no_units")}</p>`}
     ${ref.waiting ? `<p class="sub">${t("inv.waiting", { n: fmtNum(ref.waiting) })}</p>` : ""}
   </div>`;
@@ -1037,20 +1063,31 @@ function orderButtons(manual, payBtn) {
 }
 // The referral discount (referrals design, task 6): asked for after the dialog opens, so an order without a user
 // (never reaches here) or without a discount never shows anything extra. Changes nothing server-side (quote-only).
-async function applyRefQuote(d, p, tier, len) {
-  let q;
-  try { q = await api(`/api/referrals/quote?tier=${encodeURIComponent(tier.tier)}&length=${encodeURIComponent(len)}&currency=${encodeURIComponent(p.currency)}`); }
+// The price shows the regular price struck (the sale's too, while one runs), and the Pay button the Toman amount
+// ZarinPal will charge, from a second quote in the pay currency when it differs (final review #1, #7).
+async function applyRefQuote(d, p, tier, len, pay, payL) {
+  const quote = (c) => api(`/api/referrals/quote?tier=${encodeURIComponent(tier.tier)}&length=${encodeURIComponent(len)}&currency=${encodeURIComponent(c)}`);
+  const other = !!pay && !!payL && pay.currency !== p.currency;
+  let q, pq;
+  try { [q, pq] = await Promise.all([quote(p.currency), other ? quote(pay.currency) : null]); }
   catch { return; }   // a signed-out or failed call: the plain price already shown stands
   if (!q || !(q.off_usd > 0) || !document.contains(d)) return;
+  const l = tier.lengths[len];
+  const sale = !!l.discount_ends_at && l.discount_ends_at > Date.now() / 1000 + S.tkSkew && l.list_usd > l.usd;
+  const regular = sale ? (q.currency === "USD" ? l.list_usd_total : l.list_amount) : q.list_amount;
   const box = $(".order-price", d);
-  if (!box) return;
-  box.innerHTML = `<s class="muted">${esc(money(q.list_amount, q.currency))}</s> <b>${esc(money(q.amount, q.currency))}</b>
-    <div class="muted">${t("ord.ref_discount", { pct: fmtPct(q.pct_applied) })}</div>`;
+  if (box) box.innerHTML = `<s class="muted">${esc(money(regular, q.currency))}</s> <b>${esc(money(q.amount, q.currency))}</b>
+    <div class="muted">${refNote(q, sale ? l : null)}</div>`;
+  const pb = $("#order-pay", d), payQ = other ? pq : q;
+  if (pb && payQ && payQ.off_usd > 0 && payQ.currency === pay.currency) {
+    pb.dataset.label = t("pay.button", { amount: esc(money(payQ.amount, payQ.currency)) });
+    if (!pb.disabled) pb.innerHTML = pb.dataset.label;
+  }
 }
 function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   const payL = pay && pay.prices?.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
   const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay, manual, start));
-  applyRefQuote(d, p, tier, len);
+  applyRefQuote(d, p, tier, len, pay, payL);
   const f = $("#f-order", d);
   const now = () => !!start && f.start.value === "now";
   // The terms follow the choice: a ticket starting now splits across the weeks from now.
@@ -1078,7 +1115,7 @@ function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
     try {
       const r = await api("/api/orders/pay", { method: "POST", body: { tier: tier.tier, length: len, terms_version: termsVersion, lang: LANG, start_now: now(), ...(f.email ? { email: f.email.value } : {}) } });
       goPay(r.url);
-    } catch (err) { pb.disabled = false; pb.textContent = payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
+    } catch (err) { pb.disabled = false; pb.innerHTML = pb.dataset.label || payLabel(payL, pay); $("#order-err", d).textContent = err.message; }
   };
 }
 // A timeline bar's label shows only when it fits inside the bar, checked again as the timeline's width changes: the
@@ -1144,6 +1181,7 @@ function wireOrdering(root, tk, order) {
   const pl = root.querySelector(".price-list"), go = pl && pl.querySelector("#order-go");
   const showLen = (k) => pl.querySelectorAll("[data-len]").forEach((el) => (el.tagName === "BUTTON" ? el.setAttribute("aria-pressed", String(el.dataset.len === k)) : (el.hidden = el.dataset.len !== k)));
   if (pl) {
+    applyRefPrices(pl, tk.prices);
     pl.querySelectorAll(".seg [data-len]").forEach((b) => (b.onclick = () => showLen(b.dataset.len)));
     go.onclick = () => {
       const list = pl.querySelector(".tier-list:not([hidden])"), r = list && list.querySelector("input:checked");
@@ -1416,7 +1454,10 @@ function grantDialog(users, pre = null) {
       preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
-    const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${t("tk.discount")})` : `<b>${fmtPrice(p.usd)}</b>`;
+    // From an order with a referral discount: the regular price struck, the final one, and the referral's share of it.
+    const refOff = p.ref_off_usd > 0 ? t("tk.ref_off", { amount: fmtPrice(p.ref_off_usd), pct: fmtPct(Math.round(p.ref_pct_applied)) }) : "";
+    const notes = [p.discount_id ? t("tk.discount") : "", refOff].filter(Boolean).join(t("app.list_sep"));
+    const price = notes ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${notes})` : `<b>${fmtPrice(p.usd)}</b>`;
     const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : p.start_now ? t("tk.starts_beside") : t("tk.starts_now");
     const fit = p.available ? `<li class="good">${t("tk.available")}</li>` : `<li class="critical">${bdi(p.reason)}</li>`;
     const soldOut = p.sold_out_now && p.available ? `<li class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</li>` : "";

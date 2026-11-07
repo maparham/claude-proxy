@@ -46,6 +46,21 @@ _PERCENT_0_90 = ("friend_pct", "unit_pct")
 _COUNT_0_1000 = ("max_held", "max_per_month")
 
 
+def _number(key: str, value) -> float:
+    """A JSON number, finite: bools (an int subclass in Python), strings, None, NaN and infinities are refused with
+    400, never a 500 from float() or a NaN that slips through every range check (a NaN account cost would switch the
+    cost floor off, final review #4)."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value):
+        raise ReferralError(400, f"{key} must be a number.")
+    return float(value)
+
+
+def _whole(key: str, value, lo: int, hi: int) -> int:
+    if not isinstance(value, int) or isinstance(value, bool) or not (lo <= value <= hi):
+        raise ReferralError(400, f"{key} must be a whole number from {lo} to {hi}.")
+    return value
+
+
 def _validate(key: str, value):
     if key not in _FIELDS:
         raise ReferralError(400, f"Unknown referral setting {key!r}.")
@@ -54,29 +69,25 @@ def _validate(key: str, value):
             raise ReferralError(400, "enabled must be true or false.")
         return value
     if key in _PERCENT_0_90:
-        value = float(value)
+        value = _number(key, value)
         if not (0 <= value <= 90):
             raise ReferralError(400, f"{key} must be from 0 to 90.")
         return value
     if key in _COUNT_0_1000:
-        if not isinstance(value, int) or isinstance(value, bool) or not (0 <= value <= 1000):
-            raise ReferralError(400, f"{key} must be a whole number from 0 to 1000.")
-        return value
+        return _whole(key, value, 0, 1000)
     if key == "unit_days":
-        if not isinstance(value, int) or isinstance(value, bool) or not (1 <= value <= 3650):
-            raise ReferralError(400, "unit_days must be a whole number from 1 to 3650.")
-        return value
+        return _whole(key, value, 1, 3650)
     if key == "approval":
         if value not in ("auto", "manual"):
             raise ReferralError(400, "approval must be 'auto' or 'manual'.")
         return value
     if key == "account_cost_usd":
-        value = float(value)
+        value = _number(key, value)
         if value <= 0:
             raise ReferralError(400, "account_cost_usd must be greater than 0.")
         return value
     if key == "fee_pct":
-        value = float(value)
+        value = _number(key, value)
         if not (0 <= value <= 20):
             raise ReferralError(400, "fee_pct must be from 0 to 20.")
         return value
@@ -234,6 +245,25 @@ def quote(conn: sqlite3.Connection, cfg: Config, user_id: int, tier: str, length
     new_usd, pct_applied = apply_pct(conn, cfg, tier, length, usd, pct)
     return {"kind": kind, "pct": pct, "pct_applied": pct_applied, "usd": new_usd, "list_usd": usd,
             "off_usd": round(usd - new_usd, 2), "unit_id": unit_id}
+
+
+def local_quote(conn: sqlite3.Connection, cfg: Config, user_id: int, tier: str, length: str, currency: str,
+                now: int) -> dict | None:
+    """quote() on today's price (any sale taken off), priced like the price list in `currency` (round_local, VAT in):
+    what the order dialog, the price list and the bot's summary show, and what orders.create charges. A currency of
+    this gateway with no rate yet, or one it does not have, falls back to USD (always rated), never a 500. Raises
+    tickets.TicketError for a tier or length with no price. No unit_id: the buyer has no use for it."""
+    q = quote(conn, cfg, user_id, tier, length, tickets.price_now(conn, tier, length, now)["usd"], now)
+    if q is None:
+        return None
+    steps = tickets.currencies(cfg)
+    rate = tickets.current_rate(conn, currency) if currency in steps else None
+    if rate is None:
+        currency, rate = "USD", tickets.current_rate(conn, "USD")
+    vat = tickets.vat_percent(cfg)
+    q.pop("unit_id")
+    return {**q, "currency": currency, "amount": tickets.round_local(q["usd"], rate["rate"], steps[currency], vat),
+            "list_amount": tickets.round_local(q["list_usd"], rate["rate"], steps[currency], vat)}
 
 
 def hold(conn: sqlite3.Connection, order_id: int, q: dict | None, now: int) -> None:
@@ -449,20 +479,21 @@ def my_status(conn: sqlite3.Connection, cfg: Config, user_id: int, now: int) -> 
     """What the dashboard's "Invite friends" card and the Telegram bot's /invite show: the user's own link
     (cfg.listener.home_url if set, else dashboard_url, '/r/<code>'), the friend discount, their own saved and held
     units (pct, expiry, state - held meaning an open order of theirs is already using it), and how many of their
-    referrals still wait on the admin's manual approval. `{"enabled": False}` and no link at all once referrals are
-    off, so a card or bot reply has nothing to build from. Expires overdue units first, so one about to lapse is
-    never offered as still usable (controller ruling: my_status must call expire() first)."""
+    referrals still wait on the admin's manual approval. With referrals off there is no link and no friend
+    discount (no code is made), but the units and waiting count stay: saved units stay usable and waiting rewards
+    can still be approved (design: Settings; final review #8). Expires overdue units first, so one about to lapse
+    is never offered as still usable (controller ruling: my_status must call expire() first)."""
     expire(conn, now)
     s = settings(conn)
-    if not s.enabled:
-        return {"enabled": False}
-    code = code_for(conn, user_id)
-    base = (cfg.listener.home_url or cfg.listener.dashboard_url).rstrip("/")
     units = [dict(r) for r in conn.execute(
         "SELECT pct, expires_at, state FROM referral_units WHERE user_id=? AND state IN ('saved','held') "
         "ORDER BY earned_at, id", (user_id,)).fetchall()]
     waiting = conn.execute("SELECT COUNT(*) FROM referral_rewards WHERE referrer_id=? AND status='waiting'",
                           (user_id,)).fetchone()[0]
+    if not s.enabled:
+        return {"enabled": False, "units": units, "waiting": waiting}
+    code = code_for(conn, user_id)
+    base = (cfg.listener.home_url or cfg.listener.dashboard_url).rstrip("/")
     return {"enabled": True, "link": f"{base}/r/{code}", "friend_pct": s.friend_pct, "units": units, "waiting": waiting}
 
 

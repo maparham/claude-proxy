@@ -605,7 +605,7 @@ def test_an_open_toman_order_can_be_paid_online(tmp_path):
     assert "the admin will contact you about the next step." in out[1] and "pay for it here" not in out[1]
 
 
-PRICE_LIST_FNS = ["priceListCard", "pickedLine", "takePick", "tierName", "tierNameText"]
+PRICE_LIST_FNS = ["priceListCard", "priceCell", "refNote", "pickedLine", "takePick", "tierName", "tierNameText"]
 
 
 def _price_list(tmp_path, order=None, pick=None, sold_out_week=False, current=None):
@@ -888,3 +888,20 @@ def test_a_discount_ending_waits_for_the_order_dialog_to_close(tmp_path):
     assert r["whileOpen"] == 0 and r["text"] == "Offer ended"           # the dialog stays open
     assert r["price"] == "$8.00"                                         # at the regular price, which the server now charges
     assert r["afterClose"] == 1                                          # the regular price returns on the cards afterwards
+
+
+def test_a_price_cell_shows_the_referral_discount_and_keeps_a_sales_regular_price(tmp_path):
+    """Referrals final review #3/#7: with a quote the cell strikes the price before the referral and shows the
+    final one with a note; during a live sale the regular price stays struck and the note names both."""
+    import json
+    from tests.test_tickets_web import _app_fn
+    week = {"days": 7, "usd": 8, "list_usd": 10, "amount": 8, "list_amount": 10, "discount_ends_at": None, "sold_out": False}
+    q = {"off_usd": 0.8, "pct_applied": 10, "currency": "EUR", "amount": 7.2, "list_amount": 8}
+    fns = ["priceCell", "refNote", "fmtPct"]
+    stubs = APP_STUBS + 'var PCT = "%";'
+    plain = _app_fn(tmp_path, fns, stubs + f"var out = priceCell({json.dumps(week)}, 'EUR', {json.dumps(q)});")
+    assert '<s class="muted">EUR 8</s> <b>EUR 7.2</b>' in plain and "10% referral discount" in plain
+    sale = _app_fn(tmp_path, fns, stubs + f"var out = priceCell({json.dumps(week | {'discount_ends_at': 99})}, 'EUR', {json.dumps(q)});")
+    assert '<s class="muted">EUR 10</s> <b>EUR 7.2</b>' in sale and "20% offer discount + 10% referral discount" in sale
+    none = _app_fn(tmp_path, fns, stubs + f"var out = priceCell({json.dumps(week)}, 'EUR', null);")
+    assert "<s" not in none and "<b>EUR 8</b>" in none and "referral" not in none

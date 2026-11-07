@@ -885,3 +885,52 @@ async def test_prices_read_a_whole_number_of_plans_as_plans(tg, monkeypatch, lan
         await post(c, cb(ALICE, "prices"))
     text = tg.fake.texts(ALICE)[-1]
     assert head in text and "VAT" not in text and "⛔" not in text
+
+
+# ---------- Referrals, final review fix wave: the discount in the summary, /invite with referrals off ----------
+
+def _unit(conn, uid, pct=10.0):
+    now = int(time.time())
+    conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at) VALUES(?,?,?,?,'saved',?)",
+                 (uid, pct, now - 60, now + 30 * 86400, now - 60))
+    return now + 30 * 86400
+
+
+@pytest.mark.parametrize("lang", ["fa", "en"])
+async def test_summary_shows_the_referral_discount(tg, lang):
+    """The summary says what orders.create will charge: the price, the referral discount and the final amount,
+    all in Toman, the same numbers as the dashboard's quote."""
+    link(tg.conn, ALICE, tg.ids["alice"], lang=lang)
+    _unit(tg.conn, tg.ids["alice"])
+    q = referrals.local_quote(tg.conn, tg.cfg, tg.ids["alice"], "lite", "week", payments.CURRENCY, time.time())
+    assert q is not None and q["amount"] < q["list_amount"]
+    async with app(tg) as c:
+        (pay,) = await buy_week(c, tg)
+        text = tg.fake.texts(ALICE)[-1]
+        amount = (lambda n: orders.fa_amount(n, payments.CURRENCY)) if lang == "fa" else payments._toman
+        num = (lambda n: tickets.fa_num(str(n))) if lang == "fa" else str
+        assert telegram.t(lang, "summary_ref", list=amount(q["list_amount"]), pct=num(round(q["pct_applied"])),
+                          off=amount(q["list_amount"] - q["amount"])) in text
+        assert amount(q["amount"]) in text.split("\n")[3]   # the Amount line, after the two discount lines
+        await post(c, cb(ALICE, pay))
+    o = tg.conn.execute("SELECT * FROM orders ORDER BY id DESC LIMIT 1").fetchone()
+    assert o["quoted_amount"] == q["amount"]   # charged what the summary said
+
+
+async def test_summary_without_a_discount_has_no_discount_lines(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:
+        await buy_week(c, tg)
+    text = tg.fake.texts(ALICE)[-1]
+    assert text.split("\n")[1].startswith("مبلغ:")
+
+
+async def test_invite_off_still_lists_saved_units(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    expires = _unit(tg.conn, tg.ids["alice"], 15.0)
+    async with app(tg) as c:   # referrals off: no link, but the saved unit is still usable
+        await post(c, msg(ALICE, "/invite"))
+    text = tg.fake.texts(ALICE)[-1]
+    assert text.startswith(telegram.t("fa", "invite_off"))
+    assert telegram.t("fa", "invite_unit", pct="۱۵", date=tickets.terms_date(expires, "fa")) in text
+    assert "/r/" not in text

@@ -35,8 +35,9 @@ ever pushes a pass below what it costs the gateway on the Anthropic account.
 
 - Each user has a short code; the link is `https://rahkar.pro/r/<code>` (home host). The bot shows the same web link:
   the bot cannot create accounts (it only links a chat to an existing one), so a friend always signs up on the web.
-- `/r/<code>` stores the code and also passes it through the Clerk sign-up redirect in the URL, so it survives even
-  where the cookie does not.
+- The code travels by cookie only: `/r/<code>` stores it, and the Clerk sign-up reads it back from that cookie. There is
+  no URL fallback through the Clerk redirect (ruled at the final review): a visitor whose browser drops the cookie
+  signs up with no referrer.
 - Opening the link stores the code in a cookie for 30 days, then sends the visitor to the home page. The first code
   wins; a later link does not replace it.
 - The referrer is fixed **when the account is created** through Clerk sign-up, and never changes after. Accounts the
@@ -152,6 +153,9 @@ how much off), expired, cancelled.
 - Dashboard: a "Invite friends" card with the link, a copy button, the friend's discount, units saved (with expiry
   dates), and rewards waiting for the admin's approval. Persian and English, following the existing i18n.
 - Order dialog and price list: when a discount applies, show the original price, the discount, and the final price.
+  The signed-in user's price list asks for every pass's quote at once (`/api/referrals/quotes`); the order dialog's
+  Pay button shows the discounted Toman amount ZarinPal will charge. During a sale the regular price stays struck
+  through and the note names both discounts. The Telegram bot's purchase summary shows the same three lines.
 - Telegram bot: a command or button that shows the same link and units.
 - Emails: the buyer's order and receipt emails show the discount line.
 
