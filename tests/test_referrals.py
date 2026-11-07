@@ -645,3 +645,62 @@ def test_unit_floored_to_zero_paid_grant_still_used(env_on):
     tickets.set_share(conn, cfg, "lite", 40, ids["admin"])
     r = payments._fulfil(conn, cfg, add_payment(conn, o), "201", None, NOW)
     assert r["status"] == "paid" and unit_state(conn, u) == "used"
+
+
+# ---------- Task 5, fix round 1: cancel_unit ----------
+
+def test_cancel_unit_saved(env):
+    conn, cfg, ids = env
+    u = add_unit(conn, ids["alice"])
+    referrals.cancel_unit(conn, ids["admin"], u, NOW)
+    assert unit_state(conn, u) == "cancelled"
+    assert audit_actions(conn)[-1] == "referral_unit_cancelled"
+
+
+def test_cancel_unit_not_saved_is_409_and_not_audited_again(env):
+    conn, cfg, ids = env
+    u = add_unit(conn, ids["alice"])
+    referrals.cancel_unit(conn, ids["admin"], u, NOW)   # cancelled once
+    with pytest.raises(referrals.ReferralError) as e:
+        referrals.cancel_unit(conn, ids["admin"], u, NOW)
+    assert e.value.status == 409
+    assert audit_actions(conn).count("referral_unit_cancelled") == 1   # the second attempt left no new row
+
+
+def test_cancel_unit_unknown_is_404(env):
+    conn, cfg, ids = env
+    with pytest.raises(referrals.ReferralError) as e:
+        referrals.cancel_unit(conn, ids["admin"], 99999, NOW)
+    assert e.value.status == 404
+
+
+class _RaceOnCancel:
+    """A thin proxy over a real connection: when cancel_unit's own cancelling UPDATE runs, first flips the unit's
+    state out from under it, standing in for hold() (orders.create) landing between cancel_unit's SELECT and its
+    UPDATE. sqlite3.Connection is an immutable C type (its methods can't be monkeypatched), and a *second* real
+    connection can no longer land a write in that gap at all once cancel_unit holds its own BEGIN IMMEDIATE - which
+    is the point of the fix - so this is the practical way left to exercise the UPDATE's rowcount check on its own."""
+
+    def __init__(self, real, unit_id):
+        self._real, self._unit_id = real, unit_id
+
+    def execute(self, sql, parameters=()):
+        if sql.startswith("UPDATE referral_units SET state='cancelled'"):
+            self._real.execute("UPDATE referral_units SET state='held' WHERE id=?", (self._unit_id,))
+        return self._real.execute(sql, parameters)
+
+    def __getattr__(self, name):
+        return getattr(self._real, name)
+
+
+def test_cancel_unit_rechecks_state_at_update_not_just_at_select(env):
+    """A unit taken by hold() between cancel_unit's own read and its UPDATE must not be cancelled: the UPDATE's
+    rowcount decides it, not the state the SELECT first saw (fix round 1: the earlier version ran unlocked and
+    never checked the UPDATE's rowcount, so it would have audited a cancel that changed nothing)."""
+    conn, cfg, ids = env
+    u = add_unit(conn, ids["alice"])
+    with pytest.raises(referrals.ReferralError) as e:
+        referrals.cancel_unit(_RaceOnCancel(conn, u), ids["admin"], u, NOW)
+    assert e.value.status == 409
+    assert unit_state(conn, u) == "saved"   # the whole transaction - the simulated race included - rolled back
+    assert "referral_unit_cancelled" not in audit_actions(conn)

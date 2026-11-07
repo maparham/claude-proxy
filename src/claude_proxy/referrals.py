@@ -449,14 +449,32 @@ def cancel_unit(conn: sqlite3.Connection, actor: int | None, unit_id: int, now: 
     """The admin cancels one of a user's saved units, from the Referrers section. Only a `saved` unit may be
     cancelled: a unit already held by an open order stays with that order (design: a unit held by an open order
     stays with it even if the admin cancels it meanwhile), refused with ReferralError(409) instead of taking it
-    away from a buyer who already saw that price."""
-    u = conn.execute("SELECT id, user_id, state FROM referral_units WHERE id=?", (unit_id,)).fetchone()
-    if u is None:
-        raise ReferralError(404, f"Referral unit #{unit_id} does not exist.")
-    if u["state"] != "saved":
-        raise ReferralError(409, f"Referral unit #{unit_id} is {u['state'].replace('_', ' ')}, not saved; it cannot be cancelled.")
-    conn.execute("UPDATE referral_units SET state='cancelled', updated_at=? WHERE id=? AND state='saved'", (now, unit_id))
-    db.audit(conn, actor, "referral_unit_cancelled", db._user_name(conn, u["user_id"]), {"unit_id": unit_id})
+    away from a buyer who already saw that price.
+
+    Locked (BEGIN IMMEDIATE, like _decide): the read and the write must not straddle hold() taking this very unit
+    for a new order in between (orders.create's own transaction). The UPDATE's own rowcount, not the state the
+    first SELECT saw, decides whether it actually cancelled a saved unit - closing that race rather than just
+    narrowing it (fix round 1)."""
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        u = conn.execute("SELECT id, user_id, state FROM referral_units WHERE id=?", (unit_id,)).fetchone()
+        if u is None:
+            raise ReferralError(404, f"Referral unit #{unit_id} does not exist.")
+        if u["state"] != "saved":
+            raise ReferralError(409, f"Referral unit #{unit_id} is {u['state'].replace('_', ' ')}, not saved; it cannot be cancelled.")
+        changed = conn.execute("UPDATE referral_units SET state='cancelled', updated_at=? WHERE id=? AND state='saved'",
+                               (now, unit_id)).rowcount
+        if changed != 1:   # taken by hold() between the SELECT above and this UPDATE
+            raise ReferralError(409, f"Referral unit #{unit_id} is no longer saved; it cannot be cancelled.")
+        db.audit(conn, actor, "referral_unit_cancelled", db._user_name(conn, u["user_id"]), {"unit_id": unit_id})
+        if own:
+            conn.execute("COMMIT")
+    except BaseException:
+        if own:
+            conn.execute("ROLLBACK")
+        raise
 
 
 def admin_view(conn: sqlite3.Connection, now: int) -> dict:

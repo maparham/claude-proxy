@@ -1828,15 +1828,18 @@ async function refCancelUnit(uid) {
 }
 async function renderReferrals(main) {
   const v = await api("/api/admin/referrals");
+  // Waiting for approval (design: Admin: the Referrals tab) shows only while approval is manual, or something is
+  // actually waiting (e.g. left over from when it was manual): never an always-empty pane under automatic approval.
+  const showWaiting = v.settings.approval === "manual" || v.waiting.length > 0;
   main.innerHTML = `<section class="view"><h2>${t("tab.referrals")}</h2>
     <p class="lede">${t("ref.lede")}</p>
     <div class="card" data-sub="settings" data-sub-label="${esc(t("sub.settings"))}"><h3>${t("sub.settings")}</h3>
       ${refSettingsForm(v.settings)}
     </div>
-    <div class="card table-wrap" data-sub="waiting" data-sub-label="${esc(t("sub.waiting"))}"><h3>${t("sub.waiting")}</h3><p class="sub">${t("ref.waiting_lede")}</p>
+    ${showWaiting ? `<div class="card table-wrap" data-sub="waiting" data-sub-label="${esc(t("sub.waiting"))}"><h3>${t("sub.waiting")}</h3><p class="sub">${t("ref.waiting_lede")}</p>
       <table class="data"><thead><tr><th>${t("ref.referrer_col")}</th><th>${t("ref.friend_col")}</th><th>${t("ref.pass_col")}</th><th class="r">${t("ref.price_col")}</th><th></th></tr></thead>
       <tbody>${v.waiting.map(refWaitingRow).join("") || `<tr><td colspan="5" class="muted">${t("ref.none_waiting")}</td></tr>`}</tbody></table>
-    </div>
+    </div>` : ""}
     <div class="card table-wrap" data-sub="referrers" data-sub-label="${esc(t("sub.referrers"))}"><h3>${t("sub.referrers")}</h3>
       <table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("ref.code_col")}</th><th class="r">${t("ref.signed_up_col")}</th><th class="r">${t("ref.bought_col")}</th><th>${t("ref.saved_col")}</th><th class="r">${t("ref.held_col")}</th><th class="r">${t("ref.used_col")}</th><th class="r">${t("ref.expired_col")}</th></tr></thead>
       <tbody>${v.referrers.map(refReferrerRow).join("") || `<tr><td colspan="8" class="muted">${t("ref.none_referrers")}</td></tr>`}</tbody></table>
