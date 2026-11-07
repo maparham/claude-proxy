@@ -113,18 +113,20 @@ function render() {
 }
 function tick() {
   if (reloaded) return;
-  let ended = null;
+  let ended = null, offer = false;
   document.querySelectorAll(".countdown").forEach((el) => {
     const ends = +el.dataset.ends;
     // data-key: a card back on sale at the 5-hour reset counts down with its own words; any countdown's end reloads
-    if (ends <= serverNow()) { el.textContent = el.dataset.key ? t(el.dataset.key, { text: countdown(ends) }) : t("price.offer_ended"); if (!reloadedFor(ends)) ended = ends; }
-    else el.textContent = t(el.dataset.key || "home.offer_ends_in", { text: countdown(ends) });
+    if (ends <= serverNow()) {
+      el.textContent = el.dataset.key ? t(el.dataset.key, { text: countdown(ends) }) : t("price.offer_ended");
+      if (!reloadedFor(ends)) { ended = ends; offer ||= !el.dataset.key; }
+    } else el.textContent = t(el.dataset.key || "home.offer_ends_in", { text: countdown(ends) });
   });
   if (ended == null) return;
   reloaded = true; markReloaded(ended);
-  // Not while someone is filling in an order: the reload would drop what they typed. The dialog shows the regular
-  // price instead, and the cards get theirs back when it closes.
-  if (orderDialog().open) { pendingEnd = ended; offerEnded(); return; }
+  // Not while someone is filling in an order: the reload would drop what they typed. When a discount ended, the
+  // dialog shows the regular price instead (a card back on sale changes nothing in it); the page reloads on close.
+  if (orderDialog().open) { pendingEnd = ended; if (offer) offerEnded(); return; }
   location.reload();   // the regular price returns by itself
 }
 // ---------- the order dialog ----------
