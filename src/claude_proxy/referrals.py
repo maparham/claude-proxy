@@ -443,6 +443,29 @@ def refuse(conn: sqlite3.Connection, actor: int | None, reward_id: int, now: int
     _decide(conn, reward_id, decide)
 
 
+# ---------- what the user sees: the invite card and /invite (task 6) ----------
+
+def my_status(conn: sqlite3.Connection, cfg: Config, user_id: int, now: int) -> dict:
+    """What the dashboard's "Invite friends" card and the Telegram bot's /invite show: the user's own link
+    (cfg.listener.home_url if set, else dashboard_url, '/r/<code>'), the friend discount, their own saved and held
+    units (pct, expiry, state - held meaning an open order of theirs is already using it), and how many of their
+    referrals still wait on the admin's manual approval. `{"enabled": False}` and no link at all once referrals are
+    off, so a card or bot reply has nothing to build from. Expires overdue units first, so one about to lapse is
+    never offered as still usable (controller ruling: my_status must call expire() first)."""
+    expire(conn, now)
+    s = settings(conn)
+    if not s.enabled:
+        return {"enabled": False}
+    code = code_for(conn, user_id)
+    base = (cfg.listener.home_url or cfg.listener.dashboard_url).rstrip("/")
+    units = [dict(r) for r in conn.execute(
+        "SELECT pct, expires_at, state FROM referral_units WHERE user_id=? AND state IN ('saved','held') "
+        "ORDER BY earned_at, id", (user_id,)).fetchall()]
+    waiting = conn.execute("SELECT COUNT(*) FROM referral_rewards WHERE referrer_id=? AND status='waiting'",
+                          (user_id,)).fetchone()[0]
+    return {"enabled": True, "link": f"{base}/r/{code}", "friend_pct": s.friend_pct, "units": units, "waiting": waiting}
+
+
 # ---------- the admin's own actions, and the Referrals tab's one call ----------
 
 def cancel_unit(conn: sqlite3.Connection, actor: int | None, unit_id: int, now: int) -> None:

@@ -7,7 +7,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 
-from claude_proxy import telegram
+from claude_proxy import referrals, telegram
 from claude_proxy.config import TelegramConfig
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
@@ -434,6 +434,31 @@ async def test_my_passes(tg):
         tickets.grant(tg.conn, tg.cfg, tg.ids["admin"], user, "lite", "week", "IRT", terms_version="v1")
         await post(c, cb(ALICE, "mine"))
     assert tg.fake.texts(ALICE)[-1].startswith("اقتصادی: تا ")
+
+
+# ---------- Referrals (design 2026-11-07), task 6: /invite ----------
+
+async def test_invite_unlinked_gets_the_not_linked_message(tg):
+    async with app(tg) as c:
+        await post(c, msg(ALICE, "/invite"))
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "not_linked")
+
+
+async def test_invite_linked_shows_the_link_and_units(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    referrals.set_settings(tg.conn, tg.ids["admin"], {"enabled": True})
+    code = referrals.code_for(tg.conn, tg.ids["alice"])
+    async with app(tg) as c:
+        await post(c, msg(ALICE, "/invite"))
+    text = tg.fake.texts(ALICE)[-1]
+    assert f"https://rahkar.pro/r/{code}" in text and "۱۰" in text   # the 10% friend discount, in Persian digits
+
+
+async def test_invite_off_tells_the_user(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    async with app(tg) as c:   # referrals never turned on for this gateway
+        await post(c, msg(ALICE, "/invite"))
+    assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "invite_off")
 
 
 # ---------- Task 7 review fix round 1 ----------

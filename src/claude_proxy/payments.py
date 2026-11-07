@@ -512,11 +512,13 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
         out.append((o["email"], f"پرداخت شما: {what_fa}",
                     f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n{_vat_line(cfg, p['amount'], 'fa')}\nبسته: {what_fa}، {span}.\n"
+                    f"{orders.ref_discount_line_fa(o, ticket)}"
                     f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'fa', o['length'], ticket['starts_at'])}"))
     elif ticket is not None:
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
                     f"Thank you. Your payment of {_toman(p['amount'])} went through.\n{_vat_line(cfg, p['amount'], 'en')}\nPass: {what}, {span}.\n"
+                    f"{orders.ref_discount_line_en(o, ticket)}"
                     f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'en', o['length'], ticket['starts_at'])}"))
     return out
 

@@ -1347,6 +1347,37 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         referrals.cancel_unit(conn, actor["id"], uid, time.time())
         return {"ok": True}
 
+    # ---------- referrals (design 2026-11-07): what the user sees (task 6) ----------
+
+    @app.get("/api/referrals/me")
+    async def referrals_me(request: Request):
+        user = principal(request)
+        return referrals.my_status(conn, cfg, user["id"], time.time())
+
+    @app.get("/api/referrals/quote")
+    async def referrals_quote_api(request: Request, tier: str = "", length: str = "", currency: str | None = None):
+        """What a new order of this tier and length would get from referrals.quote(), priced like the price list (the
+        same round_local), in `currency` when it is one of this gateway's, else the display currency: the order
+        dialog's struck-through original price, discount and final price. Changes nothing but expire (quote()'s own):
+        no unit is held, no order recorded."""
+        user = principal(request)
+        need_tickets()
+        now = time.time()
+        try:
+            usd = tickets.price_now(conn, tier, length, now)["usd"]
+        except tickets.TicketError as e:
+            fail(400, str(e))
+        q = referrals.quote(conn, cfg, user["id"], tier, length, usd, now)
+        if q is None:
+            return None
+        cur = currency if currency in tickets.currencies(cfg) else display_currency()
+        rate = tickets.current_rate(conn, cur)
+        if rate is None:
+            cur, rate = "USD", tickets.current_rate(conn, "USD")
+        step, vat = tickets.currencies(cfg)[cur], tickets.vat_percent(cfg)
+        return {**q, "currency": cur, "amount": tickets.round_local(q["usd"], rate["rate"], step, vat),
+                "list_amount": tickets.round_local(q["list_usd"], rate["rate"], step, vat)}
+
     def ticket_state(t: dict, now: float) -> str:
         if t["cancelled_at"] is not None:
             return "cancelled"

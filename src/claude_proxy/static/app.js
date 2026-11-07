@@ -576,8 +576,9 @@ function credentialPill(c) {
 
 async function renderOverview(main) {
   const buyer = !isAdmin() && S.tickets?.enabled;
-  const [ov, me, keys, tk, mo] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), buyer ? api("/api/me/tickets") : null,
-    buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null]);
+  const [ov, me, keys, tk, mo, ref] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), buyer ? api("/api/me/tickets") : null,
+    buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null,
+    isAdmin() ? null : api("/api/referrals/me").catch(() => null)]);
   const order = mo && mo.order;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
@@ -610,6 +611,7 @@ async function renderOverview(main) {
       ${isAdmin() ? `<p class="lede">${t("ov.lede_admin")}</p>` : ""}
       ${banners.join("")}
       ${tk ? myOrderCard(order, tk.pay) : ""}
+      ${isAdmin() ? "" : inviteCard(ref)}
       ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `${isAdmin() ? usageTiles(ov) : ""}
       <div class="grid${isAdmin() ? " cols-2" : ""}">
         ${isAdmin() ? `<div class="card"><h3>${t("ov.quota_title")}${tipI("quota")}</h3>
@@ -918,6 +920,22 @@ function priceListCard(tk, order, renew) {
     ${actions}${p.vat_percent ? `<p class="sub">${t("pay.vat", { pct: fmtNum(p.vat_percent) })}</p>` : ""}${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
 }
 
+// ---------- referrals (design 2026-11-07): the overview's "Invite friends" card ----------
+
+// `ref`: referrals.my_status's own shape ({enabled:false} or {enabled, link, friend_pct, units, waiting}), or null
+// while referrals are off or the call failed - either way, nothing shows (the same as every other buyer-only card).
+function inviteCard(ref) {
+  if (!ref || !ref.enabled) return "";
+  const units = ref.units || [];
+  const unitRow = (u) => `<div class="row-actions" style="margin-top:8px"><span>${t("ref.unit_row", { pct: fmtPct(u.pct), date: fmtDate(u.expires_at) })}${u.state === "held" ? ` <span class="muted">(${t("inv.held")})</span>` : ""}</span></div>`;
+  return `<div class="card" style="margin-top:16px"><h3>${t("inv.title")}</h3>
+    <p class="sub">${t("inv.lede", { pct: fmtPct(ref.friend_pct) })}</p>
+    <div class="copy-row"><code class="key" dir="ltr">${esc(ref.link)}</code><button class="btn small" data-copy="${esc(ref.link)}">${t("key.copy")}</button></div>
+    ${units.length ? units.map(unitRow).join("") : `<p class="muted" style="margin-top:8px">${t("inv.no_units")}</p>`}
+    ${ref.waiting ? `<p class="sub">${t("inv.waiting", { n: fmtNum(ref.waiting) })}</p>` : ""}
+  </div>`;
+}
+
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
 
 const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : esc(len));
@@ -1015,9 +1033,22 @@ function orderButtons(manual, payBtn) {
   const send = manual ? `<button class="btn primary" type="submit">${t("ord.send")}</button>` : "";
   return `${send}${send && payBtn ? `<p class="pay-or muted">${t("pay.or")}</p>` : ""}${payBtn}`;
 }
+// The referral discount (referrals design, task 6): asked for after the dialog opens, so an order without a user
+// (never reaches here) or without a discount never shows anything extra. Changes nothing server-side (quote-only).
+async function applyRefQuote(d, p, tier, len) {
+  let q;
+  try { q = await api(`/api/referrals/quote?tier=${encodeURIComponent(tier.tier)}&length=${encodeURIComponent(len)}&currency=${encodeURIComponent(p.currency)}`); }
+  catch { return; }   // a signed-out or failed call: the plain price already shown stands
+  if (!q || !(q.off_usd > 0) || !document.contains(d)) return;
+  const box = $(".order-price", d);
+  if (!box) return;
+  box.innerHTML = `<s class="muted">${esc(money(q.list_amount, q.currency))}</s> <b>${esc(money(q.amount, q.currency))}</b>
+    <div class="muted">${t("ord.ref_discount", { pct: fmtPct(q.pct_applied) })}</div>`;
+}
 function orderDialog(p, tier, len, pay, termsVersion, manual, start) {
   const payL = pay && pay.prices?.tiers.find((x) => x.tier === tier.tier)?.lengths[len];
   const d = openDialog(orderFormHtml(p, tier, len, S.user.email, payL, pay, manual, start));
+  applyRefQuote(d, p, tier, len);
   const f = $("#f-order", d);
   const now = () => !!start && f.start.value === "now";
   // The terms follow the choice: a ticket starting now splits across the weeks from now.

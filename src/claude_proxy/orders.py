@@ -384,6 +384,39 @@ def fa_amount(amount: float, currency: str) -> str:
     return f"{fa_num(f'{amount:,.2f}')} {currency}"
 
 
+# ---------- the referral discount line in a buyer's email (referrals design, task 6) ----------
+
+def ref_discount_usd(order: dict, ticket: dict | None = None) -> tuple[float, float]:
+    """(the list price it was measured against, the referral discount actually sold at), in USD. From the granted
+    ticket's own prices (list_usd - usd) when there is one - the real, final price it sold at - never from
+    orders.ref_off_usd once a ticket exists: a unit floored to 0% at a manual grant (the share rose since the order)
+    keeps ref_off_usd on the order though the pass sold at full price (controller ruling). Without a ticket yet (the
+    order-placed email), the order's own list_usd and ref_off_usd, recorded when the order was created. (0, 0) when
+    the order carries no referral discount at all (ref_kind unset)."""
+    if not order.get("ref_kind"):
+        return 0.0, 0.0
+    if ticket is not None:
+        return ticket["list_usd"], round(ticket["list_usd"] - ticket["usd"], 2)
+    return order.get("list_usd") or 0.0, order.get("ref_off_usd") or 0.0
+
+
+def ref_discount_line_en(order: dict, ticket: dict | None = None) -> str:
+    """'Referral discount: X% (−$Y)\\n', or '' when the order carries no referral discount, or it came to 0."""
+    list_usd, off = ref_discount_usd(order, ticket)
+    if off <= 0:
+        return ""
+    pct = round(off / list_usd * 100) if list_usd else 0
+    return f"Referral discount: {pct}% (−${off:.2f})\n"
+
+
+def ref_discount_line_fa(order: dict, ticket: dict | None = None) -> str:
+    list_usd, off = ref_discount_usd(order, ticket)
+    if off <= 0:
+        return ""
+    pct = round(off / list_usd * 100) if list_usd else 0
+    return f"تخفیف معرفی دوستان: {fa_num(pct)}٪ (−${fa_num(f'{off:.2f}')})\n"
+
+
 def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[str, str]:
     """(subject, body) for the buyer, in the language of the page they ordered from. Nothing the buyer typed goes in
     (no name, no message), so the form cannot carry content to a stranger's inbox."""
@@ -393,7 +426,7 @@ def buyer_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple
     up = order.get("upgrade_of")
     lines = [f"Your order: an upgrade of your pass to {label} for the rest of it." if up else
              f"Your order: a {label} pass for one {order['length']}{_days(order['length'])}.",
-             f"Price at today's rate: {_amount(order)}.", ""]
+             f"Price at today's rate: {_amount(order)}.", *([ref] if (ref := ref_discount_line_en(order).rstrip("\n")) else []), ""]
     if not up:   # an upgrade keeps its ticket's weeks: the terms the buyer got with it still hold
         lines.append(tickets.terms_text(conn, cfg, "en", order["length"], None))   # it starts when granted: no dates yet
     lines.append("Your order is not paid yet. The admin will contact you about the next step.")
@@ -414,7 +447,7 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
     up = order.get("upgrade_of")
     lines = [f"سفارش شما: ارتقای بسته شما به {label} برای باقی‌مانده آن." if up else
              f"سفارش شما: بسته {label} برای ۱ {length}{_days_fa(order['length'])}.",
-             f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", ""]
+             f"قیمت: {fa_amount(order['quoted_amount'], order['currency'])}.", *([ref] if (ref := ref_discount_line_fa(order).rstrip("\n")) else []), ""]
     if not up:
         lines.append(tickets.terms_text(conn, cfg, "fa", order["length"], None))
     lines.append("سفارش شما هنوز پرداخت نشده است. ادمین برای مرحله بعد با شما تماس می‌گیرد.")
@@ -422,18 +455,21 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
 
 
 def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket: dict) -> tuple[str, str]:
-    """(subject, body) for the buyer once the admin grants their order: the ticket's dates and its terms."""
+    """(subject, body) for the buyer once the admin grants their order: the ticket's dates and its terms, plus the
+    referral discount line taken from the granted ticket itself (ref_discount_usd), not the order's own ref_off_usd -
+    a unit floored to 0% at this manual grant must show nothing, not the discount the order was quoted before the
+    floor caught up with it (controller ruling)."""
     if order.get("upgrade_of"):
         return upgraded_mail_text(cfg, order, ticket)
     terms = tickets.terms_text(conn, cfg, "fa" if order.get("lang") == "fa" else "en", order["length"], ticket["starts_at"])
     if order.get("lang") == "fa":
         what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
-        return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n\n{terms}"
+        return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n{ref_discount_line_fa(order, ticket)}\n{terms}"
     what = f"{_label(cfg, order)}, {order['length']}{_days(order['length'])}"
     span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
     return (f"Your pass is granted: {_label(cfg, order)} {order['length']}",
-            f"Your order is done.\n\nPass: {what}, {span}.\n\n{terms}")
+            f"Your order is done.\n\nPass: {what}, {span}.\n{ref_discount_line_en(order, ticket)}\n{terms}")
 
 
 def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -> tuple[str, str]:

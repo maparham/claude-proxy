@@ -117,3 +117,51 @@ async def test_view_counts(env):
         assert len(alice_row["saved"]) == 1
         assert alice_row["held"] == 0 and alice_row["used"] == 0 and alice_row["expired"] == 0
         assert any(h["action"] == "referral_waiting" for h in v["history"])
+
+
+# ---------- Task 6: what the user sees (my_status, the quote endpoint) ----------
+
+async def test_me_off_hides_link(db, cfg):
+    conn, tc, ids = seeded(db)
+    cfg.tickets = tc.tickets
+    gw = make_gateway(cfg, conn)
+    key = dbm.rotate_key(conn, ids["alice"])
+    async with client(gw) as c:
+        r = await c.get("/api/referrals/me", headers=bearer(key))
+        assert r.status_code == 200 and r.json() == {"enabled": False}
+
+
+async def test_me_shows_link_and_units(env):
+    gw, conn, cfg, ids, alice_key = env
+    cfg.listener.home_url = "https://rahkar.pro"
+    referrals.set_settings(conn, ids["admin"], {"approval": "manual"})
+    code = referrals.code_for(conn, ids["alice"])
+    add_unit(conn, ids["alice"])
+    o = signed_in(conn, cfg, ids["bob"])
+    grant_paid(conn, cfg, ids, ids["bob"], o)   # a waiting reward for alice (manual approval)
+    async with client(gw) as c:
+        m = (await c.get("/api/referrals/me", headers=bearer(alice_key))).json()
+    assert m["enabled"] is True and m["link"] == f"https://rahkar.pro/r/{code}"
+    assert m["friend_pct"] == 10
+    assert len(m["units"]) == 1 and m["units"][0]["pct"] == 10 and m["units"][0]["state"] == "saved"
+    assert m["waiting"] == 1
+
+
+async def test_quote_endpoint_friend_and_unit(env):
+    gw, conn, cfg, ids, alice_key = env
+    bob_key = dbm.rotate_key(conn, ids["bob"])
+    async with client(gw) as c:
+        rb = await c.get("/api/referrals/quote?tier=lite&length=week&currency=EUR", headers=bearer(bob_key))
+        assert rb.status_code == 200
+        qb = rb.json()
+        assert (qb["kind"], qb["pct"], qb["pct_applied"], qb["list_usd"], qb["usd"], qb["off_usd"], qb["unit_id"]) == \
+            ("friend", 10, 10, 8.0, 7.2, 0.8, None)
+        assert qb["currency"] == "EUR" and qb["list_amount"] > qb["amount"] > 0
+
+        ra = await c.get("/api/referrals/quote?tier=lite&length=week", headers=bearer(alice_key))
+        assert ra.status_code == 200 and ra.json() is None   # no referrer, no unit: nothing to quote
+
+        u = add_unit(conn, ids["alice"])
+        ru = await c.get("/api/referrals/quote?tier=lite&length=week", headers=bearer(alice_key))
+        qu = ru.json()
+        assert qu["kind"] == "unit" and qu["unit_id"] == u

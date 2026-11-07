@@ -18,7 +18,7 @@ import weakref
 
 import httpx
 
-from . import blog, db, orders, passcard, payments, tickets
+from . import blog, db, orders, passcard, payments, referrals, tickets
 from .config import Config
 
 logger = logging.getLogger("claude_proxy")
@@ -137,6 +137,10 @@ TEXTS = {
         "mine_none": "بسته فعال یا در صفی ندارید.",
         "mine_running": "{label}: تا {end}", "mine_queued": "{label}: در صف، از {start}",
         "mine_more": "جزئیات در داشبورد:\n{url}",
+        "invite_off": "سیستم معرفی دوستان فعلاً خاموش است.",
+        "invite_lede": "لینک‌تان را به اشتراک بگذارید: دوستی که از آن طریق ثبت‌نام کند {pct}٪ تخفیف در اولین بسته‌اش می‌گیرد.\n{link}",
+        "invite_unit": "{pct}٪ تخفیف، انقضا {date}",
+        "invite_waiting": "{n} در انتظار تأیید ادمین.",
         "ask_feedback": "نظرتان را بنویسید:",
         "got_support": "پیامتان به پشتیبانی رسید؛ جواب همین‌جا می‌آید.",
         "got_feedback": "ممنون، نظرتان رسید.",
@@ -182,6 +186,10 @@ TEXTS = {
         "mine_none": "You have no running or queued pass.",
         "mine_running": "{label}: until {end}", "mine_queued": "{label}: queued, from {start}",
         "mine_more": "Details in the dashboard:\n{url}",
+        "invite_off": "Referrals are off right now.",
+        "invite_lede": "Share your link: a friend who signs up through it gets {pct}% off their first pass.\n{link}",
+        "invite_unit": "{pct}% off, expires {date}",
+        "invite_waiting": "{n} waiting for the admin's approval.",
         "ask_feedback": "Write your feedback:",
         "got_support": "Your message reached support; the answer will come here.",
         "got_feedback": "Thanks, your feedback arrived.",
@@ -317,8 +325,10 @@ async def after_payment(conn: sqlite3.Connection, cfg: Config, http: httpx.Async
 
 
 COMMANDS = {
-    "fa": [("menu", "منو"), ("prices", "قیمت‌ها"), ("lang", "English / فارسی"), ("cancel", "لغو"), ("unlink", "قطع اتصال حساب")],
-    "en": [("menu", "Menu"), ("prices", "Prices"), ("lang", "English / فارسی"), ("cancel", "Cancel"), ("unlink", "Disconnect the account")],
+    "fa": [("menu", "منو"), ("prices", "قیمت‌ها"), ("invite", "دعوت دوستان"), ("lang", "English / فارسی"),
+          ("cancel", "لغو"), ("unlink", "قطع اتصال حساب")],
+    "en": [("menu", "Menu"), ("prices", "Prices"), ("invite", "Invite friends"), ("lang", "English / فارسی"),
+          ("cancel", "Cancel"), ("unlink", "Disconnect the account")],
 }
 
 
@@ -506,6 +516,8 @@ class Telegram:
                 return await self.toggle_lang(chat)
             if cmd == "/prices":
                 return await self.prices(chat)
+            if cmd == "/invite":
+                return await self.invite(chat)
             if cmd == "/cancel":
                 self.set_state(chat, None, None)
                 return await self.say(chat, "cancelled")
@@ -817,6 +829,26 @@ class Telegram:
                     lines.append(t(lang, "mine_queued", label=self.label(q["tier"], lang), start=tickets.terms_date(q["starts_at"], lang)))
         text = "\n".join(lines) if lines else t(lang, "mine_none")
         await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}")
+
+    async def invite(self, chat: dict) -> None:
+        """/invite (referrals design, task 6): the same link and units the dashboard's "Invite friends" card shows,
+        for the account this chat is linked to. Unlinked gets the bot's existing "not connected" message (not
+        need_link/need_account: /invite is read-only, nothing here needs the dashboard to set up first)."""
+        self.set_state(chat, None, None)
+        user = self.account(chat)
+        if user is None:
+            return await self.say(chat, "not_linked")
+        lang = chat["lang"]
+        status = referrals.my_status(self.conn, self.cfg, user["id"], time.time())
+        if not status["enabled"]:
+            return await self.say(chat, "invite_off")
+        num = (lambda n: tickets.fa_num(str(n))) if lang != "en" else str
+        lines = [t(lang, "invite_lede", pct=num(round(status["friend_pct"])), link=status["link"])]
+        for u in status["units"]:
+            lines.append(t(lang, "invite_unit", pct=num(round(u["pct"])), date=tickets.terms_date(u["expires_at"], lang)))
+        if status["waiting"]:
+            lines.append(t(lang, "invite_waiting", n=num(status["waiting"])))
+        await self.bot.call("sendMessage", chat_id=chat["chat_id"], text="\n".join(lines))
 
     # ---------- support and feedback (section 7) ----------
 
