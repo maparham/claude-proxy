@@ -756,10 +756,13 @@ REMOVABLE = "kind NOT IN ('share_5h', 'share_7d', 'cost_total')"
 
 
 def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, currency: str, now: float,
-            start_now: bool = False) -> dict:
+            start_now: bool = False, order_id: int | None = None) -> dict:
     """Everything the grant form shows before the admin confirms. Raises TicketError for a bad tier, length or currency
     and when the currency has no rate; capacity trouble is reported in `available`, not raised. `start_now`: the
-    ticket starts now beside the user's running tickets instead of after them (next_start)."""
+    ticket starts now beside the user's running tickets instead of after them (next_start). `order_id`: the order
+    this grant sells; its referral discount (orders.ref_pct, the percentage asked for) is applied to today's price and
+    floored again on today's price and share (referrals design: The discount must survive every way an order is
+    granted), so the preview and the grant agree. `usd` is then the discounted price, `list_usd` stays the regular one."""
     from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     _check_tier_length(cfg, tier, length)
@@ -770,6 +773,13 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     if rate is None:
         raise TicketError(f"No exchange rate for {currency}; set one on the Rates panel first.")
     p = price_now(conn, tier, length, now)
+    ref = conn.execute("SELECT ref_pct FROM orders WHERE id=? AND user_id=? AND upgrade_of IS NULL AND ref_pct IS NOT NULL",
+                       (order_id, user["id"])).fetchone() if order_id is not None else None
+    if ref is not None:
+        from . import referrals   # here, not at the top: referrals imports tickets
+        before = p["usd"]
+        p["usd"], p["ref_pct_applied"] = referrals.apply_pct(conn, cfg, tier, length, before, ref["ref_pct"])
+        p["ref_off_usd"] = round(before - p["usd"], 2)
     share = effective_share(conn, cfg, tier)
     share_5h = effective_share_5h(conn, cfg, tier)
     starts_at, replaces = next_start(conn, cfg, user["id"], now, start_now)
@@ -825,7 +835,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         orow = conn.execute("SELECT terms_version, start_now FROM orders WHERE id=?", (order_id,)).fetchone() if order_id is not None else None
         if orow is not None:
             start_now = bool(orow["start_now"])
-        p = preview(conn, cfg, user, tier, length, currency, now, start_now)
+        # Unpaid: the order's referral discount is applied again to today's price, so expect_usd is the discounted one.
+        p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id)
         if order_id is not None:
             grant_terms = orow["terms_version"] if orow is not None else TERMS_VERSION
         else:
@@ -866,6 +877,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         if order_id is not None:
             from . import orders   # here, not at the top: orders imports tickets
             orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)
+            from . import referrals   # here, not at the top: referrals imports tickets
+            referrals.on_granted(conn, order_id, now)   # uses its unit; a friend's first pass earns the referrer one
         if after is not None:
             after(tid)
         conn.execute("COMMIT")

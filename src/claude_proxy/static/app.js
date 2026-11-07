@@ -1378,7 +1378,7 @@ function grantDialog(users, pre = null) {
     // A day pass is one allowance whatever reset it crosses (2026-10-30): no parts to mention, as in the order dialog.
     if (!pre) $("#grant-terms-l1", d).innerHTML = t(f.length.value === "day" ? "ord.split_open" : "ord.terms_l1");
     try {
-      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked } });
+      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
     const price = p.discount_id ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${t("tk.discount")})` : `<b>${fmtPrice(p.usd)}</b>`;

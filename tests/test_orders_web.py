@@ -435,6 +435,22 @@ async def test_withdrawn_then_granted_is_409(env):
     assert orders.get(conn, oid)["status"] == "withdrawn"
 
 
+async def test_grant_dialog_preview_with_order_id_keeps_its_referral_discount(env):
+    """Referrals: the preview sent with the order's id shows the discounted price, and the grant at it goes through."""
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    unit = conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at) "
+                        "VALUES(?,10,?,?,'saved',?)", (ids["alice"], now - 60, now + 86400, now - 60)).lastrowid
+    async with client(gw) as c:
+        oid = (await c.post("/api/me/orders", headers=bearer(keys["alice"]), json=ORDER | {"email": "a@b.cd"})).json()["order"]["id"]
+    async with admin_client(gw) as c:
+        plain = (await c.post("/api/admin/tickets/preview", json=ORDER | {"user": "alice"})).json()
+        p = (await c.post("/api/admin/tickets/preview", json=ORDER | {"user": "alice", "order_id": oid})).json()
+        assert p["usd"] < plain["usd"] and p["list_usd"] == plain["list_usd"] and p["ref_pct_applied"] > 0
+        r = await c.post("/api/admin/tickets", json=ORDER | {"user": "alice", "usd": p["usd"], "rate": p["rate"], "order_id": oid})
+        assert r.status_code == 200, r.text
+    assert conn.execute("SELECT state FROM referral_units WHERE id=?", (unit,)).fetchone()[0] == "used"
+
 # ---------- tickets off ----------
 
 async def test_every_order_endpoint_is_404_while_tickets_are_off(env, ts):

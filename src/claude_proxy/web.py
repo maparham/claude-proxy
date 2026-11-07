@@ -1342,7 +1342,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         body = await _json(request)
         u, tier, length, currency = grant_args(body)
-        return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time(), bool(body.get("start_now")))
+        # From an order: its referral discount is applied, as the grant will apply it (referrals design).
+        order_id = None if body.get("order_id") in (None, "") else _number(body["order_id"], "order_id", whole=True)
+        return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time(), bool(body.get("start_now")),
+                           order_id)
 
     @app.post("/api/admin/tickets")
     async def ticket_grant(request: Request):

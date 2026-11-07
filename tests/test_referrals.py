@@ -384,3 +384,232 @@ def test_late_verify_when_another_order_took_the_unit_is_a_conflict(env_on):
     assert unit_state(conn, u) == "held"   # left with the open order
     row = conn.execute("SELECT detail_json FROM audit_log WHERE action='referral_unit_conflict'").fetchone()
     assert f'"order_id": {o["id"]}' in row[0] and f'"other_order_id": {o2["id"]}' in row[0]
+
+
+# ---------- Task 4: grants keep the discount; earning units ----------
+
+from datetime import UTC, datetime   # noqa: E402
+
+
+def units_of(conn, uid):
+    return [dict(r) for r in conn.execute("SELECT * FROM referral_units WHERE user_id=? ORDER BY id", (uid,))]
+
+
+def reward_of(conn, order_id):
+    row = conn.execute("SELECT * FROM referral_rewards WHERE order_id=?", (order_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def friend_of(conn, referrer, name):
+    uid = add_user(conn, name)
+    conn.execute("UPDATE users SET referred_by=? WHERE id=?", (referrer, uid))
+    return uid
+
+
+def grant_paid(conn, cfg, ids, uid, o, now=NOW):
+    return tickets.grant(conn, cfg, ids["admin"], user(conn, uid), o["tier"], o["length"], o["currency"],
+                         order_id=o["id"], paid=True, now=now)
+
+
+def test_manual_grant_keeps_friend_discount(env_on):
+    conn, cfg, ids = env_on
+    admin, bob = ids["admin"], ids["bob"]
+    o = signed_in(conn, cfg, bob)                       # $7.20
+    pv = tickets.preview(conn, cfg, user(conn, bob), "lite", "week", "EUR", NOW, order_id=o["id"])
+    assert (pv["usd"], pv["ref_pct_applied"], pv["ref_off_usd"]) == (7.2, 10, 0.8)
+    assert pv["amount"] == o["quoted_amount"]
+    plain = tickets.preview(conn, cfg, user(conn, bob), "lite", "week", "EUR", NOW)
+    assert plain["usd"] == 8.0 and "ref_pct_applied" not in plain
+    t = tickets.grant(conn, cfg, admin, user(conn, bob), "lite", "week", "EUR", expect_usd=7.2, expect_rate=pv["rate"],
+                      order_id=o["id"], now=NOW)
+    assert t["usd"] == 7.2 and t["list_usd"] == 8.0 and t["amount"] == pv["amount"]
+
+
+def test_manual_grant_at_the_regular_price_is_refused(env_on):
+    conn, cfg, ids = env_on
+    bob = ids["bob"]
+    o = signed_in(conn, cfg, bob)
+    with pytest.raises(tickets.QuoteChanged):
+        tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "week", "EUR", expect_usd=8.0, order_id=o["id"], now=NOW)
+
+
+def test_share_raised_before_grant_refloors(env_on):
+    conn, cfg, ids = env_on
+    bob = ids["bob"]
+    o = signed_in(conn, cfg, bob, tier="standard")       # $15 less 10% = $13.50
+    assert o["quoted_usd"] == 13.5
+    tickets.set_share(conn, cfg, "standard", 60, ids["admin"])   # cost now 100 * 60% * 7 / 30 = $14
+    pv = tickets.preview(conn, cfg, user(conn, bob), "standard", "week", "EUR", NOW, order_id=o["id"])
+    assert pv["usd"] >= referrals.pass_cost(conn, cfg, "standard", 7) and pv["usd"] == 14.0
+    assert 0 < pv["ref_pct_applied"] < 10 and pv["ref_off_usd"] == 1.0
+
+
+def test_friend_grant_earns_unit(env_on):
+    conn, cfg, ids = env_on
+    alice, bob = ids["alice"], ids["bob"]
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    us = units_of(conn, alice)
+    assert len(us) == 1 and (us[0]["state"], us[0]["pct"], us[0]["earned_at"], us[0]["expires_at"]) == \
+        ("saved", 10, NOW, NOW + 90 * DAY)
+    r = reward_of(conn, o["id"])
+    assert (r["referrer_id"], r["friend_id"], r["status"], us[0]["reward_id"]) == (alice, bob, "earned", r["id"])
+    assert "referral_unit_earned" in audit_actions(conn)
+
+
+def test_unit_used_on_grant(env_on):
+    """Task 3's ruling: a unit held by a manually granted order is used by the grant itself."""
+    conn, cfg, ids = env_on
+    alice = ids["alice"]
+    u = add_unit(conn, alice)
+    o = signed_in(conn, cfg, alice)
+    pv = tickets.preview(conn, cfg, user(conn, alice), "lite", "week", "EUR", NOW, order_id=o["id"])
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, alice), "lite", "week", "EUR", expect_usd=pv["usd"],
+                      order_id=o["id"], now=NOW)
+    assert t["usd"] == 7.2 and unit_state(conn, u) == "used"
+    assert reward_of(conn, o["id"]) is None   # a unit order earns nothing
+
+
+def test_manual_approval_waits(env_on):
+    conn, cfg, ids = env_on
+    admin, alice, bob = ids["admin"], ids["alice"], ids["bob"]
+    referrals.set_settings(conn, admin, {"approval": "manual"})
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    r = reward_of(conn, o["id"])
+    assert r["status"] == "waiting" and units_of(conn, alice) == []
+    assert referrals.approve(conn, admin, r["id"], NOW + 60) == "earned"
+    r = reward_of(conn, o["id"])
+    assert (r["status"], r["decided_by"], r["decided_at"]) == ("earned", admin, NOW + 60)
+    assert [u["state"] for u in units_of(conn, alice)] == ["saved"]
+    with pytest.raises(referrals.ReferralError) as e:
+        referrals.approve(conn, admin, r["id"], NOW + 120)
+    assert e.value.status == 409
+
+
+def test_refuse(env_on):
+    conn, cfg, ids = env_on
+    admin, alice, bob = ids["admin"], ids["alice"], ids["bob"]
+    referrals.set_settings(conn, admin, {"approval": "manual"})
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    r = reward_of(conn, o["id"])
+    referrals.refuse(conn, admin, r["id"], NOW + 60)
+    assert reward_of(conn, o["id"])["status"] == "refused" and units_of(conn, alice) == []
+    assert audit_actions(conn)[-1] == "referral_refused"
+    with pytest.raises(referrals.ReferralError):
+        referrals.refuse(conn, admin, r["id"], NOW + 60)
+    with pytest.raises(referrals.ReferralError):
+        referrals.approve(conn, admin, r["id"], NOW + 60)
+
+
+def test_over_limit_held(env_on):
+    conn, cfg, ids = env_on
+    alice, bob = ids["alice"], ids["bob"]
+    referrals.set_settings(conn, ids["admin"], {"max_held": 1})
+    add_unit(conn, alice)
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    assert reward_of(conn, o["id"])["status"] == "over_limit" and len(units_of(conn, alice)) == 1
+    assert "referral_over_limit" in audit_actions(conn)
+
+
+def test_month_limit_tehran(env_on):
+    conn, cfg, ids = env_on
+    admin, alice, bob = ids["admin"], ids["alice"], ids["bob"]
+    referrals.set_settings(conn, admin, {"max_per_month": 1})
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    assert reward_of(conn, o["id"])["status"] == "earned"
+    carol = friend_of(conn, alice, "carol@x.com")
+    o2 = signed_in(conn, cfg, carol)
+    grant_paid(conn, cfg, ids, carol, o2)
+    assert reward_of(conn, o2["id"])["status"] == "over_limit"
+    # 1 Feb 00:00 in Tehran is still 31 Jan in UTC: the Tehran month is what counts.
+    feb = int(datetime(2027, 2, 1, tzinfo=tickets.TEHRAN).timestamp())
+    referrals.set_settings(conn, admin, {"approval": "manual"})
+    dave = friend_of(conn, alice, "dave@x.com")
+    o3 = signed_in(conn, cfg, dave)
+    grant_paid(conn, cfg, ids, dave, o3)
+    r3 = reward_of(conn, o3["id"])
+    assert referrals.approve(conn, admin, r3["id"], feb - 60) == "over_limit"   # still January in Tehran
+    erin = friend_of(conn, alice, "erin@x.com")
+    o4 = signed_in(conn, cfg, erin)
+    grant_paid(conn, cfg, ids, erin, o4)
+    assert referrals.approve(conn, admin, reward_of(conn, o4["id"])["id"], feb + 60) == "earned"
+    assert datetime.fromtimestamp(feb + 60, tickets.TEHRAN).month == 2 and datetime.fromtimestamp(feb + 60, UTC).month == 1
+
+
+def test_deleted_referrer_friend_keeps_discount_no_reward(env_on):
+    conn, cfg, ids = env_on
+    admin, alice, bob = ids["admin"], ids["alice"], ids["bob"]
+    o = signed_in(conn, cfg, bob)
+    conn.execute("UPDATE users SET revoked_at=? WHERE id=?", (NOW, alice))
+    delete_user(conn, alice, admin, now=NOW)
+    pv = tickets.preview(conn, cfg, user(conn, bob), "lite", "week", "EUR", NOW, order_id=o["id"])
+    t = tickets.grant(conn, cfg, admin, user(conn, bob), "lite", "week", "EUR", expect_usd=pv["usd"], order_id=o["id"], now=NOW)
+    assert t["usd"] == 7.2 and reward_of(conn, o["id"]) is None
+
+
+def test_revoked_or_disabled_referrer_no_reward(env_on):
+    conn, cfg, ids = env_on
+    alice, bob = ids["alice"], ids["bob"]
+    conn.execute("UPDATE users SET enabled=0 WHERE id=?", (alice,))
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    assert reward_of(conn, o["id"]) is None and units_of(conn, alice) == []
+    conn.execute("UPDATE users SET enabled=1, revoked_at=? WHERE id=?", (NOW, alice))
+    carol = friend_of(conn, alice, "carol@x.com")
+    o2 = signed_in(conn, cfg, carol)
+    grant_paid(conn, cfg, ids, carol, o2)
+    assert reward_of(conn, o2["id"]) is None
+
+
+def test_paid_online_grant_earns(env_on):
+    conn, cfg, ids = env_on
+    alice, bob = ids["alice"], ids["bob"]
+    o = signed_in(conn, cfg, bob, currency="IRT")
+    p = add_payment(conn, o)
+    r = payments._fulfil(conn, cfg, p, "201", None, NOW)
+    assert r["status"] == "paid"
+    assert reward_of(conn, o["id"])["status"] == "earned" and len(units_of(conn, alice)) == 1
+    t = tickets.get(conn, orders.get(conn, o["id"])["ticket_id"])
+    assert (t["usd"], t["list_usd"]) == (7.2, 8.0)
+
+
+def test_off_no_new_unit_but_approve_works(env_on):
+    conn, cfg, ids = env_on
+    admin, alice, bob = ids["admin"], ids["alice"], ids["bob"]
+    referrals.set_settings(conn, admin, {"approval": "manual"})
+    o = signed_in(conn, cfg, bob)
+    grant_paid(conn, cfg, ids, bob, o)
+    waiting = reward_of(conn, o["id"])
+    carol = friend_of(conn, alice, "carol@x.com")
+    o2 = signed_in(conn, cfg, carol)                     # a friend order made while referrals were on
+    u = add_unit(conn, carol)                            # carol also holds a unit... unused: a first pass gets only the friend discount
+    referrals.set_settings(conn, admin, {"enabled": False})
+    grant_paid(conn, cfg, ids, carol, o2)
+    assert reward_of(conn, o2["id"]) is None and unit_state(conn, u) == "saved"
+    assert referrals.approve(conn, admin, waiting["id"], NOW + 60) == "earned"
+    assert len(units_of(conn, alice)) == 1
+
+
+def test_off_still_spends_held_unit_on_grant(env_on):
+    conn, cfg, ids = env_on
+    alice = ids["alice"]
+    u = add_unit(conn, alice)
+    o = signed_in(conn, cfg, alice)
+    referrals.set_settings(conn, ids["admin"], {"enabled": False})
+    pv = tickets.preview(conn, cfg, user(conn, alice), "lite", "week", "EUR", NOW, order_id=o["id"])
+    tickets.grant(conn, cfg, ids["admin"], user(conn, alice), "lite", "week", "EUR", expect_usd=pv["usd"], order_id=o["id"], now=NOW)
+    assert pv["usd"] == 7.2 and unit_state(conn, u) == "used"
+
+
+def test_friend_order_after_another_pass_earns_nothing(env_on):
+    """The friend's open order was made before the admin granted them a pass directly: it is no longer their first."""
+    conn, cfg, ids = env_on
+    alice, bob = ids["alice"], ids["bob"]
+    o = signed_in(conn, cfg, bob, length="day")
+    tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "lite", "day", "EUR", now=NOW, terms_version="v1")
+    grant_paid(conn, cfg, ids, bob, o)
+    assert reward_of(conn, o["id"]) is None and units_of(conn, alice) == []

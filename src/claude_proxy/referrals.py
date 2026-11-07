@@ -315,3 +315,123 @@ def release(conn: sqlite3.Connection, order_id: int, now: int) -> None:
         conn.execute("UPDATE referral_units SET state='saved', order_id=NULL, updated_at=? WHERE id=?", (now, unit["id"]))
         db.audit(conn, None, "referral_unit_returned", db._user_name(conn, unit["user_id"]),
                  {"unit_id": unit["id"], "order_id": order_id})
+
+
+# ---------- earning units: a friend's first pass granted ----------
+
+def _month_start(now: int) -> int:
+    """The start of the calendar month `now` falls in, in Tehran time (design: most units earned per calendar month
+    in Tehran time)."""
+    from datetime import datetime
+    t = datetime.fromtimestamp(now, tickets.TEHRAN)
+    return int(t.replace(day=1, hour=0, minute=0, second=0, microsecond=0).timestamp())
+
+
+def _active_user(conn: sqlite3.Connection, user_id: int | None):
+    """The user row when it still exists, enabled and not revoked; else None (a referrer who earns nothing)."""
+    if user_id is None:
+        return None
+    return conn.execute("SELECT id FROM users WHERE id=? AND enabled=1 AND revoked_at IS NULL", (user_id,)).fetchone()
+
+
+def on_granted(conn: sqlite3.Connection, order_id: int, now: int) -> None:
+    """Inside tickets.grant's transaction, right after orders.close_for_grant, for paid and manual grants alike: the
+    order's held unit is used (spend, idempotent, so a paid grant's own spend changes nothing), and a friend's first
+    pass records a referral_rewards row for the referrer - `waiting` for the admin with manual approval, else earned
+    on the spot (earn). Nothing is recorded for an upgrade, with referrals off (no new units), when the referrer is
+    gone, disabled or revoked, or when the friend has had another pass since ordering (no longer their first)."""
+    spend(conn, order_id, now)
+    o = conn.execute("SELECT user_id, ref_kind, upgrade_of, ticket_id FROM orders WHERE id=?", (order_id,)).fetchone()
+    if o is None or o["ref_kind"] != "friend" or o["upgrade_of"] is not None or o["user_id"] is None:
+        return
+    s = settings(conn)
+    if not s.enabled:
+        return
+    friend = conn.execute("SELECT referred_by, email, name FROM users WHERE id=?", (o["user_id"],)).fetchone()
+    if friend is None or _active_user(conn, friend["referred_by"]) is None:
+        return
+    email = (friend["email"] or friend["name"] or "").lower()
+    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? LIMIT 1",
+                    (o["user_id"], email, o["ticket_id"])).fetchone():
+        return
+    rid = conn.execute("INSERT INTO referral_rewards(referrer_id, friend_id, order_id, created_at, status) "
+                       "VALUES(?,?,?,?,'waiting')", (friend["referred_by"], o["user_id"], order_id, now)).lastrowid
+    if s.approval == "manual":
+        db.audit(conn, None, "referral_waiting", db._user_name(conn, friend["referred_by"]),
+                 {"reward_id": rid, "order_id": order_id, "friend_id": o["user_id"]})
+        return
+    earn(conn, rid, None, now)
+
+
+def earn(conn: sqlite3.Connection, reward_id: int, actor: int | None, now: int) -> str:
+    """Decide a reward in the caller's transaction: `over_limit` when the referrer already holds max_held saved plus
+    held units, or has earned max_per_month units this Tehran calendar month; otherwise a saved unit of today's
+    unit_pct, good for unit_days. Audited either way; returns the reward's new status. A referrer no longer active
+    cannot be given a unit: ReferralError(409), and the admin refuses the reward instead."""
+    r = conn.execute("SELECT * FROM referral_rewards WHERE id=?", (reward_id,)).fetchone()
+    if r is None:
+        raise ReferralError(404, f"Referral reward #{reward_id} does not exist.")
+    if _active_user(conn, r["referrer_id"]) is None:
+        raise ReferralError(409, "The referrer's account is gone, disabled or revoked; refuse this reward instead.")
+    expire(conn, now)   # an overdue saved unit no longer counts as held
+    s = settings(conn)
+    referrer = r["referrer_id"]
+    held = conn.execute("SELECT COUNT(*) FROM referral_units WHERE user_id=? AND state IN ('saved','held')",
+                        (referrer,)).fetchone()[0]
+    this_month = conn.execute("SELECT COUNT(*) FROM referral_units WHERE user_id=? AND earned_at>=?",
+                              (referrer, _month_start(now))).fetchone()[0]
+    detail = {"reward_id": reward_id, "order_id": r["order_id"], "friend_id": r["friend_id"]}
+    if held >= s.max_held or this_month >= s.max_per_month:
+        status = "over_limit"
+        db.audit(conn, actor, "referral_over_limit", db._user_name(conn, referrer),
+                 detail | {"held": held, "this_month": this_month})
+    else:
+        status = "earned"
+        uid = conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, reward_id, updated_at) "
+                           "VALUES(?,?,?,?,'saved',?,?)",
+                           (referrer, s.unit_pct, now, now + s.unit_days * 86400, reward_id, now)).lastrowid
+        db.audit(conn, actor, "referral_unit_earned", db._user_name(conn, referrer),
+                 detail | {"unit_id": uid, "pct": s.unit_pct})
+    conn.execute("UPDATE referral_rewards SET status=?, decided_by=?, decided_at=? WHERE id=?",
+                 (status, actor, now, reward_id))
+    return status
+
+
+def _decide(conn: sqlite3.Connection, reward_id: int, decide) -> str:
+    """Run `decide()` on a `waiting` reward, in the caller's transaction or in a BEGIN IMMEDIATE of its own (an admin
+    action from the Referrals tab). Anything else is ReferralError(409): a reward is decided once."""
+    own = not conn.in_transaction
+    if own:
+        conn.execute("BEGIN IMMEDIATE")
+    try:
+        r = conn.execute("SELECT status FROM referral_rewards WHERE id=?", (reward_id,)).fetchone()
+        if r is None:
+            raise ReferralError(404, f"Referral reward #{reward_id} does not exist.")
+        if r["status"] != "waiting":
+            raise ReferralError(409, f"This reward is already {r['status'].replace('_', ' ')}.")
+        status = decide()
+        if own:
+            conn.execute("COMMIT")
+        return status
+    except BaseException:
+        if own:
+            conn.execute("ROLLBACK")
+        raise
+
+
+def approve(conn: sqlite3.Connection, actor: int | None, reward_id: int, now: int) -> str:
+    """The admin approves a waiting reward (manual approval): earn() decides it, limits checked now. Works with
+    referrals off too (design: rewards already waiting can still be approved)."""
+    return _decide(conn, reward_id, lambda: earn(conn, reward_id, actor, now))
+
+
+def refuse(conn: sqlite3.Connection, actor: int | None, reward_id: int, now: int) -> None:
+    """The admin refuses a waiting reward: no unit, status `refused`, audited."""
+    def decide():
+        r = conn.execute("SELECT referrer_id, order_id, friend_id FROM referral_rewards WHERE id=?", (reward_id,)).fetchone()
+        conn.execute("UPDATE referral_rewards SET status='refused', decided_by=?, decided_at=? WHERE id=?",
+                     (actor, now, reward_id))
+        db.audit(conn, actor, "referral_refused", db._user_name(conn, r["referrer_id"]),
+                 {"reward_id": reward_id, "order_id": r["order_id"], "friend_id": r["friend_id"]})
+        return "refused"
+    _decide(conn, reward_id, decide)
