@@ -42,10 +42,13 @@ ever pushes a pass below what it costs the gateway on the Anthropic account.
 - The referrer is fixed **when the account is created** through Clerk sign-up, and never changes after. Accounts the
   admin creates (CLI) have no referrer. An existing account cannot be attached to a referrer later.
 - A user cannot refer themselves (same user id). Nothing else is checked.
+- The friend keeps the referrer's code on their account even if the referrer later deletes their account
+  (`db.delete_user`): the friend still gets their discount, the deleted referrer simply earns nothing.
 
 ### Which orders take part
 
-- Only orders from a signed-in user, for a new pass, at a normal checkout. Left out of everything (no friend discount,
+- Only orders that have a user when they are created, for a new pass, at a normal checkout. A visitor order the admin
+  later links to an account (`orders.link`) stays out. Left out of everything (no friend discount,
   no unit used, never earn a unit): upgrades (`upgrade_of` set), and the
   admin's payment links (their price is hand-set).
 - During a sale (`ticket_discounts`), the referral discount applies on top of the sale price. The cost floor still
@@ -53,9 +56,22 @@ ever pushes a pass below what it costs the gateway on the Anthropic account.
 
 ### The friend's discount
 
-- A friend gets the **friend discount** (default 10%) on their **first pass**: the first order of an account that has
-  never had a pass granted (by purchase or by the admin).
-- Applied when the order is created, recorded on the order, so the quote the friend sees and pays already includes it.
+- A friend gets the **friend discount** (default 10%) on their **first pass**: the first order of an account whose
+  **email** has never had a pass granted, by purchase or by the admin, on this account or any earlier one. Checking by
+  email stops "delete the account, sign up again with the same email" from getting the discount again (the audit log
+  already keeps the sign-up and self-delete rows needed to find earlier accounts).
+- Applied when the order is created, and the discount percentage is recorded on the order.
+
+### The discount must survive every way an order is granted
+
+Today only an order paid through ZarinPal is sold at its stored quote (`tickets.grant` with `paid=True`,
+tickets.py:833-837). An order the admin grants by hand is priced again from today's price list (tickets.py:829,
+838-840), and the dashboard sends the price its preview showed (web.py:1352-1361). Without a change, a manual order
+would lose its referral discount or be refused with "price changed".
+
+Rule: whenever an order is granted, its recorded referral discount percentage is applied to the price used at that
+moment, and the cost floor is checked again on that price. The admin's grant preview shows the discounted price, so
+the preview and the grant agree.
 
 ### The referrer's reward: discount units
 
@@ -64,10 +80,15 @@ ever pushes a pass below what it costs the gateway on the Anthropic account.
   was earned (my call, so changing the setting does not reprice saved units).
 - **At most one unit per purchase.** Three saved units mean 10% off each of the next three passes, never 30% off one.
 - A unit is used automatically on the referrer's next order (oldest unit first). It is held by the order while the
-  order is open, used for good when that order is paid or granted, and returned if the order is withdrawn, declined,
-  or its payment fails.
+  order is open, used for good as soon as any payment on that order is verified (even if the pass then fails to start,
+  `paid_unfulfilled`) or the order is granted, and returned if the order is withdrawn, declined, or closed with no
+  verified payment.
+- A unit held by an open order stays with that order even if it expires or the admin cancels it meanwhile; the order
+  keeps its discount (my call: the buyer already saw that price).
+- No double use: a user can have only one open order, checked inside one locked transaction (orders.py:159-160).
+  Holding the unit happens inside that same transaction.
 - Units expire after a set time (default 3 months) if unused.
-- Limits: most units held at once (default 5), most units earned per calendar month (default 5). A friend's purchase
+- Limits: most units held at once (default 5), most units earned per calendar month in Tehran time (default 5). A friend's purchase
   over either limit earns nothing (it is logged as "over limit").
 
 ### When a friend's purchase counts
@@ -79,7 +100,8 @@ All of these:
 3. If approval is set to **manual**, the admin approved it. Default is **automatic**.
 
 There is no waiting time: passes are never refunded, so the unit is earned the moment the friend's pass is granted
-(or, with manual approval, when the admin approves). The admin can still cancel any unused unit from the tab.
+(or, with manual approval, when the admin approves). The check runs inside the grant itself, using the grant's
+`after` hook that payments already use (tickets.py:860-861). The admin can still cancel any unused unit from the tab.
 
 ### The cost floor
 
@@ -87,7 +109,9 @@ There is no waiting time: passes are never refunded, so the unit is earned the m
   figure of $20 per 30 days for Lite at its 20% share), plus the payment fee percentage (default 0).
 - Cost of a pass = account cost × the tier's share at the time × days ÷ 30. Today: Lite (20%) $0.67 a day,
   Standard (40%) $1.33 a day. Using the share means changing shares on the Pricing tab keeps the floor right.
-- Any discount (friend or unit) is reduced so that the price before VAT, minus the payment fee, is at least the cost.
+- Any discount (friend or unit) is reduced so that what the gateway keeps is at least the cost. What it keeps = the
+  price before VAT, minus the payment fee, where the fee is taken on the full amount charged (VAT included), since
+  ZarinPal charges on that.
   If it is reduced to zero, the unit is not used and stays saved.
 - With today's prices and defaults no pass hits the floor at 10%: the smallest room is the Standard week (38%).
 - VAT (10%) is added after the discount, as today. VAT is never discounted.
@@ -136,7 +160,8 @@ how much off), expired, cancelled.
 - Prices: `tickets.price_now()` gives the USD price; `orders.create()` turns it into the quote
   (`quoted_usd`, `quoted_amount`) with VAT. The discount belongs here, recorded in new order columns.
 - Payments: `payments.py` grants on a verified ZarinPal payment; manual orders are closed by `orders.close_for_grant()`.
-- Users are created through Clerk sign-up and the Telegram bot.
+- Users are created through Clerk sign-up, or by the admin. The Telegram bot never creates users; it only links a
+  chat to an existing account.
 - Dashboard tabs live in `static/app.js` with strings in `static/i18n.js`.
 
 ## Left to the builder
@@ -145,5 +170,4 @@ how much off), expired, cancelled.
 ignored here.)
 
 - Table and column names, and the code format.
-- Where the "counts" check runs (on a timer, or when a related page loads).
 - Exact layout of the tab and the user card, following the existing dashboard style.
