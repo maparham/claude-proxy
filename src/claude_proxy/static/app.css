@@ -144,7 +144,7 @@ input.search { width: 18rem; max-width: 100%; }
 .meter.stack > span { border-radius: 0; }
 /* The Capacity card's week: one colour per piece, the same on the bar and on its legend chip. */
 .meter > span.seg-used, .legend i.seg-used { background: var(--s1); }
-.meter > span.seg-owed, .legend i.seg-owed { background: var(--s4); }
+.meter > span.seg-reserved, .legend i.seg-reserved { background: var(--s4); }
 .meter > span.seg-margin, .legend i.seg-margin { background: color-mix(in srgb, var(--ink-2) 45%, transparent); }
 .meter > span.seg-free, .legend i.seg-free { background: var(--s3); }
 .meter > span.seg-headroom, .legend i.seg-headroom { background: color-mix(in srgb, var(--ink-2) 18%, transparent); }

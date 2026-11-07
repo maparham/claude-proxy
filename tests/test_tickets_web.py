@@ -207,7 +207,7 @@ async def test_cancel_bonus_capacity_and_ungate(env):
         cap = (await c.get("/api/admin/capacity")).json()
         assert set(cap) == {"week", "peak_week", "five_hour", "hand_set_7d_pct", "utilization", "used_by"}
         row = (await c.get("/api/admin/tickets")).json()["tickets"][0]
-        assert row["week"] is None or set(row["week"]) == {"sold", "used", "owed"}   # its points of this week, when known
+        assert row["week"] is None or set(row["week"]) == {"sold", "used", "reserved"}   # its points of this week, when known
         assert (await c.post(f"/api/admin/users/{ids['alice']}/ungate")).status_code == 400          # live ticket
         r = await c.post(f"/api/admin/tickets/{t['id']}/cancel")
         assert r.status_code == 200 and r.json()["moved"] == 0 and r.json()["dates_kept"] is False

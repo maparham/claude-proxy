@@ -338,7 +338,7 @@ back to zero, and the next request opens a new window. A user over a limit waits
 With a `[tickets]` section in the config (see `config.example.toml`), the gateway sells reserved slices of the
 subscription: a tier (its share of the account) for 1 day, 1 week or 1 month. Payment happens outside the app; the
 admin grants the pass on the dashboard's **Passes** tab, where the form shows the price, the start (now, or when the user's
-current pass ends, or sooner if it runs out first and there is room) and whether the pass fits: its points of this week must fit what Anthropic reports as unused and no running pass is owed, later weeks stay under `max_sold_pct`, and the 5-hour shares of passes running at once under `max_sold_5h_pct`. **Pricing** holds the daily exchange
+current pass ends, or sooner if it runs out first and there is room) and whether the pass fits: its points of this week must fit what Anthropic reports as unused and no running pass has reserved, later weeks stay under `max_sold_pct`, and the 5-hour shares of passes running at once under `max_sold_5h_pct`. **Pricing** holds the daily exchange
 rate, the USD prices and discounts; the home page (`/`, for visitors) shows the prices as tier cards with sold-out lengths and a lower-bound
 "at least N hours of steady use" hint computed once a day from busy hours.
 

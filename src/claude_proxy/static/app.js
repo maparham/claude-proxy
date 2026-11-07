@@ -141,7 +141,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_owed", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
@@ -1270,7 +1270,7 @@ async function renderTickets(main) {
   const pts = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
   const w = cap.week, f = cap.five_hour;
   // The week's 100 points, piece by piece; each piece and its legend chip carry the same tip, on hover or tap.
-  const pieces = [["used", w.used], ["owed", w.owed], ["margin", w.margin], ["free", w.free], ["headroom", 100 - w.max_sold_pct]];
+  const pieces = [["used", w.used], ["reserved", w.reserved], ["margin", w.margin], ["free", w.free], ["headroom", 100 - w.max_sold_pct]];
   const seg = ([k, v]) => `<span class="seg-${k}" style="width:${Math.max(0, Math.min(100, v))}%" data-tip="seg_${k}" tabindex="0" role="button" aria-label="${esc(t(`tk.seg_${k}`, { v: pts(v) }))}"></span>`;
   const chip = ([k, v]) => `<span><i class="seg-${k}"></i>${t(`tk.seg_${k}`, { v: pts(v) })}${tipI(`seg_${k}`)}</span>`;
   const weekMeter = w.fresh
@@ -1327,7 +1327,7 @@ function weekCell(w) {
   if (!w) return `<span class="muted">—</span>`;
   const n = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
   const over = w.used > w.sold + 0.05;
-  return `<span class="num${over ? " over" : ""}">${t("tk.week_use", { used: n(w.used), sold: n(w.sold) })}</span>${w.owed > 0.05 ? `<div class="muted">${t("tk.week_owed", { v: n(w.owed) })}</div>` : ""}`;
+  return `<span class="num${over ? " over" : ""}">${t("tk.week_use", { used: n(w.used), sold: n(w.sold) })}</span>${w.reserved > 0.05 ? `<div class="muted">${t("tk.week_reserved", { v: n(w.reserved) })}</div>` : ""}`;
 }
 function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "queued";

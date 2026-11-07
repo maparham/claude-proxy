@@ -244,7 +244,7 @@ def _ticket_5h(conn, cfg, t, now) -> LimitState:
 
 
 def _free_room(conn, cfg, t, week, att, rate, capacity, now) -> float | None:
-    """The points of the current week no one is owed, for borrowing (2026-10-30 spec §1, through the 2026-11-04 spec §5):
+    """The points of the current week no one has reserved, for borrowing (2026-10-30 spec §1, through the 2026-11-04 spec §5):
     100 less the account's use, what the other passes may still draw, and the borrow margin. Hand-set weekly shares are
     headroom and hold nothing back. None without live data to say so."""
     if cfg.tickets.borrow_margin_pct >= 100 or not fresh(att, now):
@@ -314,7 +314,7 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
 def pass_states(conn, cfg: Config, t: dict, now: float) -> list[LimitState]:
     """One pass's two share limits, measured on the requests it served alone. A day pass running past the weekly reset
     borrows from its next part whenever the week has free room (2026-11-05): the room the user's other passes may
-    still draw is held back from it as owed, so borrowing never takes theirs and need not wait for them."""
+    still draw is held back from it as reserved, so borrowing never takes theirs and need not wait for them."""
     return [_ticket_5h(conn, cfg, t, now), _ticket_7d(conn, cfg, t, now, borrow=True)]
 
 

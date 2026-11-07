@@ -784,7 +784,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     share_5h = effective_share_5h(conn, cfg, tier)
     starts_at, replaces = next_start(conn, cfg, user["id"], now, start_now)
     ends_at = starts_at + LENGTHS[length] * DAY
-    try:   # used-up tickets this one replaces end as it starts: their owed points and 5-hour share go with them
+    try:   # used-up tickets this one replaces end as it starts: their reserved points and 5-hour share go with them
         capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=[t["id"] for t in replaces])
         available, reason = True, None
     except CapacityError as e:

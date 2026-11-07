@@ -127,10 +127,10 @@ def three_day_passes(conn, cfg, ids, used_each):
 
 def test_free_room_sells_what_anthropic_reports_unused(acct):           # spec test 1
     conn, cfg, ids = acct
-    three_day_passes(conn, cfg, ids, 3)                                  # each past its 2.86 piece: owed 0
+    three_day_passes(conn, cfg, ids, 3)                                  # each past its 2.86 piece: reserved 0
     report(conn, ids, 42)
     ctx = capacity.context(conn, cfg, 1, NOW)
-    assert (ctx.used, ctx.owed, ctx.room) == (42, pytest.approx(0), pytest.approx(53))
+    assert (ctx.used, ctx.reserved, ctx.room) == (42, pytest.approx(0), pytest.approx(53))
     t = grant(conn, cfg, ids, tier="standard", length="day")
     assert t["share_pct"] == 40 and tickets.sold_at(conn, 1, NOW) == 100
 
@@ -144,7 +144,7 @@ def test_a_full_week_refuses_with_the_points_named(acct):              # spec te
     assert conn.execute("SELECT COUNT(*) FROM tickets").fetchone()[0] == 3
 
 
-def test_owed_holds_back_what_running_passes_may_still_draw(acct):
+def test_reserved_holds_back_what_running_passes_may_still_draw(acct):
     conn, cfg, ids = acct
     add_user(conn, ids, "bob")
     live(conn, NOW - 1200, 1)
@@ -152,7 +152,7 @@ def test_owed_holds_back_what_running_passes_may_still_draw(acct):
     use(conn, ids["bob"], b["id"], 1, NOW - 1000)
     report(conn, ids, 90)
     ctx = capacity.context(conn, cfg, 1, NOW)
-    assert ctx.owed == pytest.approx(40 / 7 - 1) and ctx.room == pytest.approx(100 - 90 - (40 / 7 - 1) - 5)
+    assert ctx.reserved == pytest.approx(40 / 7 - 1) and ctx.room == pytest.approx(100 - 90 - (40 / 7 - 1) - 5)
     assert tickets.sold_out(conn, cfg, "lite", "day", NOW)              # needs 2.86, 0.29 left
 
 
@@ -199,7 +199,7 @@ def test_unused_points_of_an_ended_pass_are_sold_again(acct):          # spec te
     use(conn, ids["a"], t["id"], 1, NOW - 3 * DAY + 3600)                # 1 of its 5.71
     report(conn, ids, 2)
     ctx = capacity.context(conn, cfg, 1, NOW)
-    assert ctx.owed == 0 and ctx.room == pytest.approx(100 - 2 - 5)
+    assert ctx.reserved == 0 and ctx.room == pytest.approx(100 - 2 - 5)
     assert ctx.sold[W[0]] == pytest.approx(40 / 7)                      # sold, shown on the panel, not a gate
 
 
@@ -211,7 +211,7 @@ def test_a_pass_sold_now_leaves_the_room_by_its_whole_piece(acct):
     assert capacity.context(conn, cfg, 1, NOW).room == pytest.approx(before - 40 / 7)
 
 
-def test_replacing_used_up_passes_frees_their_owed_points(acct):       # Review Focus 3
+def test_replacing_used_up_passes_frees_their_reserved_points(acct):       # Review Focus 3
     conn, cfg, ids = acct
     cfg.tickets.max_sold_5h_pct = 40
     live(conn, NOW - 3600, 1)
@@ -261,7 +261,7 @@ def test_the_5h_ceiling_still_bounds_passes_running_at_once(acct):      # spec t
     report(conn, ids, 1)
     for n in range(4):
         add_user(conn, ids, f"u{n}")
-        grant(conn, cfg, ids, who=f"u{n}", tier="lite", length="day")    # 4 × 20 = 80 of 5-hour share, 11.4 owed
+        grant(conn, cfg, ids, who=f"u{n}", tier="lite", length="day")    # 4 × 20 = 80 of 5-hour share, 11.4 reserved
     add_user(conn, ids, "v")
     with pytest.raises(tickets.CapacityError, match="5-hour shares would reach 120%"):
         grant(conn, cfg, ids, who="v", tier="standard", length="day")
@@ -269,22 +269,22 @@ def test_the_5h_ceiling_still_bounds_passes_running_at_once(acct):      # spec t
     assert grant(conn, cfg, ids, who="v", tier="standard", length="day")["share_pct"] == 40
 
 
-def test_outside_use_scales_owed_and_check_1_but_not_later_weeks(acct):  # spec test 9
+def test_outside_use_scales_reserved_and_check_1_but_not_later_weeks(acct):  # spec test 9
     conn, cfg, ids = acct
     live(conn, NOW, 11)                                                  # 10 points nobody at the gateway used
     grant(conn, cfg, ids, tier="standard", length="week")
     ctx = capacity.context(conn, cfg, 1, NOW)
     assert ctx.scale == pytest.approx(90)
-    assert ctx.owed == pytest.approx(40 * 3 / 7 * 0.9)
+    assert ctx.reserved == pytest.approx(40 * 3 / 7 * 0.9)
     assert ctx.sold[W[1]] == pytest.approx(40 * 4 / 7)
 
 
-def test_without_a_rate_owed_uses_the_attributed_points(acct):          # spec test 10
+def test_without_a_rate_reserved_uses_the_attributed_points(acct):          # spec test 10
     conn, cfg, ids = acct
     live(conn, NOW - 1200, 1)
     t = grant(conn, cfg, ids, tier="standard", length="day", now=NOW - 1200)
     att = {"utilization_pct": 3.0, "stale": False, "resets_at": W[1], "ticket_shares": {t["id"]: 2.0}, "unattributed": 0.0}
-    assert capacity.owed(conn, cfg, 1, W, att, None, 100.0, NOW) == pytest.approx(40 / 7 - 2)
+    assert capacity.reserved(conn, cfg, 1, W, att, None, 100.0, NOW) == pytest.approx(40 / 7 - 2)
 
 
 def test_a_bonus_is_judged_as_one_change(acct):                         # spec test 11
@@ -313,7 +313,7 @@ def test_cancel_whose_move_pulls_a_pass_into_a_full_week_keeps_dates(acct):   # 
     a = grant(conn, cfg, ids, tier="standard", length="week")           # NOW .. NOW + 7d
     q = grant(conn, cfg, ids, tier="standard", length="day")            # queued NOW + 7d: next week
     report(conn, ids, 99, t=NOW + 30)
-    r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + 60)  # q would move here: 5.7 more owed, no room
+    r = tickets.cancel(conn, cfg, ids["admin"], a["id"], now=NOW + 60)  # q would move here: 5.7 more reserved, no room
     assert r["dates_kept"] and "points free" in r["reason"]
     assert tickets.get(conn, q["id"])["starts_at"] == a["ends_at"]
     assert tickets.get(conn, a["id"])["cancelled_at"] == NOW + 60
@@ -391,7 +391,7 @@ def test_summary_reports_the_week_in_points(acct):                      # spec t
     s = capacity.summary(conn, cfg, 1, NOW)
     w = s["week"]
     assert (w["start"], w["end"], w["fresh"], w["used"], w["margin"], w["max_sold_pct"]) == (W[0], W[1], True, 2, 5, 100)
-    assert w["owed"] == pytest.approx(20 * 3 / 7)
+    assert w["reserved"] == pytest.approx(20 * 3 / 7)
     assert w["free"] == pytest.approx(100 - 2 - 20 * 3 / 7 - 5)
     assert w["sold"] == pytest.approx(40 / 7 + 20 * 3 / 7)
     assert w["returned"] == pytest.approx(40 / 7 - 1)

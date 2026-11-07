@@ -650,7 +650,7 @@ async def test_cli_reconcile_survives_a_failure(monkeypatch, caplog):
 
 def full_at_alices_end(conn, cfg, ids):
     """Alice's lite week runs now; bob's standard week is queued from its end. A ceiling of 28 leaves room now (room
-    13: 28 - 10 owed - margin 5) but none for another 5 at alice's end (bob's standard alone sells 25 of the 28 there).
+    13: 28 - 10 reserved - margin 5) but none for another 5 at alice's end (bob's standard alone sells 25 of the 28 there).
     A full, unstarted Anthropic week ahead of `now` (not whatever real wall-clock position live() would land on) is
     what the 25 and the 5 need to line up exactly on a week boundary, so this reports its own snapshot."""
     now = int(time.time())
