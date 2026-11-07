@@ -40,13 +40,13 @@ ever pushes a pass below what it costs the gateway on the Anthropic account.
 - Opening the link stores the code in a cookie for 30 days, then sends the visitor to the home page. The first code
   wins; a later link does not replace it.
 - The referrer is fixed **when the account is created** through Clerk sign-up, and never changes after. Accounts the
-  admin creates (CLI, or from a visitor's order) have no referrer. An existing account cannot be attached to a referrer later.
+  admin creates (CLI) have no referrer. An existing account cannot be attached to a referrer later.
 - A user cannot refer themselves (same user id). Nothing else is checked.
 
 ### Which orders take part
 
 - Only orders from a signed-in user, for a new pass, at a normal checkout. Left out of everything (no friend discount,
-  no unit used, never earn a unit): visitor orders placed before signing in, upgrades (`upgrade_of` set), and the
+  no unit used, never earn a unit): upgrades (`upgrade_of` set), and the
   admin's payment links (their price is hand-set).
 - During a sale (`ticket_discounts`), the referral discount applies on top of the sale price. The cost floor still
   holds, so stacking can never go below cost.
@@ -143,6 +143,9 @@ how much off), expired, cancelled.
 - Dashboard tabs live in `static/app.js` with strings in `static/i18n.js`.
 
 ## Left to the builder
+
+(No page orders without signing in: `POST /api/orders` still exists on the server but nothing calls it, so it is
+ignored here.)
 
 - Table and column names, and the code format.
 - Where the "counts" check runs (on a timer, or when a related page loads).
