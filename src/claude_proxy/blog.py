@@ -31,6 +31,9 @@ from functools import lru_cache
 from pathlib import Path
 
 POSTS = Path(__file__).parent / "blog"
+# Search keywords for the meta tag, not shown on the page: Iranians also write Claude as کلود, which is less correct, so
+# it appears here and at most once per post in parentheses, never in the site's own wording.
+KEYWORDS = "کلاد, کلود, Claude, خرید کلاد, خرید کلود, اشتراک کلاد, اشتراک کلود, خرید Claude, Claude Code, Anthropic"
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 FA_TIERS = {"lite": "اقتصادی", "standard": "استاندارد"}
@@ -168,6 +171,7 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="description" content="{d}">
+<meta name="keywords" content="{KEYWORDS}">
 <title>{t}</title>
 <link rel="canonical" href="{url}">
 <meta property="og:type" content="{og_type}">

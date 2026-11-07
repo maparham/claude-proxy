@@ -110,3 +110,14 @@ def test_each_post_links_the_buying_guide_and_related_posts():
             assert links[0] == blog.GUIDE
     page = blog.post_page("https://example.com", posts["what-is-claude"], None)
     assert 'id="related-h">مطالب مرتبط</h2>' in page and 'href="/blog/buy-claude-subscription-iran"' in page
+
+
+async def test_the_spelling_kalud_is_a_keyword_but_never_shown_on_the_home_page(env):
+    # Iranians also search کلود; it sits in the head (keywords, structured data) and never in the page's own text.
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.home_url = "https://example.com"
+    async with client(create_dashboard_app(gw), "example.com") as c:
+        html = (await c.get("/")).text
+    head, body = html.split("</head>", 1)
+    assert 'name="keywords"' in head and "کلود" in head and '"alternateName"' in head
+    assert "کلود" not in body
