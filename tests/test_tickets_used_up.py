@@ -208,7 +208,7 @@ def test_replacing_a_used_up_pass_at_the_ceiling_frees_its_share_and_cuts_its_bo
 def test_hand_over_changes_nothing_when_the_queued_pass_no_longer_fits(env):
     """Moved up to now, the queued pass's bonus would land beside bob's pass: over the ceiling."""
     conn, cfg, ids, t = env
-    cfg.tickets.max_sold_pct = cfg.tickets.max_sold_5h_pct = 30
+    cfg.tickets.max_sold_pct, cfg.tickets.max_sold_5h_pct, cfg.tickets.sell_margin_pct = 30, 31, 0   # 5h: room for bob beside the 1% used
     bob, _ = create_user(conn, "bob")
     tickets.grant(conn, cfg, ids["admin"], user(conn, bob), "standard", "day", "USD", now=NOW - 300, terms_version="v1")   # ends with t
     q = day(conn, cfg, ids, NOW - 250)

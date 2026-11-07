@@ -259,6 +259,42 @@ def _no_room(free: float, need: float) -> str:
     return f"This week has {max(0.0, free):.1f} points free and the pass needs {need:.1f}."
 
 
+def reserved_5h(conn: sqlite3.Connection, account_id: int, att: dict, scale: float, now: float, exclude=()) -> float:
+    """Σ over running passes (but `exclude`) of the 5-hour allowance each has reserved in Anthropic's current window (may still draw):
+    its 5-hour share with bonuses, scaled as _ticket_5h scales it, less the points it moved there."""
+    ex = _ids(exclude)
+    total = 0.0
+    for r in conn.execute(f"SELECT t.id, COALESCE(t.share_5h_pct, t.share_pct) FROM tickets t WHERE t.account_id=? "
+                          f"AND t.cancelled_at IS NULL AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, now, now)):
+        if r[0] in ex:
+            continue
+        limit = (r[1] + tickets.bonus_share(conn, r[0], now)) * scale / 100
+        total += max(0.0, limit - att["ticket_shares"].get(r[0], 0.0))
+    return total
+
+
+def check_5h_room(conn: sqlite3.Connection, cfg: Config, account_id: int, share_5h: float, starts_at: float, now: float,
+                  exclude=()) -> None:
+    """A pass (or added 5-hour share) starting inside Anthropic's current 5-hour window must find its whole 5-hour
+    allowance free there: max_sold_5h_pct − U − Σ reserved_5h − sell_margin_pct ≥ share_5h (2026-11-07), else a buyer
+    bought just after the window filled would wait for the reset. The need is the share as sold, not scaled by
+    _capacity: use the gateway can't pin on a user shrinks every pass's limit, so a window filled that way must refuse
+    too. Skipped without a fresh 5-hour report (the weekly check already refuses a stale one), or for a start at or
+    after the window's reset."""
+    if share_5h <= 1e-12:
+        return
+    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    if not (att["utilization_pct"] is not None and not att["stale"] and att["resets_at"] and now < att["resets_at"]) \
+            or starts_at >= att["resets_at"]:
+        return
+    need = share_5h
+    free = (cfg.tickets.max_sold_5h_pct - att["utilization_pct"]
+            - reserved_5h(conn, account_id, att, _capacity(att, now), now, exclude) - cfg.tickets.sell_margin_pct)
+    if need > free + 1e-9:
+        raise tickets.FiveHourFull(f"The current 5-hour window has {max(0.0, free):.1f} points free and the pass needs "
+                                    f"{need:.1f}; it resets at {time.strftime('%H:%M', time.gmtime(att['resets_at']))} UTC.", att["resets_at"])
+
+
 def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
           ends_at: float, now: float, exclude=(), ctx: Context | None = None) -> None:
     """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails."""
@@ -274,6 +310,7 @@ def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, 
         if w > ws and ctx.sold.get(w, 0.0) + p > cfg.tickets.max_sold_pct + 1e-9:
             raise tickets.CapacityError(_week_full(w, ctx.sold.get(w, 0.0) + p, cfg.tickets.max_sold_pct))
     tickets.check_capacity(conn, cfg, account_id, share_5h, int(starts_at), int(ends_at), list(ctx.exclude) or None)
+    check_5h_room(conn, cfg, account_id, share_5h, starts_at, now, ctx.exclude)
 
 
 class Guard:

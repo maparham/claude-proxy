@@ -239,7 +239,7 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     lite = next(t for t in p["tiers"] if t["tier"] == "lite")
     assert (lite["compare"], lite["compare_pct"]) == ("Claude Pro", 30) and lite["lengths"]["month"] == {
         "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5,
-        "usd_total": 15.0, "list_usd_total": 20.0, "sold_out": False, "unavailable": True}   # no fresh report: nothing sells
+        "usd_total": 15.0, "list_usd_total": 20.0, "sold_out": False, "available_at": None, "unavailable": True}   # no fresh report: nothing sells
     assert lite["lengths"]["week"]["sold_out"] is False and lite["lengths"]["week"]["unavailable"] is True \
         and lite["lengths"]["week"]["discount_ends_at"] is None
     standard = next(t for t in p["tiers"] if t["tier"] == "standard")

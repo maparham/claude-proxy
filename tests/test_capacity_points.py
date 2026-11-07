@@ -483,3 +483,75 @@ def test_returned_counts_a_share_bonus_of_an_ended_pass(acct):
     report(conn, ids, 2)
     s = capacity.summary(conn, cfg, 1, NOW)
     assert s["week"]["returned"] == pytest.approx(40 / 7 + 10 / 7 - 1)   # the pass's own piece, its bonus's, less use
+
+
+# ---------- the current 5-hour window must hold a new pass's whole 5-hour share (2026-11-07) ----------
+
+def five_hour(conn, util, t=NOW - 30, resets=NOW + 2 * 3600):
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (t, "header", "5h", util, resets))
+
+
+def _five_hour_cfg(conn, cfg, ids):
+    cfg.tickets.sell_margin_pct = 0
+    tickets.set_share_5h(conn, cfg, "lite", 10, ids["admin"])
+    live(conn, NOW)
+
+
+def test_a_pass_is_refused_when_the_5h_window_is_nearly_full(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 95.0)                     # all of it the owner's own: no request explains it
+    with pytest.raises(tickets.CapacityError, match="5-hour window has 5.0 points free and the pass needs 10.0"):
+        grant(conn, cfg, ids, tier="lite", length="day")
+    assert tickets.sold_out(conn, cfg, "lite", "day", NOW)
+
+
+def test_a_pass_fits_when_the_5h_window_has_its_share_free(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 90.0)
+    assert grant(conn, cfg, ids, tier="lite", length="day")["id"]
+
+
+def test_running_passes_keep_their_5h_reservation(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 0.0)
+    grant(conn, cfg, ids, tier="lite", length="day")             # reserves 10: no use yet
+    capacity.check_5h_room(conn, cfg, 1, 90, NOW, NOW)            # 100 − 0 − 10
+    with pytest.raises(tickets.CapacityError, match="90.0 points free and the pass needs 95.0"):
+        capacity.check_5h_room(conn, cfg, 1, 95, NOW, NOW)
+
+
+def test_the_5h_room_is_not_checked_past_the_reset_or_without_a_fresh_report(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 100.0, resets=NOW - 60)   # that window is over
+    assert grant(conn, cfg, ids, tier="lite", length="day")["id"]
+    capacity.check_5h_room(conn, cfg, 1, 10, NOW, NOW)
+
+
+def test_a_pass_starting_after_the_5h_reset_is_not_held_to_the_current_window(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 100.0)
+    capacity.check_5h_room(conn, cfg, 1, 10, NOW + 2 * 3600, NOW)
+    with pytest.raises(tickets.CapacityError):
+        capacity.check_5h_room(conn, cfg, 1, 10, NOW + 3600, NOW)
+
+
+def test_the_price_list_says_when_a_5h_sold_out_card_is_back(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 95.0)
+    lite = next(t for t in tickets.price_table(conn, cfg, NOW, "EUR")["tiers"] if t["tier"] == "lite")["lengths"]["day"]
+    assert (lite["sold_out"], lite["available_at"]) == (True, NOW + 2 * 3600)
+
+
+def test_a_card_sold_out_on_the_week_has_no_return_time(db):
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    cfg.tickets.max_sold_pct = 0.5   # under a day pass's 5/7 piece
+    lite = next(t for t in tickets.price_table(conn, cfg, NOW, "EUR")["tiers"] if t["tier"] == "lite")["lengths"]["day"]
+    assert (lite["sold_out"], lite["available_at"]) == (True, None)

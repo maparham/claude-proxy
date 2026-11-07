@@ -245,6 +245,14 @@ class CapacityError(TicketError):
     """The period would push what is sold over max_sold_pct."""
 
 
+class FiveHourFull(CapacityError):
+    """Anthropic's current 5-hour window lacks the pass's 5-hour share; it fits again at `resets_at`."""
+
+    def __init__(self, message: str, resets_at: float):
+        super().__init__(message)
+        self.resets_at = resets_at
+
+
 class QuoteChanged(TicketError):
     """The price or rate moved between the grant form's preview and the grant."""
 
@@ -880,15 +888,20 @@ def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now:
     """A tier and length is sold out when a ticket starting now, or at `starts_at`, fails spec §2, or no fresh weekly
     report exists (price_table tells that case apart as `unavailable`). `exclude`: the used-up tickets it would replace
     (next_start), as grant leaves them out. `ctx`: a capacity.context to reuse."""
+    return _misfit(conn, cfg, tier, length, now, starts_at, exclude, ctx) is not None
+
+
+def _misfit(conn, cfg, tier, length, now, starts_at=None, exclude=None, ctx=None) -> CapacityError | None:
+    """sold_out's reason: the CapacityError a ticket starting now (or at `starts_at`) would meet, None when it fits."""
     from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     start = now if starts_at is None else int(starts_at)
     try:
         capacity.check(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), effective_share_5h(conn, cfg, tier), start,
                        start + LENGTHS[length] * DAY, now, exclude or (), ctx)
-    except CapacityError:
-        return True
-    return False
+    except CapacityError as e:
+        return e
+    return None
 
 
 # ---------- cancel, bonus, queue moves ----------
@@ -1294,7 +1307,9 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                "amount": round_local(p["usd"], rate["rate"], step, vat), "list_amount": round_local(p["list_usd"], rate["rate"], step, vat),
                                # the USD price with VAT, for a page showing USD beside its own currency
                                "usd_total": round_local(p["usd"], 1, USD_ROUND_TO, vat), "list_usd_total": round_local(p["list_usd"], 1, USD_ROUND_TO, vat),
-                               "sold_out": ctx_now.fresh and sold_out(conn, cfg, tid, length, now, None, exclude, ctx_now),
+                               "sold_out": (miss := _misfit(conn, cfg, tid, length, now, None, exclude, ctx_now) if ctx_now.fresh else None) is not None,
+                               # sold out only until Anthropic's 5-hour window resets: when it is back on sale
+                               "available_at": miss.resets_at if isinstance(miss, FiveHourFull) else None,
                                "unavailable": not ctx_now.fresh,
                                # a buyer's list: whether one starting at `starts_at` (after their passes) fits too
                                **({"sold_out_later": sold_out(conn, cfg, tid, length, now, starts_at, None, ctx_later)} if later else {})}

@@ -80,7 +80,8 @@ function card(t_, i, len, currency) {
     <p class="per">${t(LENGTHS[len][0])}</p>
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
-    ${l.sold_out || l.unavailable ? `<span class="btn get" aria-disabled="true">${t(l.unavailable ? "home.unavailable" : "home.sold_out")}</span>`
+    ${l.sold_out && l.available_at ? `<span class="btn get countdown" aria-disabled="true" data-ends="${l.available_at}" data-key="home.available_in">${t("home.available_in", { text: esc(countdown(l.available_at)) })}</span>`
+      : l.sold_out || l.unavailable ? `<span class="btn get" aria-disabled="true">${t(l.unavailable ? "home.unavailable" : "home.sold_out")}</span>`
       : `<button type="button" class="btn primary get" data-order="${esc(t_.tier)}:${len}">${t("home.get_it")}</button>`}
   </article>`;
 }
@@ -115,8 +116,9 @@ function tick() {
   let ended = null;
   document.querySelectorAll(".countdown").forEach((el) => {
     const ends = +el.dataset.ends;
-    if (ends <= serverNow()) { el.textContent = t("price.offer_ended"); if (!reloadedFor(ends)) ended = ends; }
-    else el.textContent = t("home.offer_ends_in", { text: countdown(ends) });
+    // data-key: a card back on sale at the 5-hour reset counts down with its own words; any countdown's end reloads
+    if (ends <= serverNow()) { el.textContent = el.dataset.key ? t(el.dataset.key, { text: countdown(ends) }) : t("price.offer_ended"); if (!reloadedFor(ends)) ended = ends; }
+    else el.textContent = t(el.dataset.key || "home.offer_ends_in", { text: countdown(ends) });
   });
   if (ended == null) return;
   reloaded = true; markReloaded(ended);
