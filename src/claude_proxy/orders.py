@@ -387,33 +387,35 @@ def fa_amount(amount: float, currency: str) -> str:
 # ---------- the referral discount line in a buyer's email (referrals design, task 6) ----------
 
 def ref_discount_usd(order: dict, ticket: dict | None = None) -> tuple[float, float]:
-    """(the list price it was measured against, the referral discount actually sold at), in USD. From the granted
-    ticket's own prices (list_usd - usd) when there is one - the real, final price it sold at - never from
-    orders.ref_off_usd once a ticket exists: a unit floored to 0% at a manual grant (the share rose since the order)
-    keeps ref_off_usd on the order though the pass sold at full price (controller ruling). Without a ticket yet (the
+    """(the price the referral discount came off, the referral discount actually sold at), in USD. From the granted
+    ticket's own ref_off_usd when there is one - the referral part alone, set at grant (re-floored on an unpaid grant,
+    the order's own on a paid one) - never orders.ref_off_usd once a ticket exists: a unit floored to 0% at a manual
+    grant keeps ref_off_usd on the order though the pass sold at full price (controller ruling). Not list_usd - usd
+    either: during a sale (ticket_discounts) that also counts the sale (task 6 fix round 1). Without a ticket yet (the
     order-placed email), the order's own list_usd and ref_off_usd, recorded when the order was created. (0, 0) when
     the order carries no referral discount at all (ref_kind unset)."""
     if not order.get("ref_kind"):
         return 0.0, 0.0
     if ticket is not None:
-        return ticket["list_usd"], round(ticket["list_usd"] - ticket["usd"], 2)
+        off = ticket["ref_off_usd"] or 0.0
+        return round(ticket["usd"] + off, 2), off
     return order.get("list_usd") or 0.0, order.get("ref_off_usd") or 0.0
 
 
 def ref_discount_line_en(order: dict, ticket: dict | None = None) -> str:
     """'Referral discount: X% (−$Y)\\n', or '' when the order carries no referral discount, or it came to 0."""
-    list_usd, off = ref_discount_usd(order, ticket)
+    before, off = ref_discount_usd(order, ticket)
     if off <= 0:
         return ""
-    pct = round(off / list_usd * 100) if list_usd else 0
+    pct = round(off / before * 100) if before else 0
     return f"Referral discount: {pct}% (−${off:.2f})\n"
 
 
 def ref_discount_line_fa(order: dict, ticket: dict | None = None) -> str:
-    list_usd, off = ref_discount_usd(order, ticket)
+    before, off = ref_discount_usd(order, ticket)
     if off <= 0:
         return ""
-    pct = round(off / list_usd * 100) if list_usd else 0
+    pct = round(off / before * 100) if before else 0
     return f"تخفیف معرفی دوستان: {fa_num(pct)}٪ (−${fa_num(f'{off:.2f}')})\n"
 
 

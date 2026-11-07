@@ -17,7 +17,7 @@ def test_ticket_tables_exist_with_the_spec_columns(db):
     assert cols(conn, "fx_rates") == {"id", "currency", "rate", "set_at", "set_by"}
     assert cols(conn, "tickets") >= {"id", "user_id", "user_name", "account_id", "tier", "share_pct", "length", "days", "starts_at",
                                       "ends_at", "list_usd", "usd", "discount_id", "currency", "rate", "amount", "granted_by",
-                                      "granted_at", "cancelled_at", "cancelled_by", "note", "ungated_at"}
+                                      "granted_at", "cancelled_at", "cancelled_by", "note", "ungated_at", "ref_off_usd"}
     assert cols(conn, "ticket_bonuses") == {"id", "ticket_id", "share_pct", "extra_days", "starts_at", "ends_at", "note", "granted_by",
                                             "granted_at", "cancelled_at", "cancelled_by", "tier", "share_5h_pct"}
     assert cols(conn, "usage_estimates") == {"computed_at", "family", "bucket", "busy_hours", "p75_share_per_hour"}

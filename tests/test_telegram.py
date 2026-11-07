@@ -2,6 +2,7 @@
 import itertools
 import json
 import logging
+import time
 from types import SimpleNamespace
 
 import httpx
@@ -452,6 +453,22 @@ async def test_invite_linked_shows_the_link_and_units(tg):
         await post(c, msg(ALICE, "/invite"))
     text = tg.fake.texts(ALICE)[-1]
     assert f"https://rahkar.pro/r/{code}" in text and "۱۰" in text   # the 10% friend discount, in Persian digits
+
+
+async def test_invite_lists_saved_units_and_waiting_rewards(tg):
+    link(tg.conn, ALICE, tg.ids["alice"])
+    referrals.set_settings(tg.conn, tg.ids["admin"], {"enabled": True})
+    now = int(time.time())
+    expires = now + 30 * 86400
+    tg.conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at) VALUES(?,?,?,?,'saved',?)",
+                    (tg.ids["alice"], 15.0, now - 60, expires, now - 60))
+    tg.conn.execute("INSERT INTO referral_rewards(referrer_id, friend_id, order_id, created_at, status) VALUES(?,?,?,?,'waiting')",
+                    (tg.ids["alice"], None, 999, now - 60))
+    async with app(tg) as c:
+        await post(c, msg(ALICE, "/invite"))
+    text = tg.fake.texts(ALICE)[-1]
+    assert telegram.t("fa", "invite_unit", pct="۱۵", date=tickets.terms_date(expires, "fa")) in text
+    assert telegram.t("fa", "invite_waiting", n="۱") in text
 
 
 async def test_invite_off_tells_the_user(tg):

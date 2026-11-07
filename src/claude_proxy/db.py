@@ -230,7 +230,8 @@ SCHEMA = [
         note TEXT,
         ungated_at INTEGER,                 -- set by the Ungate action: this row no longer makes its user ticket-gated
         share_5h_pct REAL,                  -- copied at grant like share_pct; NULL (sold before the split): share_pct
-        used_up_at INTEGER                  -- set: used up before its end, it ended here and the user's next ticket took over
+        used_up_at INTEGER,                 -- set: used up before its end, it ended here and the user's next ticket took over
+        ref_off_usd REAL                    -- the referral discount alone, in USD, set at grant; NULL: no referral
     )""",
     "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, starts_at)",
     "CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id, starts_at)",
@@ -560,6 +561,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN ref_unit_id INTEGER")   # the referral_units row a unit discount held/used
     if "list_usd" not in _columns(conn, "orders"):
         conn.execute("ALTER TABLE orders ADD COLUMN list_usd REAL")   # the price before the referral discount
+    if "ref_off_usd" not in _columns(conn, "tickets"):
+        conn.execute("ALTER TABLE tickets ADD COLUMN ref_off_usd REAL")   # the referral part alone of list_usd - usd
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:

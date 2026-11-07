@@ -82,3 +82,60 @@ def test_granted_mail_shows_nothing_once_the_cost_floor_zeroes_it(env_on):
     assert t["usd"] == 8.0
     body = orders.granted_mail_text(conn, cfg, orders.get(conn, o["id"]), t)[1]
     assert "Referral discount" not in body
+
+
+# ---------- Task 6 fix round 1: a sale and a referral on the same pass ----------
+
+from claude_proxy import payments  # noqa: E402
+from tests.test_referrals import add_payment, grant_paid  # noqa: E402
+
+
+def on_sale(conn, cfg, ids):
+    """Lite/week on sale at $6 (regular $8): the friend's 10% comes off the sale price, $0.60, not off $8."""
+    tickets.create_discount(conn, cfg, "lite", "week", 6.0, NOW - DAY, NOW + 30 * DAY, ids["admin"], now=NOW - DAY)
+
+
+DAY = 86400
+
+
+def test_granted_mail_shows_only_the_referral_part_during_a_sale(env_on):
+    conn, cfg, ids = env_on
+    on_sale(conn, cfg, ids)
+    o = signed_in(conn, cfg, ids["bob"])
+    assert (o["quoted_usd"], o["ref_off_usd"]) == (5.4, 0.6)
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["bob"]), o["tier"], o["length"], o["currency"],
+                      order_id=o["id"], now=NOW)
+    assert (t["list_usd"], t["usd"], t["ref_off_usd"]) == (8.0, 5.4, 0.6)
+    body = orders.granted_mail_text(conn, cfg, orders.get(conn, o["id"]), t)[1]
+    assert "Referral discount: 10% (−$0.60)" in body
+
+
+def test_paid_grant_keeps_the_orders_referral_part_during_a_sale(env_on):
+    conn, cfg, ids = env_on
+    on_sale(conn, cfg, ids)
+    o = signed_in(conn, cfg, ids["bob"])
+    t = grant_paid(conn, cfg, ids, ids["bob"], o)
+    assert (t["usd"], t["ref_off_usd"]) == (5.4, 0.6)
+    assert "Referral discount: 10% (−$0.60)" in orders.granted_mail_text(conn, cfg, orders.get(conn, o["id"]), t)[1]
+
+
+def test_ticket_without_a_referral_has_no_ref_off(env_on):
+    conn, cfg, ids = env_on
+    o = signed_in(conn, cfg, ids["alice"])
+    t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), o["tier"], o["length"], o["currency"],
+                      order_id=o["id"], now=NOW)
+    assert t["ref_off_usd"] is None
+
+
+def test_zarinpal_receipt_shows_the_referral_line(env_on):
+    conn, cfg, ids = env_on
+    cfg.email = CFG
+    o = signed_in(conn, cfg, ids["bob"], currency="IRT")
+    p = add_payment(conn, o)
+    assert payments._fulfil(conn, cfg, p, "201", None, NOW)["status"] == "paid"
+    p, o = payments.get(conn, p["id"]), orders.get(conn, o["id"])
+    t = tickets.get(conn, o["ticket_id"])
+    m = payments.mails(conn, cfg, p, o, t, None)
+    assert "Referral discount: 10% (−$0.80)" in m[1][2] and "Referral discount" not in m[0][2]
+    m = payments.mails(conn, cfg, p, o | {"lang": "fa"}, t, None)
+    assert "تخفیف معرفی دوستان: ۱۰٪ (−$۰٫۸۰)" in m[1][2]

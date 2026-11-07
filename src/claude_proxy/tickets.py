@@ -836,16 +836,20 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         if orow is not None:
             start_now = bool(orow["start_now"])
         # Unpaid: the order's referral discount is applied again to today's price, so expect_usd is the discounted one.
+        # tickets.ref_off_usd keeps the referral part alone (preview's re-floored ref_off_usd unpaid, the order's own
+        # paid), NULL without a referral: list_usd - usd would also count a sale price (ticket_discounts) in it.
         p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id)
         if order_id is not None:
             grant_terms = orow["terms_version"] if orow is not None else TERMS_VERSION
         else:
             grant_terms = _check_terms(terms_version)
         if paid:
-            q = conn.execute("SELECT quoted_usd, quoted_rate, quoted_amount FROM orders WHERE id=?", (order_id,)).fetchone()
+            q = conn.execute("SELECT quoted_usd, quoted_rate, quoted_amount, ref_kind, ref_off_usd FROM orders WHERE id=?",
+                             (order_id,)).fetchone()
             if q is None:
                 raise TicketError(f"Order #{order_id} does not exist.")
-            p = p | {"usd": q["quoted_usd"], "rate": q["quoted_rate"], "amount": q["quoted_amount"]}
+            p = p | {"usd": q["quoted_usd"], "rate": q["quoted_rate"], "amount": q["quoted_amount"],
+                     "ref_off_usd": (q["ref_off_usd"] or 0.0) if q["ref_kind"] else None}
         else:
             if expect_usd is not None and abs(p["usd"] - expect_usd) > 1e-9:
                 raise QuoteChanged(f"The price is now ${p['usd']:g}, not ${expect_usd:g} as shown; check the new price and grant again.")
@@ -861,9 +865,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             raise CapacityError(p["reason"])
         cur = conn.execute(
             "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
-            "discount_id, currency, rate, amount, granted_by, granted_at, note) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            "discount_id, currency, rate, amount, granted_by, granted_at, note, ref_off_usd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], p["share_5h_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
-             p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, note))
+             p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, note, p.get("ref_off_usd")))
         tid = cur.lastrowid
         if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
             db.audit(conn, actor, "credit_removed", user["name"], {"ticket_id": tid})
