@@ -76,11 +76,10 @@ All of these:
 
 1. It is the friend's first pass (the same purchase that got the friend discount).
 2. It was paid (online through ZarinPal, or a manual order the admin marked done) and the pass was granted.
-3. A waiting time (default 7 days) has passed since the grant, and the order has not been withdrawn or refunded in that
-   time. During the wait the reward shows as "pending" to the referrer.
-4. If approval is set to **manual**, the admin approved it. Default is **automatic**.
+3. If approval is set to **manual**, the admin approved it. Default is **automatic**.
 
-The admin can cancel any unused unit from the tab (for example after a refund made outside the system).
+There is no waiting time: passes are never refunded, so the unit is earned the moment the friend's pass is granted
+(or, with manual approval, when the admin approves). The admin can still cancel any unused unit from the tab.
 
 ### The cost floor
 
@@ -109,27 +108,25 @@ A new dashboard tab, admin only.
 | Most units held | 5 |
 | Most units earned per month | 5 |
 | Unit lifetime | 3 months |
-| Waiting time before a purchase counts | 7 days |
 | Approval | automatic (or manual) |
 | Account cost per 30 days | $100 |
 | Payment fee | 0% |
 
-Turning referrals off stops new links, new friend discounts and new units; purchases already waiting still finish
-and earn their unit, and saved units stay usable unless the admin cancels them (my call). If the referrer's or the
-friend's account is deleted or disabled during the wait, no unit is earned.
+Turning referrals off stops new links, new friend discounts and new units; rewards already waiting for the
+admin's approval can still be approved, and saved units stay usable unless the admin cancels them (my call). A
+disabled or deleted referrer earns nothing.
 
-**Waiting for approval** (shown only when approval is manual, or when items exist): each friend purchase that has
-passed the wait, with referrer, friend, pass, price paid, and Approve / Refuse.
+**Waiting for approval** (shown only when approval is manual, or when items exist): each friend purchase waiting for a decision, with referrer, friend, pass, price paid, and Approve / Refuse.
 
 **Referrers:** each user with a code: friends signed up, friends who bought, units saved, units used, units expired.
 
-**History:** every event: friend signed up, purchase pending, unit earned, refused, over limit, used (on which order,
+**History:** every event: friend signed up, waiting for approval, unit earned, refused, over limit, used (on which order,
 how much off), expired, cancelled.
 
 ## User-facing
 
 - Dashboard: a "Invite friends" card with the link, a copy button, the friend's discount, units saved (with expiry
-  dates), and pending rewards. Persian and English, following the existing i18n.
+  dates), and rewards waiting for the admin's approval. Persian and English, following the existing i18n.
 - Order dialog and price list: when a discount applies, show the original price, the discount, and the final price.
 - Telegram bot: a command or button that shows the same link and units.
 - Emails: the buyer's order and receipt emails show the discount line.
@@ -149,5 +146,4 @@ ignored here.)
 
 - Table and column names, and the code format.
 - Where the "counts" check runs (on a timer, or when a related page loads).
-- How a manual order's refund or withdrawal after grant is detected, if at all, beyond the admin's cancel button.
 - Exact layout of the tab and the user card, following the existing dashboard style.
