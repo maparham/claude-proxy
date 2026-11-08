@@ -98,16 +98,8 @@ _DUMMY_HASH = _ph.hash("not-a-real-password")
 PAGE_HEADERS = {"Cache-Control": "no-cache, no-transform"}
 USER_CODE_LETTERS = "BCDFGHJKLMNPQRSTVWXZ"   # no vowels (no words), no look-alikes of digits
 DEVICE_TTL_S, DEVICE_INTERVAL_S = 600, 3
-# Order emails go out after the response (order requests design, section 5). asyncio keeps only weak references to
-# tasks, so each is held here until it is done.
-_mail_tasks: set[asyncio.Task] = set()
-
-
-def _mail_done(task: asyncio.Task) -> None:
-    """Drop the finished task, and log anything dispatch raised outside its per-send handling right away."""
-    _mail_tasks.discard(task)
-    if not task.cancelled() and task.exception() is not None:
-        logger.error("order mail dispatch failed", exc_info=task.exception())
+# Order emails go out after the response (mail.spawn), held there until done.
+_mail_tasks = mail.tasks
 
 
 def fail(status: int, message: str):
@@ -1448,9 +1440,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version,
                         start_now=bool(body.get("start_now")))
         if order_id is not None and cfg.email is not None:   # the buyer hears their order is done, after the response
-            task = asyncio.create_task(orders.send_granted(conn, cfg, order_id))
-            _mail_tasks.add(task)
-            task.add_done_callback(_mail_done)
+            mail.spawn(orders.send_granted(conn, cfg, order_id))
         return {"ok": True, "ticket": t}
 
     @app.post("/api/admin/tickets/{tid}/cancel")
@@ -1544,9 +1534,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""),
                         start_now=bool(body.get("start_now")), **kw)
         if cfg.email is not None:   # after the response: a slow mail server never delays it
-            task = asyncio.create_task(orders.dispatch(conn, cfg, o["id"]))
-            _mail_tasks.add(task)
-            task.add_done_callback(_mail_done)
+            mail.spawn(orders.dispatch(conn, cfg, o["id"]))
         return o
 
     @app.post("/api/orders")
@@ -1612,13 +1600,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         # p["changed"] (set only on the call that actually moved the payment): two callbacks can race on the same
         # authority and both see it paid, so the status alone would send the mail twice.
         if p.get("changed") and p["status"] in ("paid", "paid_unfulfilled") and cfg.email is not None:
-            task = asyncio.create_task(payments.send_mails(conn, cfg, p["id"]))
-            _mail_tasks.add(task)
-            task.add_done_callback(_mail_done)
+            mail.spawn(payments.send_mails(conn, cfg, p["id"]))
         if p.get("changed") and p["status"] in ("paid", "paid_unfulfilled") and tg is not None:
-            task = asyncio.create_task(telegram.after_payment(conn, cfg, gw.http, p["id"]))
-            _mail_tasks.add(task)
-            task.add_done_callback(_mail_done)
+            mail.spawn(telegram.after_payment(conn, cfg, gw.http, p["id"]))
         return RedirectResponse(f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard#payment/{p['id']}", status_code=302)
 
     @app.get("/pay/{code}")
@@ -1718,9 +1702,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if action == "withdraw":
             ticket_call(orders.withdraw, conn, user["id"], oid)
             if cfg.email is not None:   # the buyer gets a confirmation, after the response
-                task = asyncio.create_task(orders.send_closed(conn, cfg, oid))
-                _mail_tasks.add(task)
-                task.add_done_callback(_mail_done)
+                mail.spawn(orders.send_closed(conn, cfg, oid))
         elif action == "dismiss":
             ticket_call(orders.dismiss, conn, user["id"], oid)
         else:
@@ -1782,9 +1764,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             o["pay_url"] = pay_url(o)
             # Offered in the link dialog, never linked by itself (spec section 7).
             o["suggested_user"] = orders.suggest_user(conn, o) if o["user_id"] is None and o["status"] in orders.OPEN else None
-            pay = conn.execute("SELECT status, amount, ref_id, card_pan FROM payments WHERE order_id=? ORDER BY id DESC LIMIT 1",
-                               (o["id"],)).fetchone()
-            o["payment"] = dict(pay) if pay else None
+            pay = conn.execute("SELECT status, amount, ref_id, card_pan, reverse_started_at, reversed_at FROM payments "
+                               "WHERE order_id=? ORDER BY id DESC LIMIT 1", (o["id"],)).fetchone()
+            # `refund`: "done" once ZarinPal reversed it (refunds.py), "unconfirmed" while a reverse went unanswered.
+            o["payment"] = None if pay is None else {k: pay[k] for k in ("status", "amount", "ref_id", "card_pan")} | {
+                "refund": "done" if pay["reversed_at"] else "unconfirmed" if pay["reverse_started_at"] else None}
         # `pay_mode`: the Payment selector itself, None without a [zarinpal] section (no selector then); `zarinpal_down`: ZarinPal can't take a payment now (not set up, or a stale Toman rate).
         # `mail_servers`: with [email.alt], the two SMTP servers, the one tried first marked.
         e = cfg.email
@@ -1844,9 +1828,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         elif action == "decline":
             o = ticket_call(orders.set_status, conn, actor["id"], oid, "declined", note=body.get("note"))
             if cfg.email is not None:   # the buyer hears it, after the response; the note stays the admin's
-                task = asyncio.create_task(orders.send_closed(conn, cfg, oid))
-                _mail_tasks.add(task)
-                task.add_done_callback(_mail_done)
+                mail.spawn(orders.send_closed(conn, cfg, oid))
         elif action == "note":
             o = ticket_call(orders.set_note, conn, actor["id"], oid, body.get("note"))
         elif action == "link":
@@ -1863,9 +1845,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         note=f"Order #{oid}", order_id=oid)
             o = orders.get(conn, oid)
             if cfg.email is not None:
-                task = asyncio.create_task(orders.send_granted(conn, cfg, oid))
-                _mail_tasks.add(task)
-                task.add_done_callback(_mail_done)
+                mail.spawn(orders.send_granted(conn, cfg, oid))
         else:
             fail(400, "action must be contacted, decline, note, link or upgrade.")
         return {"ok": True, "order": o}

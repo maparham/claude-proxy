@@ -102,7 +102,7 @@ async def test_upgraded_pass_is_not_offered(rv):
     assert refunds.offers(conn, cfg, ids["alice"]) == []
 
 
-async def test_refunded_friend_keeps_first_pass_and_referrer_loses_reward(rv):
+async def test_refund_takes_back_the_reward_and_the_friend_discount_is_spent(rv):
     conn, cfg, ids, calls, box = rv
     referrals.set_settings(conn, ids["admin"], {"enabled": True})
     code = referrals.code_for(conn, ids["bob"])
@@ -114,7 +114,7 @@ async def test_refunded_friend_keeps_first_pass_and_referrer_loses_reward(rv):
     await refunds.refund(conn, cfg, user(conn, ids["alice"]), p["id"])
     assert conn.execute("SELECT status FROM referral_rewards WHERE id=?", (r["id"],)).fetchone()[0] == "refused"
     assert conn.execute("SELECT state FROM referral_units WHERE reward_id=?", (r["id"],)).fetchone()[0] == "cancelled"
-    assert referrals.first_pass(conn, ids["alice"])
+    assert not referrals.first_pass(conn, ids["alice"])   # buying and refunding again earns the referrer nothing
 
 
 async def test_mails(rv):
@@ -129,3 +129,28 @@ async def test_mails(rv):
     assert b == o["email"] and "went back to the card" in bb and str(p["ref_id"]) in bb
     [(a, s, body)] = refunds.mails(conn, cfg, p, o, unknown=True)
     assert s.startswith("Refund NOT confirmed") and "ZarinPal panel" in body
+
+
+async def test_a_late_verify_gets_no_window_past_zarinpals_limit(rv):
+    conn, cfg, ids, calls, box = rv
+    p, tid = await bought(conn, cfg, ids)
+    conn.execute("UPDATE payments SET created_at=? WHERE id=?", (p["paid_at"] - 3600, p["id"]))   # granted by reconcile
+    assert refunds.offers(conn, cfg, ids["alice"]) == []
+    conn.execute("UPDATE payments SET created_at=? WHERE id=?", (p["paid_at"] - 20 * 60, p["id"]))
+    [o] = refunds.offers(conn, cfg, ids["alice"])
+    assert o["until"] == p["paid_at"] - 20 * 60 + refunds.REVERSE_LIMIT_S
+
+
+async def test_cancelled_by_the_admin_while_reversing_still_records_the_refund(rv, monkeypatch):
+    conn, cfg, ids, calls, box = rv
+    referrals.set_settings(conn, ids["admin"], {"enabled": True})
+    assert referrals.attach(conn, ids["alice"], referrals.code_for(conn, ids["bob"]))
+    p, tid = await bought(conn, cfg, ids)
+
+    async def reverse(merchant_id, authority, sandbox):
+        tickets.cancel(conn, cfg, ids["admin"], tid)
+    monkeypatch.setattr(zarinpal, "reverse", reverse)
+    await refunds.refund(conn, cfg, user(conn, ids["alice"]), p["id"])
+    assert tickets.get(conn, tid)["refunded_at"] is not None
+    assert payments.get(conn, p["id"])["reversed_at"] is not None
+    assert conn.execute("SELECT status FROM referral_rewards WHERE order_id=?", (p["order_id"],)).fetchone()[0] == "refused"

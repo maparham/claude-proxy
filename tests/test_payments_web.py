@@ -50,7 +50,7 @@ async def test_pay_redirect_callback_and_result(env):
         assert (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["current"]["tier"] == "lite"
     async with admin_client(gw) as c:
         o = (await c.get("/api/admin/orders?status=all")).json()["orders"][0]
-        assert o["payment"] == {"status": "paid", "amount": 1250000, "ref_id": "201", "card_pan": "502229******5995"}
+        assert o["payment"] == {"status": "paid", "amount": 1250000, "ref_id": "201", "card_pan": "502229******5995", "refund": None}
 
 
 async def test_pay_an_open_order(env):
@@ -282,3 +282,5 @@ async def test_refund_within_15_minutes(env, monkeypatch):
         assert tk["refunds"] == [] and tk["current"] is None
         r = await c.post(f"/api/me/payments/{offer['payment_id']}/refund", headers=bearer(keys["alice"]), json={})
         assert r.status_code == 409 and r.json()["error"] == "This pass can no longer be refunded."
+    async with admin_client(gw) as c:
+        assert (await c.get("/api/admin/orders?status=all")).json()["orders"][0]["payment"]["refund"] == "done"

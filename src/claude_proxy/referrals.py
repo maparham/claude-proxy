@@ -200,14 +200,13 @@ def first_pass(conn: sqlite3.Connection, user_id: int) -> bool:
     an earlier one: no ticket for this user_id, no ticket whose user_name (a snapshot taken at grant time, so it
     survives the account being deleted) is this email, and no `done` order with that email. Checked by email, not
     the audit log (controller ruling), so "delete the account, sign up again with the same email" gets nothing.
-    A pass the buyer cancelled and got refunded (refunds.py) does not count: they never had it."""
+    A pass the buyer cancelled and got refunded (refunds.py) still counts: otherwise buying and refunding again and
+    again would earn the referrer a unit each time (review of 40197c3)."""
     row = conn.execute("SELECT email, name FROM users WHERE id=?", (user_id,)).fetchone()
     email = (row["email"] or row["name"] or "").lower()
-    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND refunded_at IS NULL LIMIT 1",
-                    (user_id, email)).fetchone():
+    if conn.execute("SELECT 1 FROM tickets WHERE user_id=? OR lower(user_name)=? LIMIT 1", (user_id, email)).fetchone():
         return False
-    if conn.execute("SELECT 1 FROM orders o WHERE o.status='done' AND lower(o.email)=? AND NOT EXISTS "
-                    "(SELECT 1 FROM tickets t WHERE t.id=o.ticket_id AND t.refunded_at IS NOT NULL) LIMIT 1", (email,)).fetchone():
+    if conn.execute("SELECT 1 FROM orders WHERE status='done' AND lower(email)=? LIMIT 1", (email,)).fetchone():
         return False
     return True
 
@@ -421,7 +420,7 @@ def on_granted(conn: sqlite3.Connection, order_id: int, now: int, floored_to_zer
     if friend is None or _active_user(conn, friend["referred_by"]) is None:
         return
     email = (friend["email"] or friend["name"] or "").lower()
-    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? AND refunded_at IS NULL LIMIT 1",
+    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? LIMIT 1",
                     (o["user_id"], email, o["ticket_id"])).fetchone():
         return
     rid = conn.execute("INSERT INTO referral_rewards(referrer_id, friend_id, order_id, created_at, status) "

@@ -856,10 +856,14 @@ class Telegram:
                     lines.append(t(lang, "mine_queued", label=self.label(q["tier"], lang), start=tickets.terms_date(q["starts_at"], lang)))
         text = "\n".join(lines) if lines else t(lang, "mine_none")
         # A pass paid in the last 15 minutes and not used yet: one button each to cancel it for the money back.
-        offers = refunds.offers(self.conn, self.cfg, user["id"]) if self.cfg.tickets.enabled else []
-        params = {"reply_markup": {"inline_keyboard": [[{"text": t(lang, "btn_refund", label=self.label(r["tier"], lang)),
+        offers = card["refunds"] if self.cfg.tickets.enabled else []
+        params = {"reply_markup": {"inline_keyboard": [[{"text": t(lang, "btn_refund", label=self.pass_name(r, lang)),
                                                           "callback_data": f"rf:{r['payment_id']}"}] for r in offers]}} if offers else {}
         await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}", **params)
+
+    def pass_name(self, r: dict, lang: str) -> str:
+        """A refundable pass's tier and length, so two passes of one tier tell apart."""
+        return f"{self.label(r['tier'], lang)} ({self.length_name(lang, r['length'])})"
 
     def _refund_offer(self, user_id: int, pid: int) -> dict | None:
         return next((r for r in refunds.offers(self.conn, self.cfg, user_id) if r["payment_id"] == pid), None)
@@ -873,7 +877,7 @@ class Telegram:
             return False
         lang = chat["lang"]
         await self.say(chat, "refund_ask", [[self.btn(chat, "btn_refund_yes", f"rfy:{pid}"), self.btn(chat, "btn_refund_no", "mine")]],
-                       label=self.label(r["tier"], lang), amount=self.amount(lang, r["amount"]))
+                       label=self.pass_name(r, lang), amount=self.amount(lang, r["amount"]))
         return True
 
     async def refund(self, chat: dict, pid: int) -> bool:

@@ -5,6 +5,7 @@ Blocking: call it with `asyncio.to_thread`, never on the event loop.
 """
 from __future__ import annotations
 
+import asyncio
 import html
 import logging
 import smtplib
@@ -17,6 +18,25 @@ from . import db
 from .config import EmailConfig
 
 TIMEOUT_S = 20
+# Emails (and bot notices) go out after the response (order requests design, section 5). asyncio keeps only weak
+# references to tasks, so each is held here until it is done.
+tasks: set[asyncio.Task] = set()
+
+
+def _done(task: asyncio.Task) -> None:
+    """Drop the finished task, and log anything it raised outside its own per-send handling right away."""
+    tasks.discard(task)
+    if not task.cancelled() and task.exception() is not None:
+        logger.error("order mail dispatch failed", exc_info=task.exception())
+
+
+def spawn(coro) -> asyncio.Task:
+    """Run `coro` after the response, on the running loop, held in `tasks` until it is done."""
+    task = asyncio.create_task(coro)
+    tasks.add(task)
+    task.add_done_callback(_done)
+    return task
+
 SERVER_KEY = "mail_server"   # settings row: "alt" while the admin has [email.alt] go first
 
 logger = logging.getLogger(__name__)

@@ -1589,7 +1589,7 @@ function orderRow(o) {
     <td class="r nowrap">${esc(money(o.quoted_amount, o.currency))}</td>
     <td class="order-msg">${o.message ? bdi(o.message) : `<span class="muted">—</span>`}</td>
     <td>${stateBadge(o.status)}${o.ticket_id ? `<div class="muted">${t("ord.ticket_n", { id: esc(o.ticket_id) })}</div>` : ""}</td>
-    <td class="nowrap">${o.payment ? `${stateBadge2(o.payment.status)}${o.payment.ref_id ? `<div class="muted" dir="ltr">${esc(o.payment.ref_id)} · ${esc(o.payment.card_pan || "")}</div>` : ""}` : `<span class="muted">—</span>`}</td>
+    <td class="nowrap">${o.payment ? `${stateBadge2(o.payment.status)}${o.payment.refund ? ` <span class="badge state-cancelled">${t(`pay.refund_${o.payment.refund}`)}</span>` : ""}${o.payment.ref_id ? `<div class="muted" dir="ltr">${esc(o.payment.ref_id)} · ${esc(o.payment.card_pan || "")}</div>` : ""}` : `<span class="muted">—</span>`}</td>
     <td>${mailState(o)}</td>
     <td class="muted order-msg">${o.admin_note ? bdi(o.admin_note) : "—"}</td>
     <td>${orderActions(o)}</td></tr>`;
