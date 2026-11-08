@@ -286,12 +286,7 @@ async def test_refund_within_15_minutes(env, monkeypatch):
         assert (await c.get("/api/admin/orders?status=all")).json()["orders"][0]["payment"]["refund"] == "done"
 
 
-WIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"
-MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15"
-
-
-@pytest.mark.parametrize("ua", [WIN_UA, MAC_UA])
-async def test_a_windows_buyer_gets_the_windows_setup_in_the_pass_mail(env, monkeypatch, ua):
+async def test_every_pass_mail_has_the_windows_installer(env, monkeypatch):
     gw, conn, cfg, ids, keys, zp = env
     from claude_proxy import mail, web
     from claude_proxy.config import EmailConfig
@@ -303,15 +298,12 @@ async def test_a_windows_buyer_gets_the_windows_setup_in_the_pass_mail(env, monk
     async with client(gw) as c:
         r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
         auth = r.json()["url"].rsplit("/", 1)[1]
-        await c.get(f"/pay/callback?Authority={auth}&Status=OK", headers={"user-agent": ua}, follow_redirects=False)
+        await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)   # no browser named: a phone, say
         await asyncio.gather(*list(web._mail_tasks))
     (_, admin, _), (_, body, html) = sent
     url = "https://dash.rahkar.pro/install.cmd"
     assert url not in admin
-    if ua == WIN_UA:
-        assert "Set up on Windows:" in body and url in body and f'<a href="{url}">{url}</a>' in html
-    else:
-        assert "install.cmd" not in body
+    assert "Set up on Windows:" in body and url in body and f'<a href="{url}">{url}</a>' in html
 
 
 async def test_install_cmd_runs_the_powershell_install(env):

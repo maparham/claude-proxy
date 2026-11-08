@@ -54,7 +54,7 @@ def test_orders_table_has_the_spec_columns(db):
                     "buyer_mail", "terms_version", "lang", "via", "seen_at", "upgrade_of", "start_now", "pay_code", "pay_by",
                     # referrals (2026-11-07 design): the discount applied, if any, and the price before it
                     "ref_kind", "ref_pct", "ref_off_usd", "ref_unit_id", "list_usd",
-                    "windows"}   # ordered or paid from Windows: the pass mail adds the Windows setup
+                    "windows"}   # no longer read (every pass mail has the Windows setup), kept so old and new databases match
 
 
 # ---------- create ----------

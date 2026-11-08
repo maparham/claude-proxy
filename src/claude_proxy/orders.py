@@ -130,8 +130,7 @@ def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
-           terms_version: str | None = None, lang: str = "en", start_now: bool = False, via: str = "web",
-           windows: bool = False) -> dict:
+           terms_version: str | None = None, lang: str = "en", start_now: bool = False, via: str = "web") -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
     Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
     `terms_version`: the ticket terms the buyer ticked; equality-checked against tickets.TERMS_VERSION, missing or
@@ -139,8 +138,7 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
     `lang`: the page's language; the buyer's emails use it (anything but "fa" is English).
     `start_now`: the ticket is to start when granted, beside the buyer's
     running tickets, not after them (tickets.grant). A visitor has none: theirs never starts now.
-    `via`: where the buyer ordered, 'web' or 'telegram' (the bot tells them when it is paid).
-    `windows`: ordered from a Windows browser, so the pass mail adds the Windows setup (windows_setup)."""
+    `via`: where the buyer ordered, 'web' or 'telegram' (the bot tells them when it is paid)."""
     now = _now(now)
     start_now = bool(start_now) and user_id is not None
     if terms_version != tickets.TERMS_VERSION:
@@ -195,10 +193,10 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             admin_mail, buyer_mail = "pending", "skipped" if sent >= BUYER_MAILS else "pending"
         cur = conn.execute(
             "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, quoted_amount, "
-            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, start_now, via, windows) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?,?)",
+            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, start_now, via) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, int(start_now), via, int(bool(windows))))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, int(start_now), via))
         oid = cur.lastrowid
         referrals.hold(conn, oid, ref, now)
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
@@ -465,10 +463,10 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
 
 
 def windows_setup(cfg: Config, order: dict) -> str:
-    """For a buyer who ordered or paid from Windows: how to set up a computer with the double-click installer
-    (the dashboard's /install.cmd), as a block for the end of their pass mail. Nothing for anyone else, or on a
-    gateway without the URLs the installer needs."""
-    if not (order.get("windows") and cfg.listener.public_url and cfg.listener.dashboard_url):
+    """How to set up a Windows computer with the double-click installer (the dashboard's /install.cmd), as a block for
+    the end of every pass mail: the buyer may pay on one device and install on another. Nothing on a gateway without
+    the URLs the installer needs."""
+    if not (cfg.listener.public_url and cfg.listener.dashboard_url):
         return ""
     url = f"{cfg.listener.dashboard_url.rstrip('/')}/install.cmd"
     if order.get("lang") == "fa":

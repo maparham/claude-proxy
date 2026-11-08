@@ -1550,14 +1550,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         m = orders.mine(conn, user_id)
         return m | {"label": tier_label(m["tier"])} if m else None
 
-    def place_order(body: dict, request: Request, **kw) -> dict:
+    def place_order(body: dict, **kw) -> dict:
         # An unpaid order only while the admin's Payment selector allows it.
         if not payments.manual_orders(payments.pay_mode(conn, cfg)):
             fail(409, "Ordering without paying online is off; pay with ZarinPal.")
         o = ticket_call(orders.create, conn, cfg, tier=str(body.get("tier") or ""), length=str(body.get("length") or ""),
                         currency=str(body.get("currency") or "USD").upper(), message=str(body.get("message") or ""),
                         terms_version=body.get("terms_version"), lang=str(body.get("lang") or ""),
-                        start_now=bool(body.get("start_now")), windows=windows_browser(request), **kw)
+                        start_now=bool(body.get("start_now")), **kw)
         if cfg.email is not None:   # after the response: a slow mail server never delays it
             mail.spawn(orders.dispatch(conn, cfg, o["id"]))
         return o
@@ -1580,7 +1580,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                 headers={"Retry-After": "30"}) from e
         if not ok:
             fail(400, "The verification failed; please try again.")
-        o = place_order(body, request, name=str(body.get("name") or ""), email=str(body.get("email") or ""), ip=ip)
+        o = place_order(body, name=str(body.get("name") or ""), email=str(body.get("email") or ""), ip=ip)
         # Nothing about the order (the visitor has no view of it) but whether a confirmation was queued, so the page
         # promises an email only when one is on its way.
         return {"ok": True, "confirmation": o["buyer_mail"] == "pending"}
@@ -1592,7 +1592,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         # The account email (verified by Clerk), else one typed in the dialog: stored on the order only, never in
         # users.email, which Clerk sign-in matches against (spec section 2).
-        place_order(body, request, name=user["name"], email=user["email"] or str(body.get("email") or ""), user_id=user["id"])
+        place_order(body, name=user["name"], email=user["email"] or str(body.get("email") or ""), user_id=user["id"])
         return {"ok": True, "order": my_order(user["id"])}
 
     @app.get("/api/me/orders")
@@ -1615,7 +1615,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                     start_now=bool(body.get("start_now")))
 
     @app.get("/pay/callback")
-    async def pay_callback(request: Request, Authority: str = "", Status: str = ""):
+    async def pay_callback(Authority: str = "", Status: str = ""):
         # No session: the authority names the payment, and its ticket only ever goes to the payment's own user.
         try:
             p = await payments.callback(conn, cfg, Authority, Status)
@@ -1624,8 +1624,6 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                 status_code=404, headers=PAGE_HEADERS)
         # p["changed"] (set only on the call that actually moved the payment): two callbacks can race on the same
         # authority and both see it paid, so the status alone would send the mail twice.
-        if p.get("changed") and windows_browser(request):   # the buyer's browser, back from ZarinPal: their pass mail adds the Windows setup
-            conn.execute("UPDATE orders SET windows=1 WHERE id=?", (p["order_id"],))
         if p.get("changed") and p["status"] in ("paid", "paid_unfulfilled") and cfg.email is not None:
             mail.spawn(payments.send_mails(conn, cfg, p["id"]))
         if p.get("changed") and p["status"] in ("paid", "paid_unfulfilled") and tg is not None:
@@ -2039,12 +2037,6 @@ def install_sh(cfg) -> str:
             "set -eu\n"
             f"curl -fsSL {q(url)} | {env}sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
             f"--dashboard {q(dash)} \"$@\"\n")
-
-
-def windows_browser(request: Request) -> bool:
-    """A request from a browser on Windows (a desktop one: not Windows Phone)."""
-    ua = (request.headers.get("user-agent") or "").lower()
-    return "windows nt" in ua and "windows phone" not in ua
 
 
 def install_cmd(cfg) -> bytes:

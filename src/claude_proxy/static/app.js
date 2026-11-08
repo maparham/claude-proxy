@@ -919,16 +919,28 @@ async function applyRefPrices(pl, p) {
     if (cell) cell.innerHTML = priceCell(l, p.currency, q);
   }
 }
+// The price list as the buyer chose to see it (S.priceCur): its own currency (IRT), or USD from each length's USD
+// fields, the home page's switch. Ordering in USD works as on the home page; the Pay button stays in Toman.
+function pricesIn(p, cur) {
+  if (cur !== "USD" || p.currency === "USD") return p;
+  const usd = (l) => l && { ...l, amount: l.usd_total, list_amount: l.list_usd_total };
+  return { ...p, currency: "USD", tiers: p.tiers.map((x) => ({ ...x, lengths: Object.fromEntries(Object.entries(x.lengths).map(([k, l]) => [k, usd(l)])) })) };
+}
+function curSelect(p) {
+  if (p.currency === "USD") return "";
+  const name = (c) => (c === "IRT" ? t("cur.IRT") : c === "USD" ? t("home.cur_usd") : esc(c));
+  return `<select class="price-cur" aria-label="${esc(t("home.currency_label"))}">${[p.currency, "USD"].map((c) => `<option value="${esc(c)}"${c === S.priceCur ? " selected" : ""}>${name(c)}</option>`).join("")}</select>`;
+}
 // `renew`: in the Renew dialog, the line saying when the next ticket starts; no card around it there, and Continue
 // sits beside Cancel in the dialog's action row. A length toggle over one tier list per length; a row is a radio.
-function priceListCard(tk, order, renew) {
-  const p = tk.prices;
+function priceListCard(tk, order, renew, len) {
+  const p = pricesIn(tk.prices, S.priceCur);
   const pick = takePick();
   const picked = pickedLine(p, pick);
   const open = !!order && (order.status === "new" || order.status === "contacted");   // one open order at a time
   // Only the lengths some tier sells get a toggle; shown first is the home page's pick, else the first offered.
   const L = [["day", t("price.1_day")], ["week", t("price.1_week")], ["month", t("price.1_month")]].filter(([k]) => p.tiers.some((x) => x.lengths[k]));
-  const len0 = pick && L.some(([k]) => k === pick.length) ? pick.length : L.length ? L[0][0] : "";
+  const len0 = pick && L.some(([k]) => k === pick.length) ? pick.length : L.some(([k]) => k === len) ? len : L.length ? L[0][0] : "";
   // Sold out now but on sale after the buyer's running pass (sold_out_later false): orderable, to start then.
   const soldOut = (l) => l.sold_out && l.sold_out_later !== false;
   const canOrder = (tier, k) => !!tier.lengths[k] && !soldOut(tier.lengths[k]) && !tier.lengths[k].unavailable;
@@ -949,7 +961,7 @@ function priceListCard(tk, order, renew) {
   const go = open ? `<span class="blocked"${tipAttr(esc(t("price.open_order")))}>${goBtn}</span>` : goBtn;
   const actions = renew ? `<div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>${go}</div>` : `<p class="price-go">${go}</p>`;
   return `<div class="price-list${renew ? "" : " card"}"${renew ? "" : ` id="prices"`}><h3>${renew ? t(tk.replaces ? "new.title" : "renew.title") : t("tab.tickets")}</h3><p class="sub">${renew || `${t("price.sub", { lengths: lengthsList(p.tiers, "price.a_") })}${p.rate_set_at ? t("price.rate_at", { date: fmtDate(p.rate_set_at) }) : ""}`}</p>
-    <div class="len-pick"><div class="seg" role="group" aria-label="${esc(t("tk.length"))}">${L.map(([k, n]) => `<button type="button" data-len="${k}" aria-pressed="${k === len0}">${n}</button>`).join("")}</div>${tipH("", t("price.terms_note"))}</div>
+    <div class="len-pick"><div class="seg" role="group" aria-label="${esc(t("tk.length"))}">${L.map(([k, n]) => `<button type="button" data-len="${k}" aria-pressed="${k === len0}">${n}</button>`).join("")}</div>${tipH("", t("price.terms_note"))}${curSelect(tk.prices)}</div>
     ${L.map(([k]) => list(k)).join("")}
     ${actions}${p.vat_percent ? `<p class="sub">${t("pay.vat", { pct: fmtNum(p.vat_percent) })}</p>` : ""}${picked ? `<p class="sub">${picked}</p>` : ""}</div>`;
 }
@@ -1202,19 +1214,34 @@ function wireOrdering(root, tk, order) {
     startCountdowns(d);
   };
   // The price list: the length toggle shows that length's tier list, and Continue orders its checked tier.
-  const pl = root.querySelector(".price-list"), go = pl && pl.querySelector("#order-go");
+  let pl = root.querySelector(".price-list"), go = pl && pl.querySelector("#order-go");
   const showLen = (k) => pl.querySelectorAll("[data-len]").forEach((el) => (el.tagName === "BUTTON" ? el.setAttribute("aria-pressed", String(el.dataset.len === k)) : (el.hidden = el.dataset.len !== k)));
-  if (pl) {
-    applyRefPrices(pl, tk.prices);
+  const renewSub = root.tagName === "DIALOG" ? t(tk.replaces ? "new.sub" : "renew.sub") : undefined;
+  const wirePl = () => {
+    const prices = pricesIn(tk.prices, S.priceCur);
+    applyRefPrices(pl, prices);
     pl.querySelectorAll(".seg [data-len]").forEach((b) => (b.onclick = () => showLen(b.dataset.len)));
+    // The currency switch redraws the list in place, on the length shown.
+    const sel = pl.querySelector(".price-cur");
+    if (sel) sel.onchange = () => {
+      S.priceCur = sel.value;
+      const shown = pl.querySelector(".seg [aria-pressed=true]");
+      const box = document.createElement("div");
+      box.innerHTML = priceListCard(tk, order, renewSub, shown && shown.dataset.len);
+      const fresh = box.firstElementChild;
+      pl.replaceWith(fresh); pl = fresh; go = pl.querySelector("#order-go");
+      pl.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { root.close(); render(); }));   // the Renew dialog's Cancel
+      wirePl(); startCountdowns(root);
+    };
     go.onclick = () => {
       const list = pl.querySelector(".tier-list:not([hidden])"), r = list && list.querySelector("input:checked");
-      const tier = r && tk.prices.tiers.find((x) => x.tier === r.value);
+      const tier = r && prices.tiers.find((x) => x.tier === r.value);
       // A used-up ticket's replacement starts now either way: no choice to offer.
       const c = tk.current, start = c && !tk.replaces ? { date: tk.next_start, splitNow: tk.split_now } : null;
-      if (tier) orderDialog(tk.prices, tier, list.dataset.len, tk.pay, tk.terms_version, tk.manual, start);
+      if (tier) orderDialog(prices, tier, list.dataset.len, tk.pay, tk.terms_version, tk.manual, start);
     };
-  }
+  };
+  if (pl) wirePl();
   // The home page's pick, once: it opens straight away while it can be ordered (not sold out, no open order).
   const pick = takePick();
   // With a running ticket the price list is in the Renew dialog: open that, and its own wiring opens the pick.
@@ -2227,15 +2254,27 @@ function machinesCard(keys, install, owner) {
   return `<div class="card table-wrap" style="margin-top:16px"><h3>${owner ? t("pc.computers") : t("pc.your_computers")}</h3>
     ${keys.length ? `<table class="data"><thead><tr><th>${t("pc.computer")}</th><th>${t("pc.key")}</th><th>${t("pc.authorized")}</th><th>${t("pc.last_used")}</th><th>gclaude${tipI("gclaude_version", t("pc.about_version"))}</th><th></th></tr></thead><tbody>${rows}</tbody></table>`
       : `<p class="muted">${owner ? t("pc.none_owner") : t("pc.none_yet")}</p>`}
-    ${install ? `<p class="sub">${t("pc.setup")}</p>
-      ${[[t("login.os_unix"), install.unix], [t("pc.windows_ps"), install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
-        `<p class="muted install-os">${os}</p>
-      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`).join("")}
-      ${install.windowsFile ? `<p class="muted install-os">${t("pc.windows_file")}</p>
-      <p><a class="btn small" href="${esc(install.windowsFile)}" download>${t("pc.windows_download")}</a></p>
-      <p class="muted">${t("pc.windows_file_how")}</p>` : ""}` : ""}</div>`;
+    ${install ? installSetup(install) : ""}</div>`;
+}
+// The install steps in two tabs, the one for this browser's OS selected (wireMachines switches them).
+function installSetup(install) {
+  const copy = (cmd) => `<div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`;
+  const win = install.windows || install.windowsFile;
+  const os = win && /Windows NT/.test(navigator.userAgent) ? "win" : "unix";
+  return `<p class="sub">${t("pc.setup")}</p>
+    ${win ? `<div class="seg" role="group" style="margin-bottom:8px">${[["unix", t("login.os_unix")], ["win", "Windows"]].map(([k, label]) =>
+      `<button type="button" data-os-tab="${k}" aria-pressed="${k === os}">${label}</button>`).join("")}</div>` : ""}
+    <div data-os="unix"${os === "unix" ? "" : " hidden"}>${copy(install.unix)}</div>
+    ${win ? `<div data-os="win"${os === "win" ? "" : " hidden"}>
+      ${install.windowsFile ? `<p><a class="btn small" href="${esc(install.windowsFile)}" download>${t("pc.windows_download")}</a></p>
+      <p class="muted">${t("pc.windows_file_how")}</p>` : ""}
+      ${install.windows ? `<p class="muted install-os">${t("pc.windows_ps_or")}</p>${copy(install.windows)}` : ""}</div>` : ""}`;
 }
 function wireMachines(root) {
+  root.querySelectorAll("[data-os-tab]").forEach((b) => (b.onclick = () => {
+    root.querySelectorAll("[data-os-tab]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    root.querySelectorAll("[data-os]").forEach((d) => (d.hidden = d.dataset.os !== b.dataset.osTab));
+  }));
   root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
     try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = t("key.copied"); } catch { /* clipboard blocked */ }
   }));
