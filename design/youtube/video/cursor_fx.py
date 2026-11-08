@@ -42,8 +42,9 @@ def _ease(p):
     return p * p * (3 - 2 * p)
 
 
-def render(base_png, out_dir, dur, path, fps=30):
-    """path: list of moves (t_arrive, x, y, click). The pointer glides from the previous point to (x, y), arriving
+def render(base_png, out_dir, dur, path, fps=30, touch=False):
+    """touch: a phone-style tap instead of a pointer, a grey fingertip dot that shows at the target shortly
+    before the tap and fades after it. path: list of moves (t_arrive, x, y, click). The pointer glides from the previous point to (x, y), arriving
     at t_arrive (the first entry is where it starts, at t=0), and clicks there when click is true."""
     out_dir = pathlib.Path(out_dir)
     shutil.rmtree(out_dir, ignore_errors=True)
@@ -77,6 +78,19 @@ def render(base_png, out_dir, dur, path, fps=30):
                 fr.alpha_composite(rg, (int(x - rg.width / 2), int(y - rg.height / 2)))
             if ct <= t < ct + 0.14:
                 pressed = True
+        if touch:
+            for tc in clicks:
+                ct = tc + 0.15
+                if ct - 0.45 <= t < ct + 0.35:
+                    k = min(1, (t - (ct - 0.45)) / 0.2) * min(1, (ct + 0.35 - t) / 0.2)
+                    r = 34 if pressed else 40
+                    dot = Image.new("RGBA", (r * 2 * SS, r * 2 * SS), (0, 0, 0, 0))
+                    ImageDraw.Draw(dot).ellipse([0, 0, r * 2 * SS - 1, r * 2 * SS - 1], fill=(60, 60, 60, int(110 * k)),
+                                                outline=(255, 255, 255, int(200 * k)), width=3 * SS)
+                    dot = dot.resize((r * 2, r * 2), Image.LANCZOS)
+                    fr.alpha_composite(dot, (int(x - r), int(y - r)))
+            fr.convert("RGB").save(out_dir / f"{n:04d}.png", compress_level=1)
+            continue
         p_im = small if pressed else ptr
         fr.alpha_composite(sh, (int(x - 4 + 3), int(y - 4 + 5)))
         fr.alpha_composite(p_im, (int(x - 4), int(y - 4)))
