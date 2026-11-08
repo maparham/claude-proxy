@@ -1,0 +1,6 @@
+# Built or recorded locally: frames, segments, the vhs recordings (the raw install take shows a real account) and the
+# finished videos. Rebuild: record tapes/*.tape with vhs into out/, then python build.py and python clicks.py.
+out/
+frames/
+audio/
+__pycache__/

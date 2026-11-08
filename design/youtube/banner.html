@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;600;800;900&family=JetBrains+Mono:wght@400;600&display=block" rel="stylesheet">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 2560px; height: 1440px; overflow: hidden; }
+  body {
+    font-family: Vazirmatn, sans-serif;
+    background:
+      radial-gradient(1200px 700px at 78% 50%, rgba(235,104,52,.10), transparent 70%),
+      radial-gradient(900px 600px at 18% 60%, rgba(235,104,52,.06), transparent 70%),
+      #faf6f3;
+    position: relative;
+    color: #1d1b1a;
+  }
+  /* YouTube safe area: 1546 x 423, centered */
+  .safe {
+    position: absolute; left: 507px; top: 508px; width: 1546px; height: 423px;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 0 20px;
+  }
+  .text { display: flex; flex-direction: column; gap: 14px; }
+  .brand { display: flex; align-items: center; gap: 18px; }
+  .logo {
+    width: 84px; height: 84px; border-radius: 20px; background: #eb6834;
+    color: #fff; font-weight: 900; font-size: 24px;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 6px 18px rgba(235,104,52,.35);
+  }
+  .brand span { font-size: 40px; font-weight: 800; }
+  h1 { font-size: 138px; font-weight: 900; line-height: 1.05; letter-spacing: -1px; }
+  h1 em { font-style: normal; color: #eb6834; }
+  .tag { font-size: 40px; font-weight: 600; color: #4a4542; }
+  .chips { display: flex; gap: 14px; margin-top: 6px; }
+  .chip {
+    font-size: 28px; font-weight: 600; padding: 8px 22px; border-radius: 999px;
+    background: #fff; border: 2px solid #eadfd8;
+  }
+  .chip::before { content: "✔"; color: #eb6834; margin-left: 8px; }
+  .term {
+    direction: ltr; width: 600px; border-radius: 22px; background: #1c1c1e;
+    box-shadow: 0 30px 60px rgba(0,0,0,.22); overflow: hidden;
+    font-family: "JetBrains Mono", monospace; color: #e8e6e3; font-size: 25px;
+  }
+  .bar { height: 44px; background: #2a2a2d; display: flex; gap: 11px; align-items: center; padding: 0 18px; }
+  .bar i { width: 15px; height: 15px; border-radius: 50%; display: block; }
+  .body { padding: 22px 28px 26px; line-height: 1.6; }
+  .dim { color: #8b8885; }
+  .ok { color: #4cc26b; }
+  .or { color: #eb6834; }
+  .url { margin-top: 14px; font-size: 34px; font-weight: 600; color: #eb6834; text-align: center; font-family: "JetBrains Mono", monospace; }
+</style>
+</head>
+<body>
+  <div class="safe">
+    <div class="text">
+      <div class="brand"><div class="logo">راهکار</div><span>راهکار هوش برتر</span></div>
+      <h1>اشتراک <em>کلاد</em></h1>
+      <div class="tag">بدون پرداخت ارزی، بدون احراز هویت، راه‌اندازی فوری</div>
+      <div class="chips">
+        <div class="chip">پرداخت ریالی</div>
+        <div class="chip">بدون فیلترشکن</div>
+        <div class="chip">بسته روزانه و هفتگی</div>
+      </div>
+    </div>
+    <div>
+      <div class="term">
+        <div class="bar"><i style="background:#ff5f57"></i><i style="background:#febc2e"></i><i style="background:#28c840"></i></div>
+        <div class="body">
+          <div><span class="dim">~/project %</span> gclaude</div>
+          <div class="or">● Opus 5.5</div>
+          <div class="dim">&gt; build a landing page</div>
+          <div><span class="ok">●</span> Bash(npm test)</div>
+          <div class="dim">&nbsp;&nbsp;⎿ 42 passed</div>
+          <div><span class="ok">●</span> Done.</div>
+        </div>
+      </div>
+      <div class="url">rahkar.pro</div>
+    </div>
+  </div>
+</body>
+</html>
