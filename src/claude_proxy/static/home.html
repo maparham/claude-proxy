@@ -83,6 +83,14 @@
     <div class="feat" style="--c: var(--s7)"><div class="feat-ic"><svg class="ic"><use href="#i-term"/></svg></div><div><b data-i18n="home.feat_term">Terminal and VS Code</b><span data-i18n="home.feat_term_text">Set up with one command</span></div></div>
   </section>
 
+  <section id="pricing" class="pricing-sec" aria-label="Pricing" data-i18n-attr="aria-label:tab.pricing">
+    <div class="pill-toggle" id="length-toggle" role="group" aria-label="Pass length" data-i18n-attr="aria-label:home.length_label">
+      <button type="button" data-length="day" aria-pressed="false" data-i18n="home.len_day">Day</button><button type="button" data-length="week" aria-pressed="true" data-i18n="home.len_week">Week</button><button type="button" data-length="month" aria-pressed="false" data-i18n="home.len_month">Month</button>
+    </div>
+    <div class="cards" id="cards"><p class="muted" data-i18n="app.loading">Loading…</p></div>
+    <p id="vat-note" hidden></p>
+  </section>
+
   <!-- The promo video (also on YouTube), served from here so it plays in Iran without a VPN. -->
   <section class="video-sec" aria-labelledby="video-h">
     <h2 id="video-h" data-i18n="home.video">From purchase to your first prompt, in under two minutes</h2>
@@ -102,14 +110,6 @@
     </div>
   </section>
 
-
-  <section id="pricing" class="pricing-sec" aria-label="Pricing" data-i18n-attr="aria-label:tab.pricing">
-    <div class="pill-toggle" id="length-toggle" role="group" aria-label="Pass length" data-i18n-attr="aria-label:home.length_label">
-      <button type="button" data-length="day" aria-pressed="false" data-i18n="home.len_day">Day</button><button type="button" data-length="week" aria-pressed="true" data-i18n="home.len_week">Week</button><button type="button" data-length="month" aria-pressed="false" data-i18n="home.len_month">Month</button>
-    </div>
-    <div class="cards" id="cards"><p class="muted" data-i18n="app.loading">Loading…</p></div>
-    <p id="vat-note" hidden></p>
-  </section>
 
   <section class="faq-sec" aria-labelledby="faq-h">
     <h2 id="faq-h" data-i18n="home.faq">Questions</h2>
