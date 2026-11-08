@@ -15,7 +15,7 @@ from . import api_credit, contents, limits, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
-from .db import insert_request, set_session_title
+from .db import insert_request, note_ip, set_session_title
 from .forwarder import (COUNT_TOKENS_PATH, filter_request_headers, filter_response_headers, merge_beta, session_id,
                         should_forward, strip_account_headers, with_claude_code_identity, with_gateway_device)
 from .gateway import Gateway
@@ -189,7 +189,9 @@ def _usage_fresh(conn) -> float | None:
 
 
 def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> None:
-    """One request's log row, its API charge, its session title and its content, on a db worker thread."""
+    """One request's log row, its API charge, its session title and its content, on a db worker thread; and the address
+    it came from, in the user's IP history (db.note_ip)."""
+    ip = row.pop("ip", None)
     try:
         rid = insert_request(conn, **row)
         if content:
@@ -205,6 +207,10 @@ def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> N
             set_session_title(conn, row["user_id"], row["session_id"], title)
         except Exception:
             logger.exception("could not record session title")
+    try:
+        note_ip(conn, row.get("user_id"), ip, "gateway")
+    except Exception:
+        logger.exception("could not record the request's address")
 
 
 def _record_quota(conn, headers) -> None:
@@ -272,7 +278,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     if not should_forward(path):
         return api_error(404, "not_found_error", f"Not found: {path}")
 
-    base = {"started_at": started, "method": request.method, "path": path}
+    # Behind Caddy, uvicorn takes the client's address from X-Forwarded-For (it trusts 127.0.0.1 by default).
+    base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host if request.client else None}
     held = False   # this request is counted in `inflight` until it is recorded
 
     async def record(title: str | None = None, content: tuple | None = None, **kw) -> None:

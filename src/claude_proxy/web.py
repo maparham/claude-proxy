@@ -245,8 +245,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def client_ip(request: Request) -> str:
         return request.client.host if request.client else "unknown"
 
-    def start_session(user, key_id: int | None = None) -> JSONResponse:
+    def start_session(user, ip: str, key_id: int | None = None) -> JSONResponse:
         raw, csrf = db.create_session(conn, user["id"], key_id=key_id)
+        db.note_ip(conn, user["id"], ip, "dashboard")
         resp = JSONResponse({"ok": True, "csrf": csrf, "user": _public_user(user)})
         resp.set_cookie(COOKIE, raw, max_age=7 * 86400, httponly=True, samesite="strict",
                         secure=cfg.listener.secure_cookies, path="/")
@@ -270,7 +271,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             limiter.failed(ip)
             fail(401, "Wrong username or password.")
         db.audit(conn, user["id"], "login", user["name"])
-        return start_session(user)
+        return start_session(user, ip)
 
     @app.post("/api/login/key")
     async def login_key(request: Request):
@@ -286,7 +287,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
         if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
-        return start_session(user, key_id=user.get("machine_key_id"))
+        return start_session(user, ip, key_id=user.get("machine_key_id"))
 
     @app.get("/api/auth-config")
     async def auth_config():
@@ -318,7 +319,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if user["revoked_at"] is not None or not user["enabled"]:
             fail(403, "This account is disabled. Ask the gateway admin.")
         db.audit(conn, user["id"], "login", user["name"], {"via": "clerk"})
-        return start_session(user)
+        return start_session(user, ip)
 
     def clerk_account(clerk_id: str, email: str, ref: str | None = None):
         """The gateway user for a first Clerk sign-in: an account named by (or holding) that email, else a new one.
@@ -654,10 +655,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         tot = {k: usage.grouped(conn, cfg.pricing, f"started_at>=? AND {src}", (now - s,), group="user_id") for k, s in periods.items()}
         atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s) for b in BUCKETS}
         out = []
+        last_ips = {r[0]: r[1] for r in conn.execute("SELECT user_id, ip FROM user_ips u WHERE last_seen=(SELECT MAX(last_seen) "
+                                                     "FROM user_ips WHERE user_id=u.user_id) GROUP BY user_id")}
         for u in conn.execute("SELECT * FROM users ORDER BY name").fetchall():
             last = conn.execute("SELECT MAX(started_at) FROM requests WHERE user_id=?", (u["id"],)).fetchone()[0]
             out.append({**_public_user(u), "enabled": bool(u["enabled"]), "revoked": u["revoked_at"] is not None,
-                        "created_at": u["created_at"], "last_seen": last,
+                        "created_at": u["created_at"], "last_seen": last, "last_ip": last_ips.get(u["id"]),
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
                         "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
                         "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
@@ -1078,6 +1081,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         uid, key = db.create_user(conn, name, role=role)
         db.audit(conn, actor["id"], "user_add", name, {"role": role})
         return {"ok": True, "id": uid, "name": name, "key": key}
+
+    @app.get("/api/admin/users/{uid}/ips")
+    async def admin_user_ips(request: Request, uid: int):
+        admin(request)   # addresses are the admin's alone: never in a user's own views
+        return {"ips": db.user_ips(conn, uid)}
 
     @app.post("/api/admin/users/{uid}/{action}")
     async def user_action(request: Request, uid: int, action: str):

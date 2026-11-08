@@ -437,6 +437,17 @@ SCHEMA = [
         decided_at INTEGER
     )""",
     "CREATE INDEX IF NOT EXISTS idx_referral_rewards_referrer ON referral_rewards(referrer_id, status)",
+    # Where each user connects from (2026-11-08), for the admin only: one row per address and source, "gateway" for
+    # Claude Code and API requests, "dashboard" for sign-ins to the dashboard.
+    """CREATE TABLE IF NOT EXISTS user_ips (
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        ip TEXT NOT NULL,
+        source TEXT NOT NULL CHECK(source IN ('gateway','dashboard')),
+        first_seen INTEGER NOT NULL,
+        last_seen INTEGER NOT NULL,
+        count INTEGER NOT NULL DEFAULT 1,
+        PRIMARY KEY (user_id, ip, source)
+    )""",
 
 ]
 
@@ -656,6 +667,21 @@ def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
     # A computer authorized in the browser never carries admin powers, even an admin's: one click on a phished
     # Authorize link must not hand out the gateway.
     return {**dict(row), "key_scope": "full", "role": "user", "machine_key_id": k["id"]}
+
+
+def note_ip(conn: sqlite3.Connection, user_id: int | None, ip: str | None, source: str) -> None:
+    """Count one request or sign-in by `user_id` from `ip` (user_ips)."""
+    if user_id is None or not ip or ip == "unknown":
+        return
+    now = int(time.time())
+    conn.execute("INSERT INTO user_ips(user_id, ip, source, first_seen, last_seen) VALUES(?,?,?,?,?) "
+                 "ON CONFLICT(user_id, ip, source) DO UPDATE SET last_seen=excluded.last_seen, count=count+1",
+                 (user_id, ip[:64], source, now, now))
+
+
+def user_ips(conn: sqlite3.Connection, user_id: int, limit: int = 200) -> list[dict]:
+    return [dict(r) for r in conn.execute("SELECT ip, source, first_seen, last_seen, count FROM user_ips WHERE user_id=? "
+                                          "ORDER BY last_seen DESC LIMIT ?", (user_id, limit))]
 
 
 def add_machine_key(conn: sqlite3.Connection, user_id: int, label: str) -> str:
