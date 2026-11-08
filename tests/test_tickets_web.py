@@ -300,6 +300,21 @@ async def test_home_ignores_a_stale_session_cookie(env):
     assert r.status_code == 200 and 'id="pricing"' in r.text
 
 
+async def test_me_tickets_prices_in_the_gateways_currency_not_the_running_pass(env, monkeypatch):
+    # A pass granted in another currency (USD here; EUR on the live gateway) no longer turns the price list into it.
+    gw, conn, cfg, ids, keys = env
+    now = int(time.time())
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+        "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
+    tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now, terms_version="v1")
+    monkeypatch.undo()
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
+    assert me["current"] and me["prices"]["currency"] == "EUR"
+
+
 async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_account(env, monkeypatch):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())

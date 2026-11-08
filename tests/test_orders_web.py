@@ -605,7 +605,7 @@ def test_an_open_toman_order_can_be_paid_online(tmp_path):
     assert "the admin will contact you about the next step." in out[1] and "pay for it here" not in out[1]
 
 
-PRICE_LIST_FNS = ["priceListCard", "priceCell", "refNote", "pickedLine", "takePick", "tierName", "tierNameText"]
+PRICE_LIST_FNS = ["priceListCard", "pricesIn", "curSelect", "priceCell", "refNote", "pickedLine", "takePick", "tierName", "tierNameText"]
 
 
 def _price_list(tmp_path, order=None, pick=None, sold_out_week=False, current=None):

@@ -90,7 +90,9 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
     out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
                     "amount": t["amount"], "currency": t["currency"]} for t in tickets.past(conn, user_id, now)]
-    currency = cur["currency"] if cur and cur["currency"] in tickets.currencies(cfg) else next(iter(cfg.tickets.currencies), "USD")
+    # The gateway's own currency (IRT), as on the home page, whatever the running pass was bought in; the dashboard
+    # offers USD beside it. Not the running pass's currency: a pass granted in EUR turned the whole list into euros.
+    currency = next(iter(cfg.tickets.currencies), "USD")
     # A new ticket queues after the last, or starts now in place of a used-up one: the order dialog's "after" date.
     # `replaces`: the latter, so the dialog offers no start choice. Not merely `used_up`: with a ticket queued that
     # had no room to move up (hand_over), a new one still queues after it.

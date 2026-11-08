@@ -418,6 +418,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .order-steps li.now::before { border-color: var(--s1); background: var(--s1); color: #fff; box-shadow: 0 0 0 4px color-mix(in srgb, var(--s1) 22%, transparent); }
 @media (forced-colors: active) { .order-steps li.done::before, .order-steps li.now::before { forced-color-adjust: none; } }
 .len-pick { display: flex; align-items: center; gap: 8px; margin: 12px 0 10px; }
+.len-pick .price-cur { margin-inline-start: auto; width: auto; }
 .tier-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; }
 .tier-list[hidden] { display: none; }
 .tier-row { display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto 1fr; column-gap: 10px; align-items: start; border: 1.5px solid var(--border);
