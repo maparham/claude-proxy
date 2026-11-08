@@ -231,7 +231,8 @@ SCHEMA = [
         ungated_at INTEGER,                 -- set by the Ungate action: this row no longer makes its user ticket-gated
         share_5h_pct REAL,                  -- copied at grant like share_pct; NULL (sold before the split): share_pct
         used_up_at INTEGER,                 -- set: used up before its end, it ended here and the user's next ticket took over
-        ref_off_usd REAL                    -- the referral discount alone, in USD, set at grant; NULL: no referral
+        ref_off_usd REAL,                   -- the referral discount alone, in USD, set at grant; NULL: no referral
+        refunded_at INTEGER                 -- set: the buyer cancelled it unused and its payment was reversed (refunds.py)
     )""",
     "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, starts_at)",
     "CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id, starts_at)",
@@ -305,7 +306,10 @@ SCHEMA = [
         ref_id TEXT,
         card_pan TEXT,                      -- ZarinPal's masked card number; the card hash is never stored
         error TEXT,
-        made_order INTEGER NOT NULL DEFAULT 1   -- 1: the order was created for this payment; 0: it pays an order sent earlier
+        made_order INTEGER NOT NULL DEFAULT 1,  -- 1: the order was created for this payment; 0: it pays an order sent earlier
+        paid_at INTEGER,                    -- when it was verified and granted (status paid); the refund window counts from here
+        reverse_started_at INTEGER,         -- a ZarinPal reverse was asked for; still set with reversed_at NULL: its result is unknown
+        reversed_at INTEGER                 -- ZarinPal reversed it: the money went back to the buyer's card
     )""",
     "CREATE INDEX IF NOT EXISTS idx_payments_order ON payments(order_id)",
     "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status, created_at)",
@@ -563,6 +567,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN list_usd REAL")   # the price before the referral discount
     if "ref_off_usd" not in _columns(conn, "tickets"):
         conn.execute("ALTER TABLE tickets ADD COLUMN ref_off_usd REAL")   # the referral part alone of list_usd - usd
+    if "refunded_at" not in _columns(conn, "tickets"):
+        conn.execute("ALTER TABLE tickets ADD COLUMN refunded_at INTEGER")
+    for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)
+        if col not in _columns(conn, "payments"):
+            conn.execute(f"ALTER TABLE payments ADD COLUMN {col} INTEGER")
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:

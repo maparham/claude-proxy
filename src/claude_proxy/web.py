@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, telegram, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -1510,6 +1510,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return {"enabled": False}
         now = time.time()
         return passcard.build(conn, cfg, user["id"], now)
+
+    @app.post("/api/me/payments/{pid}/refund")
+    async def pass_refund(request: Request, pid: int):
+        """Cancel the buyer's own unused pass paid by payment `pid` through ZarinPal at most 15 minutes ago, and
+        reverse the payment. 409 when it can no longer be refunded; 502 when ZarinPal refused or did not answer."""
+        user = principal(request, write=True)
+        need_tickets()
+        await refunds.refund(conn, cfg, user, pid)
+        return {"ok": True}
 
     # ---------- order requests (design 2026-10-04) ----------
     # OrderError raised in here becomes its own status and message (_order_error above).

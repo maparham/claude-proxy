@@ -260,3 +260,25 @@ async def test_the_price_shown_is_the_price_charged_discount_included(env):
         assert r.status_code == 200, r.text
     o = conn.execute("SELECT o.quoted_amount, p.amount FROM orders o JOIN payments p ON p.order_id=o.id").fetchone()
     assert zp.requests[-1]["amount"] == int(o["quoted_amount"]) == o["amount"] == lite_week(pay["prices"])["amount"]
+
+
+async def test_refund_within_15_minutes(env, monkeypatch):
+    gw, conn, cfg, ids, keys, zp = env
+    reversed_ = []
+
+    async def reverse(merchant_id, authority, sandbox):
+        reversed_.append(authority)
+    monkeypatch.setattr(zarinpal, "reverse", reverse)
+    async with client(gw) as c:
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
+        auth = r.json()["url"].rsplit("/", 1)[1]
+        await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)
+        [offer] = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()["refunds"]
+        assert (offer["tier"], offer["amount"], offer["currency"]) == ("lite", 1250000, "IRT")
+        r = await c.post(f"/api/me/payments/{offer['payment_id']}/refund", headers=bearer(keys["alice"]), json={})
+        assert r.status_code == 200, r.text
+        assert reversed_ == [auth]
+        tk = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
+        assert tk["refunds"] == [] and tk["current"] is None
+        r = await c.post(f"/api/me/payments/{offer['payment_id']}/refund", headers=bearer(keys["alice"]), json={})
+        assert r.status_code == 409 and r.json()["error"] == "This pass can no longer be refunded."

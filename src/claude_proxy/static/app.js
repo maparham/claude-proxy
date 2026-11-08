@@ -601,6 +601,13 @@ async function renderOverview(main) {
     if (up.overloaded) banners.push(`<div class="banner warning"><span class="icon">⚠</span><span>${t("ov.up_overloaded", { failed: fmtNum(up.failed), total: fmtNum(up.total), since: esc(fmtTime(up.since)) })}${incidents ? ` ${incidents}` : ""}</span></div>`);
     else if (incidents) banners.push(`<div class="banner"><span class="icon">i</span><span>${incidents}</span></div>`);
   }
+  // A pass paid through ZarinPal in the last 15 minutes and not used yet can be cancelled for the money back.
+  for (const r of (tk && tk.refunds) || []) {
+    const left = Math.max(1, Math.ceil((r.until - (Date.now() / 1000 + S.tkSkew)) / 60));
+    const name = `${tierNameText(r.tier, r.label)} (${lengthName(r.length)})`;
+    banners.push(`<div class="banner"><span class="icon">i</span><span>${t("refund.offer", { pass: esc(name), amount: esc(money(r.amount, r.currency)), n: fmtNum(left) })}</span>
+      <button class="btn small" data-refund="${r.payment_id}" data-name="${esc(name)}" data-amount="${esc(money(r.amount, r.currency))}">${t("refund.btn")}</button></div>`);
+  }
   // A buyer with no ticket and no use yet: no zero tiles or empty limit bars, just the order and the price list.
   const idle = !!tk && !tk.current && !tk.queued && !(ov.totals["30d"] || tot).requests;
   const open = !!order && (order.status === "new" || order.status === "contacted");
@@ -1169,6 +1176,23 @@ function wireOrdering(root, tk, order) {
       e.target.disabled = true;
       try { await api("/api/me/tickets/start", { method: "POST", body: { pass: +b.dataset.start, starts_at: +b.dataset.at } }); d.close(); render(); }
       catch (err) { e.target.disabled = false; $("#start-err", d).textContent = err.message; }
+    };
+  }));
+  // Cancel an unused pass bought minutes ago: ZarinPal sends the money back to the card it came from.
+  root.querySelectorAll("[data-refund]").forEach((b) => (b.onclick = () => {
+    const d = openDialog(`<h3>${t("refund.title", { pass: esc(b.dataset.name) })}</h3><p>${t("refund.confirm", { amount: esc(b.dataset.amount) })}</p>
+      <div class="error" id="refund-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("refund.keep")}</button>
+        <button class="btn danger" type="button" id="refund-go">${t("refund.btn")}</button></div>`);
+    $("#refund-go", d).onclick = async (e) => {
+      e.target.disabled = true;
+      try {
+        await api(`/api/me/payments/${+b.dataset.refund}/refund`, { method: "POST", body: {} });
+        d.querySelector("p").textContent = t("refund.done");
+        e.target.remove();
+        d.querySelector("[data-close]").textContent = t("app.close");
+      }
+      catch (err) { e.target.disabled = false; $("#refund-err", d).textContent = err.message; }
     };
   }));
   const rb = root.querySelector("#renew-btn");

@@ -950,9 +950,11 @@ def _shift(conn, cfg: Config, chain: list[dict], delta: int, now: float) -> None
         raise
 
 
-def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, now: float | None = None) -> dict:
+def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, now: float | None = None,
+           after=None) -> dict:
     """Free the slice and end the ticket's bonuses. The user's queued tickets move forward to close the gap, each
-    re-checked; if one would not fit they keep their dates and `dates_kept` says so. Never refused."""
+    re-checked; if one would not fit they keep their dates and `dates_kept` says so. Never refused.
+    `after(ticket)`: called inside the same transaction, before it commits (a refund records itself there)."""
     now = _now(now)
     conn.execute("BEGIN IMMEDIATE")
     try:
@@ -976,6 +978,8 @@ def cancel(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: 
                 except CapacityError as e:
                     kept, reason = True, str(e)
         db.audit(conn, actor, "ticket_cancel", t["user_name"], {"ticket_id": ticket_id, "moved": moved, "dates_kept": kept})
+        if after is not None:
+            after(t)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")

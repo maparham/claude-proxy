@@ -3,7 +3,7 @@ bot's "My passes" always agree (Telegram bot design, section 6). Moved unchanged
 included: used-up passes give way to a queued one here (limits.hand_over), as they do on a request."""
 from __future__ import annotations
 
-from . import limits, payments, tickets
+from . import limits, payments, refunds, tickets
 
 
 def start_offer(conn, cfg, user_id: int, now: float) -> dict:
@@ -102,6 +102,8 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     out["timeline"] = tickets.timeline(conn, cfg, user_id, now)   # the card's chart, with more than one live ticket
     out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
     out["terms_version"] = tickets.TERMS_VERSION
+    # Passes paid through ZarinPal in the last 15 minutes and not used yet: the buyer may cancel them for the money back.
+    out["refunds"] = refunds.offers(conn, cfg, user_id, now)
     # Online payment (payments design, section 4): offered by the Payment selector alone. The Toman prices are None
     # without an IRT rate (the button then has no amount), and may be stale: paying is refused then.
     out["pay"] = ({"currency": payments.CURRENCY, "prices": payments.prices(conn, cfg, now), "vat_percent": cfg.zarinpal.vat_percent}

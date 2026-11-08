@@ -65,3 +65,10 @@ async def verify(merchant_id: str, amount: int, authority: str, sandbox: bool) -
     if data.get("ref_id") in (None, ""):   # a success without a reference cannot be recorded: ask again later
         raise ZarinpalUnavailable("verify.json: success without a ref_id")
     return {"code": data["code"], "ref_id": data.get("ref_id"), "card_pan": data.get("card_pan")}
+
+
+async def reverse(merchant_id: str, authority: str, sandbox: bool) -> None:
+    """Give a verified payment's money back to the buyer's card, without a fee. ZarinPal allows it only within 30
+    minutes of the payment and only from the server IP set on the gateway (-62 otherwise).
+    https://www.zarinpal.com/docs/paymentGateway/moreFeatures/reverse.html"""
+    await _call("reverse.json", {"merchant_id": merchant_id, "authority": authority}, sandbox)

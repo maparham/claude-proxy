@@ -376,7 +376,7 @@ def _fulfil(conn: sqlite3.Connection, cfg: Config, p: dict, ref_id: str, card_pa
     buyer = conn.execute("SELECT * FROM users WHERE id=?", (p["user_id"],)).fetchone()
 
     def mark(tid):
-        _set(conn, p["id"], "paid", now, ref_id=ref_id, card_pan=card_pan)
+        _set(conn, p["id"], "paid", now, ref_id=ref_id, card_pan=card_pan, paid_at=now)
         db.audit(conn, p["user_id"], "payment_paid", f"order #{p['order_id']}", {"payment_id": p["id"], "ref_id": ref_id, "ticket_id": tid})
         referrals.spend(conn, p["order_id"], now)   # a verified payment uses the order's referral unit for good
     try:

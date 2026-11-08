@@ -934,3 +934,28 @@ async def test_invite_off_still_lists_saved_units(tg):
     assert text.startswith(telegram.t("fa", "invite_off"))
     assert telegram.t("fa", "invite_unit", pct="۱۵", date=tickets.terms_date(expires, "fa")) in text
     assert "/r/" not in text
+
+
+
+async def test_refund_from_my_passes(tg, monkeypatch):
+    from claude_proxy import payments, refunds, zarinpal
+    async def reverse(merchant_id, authority, sandbox):
+        return None
+    monkeypatch.setattr(zarinpal, "reverse", reverse)
+    link(tg.conn, ALICE, tg.ids["alice"])
+    user = tg.conn.execute("SELECT * FROM users WHERE id=?", (tg.ids["alice"],)).fetchone()
+    r = await payments.start(tg.conn, tg.cfg, user, "lite", "week", "alice@example.com", terms_version="v1")
+    await payments.callback(tg.conn, tg.cfg, payments.get(tg.conn, r["payment_id"])["authority"], "OK")
+    [offer] = refunds.offers(tg.conn, tg.cfg, tg.ids["alice"])
+    tid = offer["payment_id"]
+    async with app(tg) as c:
+        await post(c, cb(ALICE, "mine"))
+        assert buttons(tg.fake.sent(chat_id=ALICE)[-1]) == [f"rf:{tid}"]
+        await post(c, cb(ALICE, f"rf:{tid}"))
+        assert buttons(tg.fake.sent(chat_id=ALICE)[-1]) == [f"rfy:{tid}", "mine"]
+        await post(c, cb(ALICE, f"rfy:{tid}"))
+        assert tg.fake.texts(ALICE)[-1] == telegram.t("fa", "refund_done")
+        await post(c, cb(ALICE, f"rfy:{tid}"))
+        assert tg.fake.texts(ALICE)[-1] == telegram.FA_ERRORS[refunds.GONE]
+    assert tg.conn.execute("SELECT t.cancelled_at FROM tickets t JOIN orders o ON o.ticket_id=t.id JOIN payments p ON p.order_id=o.id "
+                           "WHERE p.id=?", (tid,)).fetchone()[0] is not None

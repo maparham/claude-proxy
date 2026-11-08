@@ -199,12 +199,15 @@ def first_pass(conn: sqlite3.Connection, user_id: int) -> bool:
     """True when this account's email has never had a pass granted, by purchase or by the admin, on this account or
     an earlier one: no ticket for this user_id, no ticket whose user_name (a snapshot taken at grant time, so it
     survives the account being deleted) is this email, and no `done` order with that email. Checked by email, not
-    the audit log (controller ruling), so "delete the account, sign up again with the same email" gets nothing."""
+    the audit log (controller ruling), so "delete the account, sign up again with the same email" gets nothing.
+    A pass the buyer cancelled and got refunded (refunds.py) does not count: they never had it."""
     row = conn.execute("SELECT email, name FROM users WHERE id=?", (user_id,)).fetchone()
     email = (row["email"] or row["name"] or "").lower()
-    if conn.execute("SELECT 1 FROM tickets WHERE user_id=? OR lower(user_name)=? LIMIT 1", (user_id, email)).fetchone():
+    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND refunded_at IS NULL LIMIT 1",
+                    (user_id, email)).fetchone():
         return False
-    if conn.execute("SELECT 1 FROM orders WHERE status='done' AND lower(email)=? LIMIT 1", (email,)).fetchone():
+    if conn.execute("SELECT 1 FROM orders o WHERE o.status='done' AND lower(o.email)=? AND NOT EXISTS "
+                    "(SELECT 1 FROM tickets t WHERE t.id=o.ticket_id AND t.refunded_at IS NOT NULL) LIMIT 1", (email,)).fetchone():
         return False
     return True
 
@@ -347,6 +350,37 @@ def release(conn: sqlite3.Connection, order_id: int, now: int) -> None:
                  {"unit_id": unit["id"], "order_id": order_id})
 
 
+
+def on_refunded(conn: sqlite3.Connection, order_id: int, now: int) -> None:
+    """Inside the refund's transaction (refunds.py): the pass of this order was cancelled and its payment reversed, so
+    the referral effects of the sale are undone. The buyer's unit used by it goes back to saved (or expired, if past
+    expires_at). The referrer's reward for it is refused, and the unit it earned cancelled while still saved; a unit
+    already held or used by an order of the referrer's stays with that order, and a `referral_unit_conflict` row
+    names both for the admin."""
+    o = conn.execute("SELECT ref_kind, ref_unit_id FROM orders WHERE id=?", (order_id,)).fetchone()
+    if o is not None and o["ref_kind"] == "unit" and o["ref_unit_id"] is not None:
+        u = conn.execute("SELECT id, user_id, expires_at FROM referral_units WHERE id=? AND state='used' AND order_id=?",
+                         (o["ref_unit_id"], order_id)).fetchone()
+        if u is not None:
+            state = "expired" if u["expires_at"] <= now else "saved"
+            conn.execute("UPDATE referral_units SET state=?, order_id=NULL, updated_at=? WHERE id=?", (state, now, u["id"]))
+            db.audit(conn, None, f"referral_unit_{'expired' if state == 'expired' else 'returned'}",
+                     db._user_name(conn, u["user_id"]), {"unit_id": u["id"], "order_id": order_id, "refunded": True})
+    r = conn.execute("SELECT id, referrer_id, status FROM referral_rewards WHERE order_id=?", (order_id,)).fetchone()
+    if r is None or r["status"] not in ("waiting", "earned"):
+        return
+    detail = {"reward_id": r["id"], "order_id": order_id}
+    if r["status"] == "earned":
+        unit = conn.execute("SELECT id, state, order_id FROM referral_units WHERE reward_id=?", (r["id"],)).fetchone()
+        if unit is not None and unit["state"] == "saved":
+            conn.execute("UPDATE referral_units SET state='cancelled', updated_at=? WHERE id=?", (now, unit["id"]))
+            detail["unit_id"] = unit["id"]
+        elif unit is not None and unit["state"] in ("held", "used"):
+            db.audit(conn, None, "referral_unit_conflict", db._user_name(conn, r["referrer_id"]),
+                     {"unit_id": unit["id"], "order_id": order_id, "other_order_id": unit["order_id"], "state": unit["state"]})
+    conn.execute("UPDATE referral_rewards SET status='refused', decided_by=NULL, decided_at=? WHERE id=?", (now, r["id"]))
+    db.audit(conn, None, "referral_refunded", db._user_name(conn, r["referrer_id"]), detail)
+
 # ---------- earning units: a friend's first pass granted ----------
 
 def _month_start(now: int) -> int:
@@ -387,7 +421,7 @@ def on_granted(conn: sqlite3.Connection, order_id: int, now: int, floored_to_zer
     if friend is None or _active_user(conn, friend["referred_by"]) is None:
         return
     email = (friend["email"] or friend["name"] or "").lower()
-    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? LIMIT 1",
+    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? AND refunded_at IS NULL LIMIT 1",
                     (o["user_id"], email, o["ticket_id"])).fetchone():
         return
     rid = conn.execute("INSERT INTO referral_rewards(referrer_id, friend_id, order_id, created_at, status) "

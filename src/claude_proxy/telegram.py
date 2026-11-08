@@ -18,7 +18,7 @@ import weakref
 
 import httpx
 
-from . import blog, db, orders, passcard, payments, referrals, tickets
+from . import blog, db, orders, passcard, payments, referrals, refunds, tickets
 from .config import Config
 
 logger = logging.getLogger("claude_proxy")
@@ -136,6 +136,10 @@ TEXTS = {
         "unfulfilled": "پرداخت انجام شد (کد پیگیری زرین‌پال: {ref})، اما بسته خودکار شروع نشد. آن را شروع می‌کنیم یا مبلغ را برمی‌گردانیم؛ اگر سؤالی دارید «پشتیبانی» را بزنید.",
         "mine_none": "بسته فعال یا در صفی ندارید.",
         "mine_running": "{label}: تا {end}", "mine_queued": "{label}: در صف، از {start}",
+        "btn_refund": "لغو و بازگشت وجه: {label}",
+        "refund_ask": "{label} لغو شود؟ بسته همین حالا لغو می‌شود و زرین‌پال {amount} را به کارتی که با آن پرداخت کردید برمی‌گرداند. این کار قابل بازگشت نیست.",
+        "btn_refund_yes": "بله، لغو شود", "btn_refund_no": "بسته را نگه دار",
+        "refund_done": "انجام شد: بسته لغو شد و مبلغ به کارت شما برمی‌گردد. ممکن است نمایش آن در حساب بانکی‌تان کمی طول بکشد.",
         "mine_more": "جزئیات در داشبورد:\n{url}",
         "invite_off": "سیستم معرفی دوستان فعلاً خاموش است.",
         "invite_lede": "لینک‌تان را به اشتراک بگذارید: دوستی که از آن طریق ثبت‌نام کند {pct}٪ تخفیف در اولین بسته‌اش می‌گیرد.\n{link}",
@@ -186,6 +190,10 @@ TEXTS = {
         "unfulfilled": "Payment received (ZarinPal reference {ref}), but the pass could not start automatically. We'll start it or refund you; tap Support with any questions.",
         "mine_none": "You have no running or queued pass.",
         "mine_running": "{label}: until {end}", "mine_queued": "{label}: queued, from {start}",
+        "btn_refund": "Cancel and refund: {label}",
+        "refund_ask": "Cancel {label}? The pass is cancelled right away and ZarinPal sends {amount} back to the card you paid with. This cannot be undone.",
+        "btn_refund_yes": "Yes, cancel it", "btn_refund_no": "Keep the pass",
+        "refund_done": "Done: the pass is cancelled and the money is on its way back to your card. Your bank may take a little while to show it.",
         "mine_more": "Details in the dashboard:\n{url}",
         "invite_off": "Referrals are off right now.",
         "invite_lede": "Share your link: a friend who signs up through it gets {pct}% off their first pass.\n{link}",
@@ -217,6 +225,9 @@ def _content(msg: dict) -> tuple[str | None, str] | None:
 
 # Persian for the refusals a buyer in the bot can meet; any other message is shown as it is.
 FA_ERRORS = {
+    refunds.GONE: "دیگر نمی‌توان این بسته را لغو کرد و وجه آن را برگرداند.",
+    refunds.FAILED: "زرین‌پال بازگشت وجه را نپذیرفت و چیزی تغییر نکرد. با پشتیبانی تماس بگیرید.",
+    refunds.UNKNOWN: "زرین‌پال بازگشت وجه را تأیید نکرد؛ پشتیبانی آن را بررسی می‌کند و به شما خبر می‌دهد.",
     payments.PAUSED: "پرداخت آنلاین فعلاً متوقف است؛ کمی بعد دوباره امتحان کنید.",
     payments.MANUAL_ONLY: "پرداخت آنلاین فعلاً خاموش است.",
     payments.UNAVAILABLE: "زرین‌پال الان در دسترس نیست؛ کمی بعد دوباره امتحان کنید.",
@@ -567,6 +578,8 @@ class Telegram:
             return await self.pick_start(chat, arg)
         elif action == "p":
             return await self.pay(chat, arg)
+        elif action in ("rf", "rfy") and arg.isdigit():
+            return await (self.ask_refund if action == "rf" else self.refund)(chat, int(arg))
         elif action in ("oc", "ox") and arg.isdigit():
             await (self.continue_order if action == "oc" else self.cancel_order)(chat, int(arg))
         elif action == "feedback":
@@ -842,7 +855,38 @@ class Telegram:
                     q = card["queued"]
                     lines.append(t(lang, "mine_queued", label=self.label(q["tier"], lang), start=tickets.terms_date(q["starts_at"], lang)))
         text = "\n".join(lines) if lines else t(lang, "mine_none")
-        await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}")
+        # A pass paid in the last 15 minutes and not used yet: one button each to cancel it for the money back.
+        offers = refunds.offers(self.conn, self.cfg, user["id"]) if self.cfg.tickets.enabled else []
+        params = {"reply_markup": {"inline_keyboard": [[{"text": t(lang, "btn_refund", label=self.label(r["tier"], lang)),
+                                                          "callback_data": f"rf:{r['payment_id']}"}] for r in offers]}} if offers else {}
+        await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=f"{text}\n\n{t(lang, 'mine_more', url=self.dashboard())}", **params)
+
+    def _refund_offer(self, user_id: int, pid: int) -> dict | None:
+        return next((r for r in refunds.offers(self.conn, self.cfg, user_id) if r["payment_id"] == pid), None)
+
+    async def ask_refund(self, chat: dict, pid: int) -> bool:
+        user = await self.need_account(chat)
+        if user is None:
+            return True
+        r = self._refund_offer(user["id"], pid)
+        if r is None:
+            return False
+        lang = chat["lang"]
+        await self.say(chat, "refund_ask", [[self.btn(chat, "btn_refund_yes", f"rfy:{pid}"), self.btn(chat, "btn_refund_no", "mine")]],
+                       label=self.label(r["tier"], lang), amount=self.amount(lang, r["amount"]))
+        return True
+
+    async def refund(self, chat: dict, pid: int) -> bool:
+        user = await self.need_account(chat)
+        if user is None:
+            return True
+        try:
+            await refunds.refund(self.conn, self.cfg, user, pid)
+        except payments.PaymentError as e:
+            await self.bot.call("sendMessage", chat_id=chat["chat_id"], text=self.error_text(chat["lang"], e))
+            return True
+        await self.say(chat, "refund_done")
+        return True
 
     async def invite(self, chat: dict) -> None:
         """/invite (referrals design, task 6): the same link and units the dashboard's "Invite friends" card shows,
