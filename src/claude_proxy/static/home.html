@@ -91,15 +91,6 @@
     <p id="vat-note" hidden></p>
   </section>
 
-  <!-- The promo video (also on YouTube), served from here so it plays in Iran without a VPN. -->
-  <section class="video-sec" aria-labelledby="video-h">
-    <h2 id="video-h" data-i18n="home.video">From purchase to your first prompt, in under two minutes</h2>
-    <video controls playsinline preload="none" poster="/static/promo-poster.jpg" width="1920" height="1080">
-      <source src="/static/promo.mp4" type="video/mp4">
-    </video>
-    <p class="video-yt"><a href="https://youtu.be/054n-QUNp18" target="_blank" rel="noopener" data-i18n="home.video_yt">Watch on YouTube</a></p>
-  </section>
-
   <section class="who-sec" aria-labelledby="who-h">
     <h2 id="who-h" data-i18n="home.who">Who is Claude Code for?</h2>
     <div class="who">
@@ -109,6 +100,21 @@
       <a href="/blog/browser-automation-playwright" style="--c: var(--s3)"><div class="feat-ic"><svg class="ic"><use href="#i-browser"/></svg></div><b data-i18n="home.who_auto">Automation and data</b><span data-i18n="home.who_auto_text"></span></a>
     </div>
   </section>
+
+  <!-- The promo video (also on YouTube), served from here so it plays in Iran without a VPN. -->
+  <section class="video-sec" aria-labelledby="video-h">
+    <h2 id="video-h" data-i18n="home.video">From purchase to your first prompt, in under two minutes</h2>
+    <!-- Wide screens get the 16:9 video, phones the vertical cut (the YouTube Short); preload=none, so only the one shown loads. -->
+    <video class="video-wide" controls playsinline preload="none" poster="/static/promo-poster.jpg" width="1920" height="1080">
+      <source src="/static/promo.mp4" type="video/mp4">
+    </video>
+    <video class="video-tall" controls playsinline preload="none" poster="/static/promo-short-poster.jpg" width="1080" height="1920">
+      <source src="/static/promo-short.mp4" type="video/mp4">
+    </video>
+    <p class="video-yt video-wide"><a href="https://youtu.be/054n-QUNp18" target="_blank" rel="noopener" data-i18n="home.video_yt">Watch on YouTube</a></p>
+    <p class="video-yt video-tall"><a href="https://youtube.com/shorts/2JtXlb-Bl-0" target="_blank" rel="noopener" data-i18n="home.video_yt">Watch on YouTube</a></p>
+  </section>
+
 
 
   <section class="faq-sec" aria-labelledby="faq-h">

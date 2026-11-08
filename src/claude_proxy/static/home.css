@@ -57,6 +57,12 @@ html[dir="rtl"] .home-brand { order: 1; margin-inline-end: 0; margin-inline-star
 /* The promo video: full width, 16:9, with a link to the same video on YouTube under it. */
 .video-sec video { display: block; width: 100%; height: auto; aspect-ratio: 16 / 9; border-radius: 14px; border: 1px solid var(--border); background: #000; }
 .video-sec .video-yt { margin: 10px 0 0; font-size: 14px; }
+.video-sec video.video-tall { aspect-ratio: 9 / 16; max-height: 80vh; width: auto; max-width: 100%; margin: 0 auto; }
+.video-sec .video-tall { display: none; }
+@media (max-width: 640px) {
+  .video-sec .video-wide { display: none; }
+  .video-sec .video-tall { display: block; }
+}
 .who { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; }
 .who a { display: flex; flex-direction: column; gap: 6px; padding: 20px; border: 1px solid var(--border); border-radius: 14px; background: var(--surface); color: var(--ink); text-decoration: none; transition: transform 0.15s ease, border-color 0.15s ease; }
 .who a:hover { transform: translateY(-3px); border-color: color-mix(in srgb, var(--c) 50%, transparent); }
