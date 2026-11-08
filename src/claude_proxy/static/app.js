@@ -2260,7 +2260,8 @@ function machinesCard(keys, install, owner) {
 function installSetup(install) {
   const copy = (cmd) => `<div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`;
   const win = install.windows || install.windowsFile;
-  const os = win && /Windows NT/.test(navigator.userAgent) ? "win" : "unix";
+  // The tab picked stays picked through the overview's minute refresh; until then, this browser's OS.
+  const os = !win ? "unix" : S.osTab || (/Windows NT/.test(navigator.userAgent) ? "win" : "unix");
   return `<p class="sub">${t("pc.setup")}</p>
     ${win ? `<div class="seg" role="group" style="margin-bottom:8px">${[["unix", t("login.os_unix")], ["win", "Windows"]].map(([k, label]) =>
       `<button type="button" data-os-tab="${k}" aria-pressed="${k === os}">${label}</button>`).join("")}</div>` : ""}
@@ -2272,6 +2273,7 @@ function installSetup(install) {
 }
 function wireMachines(root) {
   root.querySelectorAll("[data-os-tab]").forEach((b) => (b.onclick = () => {
+    S.osTab = b.dataset.osTab;
     root.querySelectorAll("[data-os-tab]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
     root.querySelectorAll("[data-os]").forEach((d) => (d.hidden = d.dataset.os !== b.dataset.osTab));
   }));

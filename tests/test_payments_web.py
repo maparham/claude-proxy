@@ -318,3 +318,12 @@ async def test_install_cmd_runs_the_powershell_install(env):
         assert "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm 'https://dash.rahkar.pro/install.ps1' | iex\"" in s
         cfg.listener.public_url = ""
         assert (await c.get("/install.cmd")).status_code == 503
+
+
+def test_the_upgrade_mail_has_the_windows_installer_too(env):
+    gw, conn, cfg, ids, keys, zp = env
+    from claude_proxy import orders
+    cfg.listener.public_url = "https://gw.rahkar.pro"
+    for lang in ("en", "fa"):
+        _, body = orders.upgraded_mail_text(cfg, {"tier": "lite", "lang": lang}, {"ends_at": time.time() + 86400})
+        assert "https://dash.rahkar.pro/install.cmd" in body

@@ -509,9 +509,11 @@ def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -
     if order.get("lang") == "fa":
         label = fa_label(cfg, order["tier"])
         return (f"بسته شما ارتقا یافت: {label}",
-                f"{paid}سفارش شما انجام شد.\n\nبسته شما از حالا تا {tickets.terms_date(end, 'fa')} با سطح {label} کار می‌کند.\n")
+                f"{paid}سفارش شما انجام شد.\n\nبسته شما از حالا تا {tickets.terms_date(end, 'fa')} با سطح {label} کار می‌کند.\n"
+                f"{windows_setup(cfg, order)}")
     label = _label(cfg, order)
-    return f"Your pass is upgraded: {label}", f"{paid}Your order is done.\n\nYour pass now runs at {label} until {tickets._date(end)}.\n"
+    return (f"Your pass is upgraded: {label}",
+            f"{paid}Your order is done.\n\nYour pass now runs at {label} until {tickets._date(end)}.\n{windows_setup(cfg, order)}")
 
 
 def closed_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
