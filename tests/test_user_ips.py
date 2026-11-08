@@ -38,3 +38,26 @@ async def test_requests_and_sign_ins_are_recorded_and_only_the_admin_sees_them(e
         r = await c.get(f"/api/admin/users/{ids['alice']}/ips", headers=bearer(keys["alice"]))
         assert r.status_code == 403
         assert "127.0.0.1" not in (await c.get("/api/me/status", headers=bearer(keys["alice"]))).text
+
+
+def test_cleanup_drops_addresses_past_retention(db):
+    conn = db[1]
+    uid, _ = dbm.create_user(conn, "dave")
+    dbm.note_ip(conn, uid, "1.2.3.4", "gateway")
+    conn.execute("UPDATE user_ips SET last_seen=last_seen-400*86400")
+    dbm.note_ip(conn, uid, "5.6.7.8", "gateway")
+    assert dbm.cleanup(conn, 180, keep_usage=True)["user_ips"] == 0   # kept with the usage
+    assert dbm.cleanup(conn, 180)["user_ips"] == 1
+    assert [r["ip"] for r in dbm.user_ips(conn, uid)] == ["5.6.7.8"]
+
+
+async def test_users_table_shows_the_latest_request_address_not_a_sign_in(env):  # noqa: F811
+    gw, conn, ids, keys = env
+    dbm.note_ip(conn, ids["alice"], "1.1.1.1", "gateway")
+    conn.execute("UPDATE user_ips SET last_seen=last_seen-3600")
+    dbm.note_ip(conn, ids["alice"], "2.2.2.2", "dashboard")
+    async with admin_client(gw) as c:
+        users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
+        assert users["alice"]["last_ip"] == "1.1.1.1"
+        assert users["admin"]["last_ip"] is None   # signed in, never sent a request
+        assert (await c.get(f"/api/admin/users/{ids['alice']}/ips")).json()["more"] is False

@@ -98,6 +98,7 @@ _DUMMY_HASH = _ph.hash("not-a-real-password")
 PAGE_HEADERS = {"Cache-Control": "no-cache, no-transform"}
 USER_CODE_LETTERS = "BCDFGHJKLMNPQRSTVWXZ"   # no vowels (no words), no look-alikes of digits
 DEVICE_TTL_S, DEVICE_INTERVAL_S = 600, 3
+IPS_SHOWN = 200   # addresses listed on a user's page, latest first
 # Order emails go out after the response (mail.spawn), held there until done.
 _mail_tasks = mail.tasks
 
@@ -247,7 +248,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     def start_session(user, ip: str, key_id: int | None = None) -> JSONResponse:
         raw, csrf = db.create_session(conn, user["id"], key_id=key_id)
-        db.note_ip(conn, user["id"], ip, "dashboard")
+        try:   # bookkeeping: never fails the sign-in
+            db.note_ip(conn, user["id"], ip, "dashboard")
+        except sqlite3.Error:
+            logger.exception("could not record the sign-in's address")
         resp = JSONResponse({"ok": True, "csrf": csrf, "user": _public_user(user)})
         resp.set_cookie(COOKIE, raw, max_age=7 * 86400, httponly=True, samesite="strict",
                         secure=cfg.listener.secure_cookies, path="/")
@@ -655,8 +659,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         tot = {k: usage.grouped(conn, cfg.pricing, f"started_at>=? AND {src}", (now - s,), group="user_id") for k, s in periods.items()}
         atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s) for b in BUCKETS}
         out = []
-        last_ips = {r[0]: r[1] for r in conn.execute("SELECT user_id, ip FROM user_ips u WHERE last_seen=(SELECT MAX(last_seen) "
-                                                     "FROM user_ips WHERE user_id=u.user_id) GROUP BY user_id")}
+        # Shown under the last request, so the address of the latest request (SQLite's bare column goes with the MAX).
+        last_ips = {r[0]: r[1] for r in conn.execute("SELECT user_id, ip, MAX(last_seen) FROM user_ips WHERE source='gateway' "
+                                                     "GROUP BY user_id")}
         for u in conn.execute("SELECT * FROM users ORDER BY name").fetchall():
             last = conn.execute("SELECT MAX(started_at) FROM requests WHERE user_id=?", (u["id"],)).fetchone()[0]
             out.append({**_public_user(u), "enabled": bool(u["enabled"]), "revoked": u["revoked_at"] is not None,
@@ -1085,7 +1090,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/admin/users/{uid}/ips")
     async def admin_user_ips(request: Request, uid: int):
         admin(request)   # addresses are the admin's alone: never in a user's own views
-        return {"ips": db.user_ips(conn, uid)}
+        ips = db.user_ips(conn, uid, limit=IPS_SHOWN + 1)
+        return {"ips": ips[:IPS_SHOWN], "more": len(ips) > IPS_SHOWN}
 
     @app.post("/api/admin/users/{uid}/{action}")
     async def user_action(request: Request, uid: int, action: str):

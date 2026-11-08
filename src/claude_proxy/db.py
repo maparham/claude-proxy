@@ -865,6 +865,7 @@ def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = Fa
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
         "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
+        "user_ips": conn.execute("DELETE FROM user_ips WHERE last_seen<?", (cutoff,)).rowcount,
         "device_requests": conn.execute("DELETE FROM device_requests WHERE expires_at<?", (int(now),)).rowcount,
         "telegram_link_codes": conn.execute("DELETE FROM telegram_link_codes WHERE expires_at<?", (int(now),)).rowcount,
         "telegram_updates": conn.execute("DELETE FROM telegram_updates WHERE at<?", (int(now) - 86400,)).rowcount,

@@ -278,7 +278,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     if not should_forward(path):
         return api_error(404, "not_found_error", f"Not found: {path}")
 
-    # Behind Caddy, uvicorn takes the client's address from X-Forwarded-For (it trusts 127.0.0.1 by default).
+    # Behind a proxy on the same host (cloudflared, Caddy), uvicorn takes the client's address from X-Forwarded-For: it
+    # trusts it only from 127.0.0.1. A proxy reaching the gateway from elsewhere (a Docker bridge) would be recorded instead.
     base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host if request.client else None}
     held = False   # this request is counted in `inflight` until it is recorded
 
