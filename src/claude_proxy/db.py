@@ -580,6 +580,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN ref_off_usd REAL")   # the referral part alone of list_usd - usd
     if "refunded_at" not in _columns(conn, "tickets"):
         conn.execute("ALTER TABLE tickets ADD COLUMN refunded_at INTEGER")
+    if "windows" not in _columns(conn, "orders"):   # ordered or paid from a Windows browser: its pass mail adds the Windows setup
+        conn.execute("ALTER TABLE orders ADD COLUMN windows INTEGER NOT NULL DEFAULT 0")
     for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)
         if col not in _columns(conn, "payments"):
             conn.execute(f"ALTER TABLE payments ADD COLUMN {col} INTEGER")

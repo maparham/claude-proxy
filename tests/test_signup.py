@@ -245,14 +245,15 @@ async def test_auth_config_and_csp(env):
     async with app(gw) as c:
         r = await c.get("/api/auth-config")
         assert r.json() == {"clerk": {"publishable_key": PK, "frontend_api": FAPI}, "signup": True,
-                            "install": f"curl -fsSL {DASH}/install | sh", "install_windows": f"irm {DASH}/install.ps1 | iex"}
+                            "install": f"curl -fsSL {DASH}/install | sh", "install_windows": f"irm {DASH}/install.ps1 | iex",
+                            "install_windows_file": f"{DASH}/install.cmd"}
         csp = r.headers["content-security-policy"]
     assert f"https://{FAPI}" in csp and "https://challenges.cloudflare.com" in csp
     gw.cfg.signup.clerk_publishable_key = ""
     gw.cfg.listener.public_url = ""
     async with app(gw) as c:
         r = await c.get("/api/auth-config")
-    assert r.json() == {"clerk": None, "signup": False, "install": None, "install_windows": None}
+    assert r.json() == {"clerk": None, "signup": False, "install": None, "install_windows": None, "install_windows_file": None}
     assert "clerk" not in r.headers["content-security-policy"] and "frame-src 'none'" in r.headers["content-security-policy"]
 
 

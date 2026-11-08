@@ -284,3 +284,45 @@ async def test_refund_within_15_minutes(env, monkeypatch):
         assert r.status_code == 409 and r.json()["error"] == "This pass can no longer be refunded."
     async with admin_client(gw) as c:
         assert (await c.get("/api/admin/orders?status=all")).json()["orders"][0]["payment"]["refund"] == "done"
+
+
+WIN_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/130.0 Safari/537.36"
+MAC_UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_0) AppleWebKit/605.1.15 Safari/605.1.15"
+
+
+@pytest.mark.parametrize("ua", [WIN_UA, MAC_UA])
+async def test_a_windows_buyer_gets_the_windows_setup_in_the_pass_mail(env, monkeypatch, ua):
+    gw, conn, cfg, ids, keys, zp = env
+    from claude_proxy import mail, web
+    from claude_proxy.config import EmailConfig
+    import asyncio
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    cfg.listener.public_url = "https://gw.rahkar.pro"
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: sent.append((to, body, html)))
+    async with client(gw) as c:
+        r = await c.post("/api/orders/pay", headers=bearer(keys["alice"]), json={"tier": "lite", "length": "week", "terms_version": "v1"})
+        auth = r.json()["url"].rsplit("/", 1)[1]
+        await c.get(f"/pay/callback?Authority={auth}&Status=OK", headers={"user-agent": ua}, follow_redirects=False)
+        await asyncio.gather(*list(web._mail_tasks))
+    (_, admin, _), (_, body, html) = sent
+    url = "https://dash.rahkar.pro/install.cmd"
+    assert url not in admin
+    if ua == WIN_UA:
+        assert "Set up on Windows:" in body and url in body and f'<a href="{url}">{url}</a>' in html
+    else:
+        assert "install.cmd" not in body
+
+
+async def test_install_cmd_runs_the_powershell_install(env):
+    gw, conn, cfg, ids, keys, zp = env
+    cfg.listener.public_url = "https://gw.rahkar.pro"
+    async with client(gw) as c:
+        r = await c.get("/install.cmd")
+        assert r.status_code == 200
+        assert r.headers["content-disposition"] == 'attachment; filename="claude-gateway-setup.cmd"'
+        s = r.content.decode("ascii")
+        assert s.startswith("@echo off\r\n") and s.endswith("pause\r\n")
+        assert "powershell -NoProfile -ExecutionPolicy Bypass -Command \"irm 'https://dash.rahkar.pro/install.ps1' | iex\"" in s
+        cfg.listener.public_url = ""
+        assert (await c.get("/install.cmd")).status_code == 503

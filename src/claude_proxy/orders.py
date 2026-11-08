@@ -130,7 +130,8 @@ def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str
 
 def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, currency: str, name: str, email: str, message: str = "",
            user_id: int | None = None, ip: str | None = None, notify: bool = True, now: float | None = None,
-           terms_version: str | None = None, lang: str = "en", start_now: bool = False, via: str = "web") -> dict:
+           terms_version: str | None = None, lang: str = "en", start_now: bool = False, via: str = "web",
+           windows: bool = False) -> dict:
     """Store an order for a signed-in user (`user_id`) or a visitor (`ip`), quoted at today's price and rate.
     Refused: bad input (400), a user's second open order or a sold-out ticket (409), a visitor over a limit (429).
     `terms_version`: the ticket terms the buyer ticked; equality-checked against tickets.TERMS_VERSION, missing or
@@ -138,7 +139,8 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
     `lang`: the page's language; the buyer's emails use it (anything but "fa" is English).
     `start_now`: the ticket is to start when granted, beside the buyer's
     running tickets, not after them (tickets.grant). A visitor has none: theirs never starts now.
-    `via`: where the buyer ordered, 'web' or 'telegram' (the bot tells them when it is paid)."""
+    `via`: where the buyer ordered, 'web' or 'telegram' (the bot tells them when it is paid).
+    `windows`: ordered from a Windows browser, so the pass mail adds the Windows setup (windows_setup)."""
     now = _now(now)
     start_now = bool(start_now) and user_id is not None
     if terms_version != tickets.TERMS_VERSION:
@@ -193,10 +195,10 @@ def create(conn: sqlite3.Connection, cfg: Config, *, tier: str, length: str, cur
             admin_mail, buyer_mail = "pending", "skipped" if sent >= BUYER_MAILS else "pending"
         cur = conn.execute(
             "INSERT INTO orders(created_at, updated_at, user_id, name, email, tier, length, currency, quoted_usd, quoted_rate, quoted_amount, "
-            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, start_now, via) "
-            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?)",
+            "message, status, ip, admin_mail, buyer_mail, terms_version, lang, start_now, via, windows) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'new',?,?,?,?,?,?,?,?)",
             (now, now, user_id, name, email, tier, length, currency, usd, rate["rate"], amount, message,
-             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, int(start_now), via))
+             None if user_id is not None else ip, admin_mail, buyer_mail, terms_version, lang, int(start_now), via, int(bool(windows))))
         oid = cur.lastrowid
         referrals.hold(conn, oid, ref, now)
         db.audit(conn, user_id, "order_new", f"order #{oid}", {"tier": tier, "length": length, "currency": currency, "amount": amount,
@@ -462,6 +464,28 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
     return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
 
+def windows_setup(cfg: Config, order: dict) -> str:
+    """For a buyer who ordered or paid from Windows: how to set up a computer with the double-click installer
+    (the dashboard's /install.cmd), as a block for the end of their pass mail. Nothing for anyone else, or on a
+    gateway without the URLs the installer needs."""
+    if not (order.get("windows") and cfg.listener.public_url and cfg.listener.dashboard_url):
+        return ""
+    url = f"{cfg.listener.dashboard_url.rstrip('/')}/install.cmd"
+    if order.get("lang") == "fa":
+        return ("\nنصب روی Windows:\n"
+                f"۱. فایل نصب را دانلود کنید: {url}\n"
+                "۲. فایل دانلودشده (claude-gateway-setup.cmd) را باز کنید. اگر Windows پیام «Windows protected your PC» نشان داد، "
+                "روی «More info» و بعد «Run anyway» بزنید.\n"
+                "۳. صفحه‌ای در مرورگر باز می‌شود: وارد شوید و تأیید را بزنید.\n"
+                "۴. وقتی کار پنجره تمام شد، یک پنجره تازه PowerShell باز کنید و gclaude را بنویسید.\n")
+    return ("\nSet up on Windows:\n"
+            f"1. Download the installer: {url}\n"
+            "2. Open the downloaded file (claude-gateway-setup.cmd). If Windows says \"Windows protected your PC\", "
+            "click \"More info\", then \"Run anyway\".\n"
+            "3. A page opens in your browser: sign in and click Authorize.\n"
+            "4. When the window is done, open a new PowerShell window and type gclaude.\n")
+
+
 def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket: dict) -> tuple[str, str]:
     """(subject, body) for the buyer once the admin grants their order: the ticket's dates and its terms, plus the
     referral discount line taken from the granted ticket itself (ref_discount_usd), not the order's own ref_off_usd -
@@ -473,11 +497,11 @@ def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket
     if order.get("lang") == "fa":
         what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
-        return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n{ref_discount_line_fa(order, ticket)}\n{terms}"
+        return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n{ref_discount_line_fa(order, ticket)}\n{terms}{windows_setup(cfg, order)}"
     what = f"{_label(cfg, order)}, {order['length']}{_days(order['length'])}"
     span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
     return (f"Your pass is granted: {_label(cfg, order)} {order['length']}",
-            f"Your order is done.\n\nPass: {what}, {span}.\n{ref_discount_line_en(order, ticket)}\n{terms}")
+            f"Your order is done.\n\nPass: {what}, {span}.\n{ref_discount_line_en(order, ticket)}\n{terms}{windows_setup(cfg, order)}")
 
 
 def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -> tuple[str, str]:

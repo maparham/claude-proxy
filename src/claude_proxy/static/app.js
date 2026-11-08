@@ -2230,7 +2230,10 @@ function machinesCard(keys, install, owner) {
     ${install ? `<p class="sub">${t("pc.setup")}</p>
       ${[[t("login.os_unix"), install.unix], [t("pc.windows_ps"), install.windows]].filter(([, cmd]) => cmd).map(([os, cmd]) =>
         `<p class="muted install-os">${os}</p>
-      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`).join("")}` : ""}</div>`;
+      <div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`).join("")}
+      ${install.windowsFile ? `<p class="muted install-os">${t("pc.windows_file")}</p>
+      <p><a class="btn small" href="${esc(install.windowsFile)}" download>${t("pc.windows_download")}</a></p>
+      <p class="muted">${t("pc.windows_file_how")}</p>` : ""}` : ""}</div>`;
 }
 function wireMachines(root) {
   root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
@@ -2991,7 +2994,7 @@ function showLogin() {
 async function boot() {
   try {
     const s = await api("/api/session");
-    S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows };
+    S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows, windowsFile: s.install_windows_file };
     S.tickets = s.tickets || { enabled: false };
     S.api = s.api || { enabled: false };
     if (s.settings) S.settings = { ...S.settings, ...s.settings };

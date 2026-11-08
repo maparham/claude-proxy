@@ -7,6 +7,7 @@ transaction, so two admins acting at once cannot oversell.
 from __future__ import annotations
 
 import html
+import re
 import math
 import sqlite3
 import time
@@ -159,6 +160,7 @@ def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float | None
     d = "rtl" if lang == "fa" else "ltr"
     terms, rich = terms_text(conn, cfg, lang, length, starts_at), terms_html(conn, cfg, lang, length, starts_at)
     inner = html.escape(body).replace(html.escape(terms), rich, 1)
+    inner = re.sub(r"https://[^\s<]+/install\.cmd", lambda m: f'<a href="{m[0]}">{m[0]}</a>', inner)   # orders.windows_setup's download
     return f'<div dir="{d}" style="text-align:{"right" if d == "rtl" else "left"};white-space:pre-wrap">{inner}</div>\n'
 
 
