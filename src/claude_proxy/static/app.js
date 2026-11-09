@@ -618,7 +618,6 @@ async function renderOverview(main) {
       ${isAdmin() ? `<p class="lede">${t("ov.lede_admin")}</p>` : ""}
       ${banners.join("")}
       ${tk ? myOrderCard(order, tk.pay) : ""}
-      ${isAdmin() ? "" : inviteCard(ref)}
       ${idle ? (open ? "" : `<div class="card"><h3>${t("ov.no_ticket")}</h3><p class="sub">${t("ov.no_ticket_sub")}</p></div>`) : `${isAdmin() ? usageTiles(ov) : ""}
       <div class="grid${isAdmin() ? " cols-2" : ""}">
         ${isAdmin() ? `<div class="card"><h3>${t("ov.quota_title")}${tipI("quota")}</h3>
@@ -630,6 +629,7 @@ async function renderOverview(main) {
       </div>`}
       ${tk && !tk.current ? priceListCard(tk, order) : ""}
       ${tk ? pastCard(tk) : ""}
+      ${isAdmin() ? "" : inviteCard(ref)}
       ${machinesCard(keys.keys, S.install)}
     </section>`;
   wireSegs(main, render);
@@ -697,9 +697,9 @@ function paymentNoticeMsg(p) {
 function pastCard(tk) {
   if (!tk.past || !tk.past.length) return "";
   return `<details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("past.title")} <span class="badge">${nfFull.format(tk.past.length)}</span></h3></summary>
-    <table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th>${t("past.how")}</th><th class="r">${t("tk.paid")}</th></tr></thead>
+    <table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th>${t("past.how")}</th><th class="r">${t("pass.tokens")}${tipI("weighted")}</th><th class="r">${t("tk.paid")}</th></tr></thead>
     <tbody>${tk.past.map((p) => `<tr><td>${tierName(p.tier, p.label)}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
-      <td class="muted">${t(`past.how_${p.how}`)}</td><td class="r">${esc(money(p.amount, p.currency))}</td></tr>`).join("")}</tbody></table></details>`;
+      <td class="muted">${t(`past.how_${p.how}`)}</td>${tokensCell(p)}<td class="r">${esc(money(p.amount, p.currency))}</td></tr>`).join("")}</tbody></table></details>`;
 }
 function usersCard() {
   return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;
@@ -737,6 +737,12 @@ function limitHit(secs) {
   const tip = secs ? t("pass.limit_hit_tip", { d: fmtHM(secs) }) : t("pass.limit_hit");
   return `<span class="tip-i alert" tabindex="0" role="button" aria-label="${esc(t("pass.limit_hit"))}" data-tip-html="${esc(`<span class="tip-line">${esc(tip)}</span>`)}"></span>`;   // one line: it is short
 }
+// The tokens a pass served so far: weighted, with raw beside it, on its card.
+function passTokens(x) {
+  return x && x.tokens ? `<div class="pass-use pass-tokens"><span>${t("pass.tokens")}${tipI("weighted")}</span><span class="num">${fmtNum(x.tokens.weighted)} <span class="muted">${t("pass.tokens_raw", { v: fmtNum(x.tokens.raw) })}</span></span></div>` : "";
+}
+// Weighted over raw, in a table cell.
+const tokensCell = (x) => (x && x.tokens ? `<td class="r"><div>${fmtNum(x.tokens.weighted)}</div><div class="muted">${t("pass.tokens_raw", { v: fmtNum(x.tokens.raw) })}</div></td>` : `<td class="r muted">—</td>`);
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
 function passList(c, no) {
   const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(Math.min(100, v)))}${PCT}`);   // the request past a limit is still served: never above 100
@@ -759,7 +765,7 @@ function passList(c, no) {
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
-      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && !p.used_up && p.pct_5h >= 100, wait(p.reset_5h))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && !p.used_up && p.pct_7d >= 100, wait(p.reset_7d))}`}
+      ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && !p.used_up && p.pct_5h >= 100, wait(p.reset_5h))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && !p.used_up && p.pct_7d >= 100, wait(p.reset_7d))}${passTokens(p)}`}
       ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;
@@ -807,7 +813,7 @@ function userLimitsCard(me, tk, order) {
   const no = passNumbers(c);
   const hero = inUse ? `<div class="pass-hero${inUse.held ? " held" : ""}" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
       ${inUse.held ? pausedChip(inUse) : `<span class="badge state-active">${t("pass.serving")}</span>`}<span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
-      ${split}${limitsCompact(me.limits, noWeek)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
+      ${split}${limitsCompact(me.limits, noWeek)}${passTokens(inUse)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
       <div class="ticket-head"><div class="muted">${t("pass.list", { btn: `<span class="btn small btn-ref">${t("pass.pin")}</span>` })}</div><div class="row-actions">${renew}</div></div>
       ${hero}${passList(c, no)}${extras}</div>`
@@ -815,7 +821,7 @@ function userLimitsCard(me, tk, order) {
       <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
       <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) })}`
         : noWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
-      ${split}${extras}
+      ${split}${passTokens(c)}${extras}
       ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
     : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
@@ -1432,8 +1438,8 @@ async function renderTickets(main) {
     const shown = tickets.filter((tk) => (!S.ticketState || tk.state === S.ticketState)
       && (!q || [tk.user_name, tk.note, tk.tier].some((v) => (v || "").toLowerCase().includes(q))));
     const list = $("#tk-list");
-    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th class="r">${t("tk.this_week")}${tipI("week_col")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
-      <tbody>${foldRows(shown.map(ticketRow)) || `<tr><td colspan="9" class="muted">${t(tickets.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
+    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th class="r">${t("tk.this_week")}${tipI("week_col")}</th><th class="r">${t("pass.tokens")}${tipI("weighted")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${foldRows(shown.map(ticketRow)) || `<tr><td colspan="10" class="muted">${t(tickets.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
     wireMore(list);
     list.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
   };
@@ -1458,7 +1464,7 @@ function ticketRow(tk) {
     <td>${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
     <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${tk.effective_end !== tk.ends_at ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(Math.round((tk.effective_end - tk.ends_at) / 86400)) })})</span>` : ""}</td>
     <td class="r">${esc(money(tk.amount, tk.currency))}${tk.discount_id ? `<div class="muted"><s>${fmtPrice(tk.list_usd)}</s> ${fmtPrice(tk.usd)}</div>` : `<div class="muted">${fmtPrice(tk.usd)}</div>`}</td>
-    <td>${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td><td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
+    <td>${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td>${tokensCell(tk)}<td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
     <td><div class="row-actions">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
       ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${tk.id}" data-tip="act_ticket_cancel">${t("app.cancel_ticket")}</button>` : ""}</div></td></tr>`;
 }
