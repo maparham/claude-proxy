@@ -177,7 +177,7 @@ async def test_preview_grant_list_and_users_state(env):
 async def test_grant_refusals_map_to_400_and_409(env):
     gw, conn, cfg, ids, keys = env
     live(conn, time.time())
-    cfg.tickets.max_sold_pct = 5
+    cfg.tickets.max_sold_pct = 100   # the week has room wherever today falls in it: only the 5-hour ceiling refuses
     cfg.tickets.sell_margin_pct = 0
     cfg.tickets.max_sold_5h_pct = 5
     async with admin_client(gw) as c:
