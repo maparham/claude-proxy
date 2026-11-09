@@ -30,6 +30,8 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(mode)}
     cur = st["current"]
     past = tickets.past(conn, user_id, now)
+    # The tokens each pass served so far, the running and past ones in one query.
+    served = capacity.pass_tokens(conn, cfg, [*([cur] if cur else []), *tickets.running(conn, user_id, now), *past], now)
     if cur:
         ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
         active = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is None]   # gifts; upgrades were paid for
@@ -77,7 +79,6 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         # With more than one live pass the card lists them all, the queued ones after the running ones (`queued`).
         later = [t for t in tickets.user_tickets(conn, user_id) if t["cancelled_at"] is None and t["starts_at"] > now]
         uses = {t["id"]: pass_use(t) for t in run}
-        served = capacity.pass_tokens(conn, cfg, {t["id"]: t for t in [cur, *run, *past]}.values())   # tokens each pass served so far, past ones too
         out["current"]["tokens"] = served[cur["id"]]
         out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
             {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
@@ -91,9 +92,8 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     if st["queued"]:
         q = st["queued"]
         out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
-    served_past = served if cur else capacity.pass_tokens(conn, cfg, past)
     out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
-                    "amount": t["amount"], "currency": t["currency"], "tokens": served_past[t["id"]]} for t in past]
+                    "amount": t["amount"], "currency": t["currency"], "tokens": served[t["id"]]} for t in past]
     # The gateway's own currency (IRT), as on the home page, whatever the running pass was bought in; the dashboard
     # offers USD beside it. Not the running pass's currency: a pass granted in EUR turned the whole list into euros.
     currency = next(iter(cfg.tickets.currencies), "USD")

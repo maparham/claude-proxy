@@ -1422,7 +1422,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             where, params = "WHERE t.user_id IS NULL AND t.user_name=?", (deleted,)
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
         week = capacity_mod.week_use(conn, cfg, tickets.ACCOUNT_ID, now)["passes"]   # each pass's points of this week
-        served = capacity_mod.pass_tokens(conn, cfg, rows)   # each pass's tokens over its life
+        served = capacity_mod.pass_tokens(conn, cfg, rows, now)   # each pass's tokens over its life
         for t in rows:
             t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"]),
                   "week": week.get(t["id"]), "tokens": served[t["id"]]}

@@ -1,7 +1,7 @@
 """Telegram bot design, section 6 (My passes): the pass card is built in one place."""
 import time
 
-from claude_proxy import passcard, tickets
+from claude_proxy import capacity, passcard, tickets
 from tests.test_tickets_web import env  # noqa: F401  (the fixture)
 from tests.test_web import admin_client, bearer
 from tests.conftest import asgi_client
@@ -21,9 +21,9 @@ async def test_route_and_build_agree(env):
     assert {k: v for k, v in b.items() if k != "now"} == {k: v for k, v in r.items() if k != "now"}
 
 
-async def test_pass_tokens_on_card_and_admin_list(env):
+async def test_pass_tokens_on_card_and_admin_list(env, monkeypatch):
     """Each pass shows the tokens it served, weighted and raw, to its holder and to the admin: only its own served
-    requests, and nothing (None) for a pass older than the oldest request kept, whose history retention cut."""
+    requests, and nothing (None) for a pass started before requests carried their pass (TAGGED_SINCE)."""
     gw, conn, cfg, ids, keys = env
     now = time.time()
     live(conn, now)
@@ -34,7 +34,7 @@ async def test_pass_tokens_on_card_and_admin_list(env):
     row = ("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, status, input_tokens, output_tokens, "
            "ticket_id, rejected_by) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
     m = "claude-sonnet-4-5"
-    conn.execute(row, (ids["alice"], now - 2 * 86400, now - 2 * 86400, "POST", "/v1/messages", "anthropic", m, 200, 1, 1, None, None))   # the oldest kept
+    monkeypatch.setattr(capacity, "TAGGED_SINCE", now - 2 * 86400)
     conn.execute(row, (ids["alice"], now, now, "POST", "/v1/messages", "anthropic", m, 200, 1000, 100, tid, None))
     conn.execute(row, (ids["alice"], now, now, "POST", "/v1/messages", "anthropic", m, 429, 5000, 0, tid, "ticket"))   # refused: not served
     conn.execute(row, (ids["alice"], now, now, "POST", "/v1/messages/count_tokens", "anthropic", m, 200, 7000, 0, tid, None))
@@ -46,6 +46,6 @@ async def test_pass_tokens_on_card_and_admin_list(env):
     p = cfg.pricing.price_for(m)
     assert adm[tid] == {"raw": 1100, "weighted": (1000 * p.input + 100 * p.output) / cfg.pricing.reference_input()}
     assert adm[other]["raw"] == 330
-    assert adm[old["id"]] is None   # it began before the oldest request kept: its history may be cut
+    assert adm[old["id"]] is None   # it began before requests carried their pass
     assert sorted(x["tokens"]["raw"] for x in me["current"]["passes"] if not x.get("queued")) == [330, 1100]
     assert [x["tokens"] for x in me["past"]] == [None]
