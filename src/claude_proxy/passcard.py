@@ -37,6 +37,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         active = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is None]   # gifts; upgrades were paid for
         week = tickets.week_bounds(conn, cfg, now)
         week_end = week[1] if week is not None else tickets.current_day(cur, now)[1]   # display-only fallback; enforcement is 503 then
+        # bonus_days: from the bonuses, not effective_end - ends_at, which is negative once a pass is used up early.
         # No subscription percents: the user never learns about the account behind the gateway, so a bonus reads
         # as a percent of the ticket's own allowance (+2 points on a 5% ticket: +40%).
         share_5h = cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"]
@@ -44,7 +45,8 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         out["current"] = {"tier": now_tier, "label": label({"tier": now_tier}), "starts_at": cur["starts_at"], "length": cur["length"],
                           "upgraded_from": {"tier": cur["tier"], "label": label(cur)} if ups else None,
                           "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
-                          "bonus_days": (cur["effective_end"] - cur["ends_at"]) // tickets.DAY, "week_end": week_end,
+                          "bonus_days": sum(b["extra_days"] for b in tickets.bonuses(conn, cur["id"]) if b["cancelled_at"] is None),
+                          "week_end": week_end,
                           "week_known": week is not None,
                           # Nothing left before it ends: the card offers a new ticket, which starts at once.
                           "used_up": limits.used_up(conn, cfg, user_id, now),

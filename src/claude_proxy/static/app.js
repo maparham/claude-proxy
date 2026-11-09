@@ -1465,12 +1465,14 @@ function weekCell(w) {
   const over = w.used > w.sold + 0.05;
   return `<span class="num${over ? " over" : ""}">${t("tk.week_use", { used: n(w.used), sold: n(w.sold) })}</span>${w.reserved > 0.05 ? `<div class="muted">${t("tk.week_reserved", { v: n(w.reserved) })}</div>` : ""}`;
 }
+// A pass's bonus days, from its bonuses: not effective_end - ends_at, which is negative for a pass used up early.
+const bonusDays = (tk) => tk.bonuses.filter((b) => !b.cancelled_at).reduce((n, b) => n + (b.extra_days || 0), 0);
 function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "queued";
   const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
   return `<tr><td><b>${bdi(tk.user_name)}</b>${tk.user_id == null ? ` <span class="badge">${t("tk.deleted")}</span>` : ""}</td>
     <td>${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
-    <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${tk.effective_end !== tk.ends_at ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(Math.round((tk.effective_end - tk.ends_at) / 86400)) })})</span>` : ""}</td>
+    <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${bonusDays(tk) ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(bonusDays(tk)) })})</span>` : ""}</td>
     <td class="r">${esc(money(tk.amount, tk.currency))}${tk.discount_id ? `<div class="muted"><s>${fmtPrice(tk.list_usd)}</s> ${fmtPrice(tk.usd)}</div>` : `<div class="muted">${fmtPrice(tk.usd)}</div>`}</td>
     <td>${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td>${tokensCell(tk)}<td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
     <td><div class="row-actions">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
