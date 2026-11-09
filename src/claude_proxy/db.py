@@ -448,6 +448,14 @@ SCHEMA = [
         count INTEGER NOT NULL DEFAULT 1,
         PRIMARY KEY (user_id, ip, source)
     )""",
+    # Where an address is (geo.py), looked up once per address; an address without a row has no known place.
+    """CREATE TABLE IF NOT EXISTS ip_geo (
+        ip TEXT PRIMARY KEY,
+        city TEXT,
+        region TEXT,
+        country TEXT NOT NULL,      -- ISO 3166 two-letter code; the dashboard names it in the page's language
+        looked_up_at INTEGER NOT NULL
+    )""",
 
 ]
 
@@ -671,18 +679,21 @@ def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
     return {**dict(row), "key_scope": "full", "role": "user", "machine_key_id": k["id"]}
 
 
-def note_ip(conn: sqlite3.Connection, user_id: int | None, ip: str | None, source: str) -> None:
-    """Count one request or sign-in by `user_id` from `ip` (user_ips)."""
+def note_ip(conn: sqlite3.Connection, user_id: int | None, ip: str | None, source: str) -> bool:
+    """Count one request or sign-in by `user_id` from `ip` (user_ips). True the first time this user is seen there
+    from this source: the moment to look the address's place up (geo.locate)."""
     if user_id is None or not ip or ip == "unknown":
-        return
+        return False
     now = int(time.time())
-    conn.execute("INSERT INTO user_ips(user_id, ip, source, first_seen, last_seen) VALUES(?,?,?,?,?) "
-                 "ON CONFLICT(user_id, ip, source) DO UPDATE SET last_seen=excluded.last_seen, count=count+1",
-                 (user_id, ip[:64], source, now, now))
+    count = conn.execute("INSERT INTO user_ips(user_id, ip, source, first_seen, last_seen) VALUES(?,?,?,?,?) "
+                         "ON CONFLICT(user_id, ip, source) DO UPDATE SET last_seen=excluded.last_seen, count=count+1 "
+                         "RETURNING count", (user_id, ip[:64], source, now, now)).fetchone()[0]
+    return count == 1
 
 
 def user_ips(conn: sqlite3.Connection, user_id: int, limit: int = 200) -> list[dict]:
-    return [dict(r) for r in conn.execute("SELECT ip, source, first_seen, last_seen, count FROM user_ips WHERE user_id=? "
+    return [dict(r) for r in conn.execute("SELECT u.ip, source, first_seen, last_seen, count, city, region, country "
+                                          "FROM user_ips u LEFT JOIN ip_geo g ON g.ip=u.ip WHERE user_id=? "
                                           "ORDER BY last_seen DESC LIMIT ?", (user_id, limit))]
 
 
@@ -868,6 +879,7 @@ def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = Fa
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
         "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
         "user_ips": conn.execute("DELETE FROM user_ips WHERE last_seen<?", (cutoff,)).rowcount,
+        "ip_geo": conn.execute("DELETE FROM ip_geo WHERE ip NOT IN (SELECT ip FROM user_ips)").rowcount,
         "device_requests": conn.execute("DELETE FROM device_requests WHERE expires_at<?", (int(now),)).rowcount,
         "telegram_link_codes": conn.execute("DELETE FROM telegram_link_codes WHERE expires_at<?", (int(now),)).rowcount,
         "telegram_updates": conn.execute("DELETE FROM telegram_updates WHERE at<?", (int(now) - 86400,)).rowcount,

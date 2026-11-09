@@ -67,6 +67,14 @@ const asciiDigits = (s) => s.replace(/[\u06F0-\u06F9]/g, (d) => d.charCodeAt(0) 
 const num = (v) => Number(asciiDigits(String(v ?? "").trim()).replace(/[\u066C\u060C,]/g, ""));   // grouping, as the page prints numbers, is dropped
 const nf = new Intl.NumberFormat(LOC, { maximumFractionDigits: 1, notation: "compact" });   // 24.9M, never "24.9m" (minutes?)
 const nfFull = new Intl.NumberFormat(LOC);
+// An address's place (ip_geo): "City, Region, Country", the country named in the page's language from its ISO code.
+const regionNames = (() => { try { return new Intl.DisplayNames([LOC], { type: "region" }); } catch { return null; } })();
+const fmtPlace = (p) => {
+  if (!p || !p.country) return "";
+  let country = p.country;
+  try { country = (regionNames && regionNames.of(p.country)) || p.country; } catch { /* not a known code */ }
+  return [p.city, p.region !== p.city ? p.region : null, country].filter(Boolean).join(t("app.list_sep"));
+};
 const nfFix = (d) => new Intl.NumberFormat(LOC, { minimumFractionDigits: d, maximumFractionDigits: d, useGrouping: false });
 const nf0 = nfFix(0), nf2 = nfFix(2);
 function fmtNum(v) { return v == null ? "—" : nf.format(v); }
@@ -1366,7 +1374,7 @@ function userRow(u) {
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
-    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? `<div style="font-size:12px"><bdi>${esc(u.last_ip)}</bdi></div>` : ""}</td>
+    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? `<div style="font-size:12px"><bdi>${esc(u.last_ip)}</bdi>${u.last_place ? ` · ${esc(fmtPlace(u.last_place))}` : ""}</div>` : ""}</td>
     <td>${userActions(u)}</td></tr>`;
 }
 function userActions(u) {
@@ -2611,8 +2619,8 @@ async function renderUser(main) {
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("sess.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.recent_requests")}${tipI("recent_requests")} <span class="badge">${nfFull.format(reqs.requests.length)}</span></h3></summary><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? requestsTable(reqs.requests, false) : `<p class="muted">${t("user.no_requests")}</p>`}</details>
       ${machinesCard(keys.keys, null, u.name)}
-      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.ips")}${tipI("user_ips")} <span class="badge">${nfFull.format(ips.ips.length)}${ips.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.ips_sub")}</p>${ips.ips.length ? `<table class="data"><thead><tr><th>${t("user.ip")}</th><th>${t("user.ip_source")}</th><th>${t("user.ip_first")}</th><th>${t("user.ip_last")}</th><th class="r">${t("user.ip_count")}</th></tr></thead><tbody>
-        ${ips.ips.map((r) => `<tr><td><bdi class="nowrap">${esc(r.ip)}</bdi></td><td>${t(`user.ip_src_${r.source}`)}</td><td class="nowrap">${fmtDate(r.first_seen)}</td><td class="nowrap">${fmtAgo(r.last_seen)}</td><td class="r">${nfFull.format(r.count)}</td></tr>`).join("")}
+      <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.ips")}${tipI("user_ips")} <span class="badge">${nfFull.format(ips.ips.length)}${ips.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.ips_sub")}</p>${ips.ips.length ? `<table class="data"><thead><tr><th>${t("user.ip")}</th><th>${t("user.ip_place")}</th><th>${t("user.ip_source")}</th><th>${t("user.ip_first")}</th><th>${t("user.ip_last")}</th><th class="r">${t("user.ip_count")}</th></tr></thead><tbody>
+        ${ips.ips.map((r) => `<tr><td><bdi class="nowrap">${esc(r.ip)}</bdi></td><td>${r.country ? esc(fmtPlace(r)) : "—"}</td><td>${t(`user.ip_src_${r.source}`)}</td><td class="nowrap">${fmtDate(r.first_seen)}</td><td class="nowrap">${fmtAgo(r.last_seen)}</td><td class="r">${nfFull.format(r.count)}</td></tr>`).join("")}
         </tbody></table>` : `<p class="muted">${t("user.no_ips")}</p>`}</details>
     </section>`;
   wireSegs(main, render);

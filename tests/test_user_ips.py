@@ -5,7 +5,7 @@ from claude_proxy import db as dbm
 from claude_proxy.app import create_app
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
-from tests.test_web import admin_client, bearer, env  # noqa: F401  (fixture)
+from tests.test_web import PW, admin_client, bearer, env  # noqa: F401  (fixture)
 
 pytestmark = pytest.mark.anyio
 
@@ -61,3 +61,63 @@ async def test_users_table_shows_the_latest_request_address_not_a_sign_in(env): 
         assert users["alice"]["last_ip"] == "1.1.1.1"
         assert users["admin"]["last_ip"] is None   # signed in, never sent a request
         assert (await c.get(f"/api/admin/users/{ids['alice']}/ips")).json()["more"] is False
+
+
+class _Gw:
+    """Just what geo.locate uses: an http client and a db runner."""
+    def __init__(self, conn, handler):
+        import httpx
+        from claude_proxy.dbpool import DbPool
+        self.http = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        self.db = DbPool(conn)
+
+
+async def test_a_new_address_is_located_once_and_a_failed_lookup_stores_nothing(db):
+    import httpx
+    from claude_proxy import geo
+    conn = db[1]
+    uid, _ = dbm.create_user(conn, "erin")
+    asked = []
+
+    def handler(req):
+        asked.append(req.url.path)
+        if "203.0.113.9" in req.url.path:
+            return httpx.Response(429, json={"error": "rate limited"})
+        return httpx.Response(200, json={"ip": "8.8.8.8", "city": "Mountain View", "region": "California", "country": "US"})
+    gw = _Gw(conn, handler)
+    assert dbm.note_ip(conn, uid, "8.8.8.8", "gateway") is True
+    assert dbm.note_ip(conn, uid, "8.8.8.8", "gateway") is False   # seen before: no new lookup
+    await geo.locate(gw, "8.8.8.8")
+    await geo.locate(gw, "8.8.8.8")          # known: not asked again
+    await geo.locate(gw, "127.0.0.1")        # not public: never sent
+    await geo.locate(gw, "203.0.113.9")      # documentation range: not public either
+    assert asked == ["/8.8.8.8/json"]
+    row = dbm.user_ips(conn, uid)[0]
+    assert (row["city"], row["region"], row["country"]) == ("Mountain View", "California", "US")
+
+    geo_rows = conn.execute("SELECT COUNT(*) FROM ip_geo").fetchone()[0]
+    gw2 = _Gw(conn, lambda req: httpx.Response(429, json={}))
+    await geo.locate(gw2, "1.1.1.1")
+    assert conn.execute("SELECT COUNT(*) FROM ip_geo").fetchone()[0] == geo_rows
+
+
+async def test_proxy_and_sign_in_look_up_a_new_address_only(env, monkeypatch):  # noqa: F811
+    import asyncio
+
+    import httpx
+    from claude_proxy import geo
+    gw, conn, ids, keys = env
+    looked = []
+
+    async def fake_locate(gw_, ip):
+        looked.append(ip)
+    monkeypatch.setattr(geo, "locate", fake_locate)
+    transport = httpx.ASGITransport(app=create_app(gw), client=("8.8.4.4", 5000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        for _ in range(2):
+            await c.get("/v1/models", headers=bearer(keys["alice"]))
+    transport = httpx.ASGITransport(app=create_dashboard_app(gw), client=("9.9.9.9", 5000))
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        assert (await c.post("/api/login", json={"username": "admin", "password": PW})).status_code == 200
+    await asyncio.sleep(0)
+    assert sorted(looked) == ["8.8.4.4", "9.9.9.9"]   # the second request from 8.8.4.4 asks nothing

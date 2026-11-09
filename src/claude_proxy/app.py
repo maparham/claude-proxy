@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import api_credit, contents, limits, quota, titles
+from . import api_credit, contents, geo, limits, mail, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
@@ -188,9 +188,9 @@ def _usage_fresh(conn) -> float | None:
     return conn.execute(USAGE_FRESH_SQL).fetchone()[0]
 
 
-def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> None:
+def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> bool:
     """One request's log row, its API charge, its session title and its content, on a db worker thread; and the address
-    it came from, in the user's IP history (db.note_ip)."""
+    it came from, in the user's IP history (db.note_ip). True when that address is new for the user."""
     ip = row.pop("ip", None)
     try:
         rid = insert_request(conn, **row)
@@ -208,9 +208,10 @@ def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> N
         except Exception:
             logger.exception("could not record session title")
     try:
-        note_ip(conn, row.get("user_id"), ip, "gateway")
+        return note_ip(conn, row.get("user_id"), ip, "gateway")
     except Exception:
         logger.exception("could not record the request's address")
+        return False
 
 
 def _record_quota(conn, headers) -> None:
@@ -293,7 +294,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             uid = base["user_id"]
             fut.add_done_callback(lambda _: inflight.release(uid))
             held = False
-        await asyncio.shield(fut)
+        if await asyncio.shield(fut):
+            mail.spawn(geo.locate(gw, base["ip"]))
 
     try:
         user = await gw.db.run(authenticate, request.headers)

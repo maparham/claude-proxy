@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -249,7 +249,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def start_session(user, ip: str, key_id: int | None = None) -> JSONResponse:
         raw, csrf = db.create_session(conn, user["id"], key_id=key_id)
         try:   # bookkeeping: never fails the sign-in
-            db.note_ip(conn, user["id"], ip, "dashboard")
+            if db.note_ip(conn, user["id"], ip, "dashboard"):
+                mail.spawn(geo.locate(gw, ip))
         except sqlite3.Error:
             logger.exception("could not record the sign-in's address")
         resp = JSONResponse({"ok": True, "csrf": csrf, "user": _public_user(user)})
@@ -660,12 +661,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s) for b in BUCKETS}
         out = []
         # Shown under the last request, so the address of the latest request (SQLite's bare column goes with the MAX).
-        last_ips = {r[0]: r[1] for r in conn.execute("SELECT user_id, ip, MAX(last_seen) FROM user_ips WHERE source='gateway' "
-                                                     "GROUP BY user_id")}
+        last_ips = {r[0]: {"ip": r[1], "city": r[2], "country": r[3]} for r in conn.execute(
+            "SELECT user_id, u.ip, city, country, MAX(last_seen) FROM user_ips u LEFT JOIN ip_geo g ON g.ip=u.ip "
+            "WHERE source='gateway' GROUP BY user_id")}
         for u in conn.execute("SELECT * FROM users ORDER BY name").fetchall():
             last = conn.execute("SELECT MAX(started_at) FROM requests WHERE user_id=?", (u["id"],)).fetchone()[0]
             out.append({**_public_user(u), "enabled": bool(u["enabled"]), "revoked": u["revoked_at"] is not None,
-                        "created_at": u["created_at"], "last_seen": last, "last_ip": last_ips.get(u["id"]),
+                        "created_at": u["created_at"], "last_seen": last, "last_ip": last_ips.get(u["id"], {}).get("ip"),
+                        "last_place": {k: v for k, v in last_ips.get(u["id"], {}).items() if k != "ip"} or None,
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
                         "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
                         "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
