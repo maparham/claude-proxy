@@ -13,7 +13,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import db, quota, tickets
+from . import db, quota, tickets, usage
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 
@@ -76,6 +76,33 @@ def _week_use(conn, cfg, ticket_ids, since, now) -> dict[int, float]:
     w, args = quota.weighted_sql(cfg.pricing, models)
     return {r[0]: float(r[1]) for r in conn.execute(f"SELECT ticket_id, COALESCE(SUM({w}), 0) FROM requests WHERE {span} "
                                                     "GROUP BY ticket_id", (*args, *params))}
+
+
+# Requests carry the pass that served them since the 2026-10-28 migration (c909c73, deployed 16:37 UTC), which tagged
+# the 40 days of requests before it too: a pass that started earlier has requests with no pass.
+TAGGED_SINCE = 1793205445 - 40 * DAY
+
+
+def pass_tokens(conn, cfg, tickets_) -> dict[int, dict | None]:
+    """The tokens each pass served over its whole life, weighted and raw, for the dashboard's pass cards and the
+    admin's Tickets table. Every request the pass served counts, whatever its provider (its limits count Anthropic's
+    only). None for a pass whose history may be incomplete, as a partial count would mislead: one that started before
+    TAGGED_SINCE (its requests carry no pass) or before the oldest request kept (retention deleted the rest)."""
+    tickets_ = list(tickets_)
+    if not tickets_:
+        return {}
+    kept = conn.execute("SELECT MIN(started_at) FROM requests").fetchone()[0]
+    since = max(TAGGED_SINCE, kept if kept is not None else 0)
+    ids = tuple(t["id"] for t in tickets_)
+    span = f"ticket_id IN ({','.join('?' * len(ids))}) AND rejected_by IS NULL AND path!=?"
+    params = (*ids, COUNT_TOKENS_PATH)
+    models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
+    w, args = quota.weighted_sql(cfg.pricing, models)
+    sums = {r[0]: {"weighted": float(r[1]), "raw": int(r[2])} for r in conn.execute(
+        f"SELECT ticket_id, COALESCE(SUM({w}), 0), COALESCE(SUM({usage.raw_tokens_sql()}), 0) FROM requests "
+        f"WHERE {span} GROUP BY ticket_id", (*args, *params))}
+    return {t["id"]: sums.get(t["id"], {"weighted": 0.0, "raw": 0}) if t["starts_at"] >= since else None
+            for t in tickets_}
 
 
 def fresh(att: dict, now: float) -> bool:

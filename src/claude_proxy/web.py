@@ -1422,9 +1422,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             where, params = "WHERE t.user_id IS NULL AND t.user_name=?", (deleted,)
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
         week = capacity_mod.week_use(conn, cfg, tickets.ACCOUNT_ID, now)["passes"]   # each pass's points of this week
+        served = capacity_mod.pass_tokens(conn, cfg, rows)   # each pass's tokens over its life
         for t in rows:
             t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"]),
-                  "week": week.get(t["id"])}
+                  "week": week.get(t["id"]), "tokens": served[t["id"]]}
             if t["user_id"] is not None:   # the user's current name, falling back to the name stored at grant for a deleted user
                 t["user_name"] = n.get(t["user_id"], t["user_name"])
         gone = [r[0] for r in conn.execute("SELECT DISTINCT user_name FROM tickets WHERE user_id IS NULL ORDER BY user_name")]

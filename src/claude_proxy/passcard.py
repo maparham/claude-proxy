@@ -3,7 +3,7 @@ bot's "My passes" always agree (Telegram bot design, section 6). Moved unchanged
 included: used-up passes give way to a queued one here (limits.hand_over), as they do on a request."""
 from __future__ import annotations
 
-from . import limits, payments, refunds, tickets
+from . import capacity, limits, payments, refunds, tickets
 
 
 def start_offer(conn, cfg, user_id: int, now: float) -> dict:
@@ -29,6 +29,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     mode = payments.pay_mode(conn, cfg)
     out = {"enabled": True, "gated": st["gated"], "current": None, "queued": None, "manual": payments.manual_orders(mode)}
     cur = st["current"]
+    past = tickets.past(conn, user_id, now)
     if cur:
         ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
         active = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is None]   # gifts; upgrades were paid for
@@ -76,11 +77,13 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         # With more than one live pass the card lists them all, the queued ones after the running ones (`queued`).
         later = [t for t in tickets.user_tickets(conn, user_id) if t["cancelled_at"] is None and t["starts_at"] > now]
         uses = {t["id"]: pass_use(t) for t in run}
+        served = capacity.pass_tokens(conn, cfg, {t["id"]: t for t in [cur, *run, *past]}.values())   # tokens each pass served so far, past ones too
+        out["current"]["tokens"] = served[cur["id"]]
         out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
             {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
              "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
              "held": serving is None and picked is not None and t["id"] == picked["id"] and not uses[t["id"]].get("used_up"),
-             "pinned": t["id"] == pin, **uses[t["id"]]} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
+             "pinned": t["id"] == pin, "tokens": served[t["id"]], **uses[t["id"]]} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
                               "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
         out["current"]["serving_end"] = (serving or cur)["effective_end"]
         out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
@@ -88,8 +91,9 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     if st["queued"]:
         q = st["queued"]
         out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+    served_past = served if cur else capacity.pass_tokens(conn, cfg, past)
     out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
-                    "amount": t["amount"], "currency": t["currency"]} for t in tickets.past(conn, user_id, now)]
+                    "amount": t["amount"], "currency": t["currency"], "tokens": served_past[t["id"]]} for t in past]
     # The gateway's own currency (IRT), as on the home page, whatever the running pass was bought in; the dashboard
     # offers USD beside it. Not the running pass's currency: a pass granted in EUR turned the whole list into euros.
     currency = next(iter(cfg.tickets.currencies), "USD")
