@@ -334,6 +334,8 @@ function Update-Models([string]$File) {   # the dashboard's NAME=value lines (/a
 
 function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude's settings.json, not from here
   if (-not (Test-Path -LiteralPath $Bin)) { New-Item -ItemType Directory -Path $Bin -Force | Out-Null }
+  $ver = Get-Version   # sent with the status request, so the dashboard can say a newer gclaude is ready
+  $installer = "try { irm -TimeoutSec 30 '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }"
   $cmd = @(
     '@echo off',
     'rem gclaude: Claude Code through the claude-proxy gateway, with its own settings and history in the',
@@ -370,14 +372,28 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'rem was removed there). Only a 401 counts: offline, without curl.exe, or with the dashboard slow or down, gclaude',
     'rem starts as usual. The key reaches curl on stdin, through GW_KEY, which the inner cmd expands: never in a command line.',
     'rem The same request names the newest models, which become the /model defaults (:models).',
-    'set "GW_WHY=" & set "GW_KEY=" & set "GW_CODE=" & set "GW_MODELS=%TEMP%\gclaude-models-%RANDOM%%RANDOM%.txt"',
+    'set "GW_WHY=" & set "GW_KEY=" & set "GW_CODE=" & set "GW_UPDATE=" & set "GW_MODELS=%TEMP%\gclaude-models-%RANDOM%%RANDOM%.txt"',
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" set "GW_WHY=signed out by /logout_gclaude"',
     'if not defined GW_WHY for /f "tokens=2 delims=:, " %%k in (''type "%CLAUDE_CONFIG_DIR%\settings.json" 2^>nul ^| findstr ANTHROPIC_AUTH_TOKEN'') do set "GW_KEY=%%~k"',
-    ("if defined GW_KEY for /f %%c in ('echo Authorization: Bearer %%GW_KEY%%^| curl.exe -s -o `"%GW_MODELS%`" --max-time 3 -H @- -w `"%%{http_code}`" `"" +
+    ("if defined GW_KEY for /f %%c in ('echo Authorization: Bearer %%GW_KEY%%^| curl.exe -s -o `"%GW_MODELS%`" --max-time 3 -H @- -H `"X-Gclaude-Version: $ver`" -w `"%%{http_code}`" `"" +
      ($c.dashboard + '/api/me/status?format=models').Replace('%', '%%') + "`" 2^>nul') do set `"GW_CODE=%%c`""),
     'if "%GW_CODE%"=="401" set "GW_WHY=this computer''s key no longer works, removed in the dashboard?"',
     'set "GW_KEY="',
     'rem One block, read before `on` rewrites this file; GW_WHY holds no parentheses, which would end it.',
+    'rem The dashboard serves a newer gclaude (GCLAUDE_UPDATE=1): update first, as gclaude update does but without Claude',
+    'rem Code''s own update, then start the new one. One block, read before the installer rewrites this file. A failed',
+    'rem update starts this version; GCLAUDE_AUTO_UPDATED keeps the new one from asking again.',
+    'if "%GW_CODE%"=="200" if not defined GCLAUDE_AUTO_UPDATED (findstr /x /c:"GCLAUDE_UPDATE=1" "%GW_MODELS%" >nul 2>nul && set "GW_UPDATE=1")',
+    ('if defined GW_UPDATE (' + "`r`n" +
+     '  del "%GW_MODELS%" 2>nul' + "`r`n" +
+     '  echo gclaude: updating to the newer version on the gateway... 1>&2' + "`r`n" +
+     '  set CLAUDE_GATEWAY_UPDATE=1' + "`r`n" +
+     "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"$installer`" >nul || echo gclaude: the update failed, so this version starts 1>&2" + "`r`n" +
+     '  set "CLAUDE_GATEWAY_UPDATE="' + "`r`n" +
+     '  set GCLAUDE_AUTO_UPDATED=1' + "`r`n" +
+     '  call "%~f0" %*' + "`r`n" +
+     '  exit /b' + "`r`n" +
+     ')'),
     'if "%GW_CODE%"=="200" call :models',
     'del "%GW_MODELS%" 2>nul',
     ('if defined GW_WHY (' + "`r`n" +

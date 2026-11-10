@@ -713,8 +713,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if format == "models":
             # gclaude's launcher, at every start: the 1M forms of the newest models it makes the /model defaults.
             # Without a claude.ai login Claude Code gives the plain names a 200K window. One NAME=value line each.
-            return PlainTextResponse("".join(f"ANTHROPIC_DEFAULT_{family.upper()}_MODEL={model}[1m]\n"
-                                             for family, model in cfg.pricing.newest_models().items()))
+            # GCLAUDE_UPDATE=1 when this dashboard serves a newer gclaude than the one asking: it updates, then starts.
+            have = request.headers.get("x-gclaude-version", "")
+            if user.get("machine_key_id"):
+                db.set_client_version(conn, user["machine_key_id"], have)
+            lines = [f"ANTHROPIC_DEFAULT_{family.upper()}_MODEL={model}[1m]" for family, model in cfg.pricing.newest_models().items()]
+            d, mine = client_dist.dist(), client_dist.parse_version(have)
+            if d is not None and d.version is not None and mine is not None and d.version > mine:
+                lines.append("GCLAUDE_UPDATE=1")
+            return PlainTextResponse("".join(line + "\n" for line in lines))
         if user.get("machine_key_id"):   # gclaude's statusline says which version this computer runs
             db.set_client_version(conn, user["machine_key_id"], request.headers.get("x-gclaude-version", ""))
         now = time.time()

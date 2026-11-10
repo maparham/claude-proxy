@@ -295,6 +295,27 @@ async def test_status_names_gclaudes_model_defaults(env):
                       "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5[1m]\n")
 
 
+async def test_status_tells_an_older_gclaude_to_update(env, monkeypatch):
+    from claude_proxy import client_dist
+    gw, conn, ids, keys = env
+    monkeypatch.setattr(client_dist, "dist", lambda: client_dist.Dist(b"", b"", b"", b"", (1, 2, 30)))
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        async def asks(version):
+            r = await c.get("/api/me/status?format=models", headers={**bearer(keys["alice"]), "X-Gclaude-Version": version})
+            return "GCLAUDE_UPDATE=1\n" in r.text
+        assert await asks("1.2.29") and await asks("1.1.99") and await asks("0.9.0")
+        assert not await asks("1.2.30") and not await asks("1.3.0")   # the same, or newer (a developer's own)
+        assert not await asks("") and not await asks("unknown")       # an older launcher that says nothing
+
+
+def test_client_versions_compare_as_numbers():
+    from claude_proxy.client_dist import parse_version
+    assert parse_version("1.0.576") == parse_version("v1.0-576-g6c18921") == (1, 0, 576)
+    assert parse_version("v1.2") == (1, 2, 0)
+    assert parse_version("1.0.10") > parse_version("1.0.9")
+    assert parse_version("") is parse_version("1.0") is parse_version("v1.0-3") is None
+
+
 async def test_sessions_carry_their_title_only_for_the_owner(env):
     gw, conn, ids, keys = env
     from claude_proxy.db import set_session_title

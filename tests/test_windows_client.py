@@ -599,6 +599,34 @@ def test_gclaude_moves_its_own_model_defaults_to_the_newest_the_dashboard_names(
 
 
 @on_windows
+def test_gclaude_updates_itself_before_starting_when_the_dashboard_serves_a_newer_one(gclaude, installed, stub, tmp_path):
+    """The dashboard compares the version gclaude.cmd sends with the one it serves; gclaude then runs the dashboard's
+    installer, as gclaude update does, and starts the new launcher, which does not ask to update again."""
+    win = installed
+    marker = tmp_path / "installer-ran.txt"
+    stub.files["/install.ps1"] = f"[IO.File]::AppendAllText('{marker}', 'ran ' + $env:CLAUDE_GATEWAY_UPDATE + ';')\n".encode()
+    stub.default_models = "GCLAUDE_UPDATE=1\n"
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
+    assert "updating to the newer version on the gateway" in r.out and "failed" not in r.out, r.out
+    assert marker.read_text() == "ran 1;"   # once, quietly (CLAUDE_GATEWAY_UPDATE)
+    sent = [h.get("x-gclaude-version") for p, h, _ in stub.requests if p.endswith("format=models")]
+    assert sent == ["1.0.8", "1.0.8"], sent
+    assert not list(win.temp.glob("gclaude-models-*"))
+
+
+@on_windows
+def test_gclaude_starts_its_own_version_when_the_update_fails(gclaude, installed, stub, tmp_path):
+    win = installed
+    stub.default_models = "GCLAUDE_UPDATE=1\n"   # and no /install.ps1 to give
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
+    assert "the update failed, so this version starts" in r.out, r.out
+
+
+@on_windows
 def test_gclaude_status_and_uninstall(gclaude, installed, stub, tmp_path):
     win = installed
     fake = fake_claude(win, tmp_path)

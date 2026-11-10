@@ -11,6 +11,7 @@ from __future__ import annotations
 import functools
 import io
 import os
+import re
 import subprocess
 import tarfile
 import time
@@ -28,6 +29,13 @@ class Dist:
     install_ps1: bytes
     tarball: bytes
     zip: bytes
+    version: tuple[int, int, int] | None = None   # (MAJOR, MINOR, N) of the client served, as `claude-gateway version` says it
+
+
+def parse_version(v: str) -> tuple[int, int, int] | None:
+    """MAJOR.MINOR.N (claude-gateway's own form) or git describe's vMAJOR.MINOR[-N-gHASH]; None for anything else."""
+    m = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)", v or "") or re.fullmatch(r"v(\d+)\.(\d+)(?:-(\d+)-g[0-9a-f]+)?", v or "")
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3) or 0)) if m else None
 
 
 def client_dir() -> Path | None:
@@ -76,4 +84,5 @@ def dist() -> Dist | None:
             info = zipfile.ZipInfo(f"{PREFIX}/{name}", time.localtime(now)[:6])
             info.external_attr, info.compress_type = (0o100000 | mode) << 16, zipfile.ZIP_DEFLATED
             z.writestr(info, data)
-    return Dist((d / "install.sh").read_bytes(), (d / "install.ps1").read_bytes(), tbuf.getvalue(), zbuf.getvalue())
+    return Dist((d / "install.sh").read_bytes(), (d / "install.ps1").read_bytes(), tbuf.getvalue(), zbuf.getvalue(),
+                parse_version(_version(d)))

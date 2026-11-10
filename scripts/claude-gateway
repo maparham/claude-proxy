@@ -531,7 +531,7 @@ gclaude_ours() { [ -f "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ] && grep -qxF "$GCLAUDE
 gclaude_free() { gclaude_ours || { [ ! -e "$GCLAUDE" ] && [ ! -L "$GCLAUDE" ]; } || { echo "$GCLAUDE already exists and claude-gateway did not install it; left as it is." >&2; exit 1; } }
 
 gclaude_files() {   # on|off: the gclaude command, the links to ~/.claude, its /usage, /account and /logout_gclaude commands, and a first-run state file
-  python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
+  CG_VERSION=$(version 2>/dev/null) python3 - "$1" "$CLIENT" "$GCLAUDE_DIR" "$GCLAUDE" "$GCLAUDE_MARK" "$(dirname "$SETTINGS")" "$HOME/.claude.json" "$GCLAUDE_SYNC" "$STATUSLINE" "$(src_dir)/$(basename "${BASH_SOURCE[0]}")" <<'EOF'
 import atexit, json, os, shlex, sys, tempfile
 mode, client, gdir, launcher, mark, shared, own_state, sync, statusline, self_path = sys.argv[1:]
 SHARED = ("CLAUDE.md", "agents", "skills")   # commands/ is gclaude's own folder: see USAGE below
@@ -679,8 +679,20 @@ if mode == "on":
                 "  why='signed out (/logout_gclaude)'\n"
                 "else\n"
                 "  code=$(printf 'Authorization: Bearer %s\\n' \"$key\" | curl -s -o \"$models\" --max-time 3 -H @- -w '%{http_code}'"
+                f" -H {shlex.quote('X-Gclaude-Version: ' + os.environ.get('CG_VERSION', ''))}"
                 f" {shlex.quote(dash + '/api/me/status?format=models')} 2>/dev/null)\n"
                 "  [ \"$code\" != 401 ] || why=\"this computer's key no longer works (removed in the dashboard?)\"\n"
+                "fi\n"
+                "# The dashboard serves a newer gclaude (GCLAUDE_UPDATE=1): update first, as `gclaude update` does but without\n"
+                "# Claude Code's own update, then start the new one. The installer swaps in the new copy only once it has all\n"
+                "# of it and replaces this file by a rename, so sh goes on reading this one. A failed update starts this version.\n"
+                'if [ "$code" = 200 ] && [ -z "${GCLAUDE_AUTO_UPDATED:-}" ] && grep -qx GCLAUDE_UPDATE=1 "$models" 2>/dev/null; then\n'
+                '  rm -f "$models"\n'
+                "  echo 'gclaude: updating to the newer version on the gateway...' >&2\n"
+                f"  script=$(curl -fsSL --max-time 30 {shlex.quote(dash + '/install')}) &&"
+                " printf '%s\\n' \"$script\" | CLAUDE_GATEWAY_UPDATE=1 sh >/dev/null ||\n"
+                "    echo 'gclaude: the update failed, so this version starts' >&2\n"
+                '  GCLAUDE_AUTO_UPDATED=1 exec "$0" "$@"\n'
                 "fi\n"
                 'if [ "$code" = 200 ] && [ "$models" != /dev/null ]; then "$gw" models --gclaude "$models" >/dev/null 2>&1; fi\n'
                 '[ "$models" = /dev/null ] || rm -f "$models"\n'

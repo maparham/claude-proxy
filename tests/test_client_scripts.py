@@ -1238,6 +1238,34 @@ def test_gclaude_ignores_a_models_reply_it_cannot_trust(stub, home, lines):
     assert gsettings.read_text() == before
 
 
+def test_gclaude_updates_itself_before_starting_when_the_dashboard_serves_a_newer_one(stub, home):
+    """The dashboard compares the version gclaude sends with the one it serves; gclaude then runs the dashboard's
+    installer, as `gclaude update` does, and starts the new launcher, which does not ask to update again."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    launcher = gc_paths(home)[2]
+    ran = home / "installer-ran"
+    stub.install = f'echo installer output; echo "$CLAUDE_GATEWAY_UPDATE" >> {ran}\n'
+    stub.default_models = "GCLAUDE_UPDATE=1\n"
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi", r.stderr   # the installer's output is not shown
+    assert r.stderr == "gclaude: updating to the newer version on the gateway...\n"
+    assert ran.read_text() == "1\n"   # once, quietly (CLAUDE_GATEWAY_UPDATE)
+    sent = [h.get("x-gclaude-version") for p, h in stub.requests if p.endswith("format=models")]
+    version = subprocess.run(["bash", str(GATEWAY), "version"], capture_output=True, text=True).stdout.strip()
+    assert sent == [version, version] and version
+
+
+def test_gclaude_starts_its_own_version_when_the_update_fails(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    launcher = gc_paths(home)[2]
+    stub.default_models = "GCLAUDE_UPDATE=1\n"
+    for install in (None, "exit 3\n"):   # the dashboard has no installer to give; the installer fails
+        stub.install = install
+        r = run_gclaude(home, launcher, "-p", "hi")
+        assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi", r.stderr
+        assert "the update failed, so this version starts" in r.stderr
+
+
 def test_gclaude_starts_when_the_dashboard_cannot_be_reached(stub, home):
     """Only a clear 401 means signed out: offline, gclaude starts as usual."""
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
