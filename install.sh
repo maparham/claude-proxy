@@ -65,7 +65,8 @@ fi
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
-curl -fsSL "$tarball" | tar -xzf - -C "$tmp" --strip-components=1
+# A stalled download gives up (under 1 KB/s for 20 s) rather than hang: gclaude runs this before it starts.
+curl -fsSL --connect-timeout 15 --speed-limit 1024 --speed-time 20 "$tarball" | tar -xzf - -C "$tmp" --strip-components=1
 [ -f "$tmp/scripts/claude-gateway" ] || { echo "install.sh: $tarball has no scripts/claude-gateway" >&2; exit 1; }
 
 # Build the new copy beside the old one, then swap, so a failed download never leaves half an install.

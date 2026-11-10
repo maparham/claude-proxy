@@ -132,7 +132,7 @@ function Install-ClaudeGateway {
     $archive = Join-Path $tmp 'source.zip'
     try {
       if (Test-Path -LiteralPath $zip) { Copy-Item -LiteralPath $zip -Destination $archive }
-      else { Invoke-WebRequest -UseBasicParsing -Uri $zip -OutFile $archive }
+      else { Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Uri $zip -OutFile $archive }   # never hang gclaude's start
       Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $tmp 'src')
     } catch {
       throw "install.ps1: could not get $zip ($($_.Exception.Message))"

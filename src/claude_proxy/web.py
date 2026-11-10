@@ -2054,7 +2054,7 @@ def install_sh(cfg) -> str:
             f"# Installs claude-gateway and connects this computer to {cfg.listener.dashboard_url}: it opens the\n"
             "# browser to authorize it, then sets up gclaude.\n"
             "set -eu\n"
-            f"curl -fsSL {q(url)} | {env}sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
+            f"curl -fsSL --connect-timeout 15 --max-time 60 {q(url)} | {env}sh -s -- on --url {q(cfg.listener.public_url.rstrip('/'))} "
             f"--dashboard {q(dash)} \"$@\"\n")
 
 

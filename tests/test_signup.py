@@ -265,7 +265,7 @@ async def test_install_script(env):
         await signed_in(c)
         assert (await c.get("/api/session")).json()["install"] == f"curl -fsSL {DASH}/install | sh"
     assert s.startswith("#!/bin/sh\n")
-    assert f"curl -fsSL {DASH}/client/install.sh | CLAUDE_GATEWAY_TARBALL={DASH}/client/claude-gateway.tar.gz " \
+    assert f"curl -fsSL --connect-timeout 15 --max-time 60 {DASH}/client/install.sh | CLAUDE_GATEWAY_TARBALL={DASH}/client/claude-gateway.tar.gz " \
            f"sh -s -- on --url https://gw.test --dashboard {DASH} \"$@\"" in s
     gw.cfg.listener.public_url = ""
     async with app(gw) as c:
@@ -601,4 +601,4 @@ async def test_the_gateway_serves_the_client_itself(env, monkeypatch):
     monkeypatch.setattr(client_dist, "dist", lambda: None)   # no client files: GitHub, as configured
     async with app(gw) as c:
         assert (await c.get("/client/install.sh")).status_code == 404
-        assert f"curl -fsSL {gw.cfg.signup.installer_url} | sh -s -- on" in (await c.get("/install")).text
+        assert f"curl -fsSL --connect-timeout 15 --max-time 60 {gw.cfg.signup.installer_url} | sh -s -- on" in (await c.get("/install")).text

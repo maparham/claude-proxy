@@ -40,6 +40,8 @@ jobs:
           mkdir payload
           cp deploy/lightsail/config.toml payload/
           version=$(sh scripts/client-version.sh)   # gclaude's: only commits that change what it installs count
+          # Without one the image serves a client with no version and gclaude stops updating itself, silently.
+          [ -n "$version" ] || { echo "::error::scripts/client-version.sh found no v tag; gclaude's version is unknown"; exit 1; }
           nohup bash -o pipefail -c '
             docker build --build-arg "CLIENT_VERSION=$1" -t "claude-proxy:$GITHUB_SHA" . &&
             docker save "claude-proxy:$GITHUB_SHA" | gzip >payload/image.tar.gz
