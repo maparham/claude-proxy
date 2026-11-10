@@ -13,10 +13,25 @@ color: s3
   <li><strong>Node.js نسخه ۱۸ یا بالاتر</strong> را نصب کنید. برای بررسی، در ترمینال <code>node -v</code> را بزنید.</li>
   <li>Playwright را به کلاد اضافه کنید (در ویندوز در PowerShell، در مک و لینوکس در ترمینال):
     <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest</code></pre>
-    با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی.</li>
+    با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی.<br>
+    در ویندوز اگر <code>playwright</code> در <code>/mcp</code> وصل نشد، آن را با <code>gclaude mcp remove playwright -s user</code> پاک کنید و این‌طور دوباره اضافه کنید:
+    <pre><code>gclaude mcp add playwright -s user -- cmd /c npx @playwright/mcp@latest</code></pre></li>
   <li><code>gclaude</code> را اجرا کنید، <code>/mcp</code> را بزنید و ببینید <code>playwright</code> وصل شده باشد.</li>
   <li>بار اول مرورگر خودش دانلود می‌شود. اگر نشد، یک بار <code>npx playwright install chromium</code> را اجرا کنید.</li>
 </ol>
+
+<h2>کار با همان Chrome که باز است</h2>
+<p>به‌طور پیش‌فرض کلاد یک مرورگر جدا و خالی باز می‌کند که در هیچ سایتی وارد نشده‌اید. اگر می‌خواهید کلاد در همان Chrome که الان باز است کار کند، با همان حساب‌هایی که در آن‌ها وارد شده‌اید:</p>
+<ol>
+  <li>افزونه <strong>Playwright MCP Bridge</strong> را از Chrome Web Store در Chrome نصب کنید.</li>
+  <li>اگر Playwright را قبلاً اضافه کرده‌اید، اول پاکش کنید:
+    <pre><code>gclaude mcp remove playwright -s user</code></pre></li>
+  <li>دوباره با <code>--extension</code> اضافه‌اش کنید:
+    <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest --extension</code></pre>
+    در ویندوز اگر وصل نشد، <code>npx</code> را به <code>cmd /c npx</code> تغییر دهید.</li>
+  <li>بار اول که کلاد سراغ مرورگر می‌رود، افزونه در Chrome می‌پرسد کدام تب را در اختیارش بگذارد. تب را انتخاب کنید و تأیید کنید.</li>
+</ol>
+<p>در این حالت کلاد هر کاری که شما در آن مرورگر می‌توانید بکنید، می‌تواند بکند. پس فقط برای کارهایی از آن استفاده کنید که واقعاً به حساب‌های شما نیاز دارند.</p>
 
 <h2>با کلاد و مرورگر چه کارهایی می‌شود کرد؟</h2>
 
@@ -52,7 +67,7 @@ color: s3
 
 <h2>چند نکته ایمنی</h2>
 <ul>
-  <li>Playwright به‌طور پیش‌فرض یک پروفایل جدا از مرورگر اصلی‌تان باز می‌کند. همین‌طور نگهش دارید تا کلاد به حساب‌های شخصی‌تان دسترسی نداشته باشد.</li>
+  <li>Playwright به‌طور پیش‌فرض یک پروفایل جدا از مرورگر اصلی‌تان باز می‌کند و کلاد به حساب‌های شخصی‌تان دسترسی ندارد. با <code>--extension</code> این جدایی برداشته می‌شود؛ فقط وقتی لازم است از آن استفاده کنید.</li>
   <li>رمز عبور و اطلاعات کارت را به کلاد ندهید؛ این قدم‌ها را خودتان انجام دهید.</li>
   <li>قوانین سایت‌هایی را که از آن‌ها داده جمع می‌کنید رعایت کنید و درخواست‌ها را پشت سر هم و زیاد نفرستید.</li>
 </ul>
