@@ -306,6 +306,32 @@ function Write-Commands {
   }
 }
 
+function Update-Models([string]$File) {   # the dashboard's NAME=value lines (/api/me/status?format=models), which
+  # gclaude.cmd fetches at every start and passes here when one of them is not in settings.json yet. Each /model default
+  # gclaude set and the user has not changed since moves to the newest model the dashboard names, so a new model needs
+  # only its price on the gateway, not a gclaude update. Anything odd: no change.
+  $new = [ordered]@{}
+  foreach ($line in [IO.File]::ReadAllLines($File)) {
+    $m = [regex]::Match($line.Trim(), '^ANTHROPIC_DEFAULT_(FABLE|OPUS|SONNET)_MODEL=(claude-([a-z]+)-[0-9][0-9-]*\[1m\])$')
+    if ($m.Success -and $m.Groups[3].Value -ceq $m.Groups[1].Value.ToLowerInvariant()) { $new[$line.Trim().Split('=')[0]] = $m.Groups[2].Value }
+  }
+  if ($new.Count -eq 0) { return }
+  $c = Read-Json $Client
+  $added = Field (Field $c 'gclaude') 'added_models'
+  if (-not ($added -is [psobject])) { return }
+  $s = Read-Json $Settings
+  $envBlock = Field $s 'env'
+  if (-not ($envBlock -is [psobject])) { return }
+  $changed = $false
+  foreach ($k in $new.Keys) {
+    $was = Field $added $k
+    if ((Has $added $k) -and ((Field $envBlock $k) -ceq $was) -and ($was -cne $new[$k])) {
+      Set-Field $envBlock $k $new[$k]; Set-Field $added $k $new[$k]; $changed = $true
+    }
+  }
+  if ($changed) { Write-Json $Settings $s -Private; Write-Json $Client $c -Private }
+}
+
 function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude's settings.json, not from here
   if (-not (Test-Path -LiteralPath $Bin)) { New-Item -ItemType Directory -Path $Bin -Force | Out-Null }
   $cmd = @(
@@ -343,14 +369,17 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'rem (`if exist` reads any folder name, where findstr can''t) or the dashboard no longer accepts the key (the computer',
     'rem was removed there). Only a 401 counts: offline, without curl.exe, or with the dashboard slow or down, gclaude',
     'rem starts as usual. The key reaches curl on stdin, through GW_KEY, which the inner cmd expands: never in a command line.',
-    'set "GW_WHY=" & set "GW_KEY=" & set "GW_CODE="',
+    'rem The same request names the newest models, which become the /model defaults (:models).',
+    'set "GW_WHY=" & set "GW_KEY=" & set "GW_CODE=" & set "GW_MODELS=%TEMP%\gclaude-models-%RANDOM%%RANDOM%.txt"',
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" set "GW_WHY=signed out by /logout_gclaude"',
     'if not defined GW_WHY for /f "tokens=2 delims=:, " %%k in (''type "%CLAUDE_CONFIG_DIR%\settings.json" 2^>nul ^| findstr ANTHROPIC_AUTH_TOKEN'') do set "GW_KEY=%%~k"',
-    ("if defined GW_KEY for /f %%c in ('echo Authorization: Bearer %%GW_KEY%%^| curl.exe -s -o nul --max-time 3 -H @- -w `"%%{http_code}`" `"" +
-     ($c.dashboard + '/api/me/status').Replace('%', '%%') + "`" 2^>nul') do set `"GW_CODE=%%c`""),
+    ("if defined GW_KEY for /f %%c in ('echo Authorization: Bearer %%GW_KEY%%^| curl.exe -s -o `"%GW_MODELS%`" --max-time 3 -H @- -w `"%%{http_code}`" `"" +
+     ($c.dashboard + '/api/me/status?format=models').Replace('%', '%%') + "`" 2^>nul') do set `"GW_CODE=%%c`""),
     'if "%GW_CODE%"=="401" set "GW_WHY=this computer''s key no longer works, removed in the dashboard?"',
     'set "GW_KEY="',
     'rem One block, read before `on` rewrites this file; GW_WHY holds no parentheses, which would end it.',
+    'if "%GW_CODE%"=="200" call :models',
+    'del "%GW_MODELS%" 2>nul',
     ('if defined GW_WHY (' + "`r`n" +
      '  echo gclaude: %GW_WHY%; signing this computer in again. 1>&2' + "`r`n" +
      '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
@@ -363,6 +392,13 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'call claude %*',
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed',
     'exit /b',
+    'rem Each NAME=value line the dashboard sent whose value settings.json lacks starts claude-gateway models, which',
+    'rem moves the defaults gclaude set itself; PowerShell starts only then, so an ordinary start stays quick. /l: [1m] is literal.',
+    ':models',
+    'set "GW_STALE="',
+    'for /f "usebackq tokens=1,* delims==" %%a in ("%GW_MODELS%") do findstr /l /c:"%%b" "%CLAUDE_CONFIG_DIR%\settings.json" >nul 2>nul || set "GW_STALE=1"',
+    'if defined GW_STALE call claude-gateway models --gclaude "%GW_MODELS%" >nul 2>nul',
+    'exit /b 0',
     'rem /logout_gclaude signed out and stopped claude (statusline.ps1): the terminal back as Claude Code would leave it',
     'rem (colours, cursor, bracketed paste, focus reports, keyboard mode), with the lines Claude Code drew below its cursor',
     'rem cleared from the start of its line, then the reason it left in the signed-out file.',
@@ -518,6 +554,11 @@ function Show-Status {
 $cmd = 'status'; $rest = @()
 if ($args.Count -gt 0) { $cmd = [string]$args[0] }
 if ($args.Count -gt 1) { $rest = @($args[1..($args.Count - 1)]) }
+if ($cmd -eq 'models') {   # gclaude.cmd only, not for users: models --gclaude FILE (see Update-Models)
+  if ($rest.Count -ne 2 -or [string]$rest[0] -ne '--gclaude') { Fail 'usage: claude-gateway models --gclaude FILE' }
+  Update-Models ([string]$rest[1])
+  exit 0
+}
 $url = ''; $key = ''; $dash = ''; $login = $false
 for ($i = 0; $i -lt $rest.Count; $i++) {
   $a = [string]$rest[$i]

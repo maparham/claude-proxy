@@ -218,6 +218,9 @@ Nothing is exported to your shell, so plain `claude` still reads `~/.claude` and
 Without a claude.ai login Claude Code gives `fable`, `opus` and `sonnet` a 200K context window, so the key-only
 setup (gclaude's, and global `--key-only`) points them at their 1M forms (`ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-2[1m]`
 and the like) unless you set those yourself. `/model fable` then gets the 1M window with no `[1m]` to type.
+gclaude keeps them on the newest models: each time it starts it asks the dashboard, which names the highest version
+of each family with a price on the gateway, and moves any of these it set itself and you have not changed. A new
+model then needs only its price (`[pricing]`), not a gclaude update.
 `off --gclaude` removes the command, the links, `/usage`, `/account`, `/logout_gclaude` and the gateway settings, and keeps gclaude's own history.
 
 Claude Code's own `/usage` can't see the gateway: with a gateway key it shows only the session's cost and tokens.

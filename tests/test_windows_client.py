@@ -58,6 +58,7 @@ class Stub:
         self.revoked: set[str] = set()   # keys /api/me/status answers 401 for, as for a computer removed in the dashboard
         self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
         self.account_line = "maya · user · key sk-proxy-ab1… for PC, authorized 2026-09-20"   # ?format=account
+        self.default_models = ""   # ?format=models: the NAME=value lines gclaude.cmd applies
         self.models_status = 200
         self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
         self.files: dict[str, bytes] = {}   # GET path -> body, e.g. the dashboard's /install.ps1
@@ -87,7 +88,8 @@ class Stub:
                     self.reply(401, {"detail": "Not signed in."})
                 elif self.path.startswith("/api/me/status"):
                     line = d.account_line if "format=account" in self.path else d.status_line
-                    self.reply(200 if line is not None else 503, ((line or "") + "\n").encode(), "text/plain; charset=utf-8")
+                    body = d.default_models.encode() if "format=models" in self.path else ((line or "") + "\n").encode()
+                    self.reply(200 if line is not None else 503, body, "text/plain; charset=utf-8")
                 else:
                     self.reply(404, {})
 
@@ -572,6 +574,28 @@ def test_gclaude_starts_as_usual_while_its_key_works(gclaude, installed, stub, t
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 0 and "sign" not in r.out and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
     assert "/api/device/start" not in stub.paths()
+
+
+@on_windows
+def test_gclaude_moves_its_own_model_defaults_to_the_newest_the_dashboard_names(gclaude, installed, stub, tmp_path):
+    """A new model needs only its price on the gateway; a default the user changed stays theirs."""
+    win = installed
+    s = win.settings()
+    s["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "claude-opus-5"   # the user's own choice since
+    (win.gdir / "settings.json").write_text(json.dumps(s), encoding="utf-8")
+    stub.default_models = ("ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-6[1m]\n"
+                           "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-6[1m]\n"
+                           "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5[1m]\n")
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
+    env = win.settings()["env"]
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-6[1m]"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == "claude-sonnet-5-5[1m]"
+    assert win.client()["gclaude"]["added_models"]["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-6[1m]"
+    assert "/api/me/status?format=models" in stub.paths()
+    assert not list(win.temp.glob("gclaude-models-*"))   # the reply is not left behind
 
 
 @on_windows

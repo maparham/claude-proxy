@@ -673,13 +673,17 @@ if mode == "on":
                 "# dashboard slow or down, gclaude starts as usual. The key goes to curl on stdin, where `ps` can't show it.\n"
                 "key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get(\"env\", {}).get(\"ANTHROPIC_AUTH_TOKEN\", \"\"))'"
                 " \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null)\n"
-                'why=\n'
+                "# The same request names the newest models, which become the /model defaults (claude-gateway models).\n"
+                'why= code= models=$(mktemp "${TMPDIR:-/tmp}/gclaude-models.XXXXXX" 2>/dev/null) || models=/dev/null\n'
                 "if [ -z \"$key\" ]; then\n"
                 "  why='signed out (/logout_gclaude)'\n"
-                "elif [ \"$(printf 'Authorization: Bearer %s\\n' \"$key\" | curl -s -o /dev/null --max-time 3 -H @- -w '%{http_code}'"
-                f" {shlex.quote(dash + '/api/me/status')} 2>/dev/null)\" = 401 ]; then\n"
-                "  why=\"this computer's key no longer works (removed in the dashboard?)\"\n"
+                "else\n"
+                "  code=$(printf 'Authorization: Bearer %s\\n' \"$key\" | curl -s -o \"$models\" --max-time 3 -H @- -w '%{http_code}'"
+                f" {shlex.quote(dash + '/api/me/status?format=models')} 2>/dev/null)\n"
+                "  [ \"$code\" != 401 ] || why=\"this computer's key no longer works (removed in the dashboard?)\"\n"
                 "fi\n"
+                'if [ "$code" = 200 ] && [ "$models" != /dev/null ]; then "$gw" models --gclaude "$models" >/dev/null 2>&1; fi\n'
+                '[ "$models" = /dev/null ] || rm -f "$models"\n'
                 'if [ -n "$why" ]; then\n'
                 "  echo \"gclaude: $why; signing this computer in again.\" >&2\n"
                 '  CLAUDE_GATEWAY_FROM_GCLAUDE=1 "$gw" on --gclaude --login ||'
@@ -773,6 +777,36 @@ gclaude_status() {   # what `gclaude status` shows: its gateway, whether this co
 
 gclaude_state() {
   if gclaude_ours; then echo "gclaude: installed ($GCLAUDE)"; else echo "gclaude: not set up"; fi
+}
+
+gclaude_models() {   # FILE: the dashboard's NAME=value lines (/api/me/status?format=models), which gclaude's launcher
+  # fetches at every start. Each /model default gclaude set and the user has not changed since moves to the newest model
+  # the dashboard names, so a new model needs only its price on the gateway, not a gclaude update. Anything odd: no change.
+  python3 - "$1" "$GCLAUDE_DIR/settings.json" "$CLIENT" <<'EOF'
+import json, os, re, sys, tempfile
+lines, settings, client = sys.argv[1:]
+new = {}
+for line in open(lines, encoding="utf-8", errors="replace"):
+    m = re.fullmatch(r"ANTHROPIC_DEFAULT_(FABLE|OPUS|SONNET)_MODEL=(claude-([a-z]+)-[0-9][0-9-]*\[1m\])", line.strip())
+    if m and m.group(3) == m.group(1).lower():
+        new[line.split("=")[0]] = m.group(2)
+c = json.load(open(client)) if new else {}
+added = c.get("gclaude", {}).get("added_models") if isinstance(c.get("gclaude"), dict) else None
+s = json.load(open(settings)) if isinstance(added, dict) else {}
+env = s.get("env") if isinstance(s.get("env"), dict) else {}
+changed = {k: v for k, v in new.items() if k in added and env.get(k) == added[k] != v} if env else {}
+if not changed:
+    sys.exit(0)
+env.update(changed)
+added.update(changed)
+for path, data in ((settings, s), (client, c)):
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path))
+    with os.fdopen(fd, "w") as f:
+        json.dump(data, f, indent=2)
+        f.write("\n")
+    os.chmod(tmp, os.stat(path).st_mode & 0o777)
+    os.replace(tmp, path)
+EOF
 }
 
 cmd=${1:-status}; shift || true
@@ -910,6 +944,10 @@ case "$cmd" in
     fi
     gclaude_state
     opencode_state
+    ;;
+  models)   # gclaude's launcher only, not for users: models --gclaude FILE (see gclaude_models)
+    [ $# -eq 2 ] && [ "$1" = --gclaude ] || usage 1
+    gclaude_models "$2"
     ;;
   -h|--help|help) usage 0 ;;
   *) usage 1 ;;

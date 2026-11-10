@@ -27,6 +27,7 @@ class Stub:
         self.tokens: list[tuple[int, dict]] = []   # answers to /api/device/token, in order; then pending
         self.revoked: set[str] = set()   # keys /api/me/status answers 401 for, as for a computer removed in the dashboard
         self.install: str | None = None   # GET /install, the dashboard's installer; None: 404
+        self.default_models = ""   # /api/me/status?format=models: the NAME=value lines gclaude's launcher applies
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -41,6 +42,8 @@ class Stub:
                 elif self.path.startswith("/api/me/status"):
                     line = stub.account_line if "format=account" in self.path else stub.status_line
                     code, body, ctype = (200 if line is not None else 503), ((line or "") + "\n").encode(), "text/plain; charset=utf-8"
+                    if "format=models" in self.path and line is not None:
+                        body = stub.default_models.encode()
                 elif self.path.startswith("/v1/models"):
                     ms = stub.models_status
                     code = (ms.pop(0) if len(ms) > 1 else ms[0]) if isinstance(ms, list) else ms   # a list: answers in order, the last repeats
@@ -1193,6 +1196,46 @@ def test_gclaude_signs_in_again_when_its_key_was_removed_in_the_dashboard(stub, 
     assert json.loads(gsettings.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == "sk-proxy-new"
     status = [h for p, h in stub.requests if p.startswith("/api/me/status")]
     assert status and all("sk-proxy" not in p for p, _ in stub.requests)   # the key goes in a header, never the URL
+
+
+def test_gclaude_moves_its_own_model_defaults_to_the_newest_the_dashboard_names(stub, home):
+    """A new model needs only its price on the gateway: gclaude's next start makes it the /model default. A default the
+    user changed stays theirs, and `off` still removes the ones gclaude moved."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, launcher = gc_paths(home)
+    s = json.loads(gsettings.read_text())
+    s["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"] = "claude-opus-5"   # the user's own choice since
+    gsettings.write_text(json.dumps(s))
+    stub.default_models = ("ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-6[1m]\n"
+                           "ANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-6[1m]\n"
+                           "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5[1m]\n")
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi" and r.stderr == "", r.stderr
+    env = json.loads(gsettings.read_text())["env"]
+    assert env["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-6[1m]"
+    assert env["ANTHROPIC_DEFAULT_OPUS_MODEL"] == "claude-opus-5"
+    assert env["ANTHROPIC_DEFAULT_SONNET_MODEL"] == ONE_M["ANTHROPIC_DEFAULT_SONNET_MODEL"]
+    assert any(p.endswith("/api/me/status?format=models") for p, _ in stub.requests)
+    assert not list((home / "tmp").glob("gclaude-models.*"))   # the reply is not left behind
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {"env": {"ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5"}}
+
+
+@pytest.mark.parametrize("lines", [
+    "ANTHROPIC_DEFAULT_FABLE_MODEL=claude-opus-6[1m]\n",            # another family's model
+    "ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-6\n",               # not the 1M form
+    "ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-6[1m] x\n",
+    "ANTHROPIC_MODEL=claude-fable-6[1m]\n",                         # not one of the defaults gclaude sets
+    "<html>gateway error</html>\n",
+])
+def test_gclaude_ignores_a_models_reply_it_cannot_trust(stub, home, lines):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, launcher = gc_paths(home)
+    before = gsettings.read_text()
+    stub.default_models = lines
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi" and r.stderr == "", r.stderr
+    assert gsettings.read_text() == before
 
 
 def test_gclaude_starts_when_the_dashboard_cannot_be_reached(stub, home):

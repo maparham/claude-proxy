@@ -276,6 +276,25 @@ async def test_family_costs_follow_the_price_table(cfg):
     assert cfg.pricing.family_costs() == {"opus": 7.0}
 
 
+async def test_newest_models_are_the_highest_priced_version_of_each_family(cfg):
+    from claude_proxy.config import Price
+    assert cfg.pricing.newest_models() == {"fable": "claude-fable-5-2", "opus": "claude-opus-5-5", "sonnet": "claude-sonnet-5-5"}
+    # an admin's price comes first in the table but is no newer for it; dated and other globs name no model
+    cfg.pricing.prices = {"claude-opus-4-1*": Price(15.0, 75.0), "claude-opus-5-5*": Price(4.0, 20.0),
+                          "claude-opus-6*": Price(4.0, 20.0), "claude-sonnet-4-20250514*": Price(3.0, 15.0),
+                          "claude-sonnet-*": Price(3.0, 15.0), "claude-haiku-5-5*": Price(0.1, 0.5)}
+    assert cfg.pricing.newest_models() == {"opus": "claude-opus-6"}
+
+
+async def test_status_names_gclaudes_model_defaults(env):
+    gw, conn, ids, keys = env
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/me/status?format=models", headers=bearer(keys["alice"]))
+    assert r.status_code == 200
+    assert r.text == ("ANTHROPIC_DEFAULT_FABLE_MODEL=claude-fable-5-2[1m]\nANTHROPIC_DEFAULT_OPUS_MODEL=claude-opus-5-5[1m]\n"
+                      "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5[1m]\n")
+
+
 async def test_sessions_carry_their_title_only_for_the_owner(env):
     gw, conn, ids, keys = env
     from claude_proxy.db import set_session_title

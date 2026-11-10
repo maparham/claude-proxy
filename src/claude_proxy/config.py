@@ -283,6 +283,19 @@ class Pricing:
         p = self.price_for(self.reference_model)
         return p.input if p else 1.0
 
+    def newest_models(self) -> dict[str, str]:
+        """The highest version of each family Claude Code's /model offers (fable, opus, sonnet) that has a price here,
+        as a model id: the price pattern without its trailing *. gclaude makes these its defaults, so adding a price for
+        a new model is all it takes to offer it. Patterns that aren't a model id and a * (dated or other globs) don't count."""
+        best: dict[str, tuple[tuple[int, ...], str]] = {}
+        for pattern in self.prices:
+            m = re.fullmatch(r"(claude-(fable|opus|sonnet)-(\d+)(?:-(\d{1,2}))?)\*", pattern.lower())
+            if m:
+                version = tuple(int(g) for g in m.groups()[2:] if g is not None)
+                if m.group(2) not in best or version > best[m.group(2)][0]:
+                    best[m.group(2)] = (version, m.group(1))
+        return {family: model for family, (_, model) in best.items()}
+
     def family_costs(self) -> dict[str, float]:
         """Output price per million tokens of the first-listed (newest) price of each family Claude Code's /model
         offers: fable, opus, sonnet. The dashboard quotes their ratios: how much faster one burns a pass than another."""

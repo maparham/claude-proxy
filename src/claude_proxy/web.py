@@ -710,6 +710,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/me/status")
     async def me_status(request: Request, format: str = "json"):
         user = principal(request, routes_ok=True)
+        if format == "models":
+            # gclaude's launcher, at every start: the 1M forms of the newest models it makes the /model defaults.
+            # Without a claude.ai login Claude Code gives the plain names a 200K window. One NAME=value line each.
+            return PlainTextResponse("".join(f"ANTHROPIC_DEFAULT_{family.upper()}_MODEL={model}[1m]\n"
+                                             for family, model in cfg.pricing.newest_models().items()))
         if user.get("machine_key_id"):   # gclaude's statusline says which version this computer runs
             db.set_client_version(conn, user["machine_key_id"], request.headers.get("x-gclaude-version", ""))
         now = time.time()
