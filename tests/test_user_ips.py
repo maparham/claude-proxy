@@ -32,12 +32,16 @@ async def test_requests_and_sign_ins_are_recorded_and_only_the_admin_sees_them(e
         assert [(x["ip"], x["source"], x["count"]) for x in r.json()["ips"]] == [("127.0.0.1", "gateway", 1)]
         r = await c.get(f"/api/admin/users/{ids['admin']}/ips")
         assert [(x["ip"], x["source"]) for x in r.json()["ips"]] == [("127.0.0.1", "dashboard")]
+        reqs = (await c.get(f"/api/requests?user_id={ids['alice']}")).json()["requests"]
+        assert reqs[0]["ip"] == "127.0.0.1"   # the newest; the fixture's seeded rows have none
         users = {u["name"]: u for u in (await c.get("/api/users")).json()["users"]}
         assert (users["alice"]["last_ip"], users["bob"]["last_ip"]) == ("127.0.0.1", None)
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get(f"/api/admin/users/{ids['alice']}/ips", headers=bearer(keys["alice"]))
         assert r.status_code == 403
         assert "127.0.0.1" not in (await c.get("/api/me/status", headers=bearer(keys["alice"]))).text
+        r = await c.get("/api/requests", headers=bearer(keys["alice"]))
+        assert r.json()["requests"] and "127.0.0.1" not in r.text
 
 
 def test_cleanup_drops_addresses_past_retention(db):

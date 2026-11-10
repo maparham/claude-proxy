@@ -191,7 +191,7 @@ def _usage_fresh(conn) -> float | None:
 def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> bool:
     """One request's log row, its API charge, its session title and its content, on a db worker thread; and the address
     it came from, in the user's IP history (db.note_ip). True when that address is new for the user."""
-    ip = row.pop("ip", None)
+    ip = row.get("ip")
     try:
         rid = insert_request(conn, **row)
         if content:
@@ -281,7 +281,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
 
     # Behind a proxy on the same host (cloudflared, Caddy), uvicorn takes the client's address from X-Forwarded-For: it
     # trusts it only from 127.0.0.1. A proxy reaching the gateway from elsewhere (a Docker bridge) would be recorded instead.
-    base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host if request.client else None}
+    base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host[:64] if request.client else None}
     held = False   # this request is counted in `inflight` until it is recorded
 
     async def record(title: str | None = None, content: tuple | None = None, **kw) -> None:

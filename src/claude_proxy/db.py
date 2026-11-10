@@ -72,7 +72,8 @@ SCHEMA = [
         error_type TEXT,
         meter_error INTEGER DEFAULT 0,
         rejected_by TEXT,
-        api_key_id INTEGER
+        api_key_id INTEGER,
+        ip TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_requests_user_time ON requests(user_id, started_at)",
     "CREATE INDEX IF NOT EXISTS idx_requests_time ON requests(started_at)",
@@ -590,6 +591,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE tickets ADD COLUMN refunded_at INTEGER")
     if "windows" not in _columns(conn, "orders"):   # set by fe181f9 (a Windows browser), no longer read: every pass mail has the Windows setup
         conn.execute("ALTER TABLE orders ADD COLUMN windows INTEGER NOT NULL DEFAULT 0")
+    if "ip" not in _columns(conn, "requests"):   # the address each request came from (2026-11-10); NULL before
+        conn.execute("ALTER TABLE requests ADD COLUMN ip TEXT")
     for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)
         if col not in _columns(conn, "payments"):
             conn.execute(f"ALTER TABLE payments ADD COLUMN {col} INTEGER")
@@ -791,7 +794,7 @@ def revoke(conn: sqlite3.Connection, user_id: int, actor: int | None = None) -> 
 
 def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None, now: float | None = None) -> int:
     """Remove a revoked user. Their requests stay, anonymized, for gateway-wide cost analysis: no user, session,
-    client version or content, but the time, model, tokens and cost. Returns how many were anonymized. Tickets stay as sales
+    client version, address or content, but the time, model, tokens and cost. Returns how many were anonymized. Tickets stay as sales
     records with user_id NULL (the FK's ON DELETE SET NULL); a user with an active or queued ticket is not deleted."""
     now = time.time() if now is None else now
     u = conn.execute("SELECT name, revoked_at FROM users WHERE id=?", (user_id,)).fetchone()
@@ -801,7 +804,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
                     (user_id, now)).fetchone():
         raise ValueError("Cancel the user's active or queued pass first.")
     conn.execute("DELETE FROM request_contents WHERE request_id IN (SELECT id FROM requests WHERE user_id=?)", (user_id,))
-    n = conn.execute("UPDATE requests SET user_id=NULL, session_id=NULL, client_version=NULL WHERE user_id=?",
+    n = conn.execute("UPDATE requests SET user_id=NULL, session_id=NULL, client_version=NULL, ip=NULL WHERE user_id=?",
                      (user_id,)).rowcount
     # Their Telegram chat and its messages go too (cascade); the FK alone would only unlink the chat.
     conn.execute("DELETE FROM telegram_chats WHERE user_id=?", (user_id,))

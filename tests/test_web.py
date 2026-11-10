@@ -245,6 +245,7 @@ async def test_delete_only_revoked_users_and_anonymize_their_history(env):
     async with admin_client(gw) as c:
         assert (await c.post(f"/api/admin/users/{ids['bob']}/delete", json={"confirm": "bob"})).status_code == 400   # not revoked yet
         assert (await c.post(f"/api/admin/users/{ids['bob']}/revoke")).status_code == 200
+        conn.execute("UPDATE requests SET ip='1.2.3.4' WHERE user_id=?", (ids["bob"],))
         r = await c.post(f"/api/admin/users/{ids['bob']}/delete", json={"confirm": "bob"})
         assert r.status_code == 200 and r.json()["anonymized_requests"] == 1
         names = [u["name"] for u in (await c.get("/api/users")).json()["users"]]
@@ -255,7 +256,7 @@ async def test_delete_only_revoked_users_and_anonymize_their_history(env):
     assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC").fetchone()[:] == ("delete_user", "bob")
     # the usage stays for cost analysis, linked to no one
     assert conn.execute("SELECT COUNT(*) FROM requests WHERE user_id IS NULL AND session_id IS NULL AND client_version IS NULL "
-                        "AND input_tokens>0").fetchone()[0] == 1
+                        "AND ip IS NULL AND input_tokens>0").fetchone()[0] == 1
 
 
 async def test_session_reports_settings_the_dashboard_quotes(env, cfg):

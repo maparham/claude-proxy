@@ -611,10 +611,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             match = (f"AND (model LIKE ? ESCAPE '\\' OR user_id IN ({','.join('?' * len(ids)) or 'NULL'}) OR api_key_id IN "
                      f"(SELECT id FROM api_keys WHERE label LIKE ? ESCAPE '\\' OR key_prefix LIKE ? ESCAPE '\\')) ")
             mparams = (_like(q), *ids, _like(q), _like(q, prefix=True))
+        # The address each came from, and its place: the admin's only, like the users' IP history.
+        geo_cols, geo_join = ("requests.ip, g.city, g.region, g.country, ", "LEFT JOIN ip_geo g ON g.ip=requests.ip ") \
+            if is_admin(user) else ("", "")
         rows = conn.execute(
-            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, "
+            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, {geo_cols}"
             f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind, EXISTS(SELECT 1 FROM request_contents rc WHERE rc.request_id=requests.id) "
-            f"AS has_content FROM requests WHERE {where} AND {src} {match}"
+            f"AS has_content FROM requests {geo_join}WHERE {where} AND {src} {match}"
             f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, *mparams, min(max(limit, 1), 500))).fetchall()
         kids = {r["api_key_id"] for r in rows if r["api_key_id"]}
         key_names = {k["id"]: k["label"] or f"{k['key_prefix']}…" for k in conn.execute(
@@ -637,7 +640,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "rejected_by": r["rejected_by"] if is_admin(user) else _user_rejected_by(r["rejected_by"]),
                         "session_id": r["session_id"], "key": key_names.get(r["api_key_id"]),
                         "title": titled.get((r["user_id"], r["session_id"])), "has_content": bool(r["has_content"]),
-                        **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")}})
+                        **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")},
+                        **({k: r[k] for k in ("ip", "city", "region", "country")} if is_admin(user) else {})})
         return {"requests": out}
 
     @app.get("/api/requests/{request_id}/content")
