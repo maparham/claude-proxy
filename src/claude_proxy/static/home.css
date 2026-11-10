@@ -182,7 +182,7 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .post li { margin-bottom: 8px; }
 .post h3 { font-size: 17px; margin: 24px 0 8px; }
 .post pre { direction: ltr; text-align: start; overflow-x: auto; background: var(--wash); border: 1px solid var(--border); border-radius: 8px; padding: 10px 14px; margin: 8px 0; line-height: 1.5; }
-.post pre.prompt { direction: rtl; white-space: pre-wrap; overflow-wrap: anywhere; }
+.post pre.prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
 .post .copy-wrap { position: relative; }
 .post .copy-wrap .copy { position: absolute; top: 6px; inset-inline-end: 6px; }
 .post .copy-wrap pre { padding-inline-end: 72px; }

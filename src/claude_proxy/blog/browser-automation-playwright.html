@@ -22,12 +22,12 @@ color: s3
 
 <h2>کار با همان Chrome که باز است</h2>
 <p>به‌طور پیش‌فرض کلاد یک مرورگر جدا و خالی باز می‌کند که در هیچ سایتی وارد نشده‌اید. اگر می‌خواهید کلاد در همان Chrome که الان باز است کار کند، با همان حساب‌هایی که در آن‌ها وارد شده‌اید، ساده‌ترین راه این است که <code>gclaude</code> را باز کنید و این پیام را در آن بچسبانید تا کلاد خودش همه چیز را راه بیندازد:</p>
-<pre class="prompt"><code>Playwright را طوری راه بینداز که در همین Chrome که باز است کار کنی:
-۱. ببین چه سیستم‌عاملی دارم و با node -v بررسی کن Node.js نسخه ۱۸ یا بالاتر نصب باشد. اگر نیست نصبش کن (ویندوز: winget install OpenJS.NodeJS.LTS، مک: brew install node).
-۲. اگر playwright در gclaude mcp list هست، با gclaude mcp remove playwright -s user پاکش کن.
-۳. با gclaude mcp add playwright -s user -- npx @playwright/mcp@latest --extension اضافه‌اش کن. در ویندوز به جای npx بنویس cmd /c npx.
-۴. این صفحه را در Chrome برایم باز کن تا افزونه Playwright MCP Bridge را نصب کنم: https://chromewebstore.google.com/search/Playwright%20MCP%20Bridge
-۵. در آخر کوتاه بگو چه کردی و چه کاری مانده که خودم باید انجام بدهم.</code></pre>
+<pre class="prompt"><code>Set up Playwright so you can work in the Chrome I already have open:
+1. Check my operating system, and check with node -v that Node.js 18 or newer is installed. If it isn't, install it (Windows: winget install OpenJS.NodeJS.LTS, macOS: brew install node).
+2. If playwright is in gclaude mcp list, remove it with gclaude mcp remove playwright -s user.
+3. Add it with gclaude mcp add playwright -s user -- npx @playwright/mcp@latest --extension. On Windows, use cmd /c npx instead of npx.
+4. Open this page in Chrome so I can install the Playwright MCP Bridge extension: https://chromewebstore.google.com/search/Playwright%20MCP%20Bridge
+5. Finally, briefly tell me what you did and what is left for me to do.</code></pre>
 <p>بعد از آن فقط سه کار با خودتان است: در Chrome Web Store دکمه <strong>Add to Chrome</strong> را بزنید، <code>gclaude</code> را ببندید و دوباره باز کنید، و بار اول که کلاد سراغ مرورگر می‌رود، تبی را که می‌خواهید در اختیارش بگذارید انتخاب کنید.</p>
 <p>اگر ترجیح می‌دهید خودتان قدم‌به‌قدم انجامش دهید:</p>
 <ol>
