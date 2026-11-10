@@ -39,7 +39,7 @@ jobs:
         run: |
           mkdir payload
           cp deploy/lightsail/config.toml payload/
-          version=$(git describe --tags --match 'v[0-9]*')
+          version=$(sh scripts/client-version.sh)   # gclaude's: only commits that change what it installs count
           nohup bash -o pipefail -c '
             docker build --build-arg "CLIENT_VERSION=$1" -t "claude-proxy:$GITHUB_SHA" . &&
             docker save "claude-proxy:$GITHUB_SHA" | gzip >payload/image.tar.gz

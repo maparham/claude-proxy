@@ -48,9 +48,8 @@ def _version(d: Path) -> str:
     v = os.environ.get("CLAUDE_PROXY_CLIENT_VERSION", "").strip()
     if v.startswith("v"):
         return v
-    try:
-        v = subprocess.run(["git", "-C", str(d), "describe", "--tags", "--match", "v[0-9]*"],
-                           capture_output=True, text=True, timeout=5).stdout.strip()
+    try:   # a checkout: only the commits that change the client count (scripts/client-version.sh)
+        v = subprocess.run(["sh", str(d / "scripts" / "client-version.sh")], capture_output=True, text=True, timeout=5).stdout.strip()
     except (OSError, subprocess.SubprocessError):
         v = ""
     return v if v.startswith("v") else ""
