@@ -24,6 +24,7 @@ today's price, so the table follows the rate and discounts. Each row names its t
 from __future__ import annotations
 
 import datetime
+import hashlib
 import html
 import re
 from dataclasses import dataclass
@@ -163,6 +164,14 @@ def packages(body: str, prices: dict | None) -> str:
     return re.sub(r'<table class="packages">(.*?)</table>', table, body, flags=re.S)
 
 
+@lru_cache(maxsize=None)
+def _asset(name: str) -> str:
+    """A static asset's URL carrying its content hash, as the home page's are, so a browser that cached an older copy
+    (they keep them for hours) picks up a deploy."""
+    v = hashlib.sha256((Path(__file__).parent / "static" / name).read_bytes()).hexdigest()[:12]
+    return f"/static/{name}?v={v}"
+
+
 def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website", wide: bool = False) -> str:
     t, d, url = html.escape(title), html.escape(description), html.escape(f"{base}{path}")
     return f"""<!doctype html>
@@ -188,9 +197,9 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <link rel="alternate" type="application/rss+xml" title="وبلاگ کلاد" href="{html.escape(base)}/blog/feed.xml">
 <link rel="icon" href="/static/rahkar-favicon.svg" type="image/svg+xml">
 <link rel="apple-touch-icon" href="/static/rahkar-icon-180.png">
-<link rel="stylesheet" href="/static/app.css">
-<link rel="stylesheet" href="/static/home.css">
-<script src="/static/blog.js" defer></script>
+<link rel="stylesheet" href="{_asset('app.css')}">
+<link rel="stylesheet" href="{_asset('home.css')}">
+<script src="{_asset('blog.js')}" defer></script>
 </head>
 <body class="home blog{' blog-wide' if wide else ''}">
 <header class="home-top">
