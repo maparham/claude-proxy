@@ -185,8 +185,8 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .post pre.prompt { white-space: pre-wrap; overflow-wrap: anywhere; }
 /* The box is drawn on the wrapper and the pre stops short of the button, so a long line scrolls beside it, not under it. */
 .post .copy-wrap { position: relative; background: var(--wash); border: 1px solid var(--border); border-radius: 8px; margin: 8px 0; }
-.post .copy-wrap pre { background: none; border: 0; border-radius: 0; margin: 0 80px 0 0; }
-.post .copy-wrap .copy { position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px; }
+.post .copy-wrap pre { background: none; border: 0; border-radius: 0; margin: 0; margin-inline-end: 80px; }   /* the pre is LTR: its end is the right */
+.post .copy-wrap .copy { position: absolute; top: 6px; inset-inline-start: 6px; display: inline-flex; align-items: center; gap: 4px; }
 .post .copy-wrap .copy .ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .post code { font: 14px ui-monospace, SFMono-Regular, Menlo, monospace; direction: ltr; unicode-bidi: isolate; }
 /* A sample answer from Claude in a post, kept to its own lines and in the post's color. */
