@@ -242,6 +242,8 @@ def _default_prices() -> dict[str, Price]:
     # Anthropic first-party API list prices (cached 2026-06-24) and Meta Model API prices.
     # Order matters: the first glob that matches the model wins.
     return {
+        "claude-fable-5-2*": Price(8.0, 40.0, cache_read=0.20),
+        "claude-mythos-5-2*": Price(8.0, 40.0, cache_read=0.20),
         "claude-fable-5-1*": Price(10.0, 50.0, cache_read=0.25),
         "claude-mythos-5-1*": Price(10.0, 50.0, cache_read=0.25),
         "claude-fable-5*": Price(10.0, 50.0),

@@ -344,8 +344,8 @@ def test_on_authorizes_in_the_browser_and_sets_up_gclaude(installed, stub, tmp_p
     s = win.settings()
     assert s["env"] == {"ANTHROPIC_BASE_URL": stub.url, "ANTHROPIC_AUTH_TOKEN": "sk-proxy-new", "CLAUDE_GATEWAY_DASHBOARD": stub.url,
                         "CLAUDE_GATEWAY_VERSION": "1.0.8",   # the source zip's VERSION, for the statusline to send
-                        "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
-                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
+                        "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-2[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+                        "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5[1m]",
                         "DISABLE_LOGIN_COMMAND": "1", "DISABLE_LOGOUT_COMMAND": "1", "DISABLE_UPGRADE_COMMAND": "1",
                         "DISABLE_EXTRA_USAGE_COMMAND": "1", "DISABLE_INSTALL_GITHUB_APP_COMMAND": "1",
                         "CLAUDE_CODE_RETRY_WATCHDOG": "1", "CLAUDE_CODE_RETRY_WATCHDOG_SCOPE": "capacity"}

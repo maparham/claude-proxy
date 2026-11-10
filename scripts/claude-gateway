@@ -189,8 +189,8 @@ edit_settings() {   # on|off [settings.json scope]. Scope "gclaude" keeps its ow
   CG_VERSION=$(version 2>/dev/null) python3 - "$1" "$settings" "$CLIENT" "$STATUSLINE" "${3:-global}" "$SETTINGS" <<'EOF'
 import json, os, shlex, sys, tempfile
 mode, settings, client, statusline, scope, own_settings = sys.argv[1:]
-ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
-                "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}   # the newest of each; update when one ships
+ONE_M_MODELS = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-2[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+                "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5[1m]"}   # the newest of each; update when one ships
 # gclaude signs in to the gateway, not to Claude: Claude Code's /login and /logout would only confuse that (its
 # /logout_gclaude is the way out), /upgrade and /extra-usage are for a claude.ai plan it doesn't have, and
 # /install-github-app works with Anthropic outside the gateway. These hide them, as no hook can block a built-in. (Claude

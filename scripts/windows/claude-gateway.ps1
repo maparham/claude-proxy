@@ -44,8 +44,8 @@ $LineCmd = 'powershell -NoProfile -ExecutionPolicy Bypass -File "' + ($Statuslin
 $WarnCmd = "$LineCmd --warn"
 # Without a claude.ai login Claude Code gives fable, opus and sonnet a 200K context window; only their [1m] forms get 1M.
 # So gclaude's aliases (and its /model picker) name those. The newest of each; update when one ships.
-$OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-1[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
-                          ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5[1m]' }
+$OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-2[1m]'; ANTHROPIC_DEFAULT_OPUS_MODEL = 'claude-opus-5-5[1m]'
+                          ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5-5[1m]' }
 # gclaude signs in to the gateway, not to Claude: Claude Code's /login and /logout would only confuse that (its
 # /logout_gclaude is the way out), /upgrade and /extra-usage are for a claude.ai plan it doesn't have, and
 # /install-github-app works with Anthropic outside the gateway. These hide them, as no hook can block a built-in. (Claude

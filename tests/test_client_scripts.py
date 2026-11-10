@@ -829,8 +829,8 @@ def test_gclaude_on_sets_up_its_own_dir_and_leaves_claude_code_alone(stub, home)
     assert os.access(launcher, os.X_OK)
 
 
-ONE_M = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
-         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]"}
+ONE_M = {"ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-2[1m]", "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5-5[1m]",
+         "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5-5[1m]"}
 
 
 def test_gclaude_picks_the_1m_context_forms_of_fable_opus_and_sonnet(stub, home):

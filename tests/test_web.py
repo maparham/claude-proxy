@@ -266,12 +266,12 @@ async def test_session_reports_settings_the_dashboard_quotes(env, cfg):
         s = (await c.get("/api/session")).json()
     assert s["settings"] == {"reference_model": "claude-opus-5-5", "stale_after_s": 900,
                              # the newest listed price per family, so the dashboard can say how much faster Fable burns a pass
-                             "family_cost": {"fable": 50.0, "opus": 20.0, "sonnet": 10.0}}
+                             "family_cost": {"fable": 40.0, "opus": 20.0, "sonnet": 10.0}}
 
 
 async def test_family_costs_follow_the_price_table(cfg):
     from claude_proxy.config import Price
-    assert cfg.pricing.family_costs() == {"fable": 50.0, "opus": 20.0, "sonnet": 10.0}
+    assert cfg.pricing.family_costs() == {"fable": 40.0, "opus": 20.0, "sonnet": 10.0}
     cfg.pricing.prices = {"claude-opus-9*": Price(1.0, 7.0), "claude-opus-*": Price(5.0, 25.0)}   # first match wins
     assert cfg.pricing.family_costs() == {"opus": 7.0}
 
