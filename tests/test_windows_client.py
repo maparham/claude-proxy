@@ -577,6 +577,18 @@ def test_gclaude_starts_as_usual_while_its_key_works(gclaude, installed, stub, t
 
 
 @on_windows
+@pytest.mark.parametrize("args", [[], ["--continue"], ["-r", "1234"]])
+def test_gclaude_leaves_output_sent_elsewhere_as_claude_wrote_it(gclaude, installed, stub, tmp_path, args):
+    """Where the resume hint could be turned into gclaude's (:resumehint), output not on a console has no line to change."""
+    win = installed
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", *args], **fake)
+    assert r.returncode == 0 and "\x1b" not in r.out, r.out
+    assert claude_saw(tmp_path) == f"{win.gdir}|{' '.join(args)}"
+    assert not list(win.temp.glob("gclaude-start-*"))
+
+
+@on_windows
 def test_gclaude_moves_its_own_model_defaults_to_the_newest_the_dashboard_names(gclaude, installed, stub, tmp_path):
     """A new model needs only its price on the gateway; a default the user changed stays theirs."""
     win = installed

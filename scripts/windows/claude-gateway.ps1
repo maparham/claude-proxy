@@ -61,7 +61,15 @@ $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 function Get-Version {   # MAJOR.MINOR.N, as version() in scripts/claude-gateway works it out; '' when unknown
   $v = ''
   try { $v = [IO.File]::ReadAllText((Join-Path $PSScriptRoot '..\VERSION')).Trim() } catch { }
-  if ($v -notmatch '^v\d') { try { $v = [string](& git -C $PSScriptRoot describe --tags --match 'v[0-9]*' 2>$null) } catch { $v = '' } }
+  if ($v -notmatch '^v\d') {   # a checkout: scripts/client-version.sh's count, without sh (the same CLIENT_PATHS)
+    try {
+      $root = Join-Path $PSScriptRoot '..\..'
+      $paths = 'install.sh install.ps1 scripts/claude-gateway scripts/statusline.sh scripts/gclaude-sync.py scripts/windows examples/opencode' -split ' '
+      $tag = [string](& git -C $root describe --tags --abbrev=0 --match 'v[0-9]*' 2>$null)
+      $n = [string](& git -C $root rev-list --count "$tag..HEAD" -- @paths 2>$null)
+      $v = if (-not $tag -or -not $n) { '' } elseif ($n -eq '0') { $tag } else { "$tag-$n-g$([string](& git -C $root log -1 --format=%h HEAD -- @paths 2>$null))" }
+    } catch { $v = '' }
+  }
   if ($v -match '^v(\d+\.\d+)-(\d+)-g[0-9a-f]+$') { return "$($Matches[1]).$($Matches[2])" }
   if ($v -match '^v(\d+\.\d+)$') { return "$($Matches[1]).0" }
   return ''
@@ -406,10 +414,29 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
      '  if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
+    'rem On exit Claude Code prints "Resume this session with:" and then claude --resume ID, ending one line below it;',
+    'rem there is no setting for the name, so :resumehint puts a g before that claude. Only where the hint is known to be',
+    'rem exactly that line: no arguments, or only -c/--continue or -r/--resume [ID], which Claude Code leaves out of it.',
+    'set "GW_HINT=" & set "GW_A2=%~2" & set "GW_MARK=%TEMP%\gclaude-start-%RANDOM%%RANDOM%.tmp"',
+    'if "%~1"=="" set GW_HINT=1',
+    'for %%a in (-c --continue -r --resume) do if "%~1"=="%%a" if "%~2"=="" set GW_HINT=1',
+    'for %%a in (-r --resume) do if "%~1"=="%%a" if "%~3"=="" if not "%~2"=="" if not "%GW_A2:~0,1%"=="-" set GW_HINT=1',
+    'if defined GW_HINT type nul >"%GW_MARK%" 2>nul || set "GW_HINT="',
     'rem call: an npm install''s claude is claude.cmd, and a batch run without call never comes back here.',
     'call claude %*',
+    'if defined GW_HINT call :resumehint',
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed',
     'exit /b',
+    'rem The hint shows when this folder''s transcript exists, so one written during the session marks it; a console',
+    'rem narrower than the line wrapped it, and output sent elsewhere has no line to change. Keeps claude''s exit code.',
+    ':resumehint',
+    'set "GW_RC=%ERRORLEVEL%"',
+    ('powershell -NoProfile -Command "try { $m = Get-Item -LiteralPath $env:GW_MARK; if ([Console]::IsOutputRedirected -or [Console]::WindowWidth -lt 54) { exit 1 };' +
+     ' $p = Join-Path $env:CLAUDE_CONFIG_DIR (''projects\'' + ((Get-Location).ProviderPath -replace ''[^A-Za-z0-9]'', ''-''));' +
+     ' if (Get-ChildItem -LiteralPath $p -Filter *.jsonl -ErrorAction SilentlyContinue | Where-Object { $_.LastWriteTime -gt $m.LastWriteTime }) { exit 0 } } catch {}; exit 1"' +
+     ' && <nul set /p "=' + ((@('[1A', '[1G', '[1@', '[2mg', '[22m', '[1B', '[1G') | ForEach-Object { [char]27 + $_ }) -join '') + '"'),
+    'del "%GW_MARK%" 2>nul',
+    'exit /b %GW_RC%',
     'rem Each NAME=value line the dashboard sent whose value settings.json lacks starts claude-gateway models, which',
     'rem moves the defaults gclaude set itself; PowerShell starts only then, so an ordinary start stays quick. /l: [1m] is literal.',
     ':models',

@@ -929,6 +929,63 @@ def test_gclaude_launcher_runs_claude_with_its_own_config_dir_and_every_argument
     assert r.stdout.splitlines() == [str(gdir), "[-p]", "[two words]", "[--resume]"]
 
 
+RESUME_FIX = "\x1b[1A\r\x1b[1@\x1b[2mg\x1b[22m\x1b[1B\r"   # up to `claude --resume <id>`, a g before it, back down
+
+
+def run_in_terminal(argv, env, cwd, cols=80):
+    """Run argv on a pseudo-terminal `cols` wide; its output and exit code."""
+    import fcntl, pty, struct, termios
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.chdir(cwd)
+            os.execve(argv[0], argv, env)
+        finally:
+            os._exit(127)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", 24, cols, 0, 0))
+    out = b""
+    while True:
+        try:
+            data = os.read(fd, 65536)
+        except OSError:
+            break
+        if not data:
+            break
+        out += data
+    _, status = os.waitpid(pid, 0)
+    os.close(fd)
+    return out.decode(errors="replace").replace("\r\n", "\n"), os.waitstatus_to_exitcode(status)
+
+
+@pytest.mark.parametrize("args, transcript, cols, fixed", [
+    ([], True, 80, True),
+    (["--continue"], True, 80, True),
+    (["-r", "1234"], True, 80, True),
+    ([], False, 80, False),          # no transcript: Claude Code printed no hint
+    (["--model", "x"], True, 80, False),   # Claude Code repeats --model in the hint, so the line isn't known
+    ([], True, 50, False),           # the hint wrapped
+])
+def test_gclaude_turns_claude_codes_resume_hint_into_gclaude(stub, home, args, transcript, cols, fixed):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, _, launcher = gc_paths(home)
+    fake = home / "fakebin"
+    fake.mkdir()
+    work = home / "my work.dir"
+    work.mkdir()
+    write = ('d="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed \'s/[^A-Za-z0-9]/-/g\')"; mkdir -p "$d"; echo "{}" > "$d/s.jsonl"\n'
+             if transcript else "")
+    (fake / "claude").write_text("#!/bin/sh\nsleep 0.1\n" + write +
+                                 "printf '\\nResume this session with:\\nclaude --resume s\\n'\nexit 3\n")
+    (fake / "claude").chmod(0o755)
+    tmp = home / "tmp"
+    tmp.mkdir(exist_ok=True)
+    out, rc = run_in_terminal([str(launcher), *args], {"PATH": f"{fake}:{os.environ['PATH']}", "HOME": str(home),
+                                                       "TMPDIR": str(tmp)}, work, cols)
+    assert rc == 3
+    assert out.endswith("claude --resume s\n" + (RESUME_FIX if fixed else "")), repr(out)
+    assert not list(tmp.glob("gclaude-start.*"))
+
+
 def test_gclaude_launcher_says_when_claude_code_is_missing(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, _, launcher = gc_paths(home)
@@ -2036,6 +2093,52 @@ def test_the_installers_on_says_nothing_under_gclaude_update(stub, home):
             {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_GATEWAY_UPDATE": "1"})
     assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
     assert "gclaude now runs" in cg(home, "on", "--url", stub.url).stdout   # a plain `on` still says it
+
+
+def test_client_version_counts_only_commits_that_change_what_gclaude_installs(tmp_path):
+    """A gateway-only commit leaves gclaude's version as it was, so gclaude does not update itself for it."""
+    repo = tmp_path / "repo"
+    (repo / "scripts").mkdir(parents=True)
+    shutil.copy(GATEWAY.parent / "client-version.sh", repo / "scripts" / "client-version.sh")
+    git = lambda *a: subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, check=True).stdout.strip()
+    git("init", "-q")
+    git("config", "user.email", "t@example.com")
+    git("config", "user.name", "t")
+    version = lambda: subprocess.run(["sh", str(repo / "scripts" / "client-version.sh")], capture_output=True, text=True).stdout.strip()
+
+    def commit(path):   # each a change to that file, so git counts it
+        (repo / path).parent.mkdir(parents=True, exist_ok=True)
+        with open(repo / path, "a") as f:
+            f.write("changed\n")
+        git("add", "-A")
+        git("commit", "-qm", path)
+        return git("rev-parse", "--short", "HEAD")
+
+    commit("README.md")
+    assert version() == ""                               # no tag yet
+    git("tag", "v1.1")
+    assert version() == "v1.1"
+    commit("src/claude_proxy/web.py")
+    assert version() == "v1.1"                           # the gateway alone
+    first = commit("scripts/claude-gateway")
+    assert version() == f"v1.1-1-g{first}"
+    commit("src/claude_proxy/app.py")
+    assert version() == f"v1.1-1-g{first}"               # the same, so a gateway deploy updates no one
+    second = commit("scripts/windows/statusline.ps1")
+    assert version() == f"v1.1-2-g{second}"
+
+
+def test_the_client_files_are_listed_alike_everywhere():
+    """client-version.sh counts the commits to exactly what the image serves (Dockerfile, client_dist.py)."""
+    import re
+    from claude_proxy import client_dist
+    root = GATEWAY.parent.parent
+    listed = re.search(r'CLIENT_PATHS="([^"]+)"', (root / "scripts" / "client-version.sh").read_text()).group(1).split()
+    ps1 = re.search(r"\$paths = '([^']+)'", (root / "scripts" / "windows" / "claude-gateway.ps1").read_text()).group(1).split()
+    copied = [src for line in (root / "Dockerfile").read_text().splitlines() if line.startswith("COPY ") and "./client/" in line
+              for src in line.split()[1:-1]]
+    served = {*client_dist.FILES, "scripts/windows", "examples/opencode", "install.sh", "install.ps1"}
+    assert set(listed) == set(ps1) == set(copied) == served
 
 
 def test_version_comes_from_the_archives_describe_or_git(tmp_path):

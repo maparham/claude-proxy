@@ -66,10 +66,11 @@ GCLAUDE_SYNC=$(dirname "$CLIENT")/gclaude-sync.py   # a copy, like statusline.sh
 usage() { awk 'NR > 1 && /^#/ { sub(/^# ?/, ""); print; next } NR > 1 { exit }' "$0"; exit "${1:-0}"; }
 
 version() {   # MAJOR.MINOR.N: the newest vMAJOR.MINOR tag and the N commits since it. GitHub's archives, which the
-  # installers download, fill VERSION in with `git describe` (.gitattributes); a git checkout asks git instead.
+  # installers download, fill VERSION in with `git describe` (.gitattributes); a git checkout asks client-version.sh, which counts only
+  # the commits that change the client, as the dashboard's VERSION does.
   local v n
   v=$(cat "$(src_dir)/VERSION" 2>/dev/null)
-  case $v in v[0-9]*) ;; *) v=$(git -C "$(src_dir)" describe --tags --match 'v[0-9]*' 2>/dev/null) ;; esac
+  case $v in v[0-9]*) ;; *) v=$(sh "$(src_dir)/client-version.sh" 2>/dev/null) ;; esac   # a checkout
   case $v in
     v[0-9]*-[0-9]*-g*) v=${v#v}; n=${v#*-}; echo "${v%%-*}.${n%%-*}" ;;
     v[0-9]*) echo "${v#v}.0" ;;
@@ -704,7 +705,24 @@ if mode == "on":
                 "fi\n"
                 "# Share commands, plugins, MCP servers, memory and sessions from ~/.claude (see gclaude-sync.py); never stops gclaude.\n"
                 f"python3 {shlex.quote(sync)} sync \"$CLAUDE_CONFIG_DIR\" {shlex.quote(shared)} 2>/dev/null\n"
-                'exec claude "$@"\n')
+                "# On exit Claude Code prints \"Resume this session with:\" and then `claude --resume <id>`, ending one line below\n"
+                "# it; there is no setting for the name. gclaude waits for it and puts a g before that claude (ESC[@ inserts\n"
+                "# a column). It does this only where the hint is known to be exactly that line: run in a terminal with no\n"
+                "# arguments, or only -c/--continue or -r/--resume [id], which Claude Code leaves out of the hint (it repeats\n"
+                "# other flags), with the line narrower than the terminal. The hint appears when this folder's transcript\n"
+                "# exists, so a transcript written during the session marks it. Anything else runs claude as before.\n"
+                'hint=; [ -t 0 ] && [ -t 1 ] && case $# in 0) hint=1 ;; 1) case $1 in -c|--continue|-r|--resume) hint=1 ;; esac ;;\n'
+                '  2) case $1 in -r|--resume) case $2 in -*) ;; *) hint=1 ;; esac ;; esac ;; esac\n'
+                'cols=$(stty size 2>/dev/null </dev/tty) && cols=${cols#* } || cols=0\n'
+                '[ -n "$hint" ] && [ "${cols:-0}" -gt 53 ] && mark=$(mktemp "${TMPDIR:-/tmp}/gclaude-start.XXXXXX" 2>/dev/null) || exec claude "$@"\n'
+                "trap : INT   # a ^C inside Claude Code is its own; sh waits for it rather than stopping (exec resets the trap)\n"
+                'claude "$@"; rc=$?\n'
+                "proj=\"$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')\"\n"
+                'if [ -n "$(find "$proj/" -maxdepth 1 -name \'*.jsonl\' -newer "$mark" 2>/dev/null | head -n 1)" ]; then\n'
+                "  printf '\\033[1A\\r\\033[1@\\033[2mg\\033[22m\\033[1B\\r'\n"
+                "fi\n"
+                'rm -f "$mark"\n'
+                'exit $rc\n')
     os.chmod(tmp, 0o755)
     os.replace(tmp, launcher)
 else:
