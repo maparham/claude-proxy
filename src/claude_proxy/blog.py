@@ -190,7 +190,7 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <link rel="apple-touch-icon" href="/static/rahkar-icon-180.png">
 <link rel="stylesheet" href="/static/app.css">
 <link rel="stylesheet" href="/static/home.css">
-{'<script src="/static/blog.js" defer></script>' if wide else ""}
+<script src="/static/blog.js" defer></script>
 </head>
 <body class="home blog{' blog-wide' if wide else ''}">
 <header class="home-top">

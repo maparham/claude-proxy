@@ -18,3 +18,21 @@ if (toc) {
   addEventListener("scroll", mark, { passive: true });
   mark();
 }
+
+// Every code block in a post gets a copy button, so a command or a prompt to paste into gclaude is one click away.
+for (const pre of document.querySelectorAll(".post pre")) {
+  const wrap = document.createElement("div");
+  wrap.className = "copy-wrap";
+  pre.replaceWith(wrap);
+  wrap.append(pre);
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "btn small copy";
+  btn.textContent = "کپی";
+  btn.addEventListener("click", async () => {
+    try { await navigator.clipboard.writeText(pre.innerText.trim()); btn.textContent = "کپی شد"; }
+    catch { btn.textContent = "کپی نشد"; }
+    setTimeout(() => { btn.textContent = "کپی"; }, 1500);
+  });
+  wrap.append(btn);
+}
