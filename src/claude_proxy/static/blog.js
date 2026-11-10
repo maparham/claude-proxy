@@ -28,11 +28,16 @@ for (const pre of document.querySelectorAll(".post pre")) {
   const btn = document.createElement("button");
   btn.type = "button";
   btn.className = "btn small copy";
-  btn.textContent = "کپی";
+  const label = text => {   // a copy icon (two sheets) beside the word, a check once copied
+    const icon = text === "کپی شد" ? '<path d="M5 12l5 5 9-10"/>'
+      : '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>';
+    btn.innerHTML = `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${icon}</svg><span>${text}</span>`;
+  };
+  label("کپی");
   btn.addEventListener("click", async () => {
-    try { await navigator.clipboard.writeText(pre.innerText.trim()); btn.textContent = "کپی شد"; }
-    catch { btn.textContent = "کپی نشد"; }
-    setTimeout(() => { btn.textContent = "کپی"; }, 1500);
+    try { await navigator.clipboard.writeText(pre.innerText.trim()); label("کپی شد"); }
+    catch { label("کپی نشد"); }
+    setTimeout(() => label("کپی"), 1500);
   });
   wrap.append(btn);
 }
