@@ -1902,6 +1902,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return RedirectResponse("/dashboard")
         html = versioned("home.html", ("i18n.js", "home.js", "home.css", "app.css"))
         html = prerender_fa(html).replace("https://rahkar.pro/", f"{home_base(request)}/").replace("<!--latest-posts-->", blog.latest())
+        # The dashboard's install commands, for the FAQ's setup answer (home.js draws them as the dashboard does).
+        steps = json.dumps({"unix": install_command(), "windows": install_command(windows=True), "windows_file": install_file()}).replace("</", "<\\/")
+        html = html.replace("<!--install-->", f'<script type="application/json" id="install-data">{steps}</script>')
         return HTMLResponse(html, headers=PAGE_HEADERS)
 
     def home_base(request: Request) -> str:

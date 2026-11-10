@@ -75,6 +75,9 @@ html[dir="rtl"] .home-brand { order: 1; margin-inline-end: 0; margin-inline-star
 .faq-sec summary .ic { width: 18px; height: 18px; color: var(--muted); transition: transform 0.2s; flex: none; }
 .faq-sec details[open] summary .ic { transform: rotate(180deg); }
 .faq-sec details p { margin: 0; padding: 0 18px 16px; color: var(--ink-2); line-height: 1.8; }
+.faq-sec .install-steps:not(:empty) { padding: 0 18px 6px; }
+.faq-sec .install-steps .seg { margin-bottom: 10px; }
+.faq-sec .install-steps p { padding: 0; margin: 0 0 10px; }
 /* The support button: stays in the bottom-right corner in both languages and opens the ways to reach us. */
 .support { position: fixed; bottom: 20px; inset-inline-end: 20px; z-index: 10; }
 /* bottom-right in both languages: in Persian that corner is the inline start */

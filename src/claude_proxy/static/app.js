@@ -2272,9 +2272,12 @@ function machinesCard(keys, install, owner) {
       : `<p class="muted">${owner ? t("pc.none_owner") : t("pc.none_yet")}</p>`}
     ${install ? installSetup(install) : ""}</div>`;
 }
+// A copy icon (two sheets) beside the word, a check once copied; the home page's install commands use the same.
+const COPY_IC = '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>', CHECK_IC = '<path d="M5 12l5 5 9-10"/>';
+const copyLabel = (copied) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${copied ? CHECK_IC : COPY_IC}</svg><span>${t(copied ? "key.copied" : "key.copy")}</span>`;
 // The install steps in two tabs, the one for this browser's OS selected (wireMachines switches them).
 function installSetup(install) {
-  const copy = (cmd) => `<div class="copy-row"><code class="key">${esc(cmd)}</code><button class="btn small" data-copy="${esc(cmd)}">${t("key.copy")}</button></div>`;
+  const copy = (cmd) => `<div class="copy-row"><button class="btn small copy" data-copy="${esc(cmd)}">${copyLabel(false)}</button><code class="key" dir="ltr">${esc(cmd)}</code></div>`;
   const win = install.windows || install.windowsFile;
   // The tab picked stays picked through the overview's minute refresh; until then, this browser's OS.
   const os = !win ? "unix" : S.osTab || (/Windows NT/.test(navigator.userAgent) ? "win" : "unix");
@@ -2294,7 +2297,7 @@ function wireMachines(root) {
     root.querySelectorAll("[data-os]").forEach((d) => (d.hidden = d.dataset.os !== b.dataset.osTab));
   }));
   root.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
-    try { await navigator.clipboard.writeText(b.dataset.copy); b.textContent = t("key.copied"); } catch { /* clipboard blocked */ }
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.innerHTML = b.classList.contains("copy") ? copyLabel(true) : t("key.copied"); } catch { /* clipboard blocked */ }
   }));
   root.querySelectorAll("[data-key-remove]").forEach((b) => (b.onclick = async () => {
     if (!confirmInline(t("pc.confirm_remove", { label: iso(b.dataset.label) }))) return;

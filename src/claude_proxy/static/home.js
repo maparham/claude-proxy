@@ -203,6 +203,35 @@ document.getElementById("currency-select").addEventListener("change", (e) => {
   currency = e.target.value;
   render();
 });
+// ---------- the setup answer: the dashboard's install commands, macOS/Linux and Windows tabs ----------
+// A copy icon (two sheets) beside the word, a check once copied; the same button as the dashboard's.
+const COPY_IC = '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V6a2 2 0 0 1 2-2h9"/>', CHECK_IC = '<path d="M5 12l5 5 9-10"/>';
+const copyLabel = (copied) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${copied ? CHECK_IC : COPY_IC}</svg><span>${t(copied ? "key.copied" : "key.copy")}</span>`;
+function installSteps() {
+  const el = document.getElementById("install-steps"), src = document.getElementById("install-data");
+  let d = null;
+  try { d = src && JSON.parse(src.textContent); } catch { /* no commands: the answer stays text only */ }
+  if (!el || !d || !d.unix) return;
+  const copy = (cmd) => `<div class="copy-row"><button type="button" class="btn small copy" data-copy="${esc(cmd)}">${copyLabel(false)}</button><code class="key" dir="ltr">${esc(cmd)}</code></div>`;
+  const win = d.windows || d.windows_file;
+  const os = win && /Windows NT/.test(navigator.userAgent) ? "win" : "unix";
+  el.innerHTML = `${win ? `<div class="seg" role="group">${[["unix", t("login.os_unix")], ["win", "Windows"]].map(([k, label]) =>
+      `<button type="button" data-os-tab="${k}" aria-pressed="${k === os}">${label}</button>`).join("")}</div>` : ""}
+    <div data-os="unix"${os === "unix" ? "" : " hidden"}>${copy(d.unix)}</div>
+    ${win ? `<div data-os="win"${os === "win" ? "" : " hidden"}>
+      ${d.windows_file ? `<p><a class="btn small" href="${esc(d.windows_file)}" download>${t("pc.windows_download")}</a></p>
+      <p class="muted">${t("pc.windows_file_how")}</p>` : ""}
+      ${d.windows ? `<p class="muted">${t("pc.windows_ps_or")}</p>${copy(d.windows)}` : ""}</div>` : ""}`;
+  el.querySelectorAll("[data-os-tab]").forEach((b) => (b.onclick = () => {
+    el.querySelectorAll("[data-os-tab]").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    el.querySelectorAll("[data-os]").forEach((x) => (x.hidden = x.dataset.os !== b.dataset.osTab));
+  }));
+  el.querySelectorAll("[data-copy]").forEach((b) => (b.onclick = async () => {
+    try { await navigator.clipboard.writeText(b.dataset.copy); b.innerHTML = copyLabel(true); setTimeout(() => (b.innerHTML = copyLabel(false)), 1500); }
+    catch { /* clipboard blocked */ }
+  }));
+}
+installSteps();
 fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
   data = d;
   currency = d.currency;   // default: the page's own currency (IRT today)

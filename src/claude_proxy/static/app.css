@@ -207,6 +207,8 @@ input:focus, select:focus, button:focus-visible { outline: 2px solid var(--s1); 
 .user-code { font: 650 30px/1.2 ui-monospace, SFMono-Regular, Menlo, monospace; letter-spacing: 0.08em; margin: 8px 0 16px; }
 .copy-row { display: flex; gap: 8px; align-items: center; margin-bottom: 12px; }
 .copy-row code.key { flex: 1; min-width: 0; }
+.btn.copy { display: inline-flex; align-items: center; gap: 4px; flex: none; }
+.btn.copy .ic { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 .install-os { margin: 4px 0; font-size: 12px; }
 .login .card { padding: 24px; }
 .login h2 { margin: 0 0 4px; }
