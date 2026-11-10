@@ -332,7 +332,7 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
      '  set CLAUDE_GATEWAY_UPDATE=1' + "`r`n" +
      '  for /f "delims=" %%v in (''claude-gateway version 2^>nul'') do set "GW_OLD=%%v"' + "`r`n" +
      "  powershell -NoProfile -ExecutionPolicy Bypass -Command `"try { irm '$(($c.dashboard + '/install.ps1').Replace("'", "''").Replace('%', '%%'))' | iex } catch { [Console]::Error.WriteLine(`$_); exit 1 }`" || goto :updatefailed" + "`r`n" +
-     '  echo Checking for a Claude Code update...' + "`r`n" +
+     '  echo Checking for updates...' + "`r`n" +
      '  call claude %* >"%TEMP%\gclaude-update.log" 2>&1 || goto :claudeupdatefailed' + "`r`n" +
      '  findstr /c:"is up to date" "%TEMP%\gclaude-update.log" >nul || type "%TEMP%\gclaude-update.log"' + "`r`n" +
      '  del "%TEMP%\gclaude-update.log" 2>nul' + "`r`n" +

@@ -643,7 +643,7 @@ if mode == "on":
                 '    old=$("$gw" version 2>/dev/null)\n'
                 f"    script=$(curl -fsSL {shlex.quote(dash + '/install')}) && printf '%s\\n' \"$script\" | CLAUDE_GATEWAY_UPDATE=1 sh ||\n"
                 "      { echo 'gclaude: the gateway update failed, so Claude Code was not updated' >&2; exit 1; }\n"
-                "    echo 'Checking for a Claude Code update...'\n"
+                "    echo 'Checking for updates...'\n"
                 '    out=$(claude "$@" 2>&1) || { rc=$?; printf \'%s\\n\' "$out" >&2; exit $rc; }\n'
                 '    case $out in *"is up to date"*) ;; *) printf \'%s\\n\' "$out" ;; esac\n'
                 '    new=$("$gw" version 2>/dev/null)\n'

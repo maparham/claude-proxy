@@ -1170,10 +1170,10 @@ def test_gclaude_signs_in_again_in_the_browser_when_started_signed_out(stub, hom
 def test_the_installers_on_leaves_a_signed_out_gclaude_to_sign_in_when_it_next_starts(stub, home):
     """gclaude update runs the dashboard's installer, whose `on` must not stop for the browser: the next gclaude signs in."""
     gsettings, launcher = logged_out(stub, home)
-    launcher.write_text(launcher.read_text().replace("Checking for a Claude Code update", "an older gclaude"))
+    launcher.write_text(launcher.read_text().replace("Checking for updates", "an older gclaude"))
     r = cg(home, "on", "--url", stub.url, "--dashboard", stub.url)   # what the dashboard's /install runs
     assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
-    assert "Checking for a Claude Code update" in launcher.read_text()   # the launcher is refreshed all the same
+    assert "Checking for updates" in launcher.read_text()   # the launcher is refreshed all the same
     assert "ANTHROPIC_AUTH_TOKEN" not in gsettings.read_text()             # still signed out
     assert not any(p == "/api/device/start" for p, _ in stub.requests)
     stub.tokens = [(200, {"key": "sk-proxy-new", "user": "ana"})]
@@ -1232,11 +1232,11 @@ def test_gclaude_update_runs_the_dashboards_installer_then_claude_update(stub, h
     stub.install = f"echo installer ran; echo 1.0.8 > {version}\n"
     r = run([str(launcher), "update"], env)
     assert r.returncode == 0, r.stderr
-    assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "claude [own config] update",
+    assert r.stdout.splitlines() == ["installer ran", "Checking for updates...", "claude [own config] update",
                                    "gclaude updated from 1.0.7 to 1.0.8"]   # plain claude's own update, shown as it did something
     (fake / "claude").write_text('#!/bin/sh\necho "Claude Code is up to date (2.1.286)"\n')
     r = run([str(launcher), "update"], env)
-    assert r.stdout.splitlines() == ["installer ran", "Checking for a Claude Code update...", "gclaude is up to date (1.0.8)"]
+    assert r.stdout.splitlines() == ["installer ran", "Checking for updates...", "gclaude is up to date (1.0.8)"]
     stub.install = f"echo installer ran; echo 1.0.9 > {version}\n"
     version.unlink()   # an older claude-gateway, which has no version
     r = run([str(launcher), "update"], env)
@@ -2017,9 +2017,9 @@ def test_gclaude_update_refreshes_gclaude_on_a_machine_also_in_global_mode(stub,
     assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, _, launcher = gc_paths(home)
-    launcher.write_text(launcher.read_text().replace("Checking for a Claude Code update", "an older gclaude"))
+    launcher.write_text(launcher.read_text().replace("Checking for updates", "an older gclaude"))
     r = run(["bash", str(GATEWAY), "on", "--url", stub.url, "--dashboard", stub.url],
             {"PATH": os.environ["PATH"], "HOME": str(home), "TMPDIR": str(home / "tmp"), "CLAUDE_GATEWAY_UPDATE": "1"})
     assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
-    assert "Checking for a Claude Code update" in launcher.read_text()
+    assert "Checking for updates" in launcher.read_text()
     assert "global mode" in cg(home, "on", "--url", stub.url).stdout   # a plain `on` there still refreshes global mode
