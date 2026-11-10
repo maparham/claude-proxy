@@ -1252,7 +1252,7 @@ def test_gclaude_updates_itself_before_starting_when_the_dashboard_serves_a_newe
     assert ran.read_text() == "1\n"   # once, quietly (CLAUDE_GATEWAY_UPDATE)
     sent = [h.get("x-gclaude-version") for p, h in stub.requests if p.endswith("format=models")]
     version = subprocess.run(["bash", str(GATEWAY), "version"], capture_output=True, text=True).stdout.strip()
-    assert sent == [version, version] and version
+    assert sent == [version or None] * 2   # none from a checkout without tags, as on CI
 
 
 def test_gclaude_starts_its_own_version_when_the_update_fails(stub, home):

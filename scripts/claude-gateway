@@ -679,7 +679,8 @@ if mode == "on":
                 "  why='signed out (/logout_gclaude)'\n"
                 "else\n"
                 "  code=$(printf 'Authorization: Bearer %s\\n' \"$key\" | curl -s -o \"$models\" --max-time 3 -H @- -w '%{http_code}'"
-                f" -H {shlex.quote('X-Gclaude-Version: ' + os.environ.get('CG_VERSION', ''))}"
+                + (f" -H {shlex.quote('X-Gclaude-Version: ' + os.environ['CG_VERSION'])}" if os.environ.get("CG_VERSION") else "")
+                +
                 f" {shlex.quote(dash + '/api/me/status?format=models')} 2>/dev/null)\n"
                 "  [ \"$code\" != 401 ] || why=\"this computer's key no longer works (removed in the dashboard?)\"\n"
                 "fi\n"
