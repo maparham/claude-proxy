@@ -2277,7 +2277,7 @@ const COPY_IC = '<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15
 const copyLabel = (copied) => `<svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${copied ? CHECK_IC : COPY_IC}</svg><span>${t(copied ? "key.copied" : "key.copy")}</span>`;
 // The install steps in two tabs, the one for this browser's OS selected (wireMachines switches them).
 function installSetup(install) {
-  const copy = (cmd) => `<div class="copy-row"><button class="btn small copy" data-copy="${esc(cmd)}">${copyLabel(false)}</button><code class="key" dir="ltr">${esc(cmd)}</code></div>`;
+  const copy = (cmd) => `<div class="copy-row inset"><button class="btn small copy" data-copy="${esc(cmd)}">${copyLabel(false)}</button><code class="key" dir="ltr">${esc(cmd)}</code></div>`;
   const win = install.windows || install.windowsFile;
   // The tab picked stays picked through the overview's minute refresh; until then, this browser's OS.
   const os = !win ? "unix" : S.osTab || (/Windows NT/.test(navigator.userAgent) ? "win" : "unix");

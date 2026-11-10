@@ -212,7 +212,7 @@ function installSteps() {
   let d = null;
   try { d = src && JSON.parse(src.textContent); } catch { /* no commands: the answer stays text only */ }
   if (!el || !d || !d.unix) return;
-  const copy = (cmd) => `<div class="copy-row"><button type="button" class="btn small copy" data-copy="${esc(cmd)}">${copyLabel(false)}</button><code class="key" dir="ltr">${esc(cmd)}</code></div>`;
+  const copy = (cmd) => `<div class="copy-row inset"><button type="button" class="btn small copy" data-copy="${esc(cmd)}">${copyLabel(false)}</button><code class="key" dir="ltr">${esc(cmd)}</code></div>`;
   const win = d.windows || d.windows_file;
   const os = win && /Windows NT/.test(navigator.userAgent) ? "win" : "unix";
   el.innerHTML = `${win ? `<div class="seg" role="group">${[["unix", t("login.os_unix")], ["win", "Windows"]].map(([k, label]) =>
