@@ -517,6 +517,7 @@ def test_the_admin_may_grant_over_a_full_5h_window(db):
     assert (p["available"], p["short_5h"], p["over_5h"]) == (False, True, False)
     p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "EUR", NOW, over_5h=True)
     assert (p["available"], p["short_5h"], p["over_5h"]) == (True, True, True) and "5-hour window" in p["reason"]
+    assert p["sold_out_now"]   # buyers still see it sold out: the override is the admin's alone
     tid = grant(conn, cfg, ids, tier="lite", length="day", over_5h=True)["id"]
     a = json.loads(conn.execute("SELECT detail_json FROM audit_log WHERE action='ticket_grant'").fetchone()[0])
     assert a["ticket_id"] == tid and a["over_5h"] is True
