@@ -143,8 +143,11 @@ async function api(path, opts = {}) {
   if (r.status === 401 && !path.startsWith("/api/login")) { showLogin(); throw new Error("signed out"); }
   // The server writes English; errMsg (i18n.js) gives the known messages in Persian. `raw` keeps the original.
   if (!r.ok) { const raw = (data && data.error) || `HTTP ${r.status}`; throw Object.assign(new Error(errMsg(raw)), { status: r.status, data, raw }); }
+  if (opts.method && opts.method !== "GET") pageStale = true;
   return data;
 }
+// Set by a change the page has not redrawn since; a dialog's close button redraws only then, so Cancel leaves the page alone.
+let pageStale = false;
 
 // ---------- tooltips ----------
 
@@ -557,6 +560,7 @@ function sourceSwitch(main, view) {
   wireSegs(main.querySelector('.seg[data-pref="source"]').parentElement, render);
 }
 async function render() {
+  pageStale = false;
   renderTabs();
   hideTip();
   disposeCharts();
@@ -2180,7 +2184,7 @@ function openDialog(html) {
   const d = $("#dialog");
   d.innerHTML = html;
   d.showModal();
-  d.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { d.close(); render(); }));
+  d.querySelectorAll("[data-close]").forEach((b) => (b.onclick = () => { d.close(); if (pageStale) render(); }));
   return d;
 }
 function keyDialog(title, key, how = t("key.how_default")) {
