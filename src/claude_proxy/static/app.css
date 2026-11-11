@@ -379,6 +379,7 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .badge.state-active { border-color: var(--good); color: var(--good-text); }
 .badge.state-queued, .badge.state-upcoming { border-color: var(--s1); color: var(--s1); }
 .num.over { color: var(--critical-text); }
+.badge.state-used_up { border-color: var(--warning); color: var(--ink); }
 .badge.state-cancelled { border-color: var(--critical); color: var(--critical-text); }
 /* a running pass held back by a limit: an amber chip; the meter of the limit that holds it is red */
 .badge.state-paused { border-color: var(--warning); color: var(--ink); background: color-mix(in srgb, var(--warning) 18%, transparent); }

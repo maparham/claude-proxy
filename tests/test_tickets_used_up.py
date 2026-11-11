@@ -273,6 +273,10 @@ async def test_a_used_up_pass_with_one_queued_that_cannot_move_up_is_not_replace
         me = (await c.get("/api/me/tickets", headers=bearer(keys["alice"]))).json()
     assert me["current"]["used_up"] and tickets.get(conn, b["id"])["starts_at"] == a["ends_at"]   # no hand-over: no room
     assert me["replaces"] is False and me["next_start"] == tickets.get(conn, b["id"])["effective_end"]
+    from tests.test_web import admin_client
+    async with admin_client(gw) as c:   # the admin's list says used up too, not active
+        states = {x["id"]: x["state"] for x in (await c.get("/api/admin/tickets")).json()["tickets"]}
+    assert (states[a["id"]], states[b["id"]]) == ("used_up", "queued")
 
 
 def test_a_ticket_to_start_now_takes_the_place_of_used_up_ones_so_it_fits(env):

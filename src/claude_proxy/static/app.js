@@ -1468,7 +1468,7 @@ function weekCell(w) {
 // A pass's bonus days, from its bonuses: not effective_end - ends_at, which is negative for a pass used up early.
 const bonusDays = (tk) => tk.bonuses.filter((b) => !b.cancelled_at).reduce((n, b) => n + (b.extra_days || 0), 0);
 function ticketRow(tk) {
-  const live = tk.state === "active" || tk.state === "queued";
+  const live = tk.state === "active" || tk.state === "used_up" || tk.state === "queued";
   const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
   return `<tr><td><b>${bdi(tk.user_name)}</b>${tk.user_id == null ? ` <span class="badge">${t("tk.deleted")}</span>` : ""}</td>
     <td>${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>

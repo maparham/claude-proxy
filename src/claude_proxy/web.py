@@ -1429,7 +1429,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             return "cancelled"
         if t["effective_end"] <= now:
             return "ended"
-        return "queued" if t["starts_at"] > now else "active"
+        if t["starts_at"] > now:
+            return "queued"
+        # Running, but at a limit with nothing back before it ends: the user's dashboard calls it used up, so does this.
+        return "used_up" if limits.gone(t, limits.pass_states(conn, cfg, t, now), now) else "active"
 
     @app.get("/api/admin/tickets")
     async def tickets_list(request: Request, user_id: int | None = None, deleted: str | None = None):
