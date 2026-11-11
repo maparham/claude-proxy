@@ -324,6 +324,16 @@ details.raw pre { max-height: 40vh; overflow: auto; margin-top: 6px; }
 .form-grid label { display: grid; gap: 3px; font-size: 12px; color: var(--ink-2); }
 code.key { display: block; padding: 10px; background: var(--wash); border-radius: 8px; word-break: break-all; font-size: 13px; }
 .row-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+.row-menu-btn { font-size: 15px; line-height: 1; padding: 3px 10px 6px; }
+.row-menu { position: fixed; inset: auto; margin: 0; padding: 4px; min-width: 160px; box-sizing: border-box;
+            background: var(--surface); color: var(--ink); border: 1px solid var(--border); border-radius: 10px; font-size: 13px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18), 0 1px 3px rgba(0, 0, 0, 0.12); }
+.row-menu:popover-open { display: grid; }
+.row-menu-item { all: unset; box-sizing: border-box; padding-block: 6px; padding-inline: 12px; border-radius: 6px; cursor: pointer; white-space: nowrap; text-align: start;
+                 display: flex; align-items: center; gap: 8px; }
+.row-menu-item .ic { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; opacity: 0.8; }
+.row-menu-item:hover, .row-menu-item:focus-visible { background: var(--wash); }
+.row-menu-item.danger { color: var(--critical-text); }
 .badge { font-size: 11px; padding: 1px 7px; border-radius: 999px; border: 1px solid var(--border); color: var(--ink-2); }
 
 /* Tooltips: an info dot (.tip-i) carries data-tip / data-tip-html; one shared #tip shows it. */

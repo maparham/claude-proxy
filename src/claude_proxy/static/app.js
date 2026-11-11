@@ -149,7 +149,7 @@ async function api(path, opts = {}) {
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
@@ -1357,11 +1357,25 @@ async function renderUsers(main) {
   wireUserActions(main, users);
   // A click anywhere on a row, except its buttons, links and tips, opens that user's page.
   main.querySelectorAll("tr[data-user]").forEach((tr) => tr.addEventListener("click", (e) => {
-    if (!e.target.closest("button, a, [data-tip], [data-tip-html]")) location.hash = `user/${tr.dataset.user}`;
+    if (!e.target.closest("button, a, [data-tip], [data-tip-html], [popover]")) location.hash = `user/${tr.dataset.user}`;
   }));
 }
 function wireUserActions(root, users) {
-  root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => userAction(b.dataset.act, +b.dataset.id, users.find((u) => u.id === +b.dataset.id))));
+  root.querySelectorAll("[data-act]").forEach((b) => b.addEventListener("click", () => {
+    const m = b.closest("[popover]");
+    if (m) { if (TIP.for === b) hideTip(); m.hidePopover(); }
+    userAction(b.dataset.act, +b.dataset.id, users.find((u) => u.id === +b.dataset.id));
+  }));
+  // Each menu opens under its button, flipped above it or to the other side when the page has no room.
+  root.querySelectorAll(".row-menu").forEach((m) => m.addEventListener("toggle", (e) => {
+    if (e.newState !== "open") { if (m.contains(TIP.for)) hideTip(); return; }
+    const r = root.querySelector(`[popovertarget="${m.id}"]`).getBoundingClientRect();
+    const vw = document.documentElement.clientWidth, vh = window.innerHeight, gap = 4, gutter = 8;
+    const rtl = document.documentElement.dir === "rtl", w = m.offsetWidth, h = m.offsetHeight;
+    const left = rtl ? r.left : r.right - w;
+    m.style.left = `${Math.max(gutter, Math.min(left, vw - gutter - w))}px`;
+    m.style.top = `${r.bottom + gap + h <= vh - gutter || r.top - gap - h < gutter ? r.bottom + gap : r.top - gap - h}px`;
+  }));
 }
 
 function userRow(u) {
@@ -1377,21 +1391,39 @@ function userRow(u) {
     <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? `<div style="font-size:12px"><bdi>${esc(u.last_ip)}</bdi>${u.last_place ? ` · ${esc(fmtPlace(u.last_place))}` : ""}</div>` : ""}</td>
     <td>${userActions(u)}</td></tr>`;
 }
+// One "⋯" button per user opening a menu of every action (an auto popover: outside clicks and Escape close it).
+// 24-px stroke icons for the user menu, one per action.
+const MENU_IC = {
+  limits: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  grant: '<path d="M2 9a3 3 0 0 0 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 0 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><path d="M13 5v2M13 17v2M13 11v2"/>',
+  rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
+  rotate: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
+  routes_key: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m21 2-9.6 9.6M15.5 7.5l3 3L22 7l-3-3"/>',
+  routes_key_remove: '<circle cx="7.5" cy="15.5" r="5.5"/><path d="m11.4 11.6 4.1-4.1M16 3l5 5M21 3l-5 5"/>',
+  upgrade: '<path d="m18 15-6-6-6 6"/><path d="M12 9v12M5 3h14"/>',
+  ungate: '<rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 9.9-1"/>',
+  disable: '<circle cx="12" cy="12" r="10"/><path d="M10 15V9M14 15V9"/>',
+  enable: '<circle cx="12" cy="12" r="10"/><path d="m10 8 6 4-6 4z"/>',
+  revoke: '<circle cx="12" cy="12" r="10"/><path d="m4.9 4.9 14.2 14.2"/>',
+  delete: '<path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/>',
+};
 function userActions(u) {
-  const opencode = `<button class="btn small" data-act="routes_key" data-id="${u.id}" data-tip="act_routes_key">${u.routes_prefix ? t("users.new_opencode") : t("users.opencode")}</button>` +
-    (u.routes_prefix ? `<button class="btn small" data-act="routes_key_remove" data-id="${u.id}" data-tip="act_routes_key_remove">${t("users.remove_opencode")}</button>` : "");
-  const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked
-    ? `<button class="btn small" data-act="upgrade" data-id="${u.id}" data-tip="act_upgrade">${t("users.upgrade")}</button>` : "";
+  const item = (act, label, tip, cls = "") => `<button type="button" class="row-menu-item${cls}" role="menuitem" data-act="${act}" data-id="${u.id}" data-tip-side="right" data-tip="${tip}"><svg class="ic" viewBox="0 0 24 24" aria-hidden="true">${MENU_IC[act]}</svg><span>${label}</span></button>`;
+  const opencode = item("routes_key", u.routes_prefix ? t("users.new_opencode") : t("users.opencode"), "act_routes_key") +
+    (u.routes_prefix ? item("routes_key_remove", t("users.remove_opencode"), "act_routes_key_remove") : "");
+  const upgrade = u.limits.some((l) => l.kind === "cost_total") && !u.revoked ? item("upgrade", t("users.upgrade"), "act_upgrade") : "";
   const paused = u.ticket && u.ticket.paused;
   const ungate = u.ticket && u.ticket.gated && (!u.ticket.live || paused) && (!u.revoked || paused)   // revoked: the only way to end a ticket before deleting
-    ? `<button class="btn small" data-act="ungate" data-id="${u.id}" data-tip="${paused ? "act_ungate_paused" : "act_ungate"}">${t("users.ungate")}</button>` : "";
-  return `<div class="row-actions">${upgrade}${ungate}${u.revoked ? `<button class="btn small danger" data-act="delete" data-id="${u.id}" data-tip="act_delete">${t("users.delete")}</button>` : u.id === S.user.id ? `<button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">${t("users.limits")}</button>${opencode}` : `
-      <button class="btn small" data-act="limits" data-id="${u.id}" data-tip="act_limits">${t("users.limits")}</button>
-      <button class="btn small" data-act="rename" data-id="${u.id}" data-tip="act_rename">${t("users.rename")}</button>
-      <button class="btn small" data-act="rotate" data-id="${u.id}" data-tip="act_rotate">${t("users.rotate")}</button>
-      ${opencode}
-      <button class="btn small" data-act="${u.enabled ? "disable" : "enable"}" data-id="${u.id}" data-tip="act_${u.enabled ? "disable" : "enable"}">${u.enabled ? t("users.disable") : t("users.enable")}</button>
-      <button class="btn small danger" data-act="revoke" data-id="${u.id}" data-tip="act_revoke">${t("users.revoke")}</button>`}</div>`;
+    ? item("ungate", t("users.ungate"), paused ? "act_ungate_paused" : "act_ungate") : "";
+  const grant = S.tickets && S.tickets.enabled && !u.revoked && u.enabled ? item("grant", t("users.grant"), "act_grant") : "";
+  const items = upgrade + ungate + (u.revoked ? item("delete", t("users.delete"), "act_delete", " danger")
+    : u.id === S.user.id ? item("limits", t("users.limits"), "act_limits") + grant + opencode
+    : item("limits", t("users.limits"), "act_limits") + grant + item("rename", t("users.rename"), "act_rename") +
+      item("rotate", t("users.rotate"), "act_rotate") + opencode +
+      item(u.enabled ? "disable" : "enable", u.enabled ? t("users.disable") : t("users.enable"), `act_${u.enabled ? "disable" : "enable"}`) +
+      item("revoke", t("users.revoke"), "act_revoke", " danger"));
+  return `<button type="button" class="btn small row-menu-btn" popovertarget="umenu-${u.id}" aria-haspopup="menu" aria-label="${esc(t("users.actions"))}">⋯</button>
+    <div class="row-menu" id="umenu-${u.id}" popover role="menu">${items}</div>`;
 }
 
 // ---------- paid tickets (design 2026-10-03) ----------
@@ -2211,6 +2243,7 @@ async function userAction(act, id, u) {
   if (act === "limits") return limitsDialog(u);
   if (act === "upgrade") return upgradeDialog(u);
   if (act === "rename") return nameDialog(u);
+  if (act === "grant") return grantDialog([u]);
   if (act === "rotate" && !confirmInline(t("users.confirm_rotate", { name: iso(u.name) }))) return;
   if (act === "revoke" && !confirmInline(t("users.confirm_revoke", { name: iso(u.name) }))) return;
   if (act === "delete") return deleteDialog(u);
