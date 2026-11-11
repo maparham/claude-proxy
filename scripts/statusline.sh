@@ -180,7 +180,7 @@ model_tag() {
   [ -n "$name" ] || return 0
   case "$id" in
     *opus-5-5*) printf '[\033[32m%s\033[0m]' "$name" ;;
-    *fable*|*mythos*|*opus*) printf '[\033[31m%s\033[0m]' "$name" ;;
+    *fable*|*mythos*|*opus*) printf '[\033[1;31m%s\033[0m]' "$name" ;;
     *) printf '[\033[32m%s\033[0m]' "$name" ;;
   esac
 }

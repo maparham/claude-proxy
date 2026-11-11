@@ -202,7 +202,7 @@ try {
     try { $j = $stdin | ConvertFrom-Json; $id = [string]$j.model.id; $name = [string]$j.model.display_name } catch { }
     if (-not $name) { $name = $id }
     if (-not $name) { return '' }
-    if ($id -notmatch 'opus-5-5' -and $id -match 'fable|mythos|opus') { return '[' + [char]27 + '[31m' + $name + [char]27 + '[0m]' }
+    if ($id -notmatch 'opus-5-5' -and $id -match 'fable|mythos|opus') { return '[' + [char]27 + '[1;31m' + $name + [char]27 + '[0m]' }
     return '[' + [char]27 + '[32m' + $name + [char]27 + '[0m]'
   }
 
