@@ -646,6 +646,7 @@ async function renderOverview(main) {
     </section>`;
   wireSegs(main, render);
   wireMachines(main);
+  if (tk) wirePast(main, tk);
   const fableClose = $("#fable-close", main);
   if (fableClose) fableClose.onclick = () => { S.prefs.fableNoteSeen = true; savePrefs(); $("#fable-note", main).remove(); };
   if (tk) wireOrdering(main, tk, order);
@@ -705,13 +706,44 @@ function paymentNoticeMsg(p) {
     started: t("pay.pending") }[p.status];
 }
 
-// The buyer's ended passes, newest first: a purchase history, folded away.
+// The buyer's ended passes, newest first: a purchase history, folded away. Each column sorts from its header (again to
+// reverse), and the columns with set values (tier, how it ended) filter from a list when they hold more than one.
 function pastCard(tk) {
   if (!tk.past || !tk.past.length) return "";
   return `<details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("past.title")} <span class="badge">${nfFull.format(tk.past.length)}</span></h3></summary>
-    <table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th>${t("past.how")}</th><th class="r">${t("pass.tokens")}${tipI("weighted")}</th><th class="r">${t("tk.paid")}</th></tr></thead>
-    <tbody>${tk.past.map((p) => `<tr><td>${tierName(p.tier, p.label)}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
-      <td class="muted">${t(`past.how_${p.how}`)}</td>${tokensCell(p)}<td class="r">${esc(money(p.amount, p.currency))}</td></tr>`).join("")}</tbody></table></details>`;
+    <div id="past-list"></div></details>`;
+}
+function wirePast(root, tk) {
+  const list = $("#past-list", root);
+  if (!list) return;
+  const past = tk.past, f = { tier: "", how: "" };
+  let by = "period", desc = true;
+  const tierText = (p) => tierNameText(p.tier, p.label), howText = (p) => t(`past.how_${p.how}`);
+  const keys = { tier: tierText, period: (p) => p.starts_at, how: howText, tokens: (p) => (p.tokens ? p.tokens.weighted : -1), paid: (p) => p.amount };
+  const options = (col, text) => [...new Map(past.map((p) => [p[col], text(p)]))];
+  const filter = (col, text, all) => {
+    const opts = options(col, text);
+    return opts.length < 2 ? "" : `<select data-pfilter="${col}" aria-label="${esc(all)}"><option value="">${esc(all)}</option>${opts
+      .map(([v, txt]) => `<option value="${esc(v)}" ${f[col] === v ? "selected" : ""}>${esc(txt)}</option>`).join("")}</select>`;
+  };
+  const th = (key, label, cls = "", tip = "") => `<th class="${cls}" aria-sort="${by === key ? (desc ? "descending" : "ascending") : "none"}"><button class="th-sort" data-psort="${key}">${label}<span class="arrow">${by === key ? (desc ? "↓" : "↑") : ""}</span></button>${tip}</th>`;
+  const fill = () => {
+    const k = keys[by];
+    const shown = past.filter((p) => (!f.tier || p.tier === f.tier) && (!f.how || p.how === f.how))
+      .sort((a, b) => { const x = k(a), y = k(b); const c = typeof x === "string" ? x.localeCompare(y, LOC) : x - y; return desc ? -c : c; });
+    const filters = filter("tier", tierText, t("past.all_tiers")) + filter("how", howText, t("past.all_how"));
+    list.innerHTML = `${filters ? `<div class="controls">${filters}</div>` : ""}<table class="data"><thead><tr>${th("tier", t("price.tier"))}${th("period", t("tk.period"))}${th("how", t("past.how"))}${th("tokens", t("pass.tokens"), "r", tipI("weighted"))}${th("paid", t("tk.paid"), "r")}</tr></thead>
+    <tbody>${foldRows(shown.map((p) => `<tr><td>${tierName(p.tier, p.label)}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
+      <td class="muted">${howText(p)}</td>${tokensCell(p)}<td class="r">${esc(money(p.amount, p.currency))}</td></tr>`)) || `<tr><td colspan="5" class="muted">${t("search.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
+    wireMore(list);
+    list.querySelectorAll("[data-psort]").forEach((b) => (b.onclick = () => {
+      const key = b.dataset.psort;
+      desc = by === key ? !desc : key !== "tier" && key !== "how";   // a new column opens with text A→Z, numbers and dates largest first
+      by = key; fill();
+    }));
+    list.querySelectorAll("[data-pfilter]").forEach((sel) => (sel.onchange = () => { f[sel.dataset.pfilter] = sel.value; fill(); }));
+  };
+  fill();
 }
 function usersCard() {
   return `<div class="card"><h3>${t("ov.by_user_title")}</h3><p class="sub">${t("ov.by_user_sub")}</p><div class="chart short" id="ov-users"></div></div>`;

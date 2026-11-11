@@ -113,6 +113,9 @@ table.data th { text-align: start; font-weight: 600; color: var(--ink-2); font-s
                 border-bottom: 1px solid var(--axis); white-space: nowrap; }
 table.data td { padding: 8px 10px; border-bottom: 1px solid var(--grid); vertical-align: top; }
 table.data td.r, table.data th.r { text-align: end; font-variant-numeric: tabular-nums; }
+.th-sort { border: 0; background: none; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.th-sort:hover { color: var(--ink); }
+.th-sort .arrow { display: inline-block; min-width: 1em; margin-inline-start: 2px; }
 .sess-title { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-id { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 table.data tr:hover td { background: var(--wash); }
