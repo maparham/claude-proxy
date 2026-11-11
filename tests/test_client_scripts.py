@@ -2197,3 +2197,17 @@ def test_gclaude_update_refreshes_gclaude_on_a_machine_also_in_global_mode(stub,
     assert r.returncode == 0 and r.stdout == "", r.stdout + r.stderr
     assert "Checking for updates" in launcher.read_text()
     assert "global mode" in cg(home, "on", "--url", stub.url).stdout   # a plain `on` there still refreshes global mode
+
+
+@pytest.mark.parametrize("model, shown", [
+    ({"id": "claude-opus-5-5", "display_name": "Opus 5.5"}, "[\033[32mOpus 5.5\033[0m]"),    # the default: green
+    ({"id": "claude-sonnet-5-5", "display_name": "Sonnet 5.5"}, "[\033[32mSonnet 5.5\033[0m]"),  # cheaper: green
+    ({"id": "claude-fable-5-2", "display_name": "Fable 5.2"}, "[\033[31mFable 5.2\033[0m]"),    # dearer: red
+    ({"id": "claude-opus-4-8[1m]", "display_name": "Opus 4.8 (1M context)"}, "[\033[31mOpus 4.8 (1M context)\033[0m]"),
+])
+def test_statusline_shows_the_model_red_when_dearer_than_the_default_else_green(stub, warn_env, model, shown):
+    stdin = json.dumps({"session_id": "s", "model": model, "workspace": {"current_dir": "/tmp"}}, indent=2)
+    r = run(["sh", str(STATUSLINE)], warn_env, stdin=stdin)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.endswith("\033[0m | " + shown + "\n")
+    assert plain(r.stdout).startswith("◆ alice · daily 10/100 req 10% | [")

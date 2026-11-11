@@ -195,9 +195,21 @@ try {
     if ($line) { [IO.File]::WriteAllText($cache, $line + "`n", $utf8) }
   }
 
+  # Model-Tag: [the session's model] from Claude Code's statusline JSON, red when it costs more per token than the
+  # default, Opus 5.5 ($4/$20 per MTok): Fable and Mythos ($8-10), and older Opus ($5, and $15 before 4.5).
+  function Model-Tag {
+    $id = ''; $name = ''
+    try { $j = $stdin | ConvertFrom-Json; $id = [string]$j.model.id; $name = [string]$j.model.display_name } catch { }
+    if (-not $name) { $name = $id }
+    if (-not $name) { return '' }
+    if ($id -notmatch 'opus-5-5' -and $id -match 'fable|mythos|opus') { return '[' + [char]27 + '[31m' + $name + [char]27 + '[0m]' }
+    return '[' + [char]27 + '[32m' + $name + [char]27 + '[0m]'
+  }
+
   if (-not $warn) {
     if (-not $line) { $line = 'gateway status unavailable' }
-    Emit (Figures $line $true)
+    $tag = Model-Tag
+    if ($tag) { Emit ((Figures $line $true) + ' | ' + $tag) } else { Emit (Figures $line $true) }
     exit 0
   }
 

@@ -170,8 +170,25 @@ else
   line=
 fi
 
+# model_tag: [the session's model] from Claude Code's statusline JSON, red when it costs more per token than the
+# default, Opus 5.5 ($4/$20 per MTok): Fable and Mythos ($8-10), and older Opus ($5, and $15 before 4.5); else green.
+model_tag() {
+  m=$(printf '%s' "$input" | tr -d '\n' | sed -n 's/.*"model"[[:space:]]*:[[:space:]]*{\([^}]*\)}.*/\1/p')
+  id=$(printf '%s' "$m" | sed -n 's/.*"id"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  name=$(printf '%s' "$m" | sed -n 's/.*"display_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p')
+  name=${name:-$id}
+  [ -n "$name" ] || return 0
+  case "$id" in
+    *opus-5-5*) printf '[\033[32m%s\033[0m]' "$name" ;;
+    *fable*|*mythos*|*opus*) printf '[\033[31m%s\033[0m]' "$name" ;;
+    *) printf '[\033[32m%s\033[0m]' "$name" ;;
+  esac
+}
+
 if [ -z "$warn" ]; then
+  # Your own statusline (--then) comes after the gateway line; without one, the model does.
   own=$(own_line)
+  [ -n "$own" ] || own=$(model_tag)
   printf '%s%s\n' "$(show "${line:-gateway status unavailable}")" "${own:+ | $own}"
   exit 0
 fi
