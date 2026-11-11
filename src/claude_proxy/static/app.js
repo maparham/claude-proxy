@@ -1501,6 +1501,7 @@ function grantDialog(users, pre = null) {
       <label class="wide">${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
       <label class="check grant-now wide"><input type="checkbox" name="start_now"${!pre || pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
+      <label class="check wide" id="grant-over5h" hidden><input type="checkbox" name="over_5h"> ${t("tk.over_5h")}</label>
       <div id="grant-limits" class="wide"></div>
       ${pre ? "" : `<div class="terms wide"><ul class="muted"><li id="grant-terms-l1"></li><li>${t("ord.terms_l3")}</li></ul></div>`}
       <div class="error wide" id="grant-err"></div>
@@ -1518,7 +1519,7 @@ function grantDialog(users, pre = null) {
     // A day pass is one allowance whatever reset it crosses (2026-10-30): no parts to mention, as in the order dialog.
     if (!pre) $("#grant-terms-l1", d).innerHTML = t(f.length.value === "day" ? "ord.split_open" : "ord.terms_l1");
     try {
-      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
+      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, over_5h: f.over_5h.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
     // From an order with a referral discount: the regular price struck, the final one, and the referral's share of it.
@@ -1526,7 +1527,11 @@ function grantDialog(users, pre = null) {
     const notes = [p.discount_id ? t("tk.discount") : "", refOff].filter(Boolean).join(t("app.list_sep"));
     const price = notes ? `<s>${fmtPrice(p.list_usd)}</s> <b>${fmtPrice(p.usd)}</b> (${notes})` : `<b>${fmtPrice(p.usd)}</b>`;
     const when = p.queued ? t("tk.queued_starts", { date: fmtDate(p.starts_at) }) : p.start_now ? t("tk.starts_beside") : t("tk.starts_now");
-    const fit = p.available ? `<li class="good">${t("tk.available")}</li>` : `<li class="critical">${bdi(p.reason)}</li>`;
+    // Short only of the current 5-hour window: the admin may grant anyway (off by default, cleared when no longer short).
+    $("#grant-over5h", d).hidden = !p.short_5h;
+    if (!p.short_5h) f.over_5h.checked = false;
+    const fit = p.over_5h ? `<li class="warning">${bdi(p.reason)}</li>`
+      : p.available ? `<li class="good">${t("tk.available")}</li>` : `<li class="critical">${bdi(p.reason)}</li>`;
     const soldOut = p.sold_out_now && p.available ? `<li class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</li>` : "";
     const weeks = !p.week_split ? `<li class="muted">${t("tk.week_split_none")}</li>`
       : `<li class="muted">${plural("tk.week_split", p.week_split.length, { n: nf0.format(p.week_split.length), pieces: p.week_split.map(fmtShare).join(" + ") })}</li>`;
@@ -1539,7 +1544,7 @@ function grantDialog(users, pre = null) {
       p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(labelOf("unitname.", r.unit))}</label>`).join("") : "";
     $("#grant-go", d).disabled = !p.available;
   };
-  ["user", "tier", "length", "currency", "start_now"].forEach((k) => (f[k].onchange = refresh));
+  ["user", "tier", "length", "currency", "start_now", "over_5h"].forEach((k) => (f[k].onchange = refresh));
   refresh();
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -1548,7 +1553,7 @@ function grantDialog(users, pre = null) {
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate,
+        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, over_5h: f.over_5h.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate,
         ...(pre ? { order_id: pre.order_id } : { terms_version: preview.terms_version }) } });
       d.close(); render();
     } catch (err) {

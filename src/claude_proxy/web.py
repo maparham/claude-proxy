@@ -1466,7 +1466,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         # From an order: its referral discount is applied, as the grant will apply it (referrals design).
         order_id = None if body.get("order_id") in (None, "") else _number(body["order_id"], "order_id", whole=True)
         return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time(), bool(body.get("start_now")),
-                           order_id)
+                           order_id, bool(body.get("over_5h")))
 
     @app.post("/api/admin/tickets")
     async def ticket_grant(request: Request):
@@ -1486,7 +1486,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         t = ticket_call(tickets.grant, conn, cfg, actor["id"], u, tier, length, currency, note=str(body.get("note") or ""),
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
                         expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version,
-                        start_now=bool(body.get("start_now")))
+                        start_now=bool(body.get("start_now")), over_5h=bool(body.get("over_5h")))
         if order_id is not None and cfg.email is not None:   # the buyer hears their order is done, after the response
             mail.spawn(orders.send_granted(conn, cfg, order_id))
         return {"ok": True, "ticket": t}

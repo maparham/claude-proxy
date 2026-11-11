@@ -507,6 +507,33 @@ def test_a_pass_is_refused_when_the_5h_window_is_nearly_full(db):
     assert tickets.sold_out(conn, cfg, "lite", "day", NOW)
 
 
+def test_the_admin_may_grant_over_a_full_5h_window(db):
+    import json
+    from tests.tickets_helpers import report, user
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 95.0)
+    p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "EUR", NOW)
+    assert (p["available"], p["short_5h"], p["over_5h"]) == (False, True, False)
+    p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "EUR", NOW, over_5h=True)
+    assert (p["available"], p["short_5h"], p["over_5h"]) == (True, True, True) and "5-hour window" in p["reason"]
+    tid = grant(conn, cfg, ids, tier="lite", length="day", over_5h=True)["id"]
+    a = json.loads(conn.execute("SELECT detail_json FROM audit_log WHERE action='ticket_grant'").fetchone()[0])
+    assert a["ticket_id"] == tid and a["over_5h"] is True
+
+
+def test_over_5h_does_not_lift_the_weekly_checks(db):
+    from tests.tickets_helpers import report, user
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 95.0)
+    report(conn, ids, 99.0, NOW - 30)   # the week is nearly full too
+    p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "day", "EUR", NOW, over_5h=True)
+    assert (p["available"], p["short_5h"], p["over_5h"]) == (False, False, False)
+    with pytest.raises(tickets.CapacityError, match="This week has"):
+        grant(conn, cfg, ids, tier="lite", length="day", over_5h=True)
+
+
 def test_a_pass_fits_when_the_5h_window_has_its_share_free(db):
     conn, cfg, ids = seeded(db)
     _five_hour_cfg(conn, cfg, ids)

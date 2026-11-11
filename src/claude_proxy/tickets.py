@@ -758,13 +758,16 @@ REMOVABLE = "kind NOT IN ('share_5h', 'share_7d', 'cost_total')"
 
 
 def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, currency: str, now: float,
-            start_now: bool = False, order_id: int | None = None) -> dict:
+            start_now: bool = False, order_id: int | None = None, over_5h: bool = False) -> dict:
     """Everything the grant form shows before the admin confirms. Raises TicketError for a bad tier, length or currency
     and when the currency has no rate; capacity trouble is reported in `available`, not raised. `start_now`: the
     ticket starts now beside the user's running tickets instead of after them (next_start). `order_id`: the order
     this grant sells; its referral discount (orders.ref_pct, the percentage asked for) is applied to today's price and
     floored again on today's price and share (referrals design: The discount must survive every way an order is
-    granted), so the preview and the grant agree. `usd` is then the discounted price, `list_usd` stays the regular one."""
+    granted), so the preview and the grant agree. `usd` is then the discounted price, `list_usd` stays the regular one.
+    `short_5h`: the only check that failed is Anthropic's current 5-hour window (FiveHourFull, checked last). `over_5h`:
+    the admin grants anyway; the pass is `available` and `reason` stays as the warning. It then draws on the window's
+    free room first come, so running passes may hit Anthropic's limit before their own until the reset."""
     from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     _check_tier_length(cfg, tier, length)
@@ -788,9 +791,11 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     ends_at = starts_at + LENGTHS[length] * DAY
     try:   # used-up tickets this one replaces end as it starts: their reserved points and 5-hour share go with them
         capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=[t["id"] for t in replaces])
-        available, reason = True, None
+        available, reason, short_5h = True, None, False
+    except FiveHourFull as e:
+        available, reason, short_5h = bool(over_5h), str(e), True
     except CapacityError as e:
-        available, reason = False, str(e)
+        available, reason, short_5h = False, str(e), False
     rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
                                           (user["id"],))]
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None
@@ -799,6 +804,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
             "amount": round_local(p["usd"], rate["rate"], steps[currency], vat_percent(cfg)), "vat_percent": vat_percent(cfg),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
+            "short_5h": short_5h, "over_5h": short_5h and bool(over_5h),
             "replaces": [t["id"] for t in replaces], "start_now": bool(start_now),
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available,
             "week_split": week_split(conn, cfg, share, starts_at, ends_at, now),
@@ -811,7 +817,8 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, order_id: int | None = None,
-          paid: bool = False, after=None, now: float | None = None, terms_version: str | None = None, start_now: bool = False) -> dict:
+          paid: bool = False, after=None, now: float | None = None, terms_version: str | None = None, start_now: bool = False,
+          over_5h: bool = False) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
     capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
     `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different.
@@ -821,7 +828,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
     `terms_version`, equality-checked against TERMS_VERSION (2026-10-13 spec, §3).
     `paid`: the order was paid online (payments design, section 4): it sells at the order's quote, whatever the price
     and rate are now, with no stale-rate confirmation. `after(ticket_id)`: called inside the transaction, last.
-    `start_now`: start now beside the user's running tickets (preview); an order's own choice governs a grant from it."""
+    `start_now`: start now beside the user's running tickets (preview); an order's own choice governs a grant from it.
+    `over_5h`: grant even though Anthropic's current 5-hour window lacks the pass's 5-hour share (preview); the
+    weekly checks still refuse. Audited as over_5h."""
     now = _now(now)
     note = _note(note)
     if not cfg.tickets.enabled:
@@ -840,7 +849,7 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         # Unpaid: the order's referral discount is applied again to today's price, so expect_usd is the discounted one.
         # tickets.ref_off_usd keeps the referral part alone (preview's re-floored ref_off_usd unpaid, the order's own
         # paid), NULL without a referral: list_usd - usd would also count a sale price (ticket_discounts) in it.
-        p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id)
+        p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id, over_5h=over_5h)
         if order_id is not None:
             grant_terms = orow["terms_version"] if orow is not None else TERMS_VERSION
         else:
@@ -879,7 +888,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         db.audit(conn, actor, "ticket_grant", user["name"], {"ticket_id": tid, "tier": tier, "length": length, "usd": p["usd"],
                                                             "list_usd": p["list_usd"], "currency": currency, "amount": p["amount"],
                                                             "starts_at": p["starts_at"], "ends_at": p["ends_at"],
-                                                            "terms_version": grant_terms, "start_now": bool(start_now)})
+                                                            "terms_version": grant_terms, "start_now": bool(start_now),
+                                                            **({"over_5h": True} if p["over_5h"] else {})})
         if order_id is not None:
             from . import orders   # here, not at the top: orders imports tickets
             orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)
