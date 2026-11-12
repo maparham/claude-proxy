@@ -732,7 +732,7 @@ function wirePast(root, tk) {
     const shown = past.filter((p) => (!f.tier || p.tier === f.tier) && (!f.how || p.how === f.how))
       .sort((a, b) => { const x = k(a), y = k(b); const c = typeof x === "string" ? x.localeCompare(y, LOC) : x - y; return desc ? -c : c; });
     const filters = filter("tier", tierText, t("past.all_tiers")) + filter("how", howText, t("past.all_how"));
-    list.innerHTML = `${filters ? `<div class="controls past-filters">${filters}</div>` : ""}<table class="data"><thead><tr>${th("tier", t("price.tier"))}${th("period", t("tk.period"))}${th("how", t("past.how"))}${th("tokens", t("pass.tokens"), "r", tipI("weighted"))}${th("paid", t("tk.paid"), "r")}</tr></thead>
+    list.innerHTML = `${filters ? `<div class="past-filters">${filters}</div>` : ""}<table class="data"><thead><tr>${th("tier", t("price.tier"))}${th("period", t("tk.period"))}${th("how", t("past.how"))}${th("tokens", t("pass.tokens"), "r", tipI("weighted"))}${th("paid", t("tk.paid"), "r")}</tr></thead>
     <tbody>${foldRows(shown.map((p) => `<tr><td>${tierName(p.tier, p.label)}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
       <td class="muted">${howText(p)}</td>${tokensCell(p)}<td class="r">${esc(money(p.amount, p.currency))}</td></tr>`)) || `<tr><td colspan="5" class="muted">${t("search.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
     wireMore(list);
