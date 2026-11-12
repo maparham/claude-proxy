@@ -117,7 +117,7 @@ table.data td.r, table.data th.r { text-align: end; font-variant-numeric: tabula
 .th-sort:hover { color: var(--ink); }
 .th-sort .arrow { display: inline-block; min-width: 1em; margin-inline-start: 2px; }
 select.small { padding-block: 3px; padding-inline: 8px 4px; font-size: 12px; border-radius: 6px; color: var(--ink-2); }
-.past-filters { gap: 8px; margin: 10px 0 4px; }
+.past-filters { gap: 8px; margin: 10px 0 4px; justify-content: flex-end; }
 .sess-title { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sess-id { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 table.data tr:hover td { background: var(--wash); }
