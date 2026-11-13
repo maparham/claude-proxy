@@ -422,10 +422,11 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'rem The gateway''s /health: when it does not answer within 3 s (curl''s 000) or Cloudflare answers for it (5xx), Claude',
     'rem Code starts on the relay the dashboard named, unless an argument names settings of its own. Its --settings outranks',
     'rem settings.json, which an ANTHROPIC_BASE_URL in the environment would not. Without curl.exe, nothing changes.',
-    'set "GW_RELAY=" & set "GW_HEALTH=" & set "GW_ARGS="',
+    'rem GW_HEALTH is never empty: cmd mangles a line that takes a substring of an unset variable.',
+    'set "GW_RELAY=" & set "GW_HEALTH=none" & set "GW_ARGS="',
     ("if exist `"%CLAUDE_CONFIG_DIR%\fallback-settings.json`" for /f %%h in ('curl.exe -s -o nul --max-time 3 -w `"%%{http_code}`" `"" +
      ($c.url.TrimEnd('/') + '/health').Replace('%', '%%') + "`" 2^>nul') do set `"GW_HEALTH=%%h`""),
-    'if defined GW_HEALTH set "GW_RELAY=1"',
+    'if not "%GW_HEALTH%"=="none" set "GW_RELAY=1"',
     'for %%c in (2 3 4) do if "%GW_HEALTH:~0,1%"=="%%c" set "GW_RELAY="',
     'if defined GW_RELAY for %%a in (%*) do if /i "%%~a"=="--settings" set "GW_RELAY="',
     ('if defined GW_RELAY (' + "`r`n" +
