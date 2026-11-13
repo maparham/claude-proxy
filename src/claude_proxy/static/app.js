@@ -598,8 +598,25 @@ function utilPill(account = S.account) {
   pill.querySelector(".dot").style.background = !known.length || known.some((q) => q.stale) ? css("--border") : top >= 90 ? css("--critical") : top >= 70 ? css("--warning") : css("--good");
   pill.querySelector("span:last-child").textContent = bs.map((q) => `${t(`bucket.${q.b}`)} ${fmtPct(q.utilization_pct)}`).join(" · ");
   const line = (q) => `<p>${t(`tk.bucket_${q.b}`)}: <b>${fmtPct(q.utilization_pct)}</b>${q.utilization_pct != null && q.stale ? ` (${t("quota.stale")})` : ""}${q.resets_at > Date.now() / 1000 ? ` · ${t("quota.resets_in", { d: fmtDur(q.resets_at - Date.now() / 1000) })}` : ""}</p>`;
-  pill.dataset.tipHtml = `<span class="th">${t("tk.util_title")}</span>${bs.map(line).join("")}<p class="tm">${t("tk.util_sub")}</p>`;
+  pill.dataset.tipHtml = `<span class="th">${t("tk.util_title")}</span>${bs.map(line).join("")}<p class="tm">${t("tk.util_sub")}</p><p class="tm">${t("sub.open")}</p>`;
 }
+// The pill's dialog: utilization, then the subscription's profile from Anthropic as sent, field by field.
+async function subscriptionDialog() {
+  const r = await api("/api/admin/subscription");
+  const rows = [];
+  const walk = (v, path) => {
+    if (v && typeof v === "object" && !Array.isArray(v)) { for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k); return; }
+    const when = typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) ? Date.parse(v) / 1000 : typeof v === "number" && /_at$/.test(path) ? (v > 1e11 ? v / 1000 : v) : null;
+    rows.push(`<tr><td><code>${esc(path)}</code></td><td>${esc(when ? fmtDate(when) : Array.isArray(v) ? JSON.stringify(v) : String(v))}</td></tr>`);
+  };
+  if (r.profile) walk(r.profile.profile, "");
+  const util = ["5h", "7d"].map((b) => `<div class="limit-row"><span>${t(`tk.bucket_${b}`)}</span><span class="num">${fmtPct(S.account?.[b]?.utilization_pct)}</span></div>`).join("");
+  openDialog(`<h3>${t("sub.title")}</h3>${util}
+    ${r.profile ? `<p class="sub" style="margin-top:12px">${t("sub.checked", { date: fmtDate(r.profile.observed_at) })}</p>
+      <div class="table-wrap"><table class="data"><tbody>${rows.join("")}</tbody></table></div>` : `<p class="sub">${t("sub.none")}</p>`}
+    <p><button class="btn primary" data-close>${t("app.done")}</button></p>`);
+}
+$("#util-pill").onclick = () => subscriptionDialog().catch(() => {});
 
 async function renderOverview(main) {
   const buyer = !isAdmin() && S.tickets?.enabled;

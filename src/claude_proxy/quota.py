@@ -369,6 +369,18 @@ def record_plan(conn: sqlite3.Connection, organization_type: str | None, rate_li
     return last is not None
 
 
+def record_profile(conn: sqlite3.Connection, profile: dict, now: float) -> None:
+    """Keep the latest profile Anthropic sent, whole: the admin sees its details (renewal dates and the like)."""
+    conn.execute("INSERT INTO account_profile(id, observed_at, raw_json) VALUES(1,?,?) "
+                 "ON CONFLICT(id) DO UPDATE SET observed_at=excluded.observed_at, raw_json=excluded.raw_json",
+                 (now, json.dumps(profile)))
+
+
+def latest_profile(conn: sqlite3.Connection) -> dict | None:
+    row = conn.execute("SELECT observed_at, raw_json FROM account_profile WHERE id=1").fetchone()
+    return {"observed_at": row[0], "profile": json.loads(row[1])} if row else None
+
+
 def plan_changes(conn: sqlite3.Connection) -> list[dict]:
     """Each change of plan as {t, from, to}. The first plan ever seen is not a change. Rises are only compared within
     one plan."""
@@ -472,9 +484,13 @@ class Poller:
         """Record the subscription's plan from its profile; a change restarts the observed rate (plan_changes)."""
         fetch = getattr(self.backend, "fetch_profile", None)
         try:
-            org = ((await fetch()) or {}).get("organization") if fetch else None
+            profile = (await fetch()) if fetch else None
         except Exception:   # e.g. RefreshUnavailable: the request path reports it
-            org = None
+            profile = None
+        if not isinstance(profile, dict):
+            return
+        await self._run(record_profile, profile, now)
+        org = profile.get("organization")
         if not isinstance(org, dict) or not (org.get("organization_type") or org.get("rate_limit_tier")):
             return
         if await self._run(record_plan, org.get("organization_type"), org.get("rate_limit_tier"), now):

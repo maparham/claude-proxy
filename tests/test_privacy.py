@@ -52,12 +52,13 @@ async def test_dashboard_api_tells_a_user_nothing_about_the_account(env):
             assert r.status_code == 200, route
             text = r.text.lower()
             assert not [w for w in ACCOUNT_WORDS if w in text], (route, r.text)
-        for route in ("/api/quota/timeline", "/api/users", "/api/audit"):
+        for route in ("/api/quota/timeline", "/api/users", "/api/audit", "/api/admin/subscription"):
             assert (await c.get(route, headers=bearer(key))).status_code == 403, route
         # The admin still sees all of it.
         ov = (await c.get("/api/overview", headers=bearer(admin_key))).json()
         assert ov["quota"][0]["utilization_pct"] == 40 and "credential" in ov
         assert (await c.get("/api/quota/timeline", headers=bearer(admin_key))).status_code == 200
+        assert (await c.get("/api/session", headers=bearer(admin_key))).json()["account"]["5h"]["utilization_pct"] == 40
 
 
 async def test_share_limit_reads_as_the_users_own_allowance(env):

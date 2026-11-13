@@ -96,6 +96,12 @@ SCHEMA = [
         organization_type TEXT,
         rate_limit_tier TEXT
     )""",
+    # The subscription's latest profile from Anthropic, whole, for the admin's subscription details (quota.record_profile).
+    """CREATE TABLE IF NOT EXISTS account_profile (
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        observed_at REAL NOT NULL,
+        raw_json TEXT NOT NULL
+    )""",
     CREDENTIALS_DDL,
     """CREATE TABLE IF NOT EXISTS audit_log (
         id INTEGER PRIMARY KEY AUTOINCREMENT,

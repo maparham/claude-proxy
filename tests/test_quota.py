@@ -492,3 +492,6 @@ async def test_poller_checks_the_plan_hourly(db):
     await p.tick(now=1001 + quota.PLAN_CHECK_S)        # a failed fetch records nothing
     await p.tick(now=1001 + 2 * quota.PLAN_CHECK_S)
     assert [c["to"] for c in quota.plan_changes(conn)] == ["default_claude_max_5x"]
+    # The whole profile is kept, the latest one only, for the admin's subscription details.
+    assert quota.latest_profile(conn) == {"observed_at": 1001 + 2 * quota.PLAN_CHECK_S,
+                                          "profile": {"organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_5x"}}}

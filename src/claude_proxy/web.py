@@ -1516,6 +1516,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         note=str(body.get("note") or ""))
         return {"ok": True, **r}
 
+    @app.get("/api/admin/subscription")
+    async def subscription(request: Request):
+        # The subscription's latest profile from Anthropic, as sent: the header pill's details dialog shows it.
+        admin(request)
+        return {"profile": quota.latest_profile(conn)}
+
     @app.get("/api/admin/capacity")
     async def capacity(request: Request):
         admin(request)
