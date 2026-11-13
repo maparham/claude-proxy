@@ -586,6 +586,21 @@ function credentialPill(c) {
   pill.dataset.tipHtml = (c.healthy ? t("cred.linked_tip") : t("cred.needed_tip")) + (c.detail ? `<p class="tm">${esc(c.detail)}</p>` : "");
 }
 
+// The account's utilization as Anthropic reports it, in the header on every tab (admin only).
+function utilPill(account = S.account) {
+  const pill = $("#util-pill");
+  pill.hidden = !account;
+  if (!account) return;
+  S.account = account;
+  const bs = ["5h", "7d"].map((b) => ({ b, ...account[b] }));
+  const known = bs.filter((q) => q.utilization_pct != null);
+  const top = Math.max(0, ...known.map((q) => q.utilization_pct));
+  pill.querySelector(".dot").style.background = !known.length || known.some((q) => q.stale) ? css("--border") : top >= 90 ? css("--critical") : top >= 70 ? css("--warning") : css("--good");
+  pill.querySelector("span:last-child").textContent = bs.map((q) => `${t(`bucket.${q.b}`)} ${fmtPct(q.utilization_pct)}`).join(" · ");
+  const line = (q) => `<p>${t(`tk.bucket_${q.b}`)}: <b>${fmtPct(q.utilization_pct)}</b>${q.utilization_pct != null && q.stale ? ` (${t("quota.stale")})` : ""}${q.resets_at > Date.now() / 1000 ? ` · ${t("quota.resets_in", { d: fmtDur(q.resets_at - Date.now() / 1000) })}` : ""}</p>`;
+  pill.dataset.tipHtml = `<span class="th">${t("tk.util_title")}</span>${bs.map(line).join("")}<p class="tm">${t("tk.util_sub")}</p>`;
+}
+
 async function renderOverview(main) {
   const buyer = !isAdmin() && S.tickets?.enabled;
   const [ov, me, keys, tk, mo, ref] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), buyer ? api("/api/me/tickets") : null,
@@ -1470,7 +1485,6 @@ const stateBadge = (s) => `<span class="badge state-${s}">${esc(I18N.en[`state.$
 async function renderTickets(main) {
   const [cap, { tickets, deleted_users }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
   const pct = (v, max) => meter((100 * v) / max);
-  const util = (b) => (cap.utilization[b].utilization_pct == null ? "—" : `${fmtPct(cap.utilization[b].utilization_pct)}${cap.utilization[b].stale ? ` (${t("quota.stale")})` : ""}`);
   const pts = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
   const w = cap.week, f = cap.five_hour;
   // The week's 100 points, piece by piece; each piece and its legend chip carry the same tip, on hover or tap.
@@ -1483,7 +1497,7 @@ async function renderTickets(main) {
     : `<div class="meter"></div><p class="sub">${t("tk.no_report")}</p>`;
   main.innerHTML = `<section class="view"><h2>${t("tab.tickets")}</h2>
     <p class="lede">${t("tk.lede")}</p>
-    <div class="grid cols-2">
+    <div class="grid">
       <div class="card"><h3>${t("tk.capacity")}${tipI("capacity_sold")}</h3>
         <div class="limit-row"><span>${t("tk.week")}${w.end ? ` · ${t("tk.week_resets", { date: fmtDate(w.end) })}` : ""}</span><span class="num">${w.fresh ? t("tk.free_to_sell", { v: pts(w.free) }) : "—"}</span></div>${weekMeter}
         <p class="sub">${t("tk.sold_week", { sold: pts(w.sold), returned: pts(w.returned) })}</p>
@@ -1491,10 +1505,6 @@ async function renderTickets(main) {
         <div class="limit-row" style="margin-top:8px"><span>${t("tk.five_now")}</span><span class="num">${t("tk.of", { v: fmtPct(f.now, 1), max: fmtShare(f.max_sold_5h_pct) })}</span></div>${pct(f.now, f.max_sold_5h_pct)}
         <div class="limit-row" style="margin-top:8px"><span>${t("tk.five_peak")}</span><span class="num">${t("tk.of", { v: fmtPct(f.peak_30d, 1), max: fmtShare(f.max_sold_5h_pct) })}</span></div>${pct(f.peak_30d, f.max_sold_5h_pct)}
         ${cap.hand_set_7d_pct ? `<p class="sub" style="margin-top:12px">${t("tk.hand_set", { v: fmtShare(cap.hand_set_7d_pct) })}</p>` : ""}</div>
-      <div class="card"><h3>${t("tk.util_title")}${tipI("capacity_util")}</h3>
-        <div class="limit-row"><span>${t("tk.bucket_5h")}</span><span class="num">${util("5h")}</span></div>
-        <div class="limit-row"><span>${t("tk.bucket_7d")}</span><span class="num">${util("7d")}</span></div>
-        <p class="sub" style="margin-top:12px">${t("tk.util_sub")}</p></div>
     </div>
     <div class="controls"><button class="btn primary" id="grant">${t("tk.grant")}</button>
       <select id="ticket-user"><option value="">${t("tk.all_users")}</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(t("tk.deleted_name", { name: n }))}</option>`).join("")}</select>
@@ -3135,6 +3145,7 @@ async function boot() {
     Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
     $("#cred-pill").hidden = !s.credential;
     if (s.credential) credentialPill(s.credential);
+    utilPill(s.account || null);
   } catch { showLogin(); return; }
   if (POPUP && S.user) { popupSignedIn(); return; }
   const pending = rememberedAuthorize();
@@ -3206,10 +3217,14 @@ $("#theme-toggle").onclick = () => {
 try { const t = localStorage.getItem("cp-theme"); if (t) document.documentElement.dataset.theme = t; } catch { /* ignore */ }
 window.addEventListener("hashchange", () => { if (S.user && route()) render(); });
 setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["overview", "users", "user", "orders"].includes(S.tab)) render(); }, 60000);
-// The Orders tab's count of new orders follows along on every other tab too.
+// The header's utilization pill and the Orders tab's count of new orders follow along on every tab.
 setInterval(async () => {
-  if (!S.user || document.hidden || !isAdmin() || !S.tickets?.enabled) return;
-  try { const s = await api("/api/session"); if (s.tickets && s.tickets.orders_new !== S.tickets.orders_new) { S.tickets.orders_new = s.tickets.orders_new; renderTabs(); } }
+  if (!S.user || document.hidden || !isAdmin()) return;
+  try {
+    const s = await api("/api/session");
+    if (s.account) utilPill(s.account);
+    if (S.tickets?.enabled && s.tickets && s.tickets.orders_new !== S.tickets.orders_new) { S.tickets.orders_new = s.tickets.orders_new; renderTabs(); }
+  }
   catch { /* the next tick tries again */ }
 }, 60000);
 

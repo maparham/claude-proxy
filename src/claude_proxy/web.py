@@ -386,6 +386,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             be = gw.backend.describe()
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
+            # The header's utilization pill, on every tab: what Anthropic last reported for the account.
+            now = time.time()
+            out["account"] = {}
+            for b in BUCKETS:
+                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+                out["account"][b] = {k: att[k] for k in ("utilization_pct", "resets_at", "stale")}
         out["tickets"] = {"enabled": cfg.tickets.enabled}
         out["api"] = {"enabled": cfg.api.enabled}
         if is_admin(user) and cfg.tickets.enabled:
