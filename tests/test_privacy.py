@@ -58,7 +58,8 @@ async def test_dashboard_api_tells_a_user_nothing_about_the_account(env):
         ov = (await c.get("/api/overview", headers=bearer(admin_key))).json()
         assert ov["quota"][0]["utilization_pct"] == 40 and "credential" in ov
         assert (await c.get("/api/quota/timeline", headers=bearer(admin_key))).status_code == 200
-        assert (await c.get("/api/session", headers=bearer(admin_key))).json()["account"]["5h"]["utilization_pct"] == 40
+        account = (await c.get("/api/session", headers=bearer(admin_key))).json()["account"]
+        assert account["5h"]["utilization_pct"] == 40 and set(account) == {"5h", "7d", "7d_oi"}
 
 
 async def test_share_limit_reads_as_the_users_own_allowance(env):

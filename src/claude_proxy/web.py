@@ -389,7 +389,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             # The header's utilization pill, on every tab: what Anthropic last reported for the account.
             now = time.time()
             out["account"] = {}
-            for b in BUCKETS:
+            for b in (*BUCKETS, "7d_oi"):   # 7d_oi: the weekly Fable limit, reported only on Fable replies
                 att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
                 out["account"][b] = {k: att[k] for k in ("utilization_pct", "resets_at", "stale")}
         out["tickets"] = {"enabled": cfg.tickets.enabled}

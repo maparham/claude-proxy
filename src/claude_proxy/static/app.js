@@ -592,10 +592,11 @@ function utilPill(account = S.account) {
   pill.hidden = !account;
   if (!account) return;
   S.account = account;
-  const bs = ["5h", "7d"].map((b) => ({ b, ...account[b] }));
-  const known = bs.filter((q) => q.utilization_pct != null);
-  const top = Math.max(0, ...known.map((q) => q.utilization_pct));
-  pill.querySelector(".dot").style.background = !known.length || known.some((q) => q.stale) ? css("--border") : top >= 90 ? css("--critical") : top >= 70 ? css("--warning") : css("--good");
+  const bs = ["5h", "7d", "7d_oi"].filter((b) => account[b]).map((b) => ({ b, ...account[b] }));
+  // The dot follows the fullest fresh bucket: 7d Fable goes stale whenever nobody uses Fable, which is no alarm.
+  const fresh = bs.filter((q) => q.utilization_pct != null && !q.stale);
+  const top = Math.max(0, ...fresh.map((q) => q.utilization_pct));
+  pill.querySelector(".dot").style.background = !fresh.length ? css("--border") : top >= 90 ? css("--critical") : top >= 70 ? css("--warning") : css("--good");
   pill.querySelector("span:last-child").textContent = bs.map((q) => `${t(`bucket.${q.b}`)} ${fmtPct(q.utilization_pct)}`).join(" · ");
   const line = (q) => `<p>${t(`tk.bucket_${q.b}`)}: <b>${fmtPct(q.utilization_pct)}</b>${q.utilization_pct != null && q.stale ? ` (${t("quota.stale")})` : ""}${q.resets_at > Date.now() / 1000 ? ` · ${t("quota.resets_in", { d: fmtDur(q.resets_at - Date.now() / 1000) })}` : ""}</p>`;
   pill.dataset.tipHtml = `<span class="th">${t("tk.util_title")}</span>${bs.map(line).join("")}<p class="tm">${t("tk.util_sub")}</p><p class="tm">${t("sub.open")}</p>`;
@@ -611,7 +612,7 @@ async function subscriptionDialog() {
     rows.push(`<div><dt><code>${esc(path)}</code></dt><dd dir="auto">${esc(when ? fmtDate(when) : Array.isArray(v) ? JSON.stringify(v) : String(v))}</dd></div>`);
   };
   if (r.profile) walk(r.profile.profile, "");
-  const util = ["5h", "7d"].map((b) => `<div class="limit-row"><span>${t(`tk.bucket_${b}`)}</span><span class="num">${fmtPct(S.account?.[b]?.utilization_pct)}</span></div>`).join("");
+  const util = ["5h", "7d", "7d_oi"].map((b) => `<div class="limit-row"><span>${t(`tk.bucket_${b}`)}</span><span class="num">${fmtPct(S.account?.[b]?.utilization_pct)}</span></div>`).join("");
   openDialog(`<h3>${t("sub.title")}</h3>${util}
     ${r.profile ? `<p class="sub" style="margin-top:12px">${t("sub.checked", { date: fmtDate(r.profile.observed_at) })}</p>
       <dl class="kv" dir="ltr">${rows.join("")}</dl>` : `<p class="sub">${t("sub.none")}</p>`}
@@ -1346,7 +1347,7 @@ function wireOrdering(root, tk, order) {
 }
 
 function quotaBar(q) {
-  const name = q.bucket === "5h" || q.bucket === "7d" ? t(`quota.bucket_${q.bucket}`) : esc(q.bucket);
+  const name = ["5h", "7d", "7d_oi"].includes(q.bucket) ? t(`quota.bucket_${q.bucket}`) : esc(q.bucket);
   if (q.utilization_pct == null) return `<div style="margin-bottom:14px"><b>${name}</b> <span class="muted">${t("quota.no_data")}</span></div>`;
   const resets = q.resets_at ? t("quota.resets_in", { d: fmtDur(q.resets_at - Date.now() / 1000) }) : "";
   const pts = (v) => nfFix(1).format(v);
@@ -2804,7 +2805,7 @@ async function renderQuota(main) {
   const p = S.prefs;
   const qr = ["1d", "7d", "30d", "90d", "365d"].includes(p.range) ? p.range : "30d";
   const d = await api(`/api/quota/timeline?bucket=${encodeURIComponent(p.bucket)}&range=${qr}`);
-  const bname = (b) => (b === "5h" || b === "7d" ? t(`quota.bucket_${b}`) : b);
+  const bname = (b) => (["5h", "7d", "7d_oi"].includes(b) ? t(`quota.bucket_${b}`) : b);
   main.innerHTML = `<section class="view"><h2>${t("tab.quota")}</h2>
     <p class="lede">${t("quota.lede", { estimated: tipT(t("quota.estimated"), "share") })}</p>
     <div class="controls">${seg("bucket", d.buckets.map((b) => [b, bname(b), `bucket:${b}`]), p.bucket)} ${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], qr)}</div>
