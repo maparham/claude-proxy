@@ -607,13 +607,14 @@ async function subscriptionDialog() {
   const walk = (v, path) => {
     if (v && typeof v === "object" && !Array.isArray(v)) { for (const [k, x] of Object.entries(v)) walk(x, path ? `${path}.${k}` : k); return; }
     const when = typeof v === "string" && /^\d{4}-\d{2}-\d{2}T/.test(v) ? Date.parse(v) / 1000 : typeof v === "number" && /_at$/.test(path) ? (v > 1e11 ? v / 1000 : v) : null;
-    rows.push(`<tr><td><code>${esc(path)}</code></td><td>${esc(when ? fmtDate(when) : Array.isArray(v) ? JSON.stringify(v) : String(v))}</td></tr>`);
+    if (v == null || (Array.isArray(v) && !v.length)) return;   // empty fields say nothing
+    rows.push(`<div><dt><code>${esc(path)}</code></dt><dd>${esc(when ? fmtDate(when) : Array.isArray(v) ? JSON.stringify(v) : String(v))}</dd></div>`);
   };
   if (r.profile) walk(r.profile.profile, "");
   const util = ["5h", "7d"].map((b) => `<div class="limit-row"><span>${t(`tk.bucket_${b}`)}</span><span class="num">${fmtPct(S.account?.[b]?.utilization_pct)}</span></div>`).join("");
   openDialog(`<h3>${t("sub.title")}</h3>${util}
     ${r.profile ? `<p class="sub" style="margin-top:12px">${t("sub.checked", { date: fmtDate(r.profile.observed_at) })}</p>
-      <div class="table-wrap"><table class="data"><tbody>${rows.join("")}</tbody></table></div>` : `<p class="sub">${t("sub.none")}</p>`}
+      <dl class="kv" dir="ltr">${rows.join("")}</dl>` : `<p class="sub">${t("sub.none")}</p>`}
     <p><button class="btn primary" data-close>${t("app.done")}</button></p>`);
 }
 $("#util-pill").onclick = () => subscriptionDialog().catch(() => {});
