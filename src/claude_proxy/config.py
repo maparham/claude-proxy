@@ -45,6 +45,9 @@ class ListenerConfig:
     # Optional: another host (e.g. the apex domain) that serves the public home page; its sign-in links and install
     # commands go on to dashboard_url, since Clerk's tokens are made for that origin only.
     home_url: str = ""
+    # Optional: a second address for the API (e.g. a relay in the users' own country, reached when public_url is
+    # blocked or down). gclaude learns it from the dashboard and starts on it when public_url does not answer.
+    relay_url: str = ""
 
 
 @dataclass

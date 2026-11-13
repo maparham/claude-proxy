@@ -731,6 +731,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             d, mine = client_dist.dist(), client_dist.parse_version(have)
             if d is not None and d.version is not None and mine is not None and d.version > mine:
                 lines.append("GCLAUDE_UPDATE=1")
+            if cfg.listener.relay_url:   # where gclaude starts when public_url does not answer
+                lines.append(f"GATEWAY_FALLBACK_URL={cfg.listener.relay_url.rstrip('/')}")
             return PlainTextResponse("".join(line + "\n" for line in lines))
         if user.get("machine_key_id"):   # gclaude's statusline says which version this computer runs
             db.set_client_version(conn, user["machine_key_id"], request.headers.get("x-gclaude-version", ""))

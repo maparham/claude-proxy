@@ -319,9 +319,22 @@ function Update-Models([string]$File) {   # the dashboard's NAME=value lines (/a
   # gclaude set and the user has not changed since moves to the newest model the dashboard names, so a new model needs
   # only its price on the gateway, not a gclaude update. Anything odd: no change.
   $new = [ordered]@{}
+  $fallback = $null
   foreach ($line in [IO.File]::ReadAllLines($File)) {
     $m = [regex]::Match($line.Trim(), '^ANTHROPIC_DEFAULT_(FABLE|OPUS|SONNET)_MODEL=(claude-([a-z]+)-[0-9][0-9-]*\[1m\])$')
     if ($m.Success -and $m.Groups[3].Value -ceq $m.Groups[1].Value.ToLowerInvariant()) { $new[$line.Trim().Split('=')[0]] = $m.Groups[2].Value }
+    $m = [regex]::Match($line.Trim(), '^GATEWAY_FALLBACK_URL=(https://[A-Za-z0-9.-]+(:[0-9]+)?)$')
+    if ($m.Success) { $fallback = $m.Groups[1].Value }
+  }
+  # The relay gclaude.cmd starts on when the gateway's URL does not answer: a settings file it passes with --settings,
+  # which outranks settings.json (an ANTHROPIC_BASE_URL in the environment would not). Removed when the dashboard names
+  # none, or names the URL this computer already uses.
+  $relay = Join-Path $GDir 'fallback-settings.json'
+  $url = ([string](Field (Field (Read-Json $Settings) 'env') 'ANTHROPIC_BASE_URL')).TrimEnd('/')
+  if ($url) {
+    if ($fallback -and $fallback -cne $url) {
+      [IO.File]::WriteAllText($relay, '{"env": {"ANTHROPIC_BASE_URL": "' + $fallback + '"}}' + "`n", (New-Object Text.UTF8Encoding $false))
+    } else { Remove-Item -LiteralPath $relay -Force -ErrorAction SilentlyContinue }
   }
   if ($new.Count -eq 0) { return }
   $c = Read-Json $Client
@@ -406,11 +419,24 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
      ')'),
     'if "%GW_CODE%"=="200" call :models',
     'del "%GW_MODELS%" 2>nul',
+    'rem The gateway''s /health: when it does not answer within 3 s (curl''s 000) or Cloudflare answers for it (5xx), Claude',
+    'rem Code starts on the relay the dashboard named, unless an argument names settings of its own. Its --settings outranks',
+    'rem settings.json, which an ANTHROPIC_BASE_URL in the environment would not. Without curl.exe, nothing changes.',
+    'set "GW_RELAY=" & set "GW_HEALTH=" & set "GW_ARGS="',
+    ("if exist `"%CLAUDE_CONFIG_DIR%\fallback-settings.json`" for /f %%h in ('curl.exe -s -o nul --max-time 3 -w `"%%{http_code}`" `"" +
+     ($c.url.TrimEnd('/') + '/health').Replace('%', '%%') + "`" 2^>nul') do set `"GW_HEALTH=%%h`""),
+    'if defined GW_HEALTH set "GW_RELAY=1"',
+    'for %%c in (2 3 4) do if "%GW_HEALTH:~0,1%"=="%%c" set "GW_RELAY="',
+    'if defined GW_RELAY for %%a in (%*) do if /i "%%~a"=="--settings" set "GW_RELAY="',
+    ('if defined GW_RELAY (' + "`r`n" +
+     '  echo gclaude: ' + $c.url.TrimEnd('/').Replace('%', '%%') + ' does not answer, so this session uses the relay. 1>&2' + "`r`n" +
+     '  set GW_ARGS=--settings "%CLAUDE_CONFIG_DIR%\fallback-settings.json"' + "`r`n" +
+     ')'),
     ('if defined GW_WHY (' + "`r`n" +
      '  echo gclaude: %GW_WHY%; signing this computer in again. 1>&2' + "`r`n" +
      '  set CLAUDE_GATEWAY_FROM_GCLAUDE=1' + "`r`n" +
      '  call claude-gateway on --gclaude --login || goto signinfailed' + "`r`n" +
-     '  call claude %*' + "`r`n" +
+     '  call claude %GW_ARGS% %*' + "`r`n" +
      '  if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed' + "`r`n" +
      '  exit /b' + "`r`n" +
      ')'),
@@ -421,9 +447,11 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'if "%~1"=="" set GW_HINT=1',
     'for %%a in (-c --continue -r --resume) do if "%~1"=="%%a" if "%~2"=="" set GW_HINT=1',
     'for %%a in (-r --resume) do if "%~1"=="%%a" if "%~3"=="" if not "%~2"=="" if not "%GW_A2:~0,1%"=="-" set GW_HINT=1',
+    'rem With the relay, Claude Code''s hint repeats --settings, so it is left as it is.',
+    'if defined GW_RELAY set "GW_HINT="',
     'if defined GW_HINT type nul >"%GW_MARK%" 2>nul || set "GW_HINT="',
     'rem call: an npm install''s claude is claude.cmd, and a batch run without call never comes back here.',
-    'call claude %*',
+    'call claude %GW_ARGS% %*',
     'if defined GW_HINT call :resumehint',
     'if exist "%CLAUDE_CONFIG_DIR%\signed-out" call :closed',
     'exit /b',
@@ -441,7 +469,7 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'rem moves the defaults gclaude set itself; PowerShell starts only then, so an ordinary start stays quick. /l: [1m] is literal.',
     ':models',
     'set "GW_STALE="',
-    'for /f "usebackq tokens=1,* delims==" %%a in ("%GW_MODELS%") do findstr /l /c:"%%b" "%CLAUDE_CONFIG_DIR%\settings.json" >nul 2>nul || set "GW_STALE=1"',
+    'for /f "usebackq tokens=1,* delims==" %%a in ("%GW_MODELS%") do findstr /l /c:"%%b" "%CLAUDE_CONFIG_DIR%\settings.json" "%CLAUDE_CONFIG_DIR%\fallback-settings.json" >nul 2>nul || set "GW_STALE=1"',
     'if defined GW_STALE call claude-gateway models --gclaude "%GW_MODELS%" >nul 2>nul',
     'exit /b 0',
     'rem /logout_gclaude signed out and stopped claude (statusline.ps1): the terminal back as Claude Code would leave it',
@@ -562,6 +590,7 @@ function Gclaude-Off {
   $s = Read-Json $Settings
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $GDir 'fallback-settings.json') -Force -ErrorAction SilentlyContinue
   $cmds = Join-Path $GDir 'commands'
   foreach ($name in 'usage', 'account', 'logout_gclaude', 'logout') {   # logout: an older gclaude's
     $file = Join-Path $cmds "$name.md"
@@ -583,6 +612,8 @@ function Show-Status {
   $url = Field $c 'url'
   if (-not $url) { Write-Output 'Not set up yet. Run: claude-gateway on --url https://claude.example.com'; return }
   Write-Output "gateway: $url"
+  $relay = Field (Field (Read-Json (Join-Path $GDir 'fallback-settings.json')) 'env') 'ANTHROPIC_BASE_URL'
+  if ($relay) { Write-Output "relay: $relay (gclaude starts on it when the gateway does not answer)" }
   Write-Output "dashboard: $($c.dashboard)"
   if (Launcher-Ours) { Write-Output "gclaude: installed ($Launcher)" } else { Write-Output 'gclaude: not set up' }
   try {

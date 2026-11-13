@@ -59,6 +59,7 @@ class Stub:
         self.status_line: str | None = "maya · daily $10/$100"   # None: /api/me/status fails
         self.account_line = "maya · user · key sk-proxy-ab1… for PC, authorized 2026-09-20"   # ?format=account
         self.default_models = ""   # ?format=models: the NAME=value lines gclaude.cmd applies
+        self.health = 200   # /health's status; a 5xx is the gateway down behind Cloudflare
         self.models_status = 200
         self.logout = (200, {"ok": True, "revoked": True})   # POST /api/me/logout: status, body
         self.files: dict[str, bytes] = {}   # GET path -> body, e.g. the dashboard's /install.ps1
@@ -81,6 +82,8 @@ class Stub:
                 d.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, {}))
                 if self.path in d.files:
                     self.reply(200, d.files[self.path], "text/plain; charset=utf-8")
+                elif self.path == "/health":
+                    self.reply(d.health, {"ok": True})
                 elif self.path.startswith("/v1/models"):
                     ms = d.models_status   # a list: answers in order, the last repeats
                     self.reply((ms.pop(0) if len(ms) > 1 else ms[0]) if isinstance(ms, list) else ms, {"data": [], "has_more": False})
@@ -608,6 +611,29 @@ def test_gclaude_moves_its_own_model_defaults_to_the_newest_the_dashboard_names(
     assert win.client()["gclaude"]["added_models"]["ANTHROPIC_DEFAULT_FABLE_MODEL"] == "claude-fable-6[1m]"
     assert "/api/me/status?format=models" in stub.paths()
     assert not list(win.temp.glob("gclaude-models-*"))   # the reply is not left behind
+
+
+@on_windows
+def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_not_answer(gclaude, installed, stub, tmp_path):
+    """The dashboard names a relay; gclaude keeps it in a settings file and passes that with --settings (which outranks
+    settings.json) only when the gateway's /health fails, and never over the user's own --settings."""
+    win = installed
+    relay = win.gdir / "fallback-settings.json"
+    stub.default_models = "GATEWAY_FALLBACK_URL=https://relay.example.com\n"
+    fake = fake_claude(win, tmp_path)
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)   # the gateway answers: as before
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
+    assert json.loads(relay.read_text(encoding="utf-8")) == {"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert claude_saw(tmp_path) == f"{win.gdir}|-p hi" and "/health" in stub.paths(), r.out
+    stub.health = 502
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
+    assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|--settings {relay} -p hi", r.out
+    assert "does not answer, so this session uses the relay" in r.out, r.out
+    r = win.run(["cmd.exe", "/d", "/c", "gclaude", "--settings", "mine.json"], **fake)
+    assert claude_saw(tmp_path) == f"{win.gdir}|--settings mine.json", r.out
+    assert "relay: https://relay.example.com" in win.cg("status").out
+    assert win.cg("off").returncode == 0 and not relay.exists()
 
 
 @on_windows

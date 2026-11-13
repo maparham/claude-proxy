@@ -28,6 +28,7 @@ class Stub:
         self.revoked: set[str] = set()   # keys /api/me/status answers 401 for, as for a computer removed in the dashboard
         self.install: str | None = None   # GET /install, the dashboard's installer; None: 404
         self.default_models = ""   # /api/me/status?format=models: the NAME=value lines gclaude's launcher applies
+        self.health = 200   # /health's status; a 5xx is the gateway down behind Cloudflare
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -51,7 +52,7 @@ class Stub:
                 elif self.path == "/install" and stub.install is not None:
                     code, body, ctype = 200, stub.install.encode(), "text/x-shellscript"
                 elif self.path == "/health":
-                    code, body, ctype = 200, b'{"ok": true}', "application/json"
+                    code, body, ctype = stub.health, b'{"ok": true}', "application/json"
                 else:
                     code, body, ctype = 404, b"{}", "application/json"
                 self.send_response(code)
@@ -1293,6 +1294,54 @@ def test_gclaude_ignores_a_models_reply_it_cannot_trust(stub, home, lines):
     r = run_gclaude(home, launcher, "-p", "hi")
     assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi" and r.stderr == "", r.stderr
     assert gsettings.read_text() == before
+
+
+RELAY = "https://relay.example.com"
+
+
+def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_not_answer(stub, home):
+    """The dashboard names a relay; gclaude keeps it in a settings file and passes that with --settings (which outranks
+    settings.json) only when the gateway's /health fails. A dashboard that stops naming it removes it."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, launcher = gc_paths(home)
+    relay = gdir / "fallback-settings.json"
+    stub.default_models = f"GATEWAY_FALLBACK_URL={RELAY}\n"
+    r = run_gclaude(home, launcher, "-p", "hi")   # the gateway answers: as before; the relay is kept for next time
+    assert r.returncode == 0 and r.stdout.strip() == "claude started -p hi" and r.stderr == "", r.stderr
+    assert json.loads(relay.read_text()) == {"env": {"ANTHROPIC_BASE_URL": RELAY}}
+    assert not any(p == "/health" for p, _ in stub.requests)   # no relay yet, so nothing to check
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.stdout.strip() == "claude started -p hi" and r.stderr == "" and any(p == "/health" for p, _ in stub.requests)
+    stub.health = 502
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.returncode == 0 and r.stdout.strip() == f"claude started --settings {relay} -p hi", r.stderr
+    assert "does not answer, so this session uses the relay" in r.stderr
+    r = run_gclaude(home, launcher, "--settings", "mine.json")   # the user's own settings: left alone
+    assert r.stdout.strip() == "claude started --settings mine.json"
+    assert not list((home / "tmp").glob("gclaude-probe.*"))
+    stub.default_models = ""
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.stdout.strip() == "claude started -p hi" and not relay.exists()
+
+
+@pytest.mark.parametrize("line", [f"GATEWAY_FALLBACK_URL={RELAY}/x\n", "GATEWAY_FALLBACK_URL=http://relay.example.com\n",
+                                  'GATEWAY_FALLBACK_URL=https://a"b\n'])
+def test_gclaude_ignores_a_relay_it_cannot_trust(stub, home, line):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, launcher = gc_paths(home)
+    stub.default_models = line
+    assert run_gclaude(home, launcher).returncode == 0
+    assert not (gdir / "fallback-settings.json").exists()
+
+
+def test_gclaude_off_removes_the_relay(stub, home):
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, launcher = gc_paths(home)
+    stub.default_models = f"GATEWAY_FALLBACK_URL={RELAY}\n"
+    assert run_gclaude(home, launcher).returncode == 0 and (gdir / "fallback-settings.json").exists()
+    assert "relay: https://relay.example.com" in cg(home, "status", "--gclaude").stdout
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert not (gdir / "fallback-settings.json").exists()
 
 
 def test_gclaude_updates_itself_before_starting_when_the_dashboard_serves_a_newer_one(stub, home):

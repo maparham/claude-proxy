@@ -296,6 +296,14 @@ async def test_status_names_gclaudes_model_defaults(env):
                       "ANTHROPIC_DEFAULT_SONNET_MODEL=claude-sonnet-5-5[1m]\n")
 
 
+async def test_status_names_the_relay_gclaude_falls_back_to(env):
+    gw, conn, ids, keys = env
+    gw.cfg.listener.relay_url = "https://claude-ir.example.com/"
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/me/status?format=models", headers=bearer(keys["alice"]))
+    assert r.text.endswith("GATEWAY_FALLBACK_URL=https://claude-ir.example.com\n")
+
+
 async def test_status_tells_an_older_gclaude_to_update(env, monkeypatch):
     from claude_proxy import client_dist
     gw, conn, ids, keys = env

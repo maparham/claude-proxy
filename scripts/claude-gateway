@@ -676,6 +676,11 @@ if mode == "on":
                 " \"$CLAUDE_CONFIG_DIR/settings.json\" 2>/dev/null)\n"
                 "# The same request names the newest models, which become the /model defaults (claude-gateway models).\n"
                 'why= code= models=$(mktemp "${TMPDIR:-/tmp}/gclaude-models.XXXXXX" 2>/dev/null) || models=/dev/null\n'
+                "# The gateway's /health, beside the dashboard's request so the start takes no longer: when it does not answer\n"
+                "# within 3 s (or Cloudflare answers for it, 5xx), Claude Code starts on the relay the dashboard named (below).\n"
+                'probe=; if [ -f "$CLAUDE_CONFIG_DIR/fallback-settings.json" ] && probe=$(mktemp "${TMPDIR:-/tmp}/gclaude-probe.XXXXXX" 2>/dev/null); then\n'
+                f"  curl -s -o /dev/null --max-time 3 -w '%{{http_code}}' {shlex.quote(c.get('url', '').rstrip('/') + '/health')} >\"$probe\" 2>/dev/null &\n"
+                "fi\n"
                 "if [ -z \"$key\" ]; then\n"
                 "  why='signed out (/logout_gclaude)'\n"
                 "else\n"
@@ -689,7 +694,7 @@ if mode == "on":
                 "# Claude Code's own update, then start the new one. The installer swaps in the new copy only once it has all\n"
                 "# of it and replaces this file by a rename, so sh goes on reading this one. A failed update starts this version.\n"
                 'if [ "$code" = 200 ] && [ -z "${GCLAUDE_AUTO_UPDATED:-}" ] && grep -qx GCLAUDE_UPDATE=1 "$models" 2>/dev/null; then\n'
-                '  rm -f "$models"\n'
+                '  rm -f "$models"; [ -z "$probe" ] || rm -f "$probe"\n'
                 "  echo 'gclaude: updating to the newer version on the gateway...' >&2\n"
                 f"  script=$(curl -fsSL --max-time 30 {shlex.quote(dash + '/install')}) &&"
                 " printf '%s\\n' \"$script\" | CLAUDE_GATEWAY_UPDATE=1 sh >/dev/null ||\n"
@@ -698,6 +703,20 @@ if mode == "on":
                 "fi\n"
                 'if [ "$code" = 200 ] && [ "$models" != /dev/null ]; then "$gw" models --gclaude "$models" >/dev/null 2>&1; fi\n'
                 '[ "$models" = /dev/null ] || rm -f "$models"\n'
+                "# Use the relay when the probe failed, unless an argument names settings of its own. Its --settings outranks\n"
+                "# settings.json, which an ANTHROPIC_BASE_URL in the environment would not. The resume hint then repeats it, so\n"
+                "# the hint below is left as Claude Code prints it.\n"
+                'if [ -n "$probe" ]; then\n'
+                '  wait\n'
+                '  case $(cat "$probe" 2>/dev/null) in [234]??) ;; *)\n'
+                '    own=; for a in "$@"; do case $a in --settings|--settings=*) own=1 ;; esac; done\n'
+                '    if [ -z "$own" ] && [ -f "$CLAUDE_CONFIG_DIR/fallback-settings.json" ]; then\n'
+                f"      echo {shlex.quote('gclaude: ' + c.get('url', '').rstrip('/') + ' does not answer, so this session uses the relay.')} >&2\n"
+                '      set -- --settings "$CLAUDE_CONFIG_DIR/fallback-settings.json" "$@"\n'
+                "    fi ;;\n"
+                "  esac\n"
+                '  rm -f "$probe"\n'
+                "fi\n"
                 'if [ -n "$why" ]; then\n'
                 "  echo \"gclaude: $why; signing this computer in again.\" >&2\n"
                 '  CLAUDE_GATEWAY_FROM_GCLAUDE=1 "$gw" on --gclaude --login ||'
@@ -766,7 +785,7 @@ gclaude_on() {
 gclaude_off() {
   if ! gclaude_ours && [ ! -f "$GCLAUDE_DIR/settings.json" ]; then echo "gclaude was not set up; nothing to undo."; return; fi
   python3 "$(src_dir)/gclaude-sync.py" unsync "$GCLAUDE_DIR" "$(dirname "$SETTINGS")" || true   # the rest of off still runs
-  rm -f "$GCLAUDE_SYNC"
+  rm -f "$GCLAUDE_SYNC" "$GCLAUDE_DIR/fallback-settings.json"
   if [ -f "$GCLAUDE_DIR/settings.json" ]; then
     edit_settings off "$GCLAUDE_DIR/settings.json" gclaude
     rm -f "$GCLAUDE_DIR/settings.json.bak-claude-gateway"   # the copy from before `off` still holds the key
@@ -792,6 +811,10 @@ gclaude_status() {   # what `gclaude status` shows: its gateway, whether this co
   key=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1])).get("env", {}).get("ANTHROPIC_AUTH_TOKEN", ""))' \
         "$GCLAUDE_DIR/settings.json" 2>/dev/null || true)
   if curl -fsS --max-time 10 "$url/health" >/dev/null 2>&1; then echo "gateway: $url (reachable)"; else echo "gateway: $url (NOT reachable)"; fi
+  relay=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["env"]["ANTHROPIC_BASE_URL"])' "$GCLAUDE_DIR/fallback-settings.json" 2>/dev/null) || relay=
+  if [ -n "$relay" ]; then   # where gclaude starts when the gateway does not answer
+    if curl -fsS --max-time 10 "$relay/health" >/dev/null 2>&1; then echo "relay: $relay (reachable)"; else echo "relay: $relay (NOT reachable)"; fi
+  fi
   [ -n "$key" ] || { echo "account: signed out; run gclaude to sign in"; return; }
   reply=$(printf 'Authorization: Bearer %s\n' "$key" | curl -sS --max-time 10 -H @- -w '\n%{http_code}' \
           "$dash/api/me/status?format=account" 2>/dev/null || true)
@@ -816,11 +839,33 @@ gclaude_models() {   # FILE: the dashboard's NAME=value lines (/api/me/status?fo
   python3 - "$1" "$GCLAUDE_DIR/settings.json" "$CLIENT" <<'EOF'
 import json, os, re, sys, tempfile
 lines, settings, client = sys.argv[1:]
-new = {}
+new, fallback = {}, None
 for line in open(lines, encoding="utf-8", errors="replace"):
     m = re.fullmatch(r"ANTHROPIC_DEFAULT_(FABLE|OPUS|SONNET)_MODEL=(claude-([a-z]+)-[0-9][0-9-]*\[1m\])", line.strip())
     if m and m.group(3) == m.group(1).lower():
         new[line.split("=")[0]] = m.group(2)
+    m = re.fullmatch(r"GATEWAY_FALLBACK_URL=(https://[A-Za-z0-9.-]+(:[0-9]+)?)", line.strip())
+    if m:
+        fallback = m.group(1)
+# The relay the launcher starts on when the gateway's URL does not answer: a settings file it passes with --settings,
+# which outranks settings.json (an ANTHROPIC_BASE_URL in the environment would not). None when the dashboard names
+# none, or names the URL this computer already uses.
+relay = os.path.join(os.path.dirname(settings), "fallback-settings.json")
+try:
+    url = json.load(open(settings)).get("env", {}).get("ANTHROPIC_BASE_URL", "").rstrip("/")
+except (OSError, ValueError, AttributeError):
+    url = None
+if url is not None:
+    want = json.dumps({"env": {"ANTHROPIC_BASE_URL": fallback}}) + "\n" if fallback and fallback != url else None
+    have = open(relay).read() if os.path.exists(relay) else None
+    if want is None and have is not None:
+        os.remove(relay)
+    elif want is not None and want != have:
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(relay))
+        with os.fdopen(fd, "w") as f:
+            f.write(want)
+        os.chmod(tmp, 0o644)
+        os.replace(tmp, relay)
 c = json.load(open(client)) if new else {}
 added = c.get("gclaude", {}).get("added_models") if isinstance(c.get("gclaude"), dict) else None
 s = json.load(open(settings)) if isinstance(added, dict) else {}

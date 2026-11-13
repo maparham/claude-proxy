@@ -11,6 +11,7 @@ secure_cookies = true
 public_url = "https://claude.rahkar.pro"
 dashboard_url = "https://dash.rahkar.pro"
 home_url = "https://rahkar.pro"                 # the home page; sign-in links go on to dashboard_url
+relay_url = "https://claude-ir.rahkar.pro"      # Iranian VPS (ssh gateway-ir), Xray tunnel to this box; gclaude falls back to it
 
 [db]
 path = "/data/claude_proxy.db"

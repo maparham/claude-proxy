@@ -24,6 +24,19 @@ The gateway has its own Lightsail nano (`claude-gateway`, us-east-2, static IP `
 `https://dash.rahkar.pro/dashboard`. Streams of over 90 s pass through Cloudflare intact, and the dashboard
 sees real client IPs.
 
+## Iranian relay (`claude-ir.rahkar.pro`)
+
+An ArvanCloud VPS (`95.38.187.63`, Debian 13, `ssh gateway-ir`) relays the API for users in Iran:
+Caddy on it serves `claude-ir.rahkar.pro` (DNS only in Cloudflare, Let's Encrypt certificate) and hands requests
+to Xray, whose VLESS + Reality tunnel reaches Xray on this box (port 443, open in Lightsail to the VPS's address
+only), which delivers them to `127.0.0.1:18480` and nothing else. Anthropic sees only this box. Both ends run
+`xray.service` with `/usr/local/etc/xray/config.json`; the tunnel's keys are only there, not in the repo. The
+gateway records each user's own IP (Caddy's X-Forwarded-For, trusted from 127.0.0.1).
+
+`[listener] relay_url` in `config.toml` names it to gclaude, which starts on it when `claude.rahkar.pro/health`
+does not answer within 3 s (or answers 5xx). A user can also make it their gateway outright:
+`claude-gateway on --url https://claude-ir.rahkar.pro --dashboard https://dash.rahkar.pro`.
+
 ## Automatic deploys
 
 Every push to `master` whose tests pass goes live (`.github/workflows/deploy.yml`). "Run workflow" on
