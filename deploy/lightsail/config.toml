@@ -20,6 +20,7 @@ path = "/data/claude_proxy.db"
 [signup]
 enabled = true
 clerk_publishable_key = "pk_live_Y2xlcmsuZGFzaC5yYWhrYXIucHJvJA"
+clerk_proxy_url = "https://dash.rahkar.pro/__clerk"   # Clerk through the dashboard: from Iran Clerk's own host freezes
 
 # Order emails (docs/superpowers/specs/2026-10-04-order-requests-design.md). support@chartkar.app only forwards to
 # maparham40@gmail.com, so mail goes out through that Gmail account (app password "Claude Gateway" as SMTP_PASSWORD in
@@ -90,3 +91,4 @@ vat_percent = 10
 [telegram]
 bot_username = "rahkar_ai_bot"
 admin_chat_id = -5520844535
+webhook_url = "https://hooks.rahkar.pro/telegram/webhook"   # stays on the Cloudflare tunnel; Telegram cannot reach the Iranian VPS
