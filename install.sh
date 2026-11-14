@@ -79,8 +79,38 @@ rm -rf "$share"
 mv "$share.new" "$share"
 ln -sfn "$share/scripts/claude-gateway" "$link"
 
-case ":$PATH:" in *":$bin:"*) ;; *) echo "Add ~/.local/bin to your PATH to run claude-gateway and gclaude." ;; esac
+# ~/.local/bin on PATH in the startup file of the user's shell, so claude-gateway and gclaude run in the next terminal
+# (this one can't be changed from here). Once per file, marked; CLAUDE_GATEWAY_NO_MODIFY_PATH=1 leaves the files alone.
+# bash on macOS: Terminal opens login shells, which read ~/.bash_profile, not ~/.bashrc. Others: ~/.profile.
+case ":$PATH:" in
+  *":$bin:"*) ;;
+  *)
+    mark="# added by claude-gateway's installer"
+    line='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
+    case ${SHELL##*/} in
+      zsh) rc=${ZDOTDIR:-$HOME}/.zshrc ;;
+      bash) if [ "$(uname -s)" = Darwin ]; then rc=$HOME/.bash_profile; else rc=$HOME/.bashrc; fi ;;
+      fish) rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/claude-gateway.fish
+            line='contains $HOME/.local/bin $PATH; or set -gx PATH $HOME/.local/bin $PATH' ;;
+      *) rc=$HOME/.profile ;;
+    esac
+    short=$(printf '%s' "$rc" | sed "s|^$HOME/|~/|")
+    if [ -n "${CLAUDE_GATEWAY_NO_MODIFY_PATH:-}" ]; then
+      echo "Add ~/.local/bin to your PATH to run claude-gateway and gclaude."
+    elif grep -qF "$mark" "$rc" 2>/dev/null; then
+      CLAUDE_GATEWAY_PATH_FILE=$short; export CLAUDE_GATEWAY_PATH_FILE
+    elif mkdir -p "$(dirname "$rc")" && printf '\n%s\n%s\n' "$mark" "$line" >>"$rc" 2>/dev/null; then
+      echo "Added ~/.local/bin to your PATH in $short."
+      CLAUDE_GATEWAY_PATH_FILE=$short; export CLAUDE_GATEWAY_PATH_FILE
+    else
+      echo "Add ~/.local/bin to your PATH to run claude-gateway and gclaude ($short could not be changed)."
+    fi ;;
+esac
 if [ $# -gt 0 ]; then
   exec "$link" "$@"
 fi
-echo "Installed claude-gateway. Next: run 'claude-gateway on' (and 'on --opencode' if you use it) to refresh what it set up."
+if [ -n "${CLAUDE_GATEWAY_PATH_FILE:-}" ]; then
+  echo "Installed claude-gateway. Next: open a new terminal (or run '. $CLAUDE_GATEWAY_PATH_FILE'), then 'claude-gateway on' (and 'on --opencode' if you use it) to refresh what it set up."
+else
+  echo "Installed claude-gateway. Next: run 'claude-gateway on' (and 'on --opencode' if you use it) to refresh what it set up."
+fi

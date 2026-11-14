@@ -778,7 +778,11 @@ gclaude_on() {
   [ -z "${CLAUDE_GATEWAY_FROM_GCLAUDE:-}" ] || return 0   # gclaude is signing in and about to start
   case ":$PATH:" in
     *":$(dirname "$GCLAUDE"):"*) echo "${b}Next: run 'gclaude' instead of 'claude'.${r}" ;;
-    *) echo "${b}Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'.${r}" ;;
+    *) if [ -n "${CLAUDE_GATEWAY_PATH_FILE:-}" ]; then   # the installer put it on PATH for the next terminal
+         echo "${b}Next: open a new terminal (or run '. $CLAUDE_GATEWAY_PATH_FILE'), then run 'gclaude' instead of 'claude'.${r}"
+       else
+         echo "${b}Next: add $(dirname "$GCLAUDE") to your PATH, then run 'gclaude' instead of 'claude'.${r}"
+       fi ;;
   esac
 }
 

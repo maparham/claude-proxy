@@ -1,5 +1,6 @@
 """install.sh, run against a tarball of this checkout instead of GitHub."""
 import os
+import sys
 import shutil
 import subprocess
 import tarfile
@@ -38,13 +39,13 @@ def fake_claude(home, body='#!/bin/sh\necho "2.1.0 (Claude Code)"\n', mode=0o755
     return fake
 
 
-def install(home, tarball, *args, path=None, claude_installer=None):
+def install(home, tarball, *args, path=None, claude_installer=None, **extra):
     if path is None:
         path = f"{home / 'claudebin'}:{os.environ['PATH']}" if (home / "claudebin").exists() else \
             f"{fake_claude(home)}:{os.environ['PATH']}"
     env = {"PATH": path, "HOME": str(home), "TMPDIR": str(home / "tmp"),
            "CLAUDE_GATEWAY_TARBALL": f"file://{tarball}",
-           "CLAUDE_GATEWAY_CLAUDE_INSTALLER": f"file://{claude_installer or home / 'no-claude-installer.sh'}"}
+           "CLAUDE_GATEWAY_CLAUDE_INSTALLER": f"file://{claude_installer or home / 'no-claude-installer.sh'}", **extra}
     return subprocess.run(["sh", str(INSTALL), *args], capture_output=True, text=True, env=env, timeout=60)
 
 
@@ -57,7 +58,7 @@ def test_install_puts_claude_gateway_on_the_path_with_its_files(home, tarball):
     for f in ("scripts/claude-gateway", "scripts/statusline.sh", "scripts/gclaude-sync.py", "examples/opencode/muse.md"):
         assert (share / f).read_bytes() == (ROOT / f).read_bytes()
     assert os.access(share / "scripts" / "claude-gateway", os.X_OK)
-    assert "Add " in r.stdout                                          # ~/.local/bin isn't on this PATH
+    assert "Added ~/.local/bin to your PATH in ~/" in r.stdout   # it isn't on this PATH
     help_out = subprocess.run([str(link), "--help"], capture_output=True, text=True).stdout
     assert "claude-gateway on --gclaude" in help_out
 
@@ -174,3 +175,36 @@ def test_install_from_the_gateways_own_archive(home, tmp_path):
         assert (share / f).read_bytes() == (ROOT / f).read_bytes()
     version = (share / "scripts" / "VERSION").read_text().strip()   # `git describe`; empty in a checkout without tags
     assert version == "" or version.startswith("v")
+
+
+@pytest.mark.parametrize("shell, rc", [("/bin/zsh", ".zshrc"), ("/bin/sh", ".profile"),
+                                       ("/bin/bash", ".bash_profile" if sys.platform == "darwin" else ".bashrc")])
+def test_install_puts_local_bin_on_the_path_of_the_next_terminal_once(home, tarball, shell, rc):
+    """A fresh Debian root has no ~/.local/bin on PATH: gclaude was "command not found" after a working install."""
+    (home / rc).write_text("# mine\n")
+    r = install(home, tarball, SHELL=shell)
+    assert r.returncode == 0, r.stderr
+    assert f"Added ~/.local/bin to your PATH in ~/{rc}." in r.stdout
+    assert f"open a new terminal (or run '. ~/{rc}')" in r.stdout
+    assert install(home, tarball, SHELL=shell).returncode == 0   # again: not added twice
+    text = (home / rc).read_text()
+    assert text.startswith("# mine\n") and text.count("added by claude-gateway") == 1
+    bin_ = str(home / ".local" / "bin")
+    for start in ("/usr/bin:/bin", f"{bin_}:/usr/bin:/bin"):   # sourced: on PATH once, even when it already was
+        out = subprocess.run(["sh", "-c", f". {home / rc}; printf %s \"$PATH\""], capture_output=True, text=True,
+                             env={"HOME": str(home), "PATH": start}).stdout
+        assert out.split(":").count(bin_) == 1, out
+
+
+def test_install_leaves_startup_files_alone_when_told_or_when_local_bin_is_on_the_path(home, tarball):
+    r = install(home, tarball, SHELL="/bin/bash", CLAUDE_GATEWAY_NO_MODIFY_PATH="1")
+    assert r.returncode == 0 and "Add ~/.local/bin to your PATH" in r.stdout
+    path = f"{home / '.local' / 'bin'}:{fake_claude(home)}:{os.environ['PATH']}"
+    assert install(home, tarball, path=path, SHELL="/bin/bash").returncode == 0
+    assert not [p for p in home.iterdir() if p.name in (".bashrc", ".bash_profile", ".profile")]
+
+
+def test_install_puts_local_bin_on_fishs_path_in_its_own_file(home, tarball):
+    r = install(home, tarball, SHELL="/usr/bin/fish")
+    conf = home / ".config" / "fish" / "conf.d" / "claude-gateway.fish"
+    assert r.returncode == 0 and "fish_add_path" not in conf.read_text() and "set -gx PATH $HOME/.local/bin" in conf.read_text()
