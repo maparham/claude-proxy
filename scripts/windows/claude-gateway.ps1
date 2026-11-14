@@ -584,6 +584,17 @@ function Gclaude-On($c) {
 
   Write-Launcher $c
 
+  # The dashboard's models reply, which gclaude.cmd otherwise first fetches at its first start: it names the relay, so
+  # that very start can already check the gateway and use the relay when the gateway does not answer (from Iran,
+  # Cloudflare can stall). Offline or with the dashboard down, nothing changes.
+  try {
+    $r = Invoke-Json GET "$($c.dashboard)/api/me/status?format=models" $null @{ Authorization = "Bearer $($c.key)" }
+    if ($r.code -eq 200) {
+      $tmp = [IO.Path]::GetTempFileName()
+      try { [IO.File]::WriteAllText($tmp, [string]$r.text); Update-Models $tmp } finally { Remove-Item -LiteralPath $tmp -Force -ErrorAction SilentlyContinue }
+    }
+  } catch { }
+
   if ($env:CLAUDE_GATEWAY_UPDATE) { return }   # gclaude update: its own lines say what happened
   Write-Output "gclaude now runs Claude Code through the gateway at $($c.url); plain 'claude' is unchanged."
   if (($env:Path -split ';') -notcontains $Bin -and -not $env:CLAUDE_GATEWAY_FROM_GCLAUDE) { Write-Output "Open a new terminal (or add $Bin to your PATH) to run gclaude." }

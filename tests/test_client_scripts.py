@@ -1340,6 +1340,17 @@ def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_n
     assert r.stdout.strip() == "claude started -p hi" and not relay.exists()
 
 
+def test_gclaude_knows_the_relay_from_the_install_so_its_first_start_can_use_it(stub, home):
+    """Right after an install from Iran the gateway can stall; the first start must not wait for a second one."""
+    stub.default_models = f"GATEWAY_FALLBACK_URL={RELAY}\n"
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    gdir, _, launcher = gc_paths(home)
+    assert json.loads((gdir / "fallback-settings.json").read_text()) == {"env": {"ANTHROPIC_BASE_URL": RELAY}}
+    stub.health = 502
+    r = run_gclaude(home, launcher, "-p", "hi")
+    assert r.stdout.strip() == f"claude started --settings {gdir / 'fallback-settings.json'} -p hi", r.stderr
+
+
 @pytest.mark.parametrize("line", [f"GATEWAY_FALLBACK_URL={RELAY}/x\n", "GATEWAY_FALLBACK_URL=http://relay.example.com\n",
                                   'GATEWAY_FALLBACK_URL=https://a"b\n'])
 def test_gclaude_ignores_a_relay_it_cannot_trust(stub, home, line):
@@ -1365,6 +1376,7 @@ def test_gclaude_updates_itself_before_starting_when_the_dashboard_serves_a_newe
     installer, as `gclaude update` does, and starts the new launcher, which does not ask to update again."""
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     launcher = gc_paths(home)[2]
+    stub.requests.clear()   # the install's own models request
     ran = home / "installer-ran"
     stub.install = f'echo installer output; echo "$CLAUDE_GATEWAY_UPDATE" >> {ran}\n'
     stub.default_models = "GCLAUDE_UPDATE=1\n"
@@ -2222,6 +2234,7 @@ def test_version_comes_from_the_archives_describe_or_git(tmp_path):
 def test_gclaude_version_shows_gclaudes_then_claude_codes(stub, home):
     assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
     _, _, launcher = gc_paths(home)
+    stub.requests.clear()   # the install's own models request
     (launcher.parent / "claude-gateway").write_text('#!/bin/sh\n[ "$1" = version ] && echo 1.0.8\n')
     (launcher.parent / "claude-gateway").chmod(0o755)
     r = run_gclaude(home, launcher, "--version")

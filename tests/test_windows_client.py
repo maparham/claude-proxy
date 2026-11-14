@@ -619,6 +619,15 @@ def test_gclaude_moves_its_own_model_defaults_to_the_newest_the_dashboard_names(
 
 
 @on_windows
+def test_gclaude_knows_the_relay_from_the_install(gclaude, installed, stub, tmp_path):
+    win = installed
+    stub.default_models = "GATEWAY_FALLBACK_URL=https://relay.example.com\n"
+    assert win.cg("on").returncode == 0
+    relay = win.gdir / "fallback-settings.json"
+    assert json.loads(relay.read_text(encoding="utf-8")) == {"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}
+
+
+@on_windows
 def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_not_answer(gclaude, installed, stub, tmp_path):
     """The dashboard names a relay; gclaude keeps it in a settings file and passes that with --settings (which outranks
     settings.json) only when the gateway's /health fails, and never over the user's own --settings."""
