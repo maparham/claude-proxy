@@ -801,6 +801,13 @@ async def test_set_webhook_registers_our_url(tg):
     assert len(tg.fake.sent("setMyCommands")) == 2
 
 
+async def test_webhook_url_override(tg):
+    tg.cfg.telegram.webhook_url = "https://hooks.rahkar.pro/telegram/webhook"
+    assert await telegram.set_webhook(tg.cfg, tg.gw.http) is True
+    (hook,) = tg.fake.sent("setWebhook")
+    assert hook["url"] == "https://hooks.rahkar.pro/telegram/webhook"
+
+
 async def test_startup_only_checks(tg, caplog):
     tg.fake.webhook_url = "https://elsewhere.example/telegram/webhook"
     await telegram.check_webhook(tg.cfg, tg.gw.http)

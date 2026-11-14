@@ -213,6 +213,9 @@ class TelegramConfig:
     TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in the environment."""
     bot_username: str = ""
     admin_chat_id: int = 0   # the private admin group (a negative id)
+    # Where Telegram delivers updates; empty: <dashboard_url>/telegram/webhook. Set when the dashboard is served from
+    # Iran (design 2026-11-14-iran-hosting), which Telegram's servers cannot reach.
+    webhook_url: str = ""
 
     def token(self) -> str | None:
         return os.environ.get("TELEGRAM_BOT_TOKEN") or None

@@ -346,7 +346,7 @@ COMMANDS = {
 
 
 def webhook_url(cfg: Config) -> str:
-    return f"{cfg.listener.dashboard_url.rstrip('/')}/telegram/webhook"
+    return cfg.telegram.webhook_url or f"{cfg.listener.dashboard_url.rstrip('/')}/telegram/webhook"
 
 
 async def set_webhook(cfg: Config, http: httpx.AsyncClient) -> bool:
