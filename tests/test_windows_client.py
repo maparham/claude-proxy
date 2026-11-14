@@ -660,6 +660,7 @@ def test_gclaude_updates_itself_before_starting_when_the_dashboard_serves_a_newe
     stub.files["/install.ps1"] = f"[IO.File]::AppendAllText('{marker}', 'ran ' + $env:CLAUDE_GATEWAY_UPDATE + ';')\n".encode()
     stub.default_models = "GCLAUDE_UPDATE=1\n"
     fake = fake_claude(win, tmp_path)
+    stub.requests.clear()   # the install's own models request
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|-p hi", r.out
     assert "updating to the newer version on the gateway" in r.out and "failed" not in r.out, r.out
