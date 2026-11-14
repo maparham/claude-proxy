@@ -153,6 +153,7 @@ let pageStale = false;
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
 const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+  "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_share", "trial_share_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
@@ -626,6 +627,7 @@ async function renderOverview(main) {
     buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null,
     isAdmin() ? null : api("/api/referrals/me").catch(() => null)]);
   const order = mo && mo.order;
+  const trial = buyer && tk && !tk.current && !tk.queued ? await api("/api/me/trial").catch(() => null) : null;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
   const tot = ov.totals[S.prefs.period] || ov.totals["24h"];
@@ -673,6 +675,7 @@ async function renderOverview(main) {
         </div>` : ""}
         ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order)}
       </div>`}
+      ${trialCard(trial)}
       ${tk && !tk.current ? priceListCard(tk, order) : ""}
       ${tk ? pastCard(tk) : ""}
       ${isAdmin() ? "" : inviteCard(ref)}
@@ -684,6 +687,7 @@ async function renderOverview(main) {
   const fableClose = $("#fable-close", main);
   if (fableClose) fableClose.onclick = () => { S.prefs.fableNoteSeen = true; savePrefs(); $("#fable-note", main).remove(); };
   if (tk) wireOrdering(main, tk, order);
+  if (trial) wireTrial(main, trial);
   if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">${t("ov.no_figures")}</p>`;
   if (isAdmin()) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
@@ -695,6 +699,52 @@ async function renderOverview(main) {
     api(`/api/me/payments/${id}`).then(showPaymentNotice).catch(() => {});
   }
   if (S.payLink) { const code = S.payLink; S.payLink = null; payLinkDialog(code, tk); }
+}
+// ---------- the free trial (2026-11-14) ----------
+
+// Offered to a user with no pass who never had one: a claim button, then Start now while the claim waits.
+function trialCard(tr) {
+  if (!tr || !(tr.can_claim || tr.claim)) return "";
+  const vars = { len: trialLen(tr.duration_min), tier: tierName(tr.tier, tr.tier === "lite" ? "Lite" : tr.tier === "standard" ? "Standard" : tr.tier) };
+  return `<div class="card trial-card" id="trial-card"><h3>${t("trial.title")}</h3>
+    ${tr.claim ? `<p class="sub">${t("trial.waiting", { ...vars, date: fmtDate(tr.claim.expires_at) })}</p>
+      <p><button class="btn primary" id="trial-start">${t("trial.start_btn")}</button></p>`
+    : `<p class="sub">${t("trial.offer", vars)}</p>${tr.turnstile_site_key ? `<div id="trial-ts"></div>` : ""}
+      <p><button class="btn primary" id="trial-claim"${tr.turnstile_site_key ? " disabled" : ""}>${t("trial.claim_btn")}</button></p>`}
+    <div class="error" id="trial-err"></div></div>`;
+}
+function wireTrial(root, tr) {
+  const card = $("#trial-card", root);
+  if (!card) return;
+  const err = $("#trial-err", root);
+  let token = "";
+  const claim = $("#trial-claim", root), start = $("#trial-start", root);
+  if (claim && tr.turnstile_site_key) {
+    // Not loadScript: its crossorigin attribute would need CORS headers Turnstile's script doesn't promise.
+    const ready = window.turnstile ? Promise.resolve() : new Promise((resolve, reject) => {
+      const el = document.createElement("script");
+      el.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"; el.async = true;
+      el.onload = resolve; el.onerror = reject;
+      document.head.appendChild(el);
+    });
+    ready.then(() => {
+      window.turnstile.render($("#trial-ts", root), { sitekey: tr.turnstile_site_key, callback: (tok) => { token = tok; claim.disabled = false; },
+        "expired-callback": () => { token = ""; claim.disabled = true; } });
+    }).catch(() => { err.textContent = t("app.could_not"); });
+  }
+  if (claim) claim.onclick = async () => { if (await apiPost("/api/me/trial/claim", { turnstile_token: token }, err, claim)) render(); };
+  if (start) start.onclick = async () => {
+    const r = await apiPost("/api/me/trial/start", {}, err, start);
+    if (r) { infoInline(t("trial.title"), t("trial.started", { date: fmtShort(r.ends_at) })); render(); }
+  };
+  // From the home page's "Try free" button: /dashboard?trial=1 brings the card into view once.
+  const q = new URLSearchParams(location.search);
+  if (q.get("trial") === "1") {
+    q.delete("trial");
+    history.replaceState(null, "", `${location.pathname}${q.toString() ? `?${q}` : ""}${location.hash}`);
+    card.scrollIntoView({ block: "center" });
+    card.classList.add("flash");
+  }
 }
 // The usage totals as tiles: on the admin's overview over 24 h / 7 d / 30 d, with their own switch; under everyone else's
 // usage history, `tot` is the chart's range summed, so the chart's range switch drives both.
@@ -767,7 +817,7 @@ function wirePast(root, tk) {
       .sort((a, b) => { const x = k(a), y = k(b); const c = typeof x === "string" ? x.localeCompare(y, LOC) : x - y; return desc ? -c : c; });
     const filters = filter("tier", tierText, t("past.all_tiers")) + filter("how", howText, t("past.all_how"));
     list.innerHTML = `${filters ? `<div class="past-filters">${filters}</div>` : ""}<table class="data"><thead><tr>${th("tier", t("price.tier"))}${th("period", t("tk.period"))}${th("how", t("past.how"))}${th("tokens", t("pass.tokens"), "r", tipI("weighted"))}${th("paid", t("tk.paid"), "r")}</tr></thead>
-    <tbody>${foldRows(shown.map((p) => `<tr><td>${tierName(p.tier, p.label)}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
+    <tbody>${foldRows(shown.map((p) => `<tr><td>${tierName(p.tier, p.label)}${p.trial ? ` <span class="muted">(${t("trial.short")})</span>` : ""}</td><td class="nowrap">${fmtDate(p.starts_at)} ${t("app.arrow")} ${fmtDate(p.ended_at)}</td>
       <td class="muted">${howText(p)}</td>${tokensCell(p)}<td class="r">${esc(money(p.amount, p.currency))}</td></tr>`)) || `<tr><td colspan="5" class="muted">${t("search.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
     wireMore(list);
     list.querySelectorAll("[data-psort]").forEach((b) => (b.onclick = () => {
@@ -841,11 +891,11 @@ function passList(c, no) {
   const bought = (p) => (p.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(p.bought_at) })}</div>` : "");
   if (!others.length) return "";
   return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
-      <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${lengthName(p.length)})</b>${badge(p)}</div>
+      <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${passLen(p)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && !p.used_up && p.pct_5h >= 100, wait(p.reset_5h))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && !p.used_up && p.pct_7d >= 100, wait(p.reset_7d))}${passTokens(p)}`}
-      ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.pin")}</button>`}
-      ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`)}">${t("pass.start_now")}</button>` : ""}
+      ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${passLen(p)})`)}">${t("pass.pin")}</button>`}
+      ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${passLen(p)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;
 }
 function userLimitsCard(me, tk, order) {
@@ -889,7 +939,7 @@ function userLimitsCard(me, tk, order) {
   const inUse = multi && c.passes.find((p) => p.serving || p.held);
   const inUseAt = inUse ? c.passes.indexOf(inUse) : -1;
   const no = passNumbers(c);
-  const hero = inUse ? `<div class="pass-hero${inUse.held ? " held" : ""}" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${lengthName(inUse.length)})</b>
+  const hero = inUse ? `<div class="pass-hero${inUse.held ? " held" : ""}" data-pass="${inUseAt}"><div class="pass-card-head"><b>${passNo(no[inUseAt])}${tierName(inUse.tier, inUse.label)} (${passLen(inUse)})</b>
       ${inUse.held ? pausedChip(inUse) : `<span class="badge state-active">${t("pass.serving")}</span>`}<span class="muted pass-hero-left">${passLeft(inUse.effective_end)}</span></div>
       ${split}${limitsCompact(me.limits, noWeek)}${passTokens(inUse)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
@@ -920,7 +970,7 @@ function passTimeline(tk, inUseAt = -1, no = []) {
   const rows = order.map((i) => {
     const p = tl.passes[i];
     const from = Math.max(p.starts_at, tl.start);
-    const name = `${nf0.format(no[i] || i + 1)}. ${tierNameText(p.tier, p.label)} (${lengthName(p.length)})`;
+    const name = `${nf0.format(no[i] || i + 1)}. ${tierNameText(p.tier, p.label)} (${passLen(p)})`;
     // A bar names the time it spans and, for a running pass, how much of it is used (where that fits, see
     // fitBarLabels); a used-up pass's bar is dimmed.
     const cp = cps[i] && !cps[i].queued ? cps[i] : null;
@@ -1069,6 +1119,8 @@ function inviteCard(ref) {
 
 // ---------- order requests: the buyer's side (design 2026-10-04, section 8) ----------
 
+// A pass's length for its name, or "free trial" for a trial pass (2026-11-14).
+const passLen = (p) => (p && p.trial ? t("trial.short") : lengthName(p.length));
 const lengthName = (len) => (["day", "week", "month"].includes(len) ? t(`price.1_${len}`) : esc(len));
 // The open order with Withdraw, or the latest closed one with Dismiss until it is dismissed. The admin note never reaches here.
 // `pay`: online payment is offered, so an open Toman order gets a Pay button (sent unpaid, or its payment never came back).
@@ -1465,6 +1517,7 @@ function userRow(u) {
 // 24-px stroke icons for the user menu, one per action.
 const MENU_IC = {
   limits: '<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  trial: '<path d="M20 12v10H4V12M2 7h20v5H2zM12 22V7"/><path d="M12 7H7.5a2.5 2.5 0 0 1 0-5C11 2 12 7 12 7zM12 7h4.5a2.5 2.5 0 0 0 0-5C13 2 12 7 12 7z"/>',
   grant: '<path d="M2 9a3 3 0 0 0 0 6v2a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-2a3 3 0 0 0 0-6V7a2 2 0 0 0-2-2H4a2 2 0 0 0-2 2z"/><path d="M13 5v2M13 17v2M13 11v2"/>',
   rename: '<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>',
   rotate: '<path d="M21 12a9 9 0 1 1-2.6-6.4L21 8"/><path d="M21 3v5h-5"/>',
@@ -1485,7 +1538,7 @@ function userActions(u) {
   const paused = u.ticket && u.ticket.paused;
   const ungate = u.ticket && u.ticket.gated && (!u.ticket.live || paused) && (!u.revoked || paused)   // revoked: the only way to end a ticket before deleting
     ? item("ungate", t("users.ungate"), paused ? "act_ungate_paused" : "act_ungate") : "";
-  const grant = S.tickets && S.tickets.enabled && !u.revoked && u.enabled ? item("grant", t("users.grant"), "act_grant") : "";
+  const grant = S.tickets && S.tickets.enabled && !u.revoked && u.enabled ? item("grant", t("users.grant"), "act_grant") + item("trial", t("users.trial"), "act_trial") : "";
   const items = upgrade + ungate + (u.revoked ? item("delete", t("users.delete"), "act_delete", " danger")
     : u.id === S.user.id ? item("limits", t("users.limits"), "act_limits") + grant + opencode
     : item("limits", t("users.limits"), "act_limits") + grant + item("rename", t("users.rename"), "act_rename") +
@@ -1864,7 +1917,7 @@ function linkDialog(o, users) {
 }
 
 async function renderPricing(main) {
-  const [{ rates }, p] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices")]);
+  const [{ rates }, p, trial] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices"), api("/api/admin/trial")]);
   const price = (tier, length) => p.prices.find((x) => x.tier === tier && x.length === length)?.usd ?? "";
   const now = Date.now() / 1000;
   const recKey = p.recommended ? `${p.recommended.tier}:${p.recommended.length}` : "";
@@ -1920,7 +1973,9 @@ async function renderPricing(main) {
       ${p.discounts.map((x) => `<tr><td>${p.tiers[x.tier] ? tierName(x.tier, p.tiers[x.tier].label) : esc(x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
         <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">${t("app.cancel_ticket")}</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("pr.no_discounts")}</td></tr>`}
       </tbody></table></div></div>
+    ${trialSettingsCard(trial, p.tiers)}
   </section>`;
+  wireTrialSettings();
   const post = async (path, body, errEl) => { try { await api(path, { method: "POST", body }); render(); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); } };
   const inputChanged = (input) => {
     const v = input.value.trim();
@@ -1989,6 +2044,59 @@ async function renderPricing(main) {
   }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
+}
+
+// ---------- Free trial settings (2026-11-14) ----------
+
+function trialSettingsCard(v, tiers) {
+  const s = v.settings, d = v.tier_default;
+  const whole = (name, val, unit) => `${refWholeInput(name, val)} ${t(unit)}`;
+  const share = (name, val, dflt) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-init="${dflt ? "" : val}" value="${dflt ? "" : val}" placeholder="${esc(`${fmtShare(val)} · ${t("trial.s_default")}`)}" style="width:150px"> ${PCT}`;
+  return `<div class="card" style="margin-top:16px"><h3>${t("trial.title")}</h3>
+    <p class="sub">${t("trial.admin_sub", { today: nfFull.format(v.today), cap: nfFull.format(s.daily_cap), claimed: nfFull.format(v.claimed), started: nfFull.format(v.started), lapsed: nfFull.format(v.lapsed), bought: nfFull.format(v.bought) })}</p>
+    <form id="f-trial">
+    ${refSettingsRow(t("trial.s_enabled"), "trial_enabled", `<input type="checkbox" name="enabled" data-init="${s.enabled ? 1 : 0}"${s.enabled ? " checked" : ""}>`)}
+    ${refSettingsRow(t("trial.s_duration"), "trial_duration", whole("duration_min", s.duration_min, "trial.u_min"))}
+    ${refSettingsRow(t("trial.s_valid"), "trial_valid", whole("valid_hours", s.valid_hours, "trial.u_hours"))}
+    ${refSettingsRow(t("trial.s_tier"), "trial_tier", `<select name="tier" data-init="${d.tier ? "" : esc(s.tier)}"><option value=""${d.tier ? " selected" : ""}>${t("trial.s_default")}</option>
+      ${Object.entries(tiers).map(([k, x]) => `<option value="${esc(k)}"${!d.tier && s.tier === k ? " selected" : ""}>${esc(tierNameText(k, x.label))}</option>`).join("")}</select>`)}
+    ${refSettingsRow(t("trial.s_share"), "trial_share", share("share_pct", s.share_pct, d.share_pct))}
+    ${refSettingsRow(t("trial.s_share_5h"), "trial_share_5h", share("share_5h_pct", s.share_5h_pct, d.share_5h_pct))}
+    ${refSettingsRow(t("trial.s_cap"), "trial_cap", refWholeInput("daily_cap", s.daily_cap))}
+    ${refSettingsRow(t("trial.s_follow_pct"), "trial_follow_pct", refPctInput("follow_pct", s.follow_pct))}
+    ${refSettingsRow(t("trial.s_follow_days"), "trial_follow_days", whole("follow_days", s.follow_days, "trial.u_days"))}
+    <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
+    <div class="error" id="trial-settings-err"></div>
+    </form></div>`;
+}
+function wireTrialSettings() {
+  $("#f-trial").onsubmit = async (e) => {
+    e.preventDefault();
+    const f = e.target, err = $("#trial-settings-err");
+    err.textContent = "";
+    const body = {};
+    if (f.enabled.checked !== (f.enabled.dataset.init === "1")) body.enabled = f.enabled.checked;
+    for (const name of ["duration_min", "valid_hours", "daily_cap", "follow_days"]) {
+      const n = num(f[name].value);
+      if (badNum([n], err)) return;
+      if (n !== Number(f[name].dataset.init)) body[name] = n;
+    }
+    const pct = num(f.follow_pct.value);
+    if (badNum([pct], err)) return;
+    if (pct !== Number(f.follow_pct.dataset.init)) body.follow_pct = pct;
+    for (const name of ["share_pct", "share_5h_pct"]) {   // empty: back to the tier's own
+      const v = f[name].value.trim();
+      if (v === f[name].dataset.init) continue;
+      if (v === "") { body[name] = null; continue; }
+      const n = num(v);
+      if (badNum([n], err)) return;
+      body[name] = n;
+    }
+    if (f.tier.value !== f.tier.dataset.init) body.tier = f.tier.value || null;
+    if (!Object.keys(body).length) return;
+    try { await api("/api/admin/trial", { method: "PUT", body }); render(); }
+    catch (x) { err.textContent = x.message; }
+  };
 }
 
 // ---------- Referrals (design 2026-11-07) ----------
@@ -2309,6 +2417,7 @@ async function userAction(act, id, u) {
   if (act === "upgrade") return upgradeDialog(u);
   if (act === "rename") return nameDialog(u);
   if (act === "grant") return grantDialog([u]);
+  if (act === "trial") return grantTrial(u);
   if (act === "rotate" && !confirmInline(t("users.confirm_rotate", { name: iso(u.name) }))) return;
   if (act === "revoke" && !confirmInline(t("users.confirm_revoke", { name: iso(u.name) }))) return;
   if (act === "delete") return deleteDialog(u);
@@ -2326,6 +2435,19 @@ async function userAction(act, id, u) {
     if (act === "routes_key") return keyDialog(t("key.opencode_for", { name: bdi(u.name) }), r.key, t("key.how_opencode"));
     render();
   } catch (e) { alertInline(e.message); }
+}
+// The admin's free trial grant (2026-11-14): asked again with confirm when the user already had a trial or a pass.
+async function grantTrial(u, confirm = false) {
+  try {
+    const r = await api(`/api/admin/users/${u.id}/trial`, { method: "POST", body: { confirm } });
+    infoInline(t("trial.title"), t("trial.granted", { name: iso(u.name), date: fmtDate(r.expires_at) }));
+  } catch (e) {
+    if (!confirm && e.status === 409 && /confirm to grant anyway/.test(e.raw || "")) {
+      if (confirmInline(t("trial.confirm", { name: iso(u.name) }))) return grantTrial(u, true);
+      return;
+    }
+    alertInline(e.message);
+  }
 }
 function deleteDialog(u) {
   const d = openDialog(`<h3>${t("users.delete_title", { name: bdi(u.name) })}</h3>

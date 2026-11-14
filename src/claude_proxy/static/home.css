@@ -215,3 +215,6 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .order-dialog .order-alt { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; margin: 12px 0 0; font-size: 14px; }
 @media (max-width: 400px) { .order-dialog { padding: 16px; } }
 #vat-note { margin: 12px 0 0; text-align: center; }
+/* The free trial line above the price cards (2026-11-14). */
+.trial-line { margin: 0 0 14px; text-align: center; font-weight: 600; }
+#trial-btn[hidden], .trial-line[hidden] { display: none; }

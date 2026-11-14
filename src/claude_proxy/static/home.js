@@ -192,6 +192,19 @@ document.getElementById("length-toggle").addEventListener("click", (e) => {
   length = b.dataset.length;
   render();
 });
+// The free trial (2026-11-14): while it is offered and today's aren't taken, a hero button (the sign-in window, then the
+// dashboard's trial card) and a line above the cards. Whether this visitor already had one is the dashboard's to say.
+function trialOffer(tr) {
+  if (!tr) return;
+  const len = trialLen(tr.duration_min), tier = I18N.en[`tier.${tr.tier}`] ? t(`tier.${tr.tier}`) : tr.tier;
+  const btn = document.getElementById("trial-btn"), line = document.getElementById("trial-line");
+  btn.textContent = t("home.trial_btn", { len });
+  btn.hidden = false;
+  document.getElementById("hero-signin").classList.remove("primary");
+  btn.onclick = (e) => { if (!(e.metaKey || e.ctrlKey || e.shiftKey) && signInPopup(btn.href)) e.preventDefault(); };
+  line.textContent = t("home.trial_line", { len, tier });
+  line.hidden = false;
+}
 // ZarinPal's trust logo links to javascript:showZPTrust(), which the CSP blocks; open its trust page the way that function does.
 document.getElementById("zarinpal").addEventListener("click", (e) => {
   if (!e.target.closest("a")) return;
@@ -240,7 +253,7 @@ fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw ne
   document.querySelectorAll("#length-toggle button").forEach((b) => { b.hidden = !onSale(d, b.dataset.length); });
   document.getElementById("length-toggle").classList.add("ready");
   if (typeof d.now === "number") skew = d.now - Date.now() / 1000;
-  initCurrencySelect(d); lede(d);
+  initCurrencySelect(d); lede(d); trialOffer(d.trial);
   render(); setInterval(tick, 1000);
 })
   .catch(() => { lede(null); document.getElementById("cards").innerHTML = `<p class="muted">${t("home.prices_unavailable")}</p>`; });

@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, turnstile, upstream, usage
+from . import api_credit, blog, clerk, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -211,6 +211,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def _order_error(request, exc: orders.OrderError):
         # A refused link carries the existing user's id, so the dialog can offer that account instead.
         return JSONResponse(status_code=exc.status, content={"error": str(exc), **exc.extra})
+
+    @app.exception_handler(trials.TrialError)
+    async def _trial_error(request, exc: trials.TrialError):
+        return JSONResponse(status_code=exc.status, content={"error": exc.message})
 
     @app.exception_handler(referrals.ReferralError)
     async def _referral_error(request, exc: referrals.ReferralError):
@@ -1131,6 +1135,63 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         ips = db.user_ips(conn, uid, limit=IPS_SHOWN + 1)
         return {"ips": ips[:IPS_SHOWN], "more": len(ips) > IPS_SHOWN}
 
+    # ---------- free trial (design 2026-11-14) ----------
+
+    @app.post("/api/admin/users/{uid}/trial")
+    async def admin_user_trial(request: Request, uid: int):
+        """A trial claim for any user; `confirm` when they already had a trial or a pass (409 names which)."""
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        c = trials.admin_grant(conn, cfg, actor["id"], target_user(uid), time.time(), confirm=bool(body.get("confirm")))
+        return {"ok": True, "expires_at": c["expires_at"]}
+
+    @app.get("/api/admin/trial")
+    async def admin_trial(request: Request):
+        admin(request)
+        return trials.admin_view(conn, cfg, time.time())
+
+    @app.put("/api/admin/trial")
+    async def admin_trial_settings(request: Request):
+        actor = admin(request, write=True)
+        trials.set_settings(conn, cfg, actor["id"], await _json(request))
+        return trials.admin_view(conn, cfg, time.time())
+
+    @app.get("/api/me/trial")
+    async def my_trial(request: Request):
+        user = principal(request)
+        if not cfg.tickets.enabled:
+            return {"can_claim": False, "reason": "off", "claim": None}
+        return trials.offer(conn, cfg, user, time.time()) | {"turnstile_site_key": cfg.tickets.turnstile_site_key
+                                                              if cfg.tickets.turnstile_on() else None}
+
+    @app.post("/api/me/trial/claim")
+    async def my_trial_claim(request: Request):
+        """The user's own claim; Turnstile-checked when the gateway has it, before anything is stored."""
+        user = principal(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        if cfg.tickets.turnstile_on():
+            ip = client_ip(request)
+            token = str(body.get("turnstile_token") or "")
+            try:
+                ok = bool(token) and await turnstile.verify(cfg.tickets.turnstile_secret(), token, None if ip == "unknown" else ip)
+            except turnstile.TurnstileUnavailable as e:
+                logger.warning("turnstile unavailable: %s", e)
+                raise HTTPException(status_code=503, detail="The verification service is not answering; try again in a moment.",
+                                    headers={"Retry-After": "30"}) from e
+            if not ok:
+                fail(400, "The verification failed; please try again.")
+        trials.claim(conn, cfg, user, time.time())
+        return trials.offer(conn, cfg, user, time.time())
+
+    @app.post("/api/me/trial/start")
+    async def my_trial_start(request: Request):
+        user = principal(request, write=True)
+        need_tickets()
+        t = trials.start(conn, cfg, user["id"], time.time())
+        return {"ok": True, "starts_at": t["starts_at"], "ends_at": t["ends_at"]}
+
     @app.post("/api/admin/users/{uid}/{action}")
     async def user_action(request: Request, uid: int, action: str):
         actor = admin(request, write=True)
@@ -1547,6 +1608,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out = {**tickets.price_table(conn, cfg, now, display_currency()), "now": now, "terms_version": tickets.TERMS_VERSION}
         if cfg.tickets.turnstile_on():   # public by design: the home page's order dialog renders the widget with it
             out["turnstile_site_key"] = cfg.tickets.turnstile_site_key
+        out["trial"] = trials.public_offer(conn, cfg, now)   # None: no trial offered now (off, or today's are taken)
         return out
 
     @app.get("/pricing")

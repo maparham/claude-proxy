@@ -577,3 +577,6 @@ code { unicode-bidi: isolate; direction: ltr; }
 .kv dt, .kv dd { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .kv dt code { font-size: 12px; color: var(--ink-2); }
 @media (max-width: 600px) { .kv > div { grid-template-columns: 1fr; gap: 2px; } }
+/* The free trial card, highlighted once when the home page's "Try free" button brought the user here (2026-11-14). */
+.trial-card.flash { animation: trial-flash 2s ease-out 1; }
+@keyframes trial-flash { from { box-shadow: 0 0 0 3px var(--accent, #d77757); } to { box-shadow: none; } }

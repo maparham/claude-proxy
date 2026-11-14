@@ -57,7 +57,7 @@
     <section class="hero">
       <h1 data-i18n="login.about_title">Your Claude Code access, in one place.</h1>
       <p class="hero-lede" id="hero-lede"></p>
-      <p class="hero-cta"><a class="btn primary" href="/dashboard" data-i18n="home.signin">Sign in</a></p>
+      <p class="hero-cta"><a class="btn primary" id="trial-btn" href="/dashboard?trial=1" hidden></a> <a class="btn primary" id="hero-signin" href="/dashboard" data-i18n="home.signin">Sign in</a></p>
     </section>
     <!-- A Claude Code session as it looks in the terminal, in English like the real one. -->
     <div class="term" aria-hidden="true" translate="no">
@@ -87,6 +87,7 @@
     <div class="pill-toggle" id="length-toggle" role="group" aria-label="Pass length" data-i18n-attr="aria-label:home.length_label">
       <button type="button" data-length="day" aria-pressed="false" data-i18n="home.len_day">Day</button><button type="button" data-length="week" aria-pressed="true" data-i18n="home.len_week">Week</button><button type="button" data-length="month" aria-pressed="false" data-i18n="home.len_month">Month</button>
     </div>
+    <p class="trial-line" id="trial-line" hidden></p>
     <div class="cards" id="cards"><p class="muted" data-i18n="app.loading">Loading…</p></div>
     <p id="vat-note" hidden></p>
   </section>

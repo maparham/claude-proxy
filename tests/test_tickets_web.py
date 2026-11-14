@@ -881,6 +881,7 @@ var passNo = (n) => `${n}. `;
 var tierName = (tier, label) => label;
 var tierNameText = (tier, label) => label;
 var lengthName = (l) => l;
+var passLen = (p) => lengthName(p.length);
 var meter = (pct, at) => `<meter data-pct="${pct}" data-fill="${at ? at.fill : ""}"></meter>`;
 var fmtDurLong = (s) => `${s}s`;
 var fmtShort = (t_) => `T${t_}`;
