@@ -43,7 +43,7 @@ async def test_search_engines_index_the_home_host_only(env):
     async with client(app, "example.com") as c:
         assert '<link rel="canonical" href="https://example.com/">' in (await c.get("/")).text
         robots = (await c.get("/robots.txt")).text
-        assert "Allow: /$" in robots and "Sitemap: https://example.com/sitemap.xml" in robots
+        assert "Allow: /$" in robots and "Allow: /sitemap.xml" in robots and "Sitemap: https://example.com/sitemap.xml" in robots
         sitemap = await c.get("/sitemap.xml")
         assert sitemap.headers["content-type"].startswith("application/xml")
         assert "<loc>https://example.com/</loc>" in sitemap.text and "<loc>https://example.com/privacy</loc>" in sitemap.text

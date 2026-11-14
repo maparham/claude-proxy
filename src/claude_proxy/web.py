@@ -1941,7 +1941,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def robots(request: Request):
         if not cfg.tickets.enabled or not on_home_host(request):
             return PlainTextResponse("User-agent: *\nDisallow: /\n")
-        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /blog\nAllow: /static/\nAllow: /api/pricing\n"
+        return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /blog\nAllow: /static/\nAllow: /api/pricing\nAllow: /sitemap.xml\n"
                                  f"Allow: /{INDEXNOW_KEY}.txt\nDisallow: /\n\n"
                                  f"Sitemap: {home_base(request)}/sitemap.xml\n")
 
