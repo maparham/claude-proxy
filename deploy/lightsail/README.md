@@ -14,8 +14,9 @@ Tunnels → claude-gateway → Routes → Add route → Published application:
 | Hostname | Service URL |
 |---|---|
 | `claude.rahkar.pro` | `http://127.0.0.1:18480` |
-| `dash.rahkar.pro` | `http://127.0.0.1:18481` |
-| `rahkar.pro` | `http://127.0.0.1:18481` (the home page, `[listener] home_url`) |
+| `dash.rahkar.pro` | `http://127.0.0.1:18481` (DNS now points at the Iranian VPS; the route stays for rollback) |
+| `rahkar.pro` | `http://127.0.0.1:18481` (the home page, `[listener] home_url`; likewise) |
+| `hooks.rahkar.pro` | `http://127.0.0.1:18481` (Telegram's webhook, `[telegram] webhook_url`) |
 
 (`apply-tunnel.sh` is for a tunnel run from a local config file.)
 
@@ -29,13 +30,40 @@ sees real client IPs.
 An ArvanCloud VPS (`95.38.187.63`, Debian 13, `ssh gateway-ir`) relays the API for users in Iran:
 Caddy on it serves `claude-ir.rahkar.pro` (DNS only in Cloudflare, Let's Encrypt certificate) and hands requests
 to Xray, whose VLESS + Reality tunnel reaches Xray on this box (port 443, open in Lightsail to the VPS's address
-only), which delivers them to `127.0.0.1:18480` and nothing else. Anthropic sees only this box. Both ends run
+only), which delivers them to `127.0.0.1:18480` and `127.0.0.1:18481` and nothing else. Anthropic sees only this box. Both ends run
 `xray.service` with `/usr/local/etc/xray/config.json`; the tunnel's keys are only there, not in the repo. The
 gateway records each user's own IP (Caddy's X-Forwarded-For, trusted from 127.0.0.1).
 
 `[listener] relay_url` in `config.toml` names it to gclaude, which starts on it when `claude.rahkar.pro/health`
 does not answer within 3 s (or answers 5xx). A user can also make it their gateway outright:
 `claude-gateway on --url https://claude-ir.rahkar.pro --dashboard https://dash.rahkar.pro`.
+
+## rahkar.pro and the dashboard from the Iranian VPS
+
+Since 2026-11-14 `rahkar.pro`, `www.rahkar.pro` and `dash.rahkar.pro` point at the VPS for everyone (A
+`95.38.187.63` / CNAME, DNS only, TTL 1 min): from Iran, Cloudflare froze downloads partway (larger files never
+arrived), so the dashboard and sign-in did not load (`docs/superpowers/specs/2026-11-14-iran-hosting-design.md`).
+Caddy on the VPS serves them (`www` redirects to the apex) and hands them to Xray's `dash` inbound
+(`127.0.0.1:18481` on the VPS), which reaches this box's dashboard listener. Visitors abroad go through Iran too,
+and if Iran's link goes down, so does the site. `claude.rahkar.pro` stays on Cloudflare.
+
+- **Clerk** runs in proxy mode: `[signup] clerk_proxy_url` is `https://dash.rahkar.pro/__clerk`, which the gateway
+  forwards to Clerk's Frontend API; the production domain's `proxy_url` is set to the same (Backend API
+  `PATCH /v1/domains/{id}`). Google client "Web client 1" and GitHub OAuth app 3884256 accept both
+  `https://dash.rahkar.pro/__clerk/v1/oauth_callback` and the old `https://clerk.dash.rahkar.pro/v1/oauth_callback`.
+  Clerk's bot check (Turnstile) still loads from Cloudflare; it worked from Iran.
+- **Telegram** cannot reach Iranian addresses, so its webhook is `https://hooks.rahkar.pro/telegram/webhook`
+  (`[telegram] webhook_url`, on this tunnel); after changing it run `claude-proxy telegram set-webhook` in the
+  container.
+- **Monitor**: `monitor.yml` checks `rahkar.pro` and `dash.rahkar.pro/api/auth-config` hourly.
+- **Rollback**: in Cloudflare DNS, set `rahkar.pro` and `dash.rahkar.pro` back to CNAME
+  `7305f1ba-193d-47a3-941f-b32413742358.cfargotunnel.com` and `www.rahkar.pro` to CNAME `rahkar.pro`, all
+  proxied (the tunnel routes above are still there). Clerk's proxy can stay on: it works through Cloudflare too.
+  The VPS's previous Caddyfile is `/etc/caddy/Caddyfile.before-iran-hosting`.
+- **Test browser from Iran**: the VPS runs Chromium on a virtual display (`iranbrowser-xvfb`, `-wm`, `-vnc`,
+  `-chromium` systemd units, user `browser`), with noVNC on `127.0.0.1:6080` and DevTools on `127.0.0.1:9222`
+  (started with `--disable-quic` during testing). View it with
+  `ssh -N -L 6080:127.0.0.1:6080 -L 9222:127.0.0.1:9222 gateway-ir` and http://localhost:6080/vnc.html.
 
 ## Automatic deploys
 

@@ -46,3 +46,18 @@ jobs:
           echo "::warning::first check failed; rechecking in 2 minutes"
           sleep 120
           check || { echo "::error::the relay at claude-ir.rahkar.pro does not reach the gateway (VPS, Caddy or the Xray tunnel: ssh gateway-ir)"; exit 1; }
+      # rahkar.pro and dash.rahkar.pro are served by the same VPS for everyone (design 2026-11-14-iran-hosting), so
+      # this is the site itself: the home page, and the dashboard's sign-in config with Clerk through its proxy.
+      - name: Site through the Iranian VPS
+        if: always()
+        shell: bash
+        run: |
+          check() {
+            curl -fsS --max-time 15 -o /dev/null https://rahkar.pro/ || { echo "rahkar.pro unreachable"; return 1; }
+            body=$(curl -fsS --max-time 15 https://dash.rahkar.pro/api/auth-config) || { echo "dash.rahkar.pro unreachable"; return 1; }
+            jq -e '.clerk.proxy_url != ""' <<<"$body" >/dev/null
+          }
+          check && exit 0
+          echo "::warning::first check failed; rechecking in 2 minutes"
+          sleep 120
+          check || { echo "::error::rahkar.pro or dash.rahkar.pro is down (VPS Caddy or the Xray tunnel: ssh gateway-ir; rollback in deploy/lightsail/README.md)"; exit 1; }
