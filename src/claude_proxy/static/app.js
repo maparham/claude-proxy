@@ -2052,23 +2052,29 @@ async function renderPricing(main) {
 
 function trialSettingsCard(v, tiers) {
   const s = v.settings, d = v.tier_default;
-  const whole = (name, val, unit) => `${refWholeInput(name, val)} ${t(unit)}`;
-  const share = (name, val, dflt) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-init="${dflt ? "" : val}" value="${dflt ? "" : val}" placeholder="${esc(`${fmtShare(val)} · ${t("trial.s_default")}`)}" style="width:150px"> ${PCT}`;
-  return `<div class="card" style="margin-top:16px"><h3>${t("trial.title")}</h3>
+  const tierLabel = (k) => (tiers[k] ? tierNameText(k, tiers[k].label) : k);
+  // A field with its label above it, and the unit after the box: the Discounts form's layout.
+  const field = (label, tip, input, unit = "") => `<label><span>${t(label)}${tipI(tip)}</span><span class="unit-in">${input}${unit ? `<span class="muted">${t(unit)}</span>` : ""}</span></label>`;
+  const box = (name, val, mode = "numeric") => `<input type="text" inputmode="${mode}" dir="ltr" name="${name}" data-init="${val}" value="${val}">`;
+  // Empty: the tier's own share, which the placeholder shows.
+  const share = (name, val, dflt) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-init="${dflt ? "" : val}" value="${dflt ? "" : val}" placeholder="${esc(t("trial.tier_value", { tier: tierLabel(s.tier), v: fmtShare(val) }))}">`;
+  return `<div class="card trial-settings" style="margin-top:16px"><h3>${t("trial.title")}</h3>
     <p class="sub">${t("trial.admin_sub", { today: nfFull.format(v.today), cap: nfFull.format(s.daily_cap), claimed: nfFull.format(v.claimed), started: nfFull.format(v.started), lapsed: nfFull.format(v.lapsed), bought: nfFull.format(v.bought) })}</p>
     <form id="f-trial">
-    ${refSettingsRow(t("trial.s_enabled"), "trial_enabled", `<input type="checkbox" name="enabled" data-init="${s.enabled ? 1 : 0}"${s.enabled ? " checked" : ""}>`)}
-    ${refSettingsRow(t("trial.s_duration"), "trial_duration", whole("duration_min", s.duration_min, "trial.u_min"))}
-    ${refSettingsRow(t("trial.s_valid"), "trial_valid", whole("valid_hours", s.valid_hours, "trial.u_hours"))}
-    ${refSettingsRow(t("trial.s_tier"), "trial_tier", `<select name="tier" data-init="${d.tier ? "" : esc(s.tier)}"><option value=""${d.tier ? " selected" : ""}>${t("trial.s_default")}</option>
-      ${Object.entries(tiers).map(([k, x]) => `<option value="${esc(k)}"${!d.tier && s.tier === k ? " selected" : ""}>${esc(tierNameText(k, x.label))}</option>`).join("")}</select>`)}
-    ${refSettingsRow(t("trial.s_share"), "trial_share", share("share_pct", s.share_pct, d.share_pct))}
-    ${refSettingsRow(t("trial.s_share_5h"), "trial_share_5h", share("share_5h_pct", s.share_5h_pct, d.share_5h_pct))}
-    ${refSettingsRow(t("trial.s_cap"), "trial_cap", refWholeInput("daily_cap", s.daily_cap))}
-    ${refSettingsRow(t("trial.s_follow_pct"), "trial_follow_pct", refPctInput("follow_pct", s.follow_pct))}
-    ${refSettingsRow(t("trial.s_follow_days"), "trial_follow_days", whole("follow_days", s.follow_days, "trial.u_days"))}
-    <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
-    <div class="error" id="trial-settings-err"></div>
+      <label class="check"><input type="checkbox" name="enabled" data-init="${s.enabled ? 1 : 0}"${s.enabled ? " checked" : ""}> ${t("trial.s_enabled")}${tipI("trial_enabled")}</label>
+      <div class="form-grid">
+        ${field("trial.s_duration", "trial_duration", box("duration_min", s.duration_min), "trial.u_min")}
+        ${field("trial.s_valid", "trial_valid", box("valid_hours", s.valid_hours), "trial.u_hours")}
+        ${field("trial.s_cap", "trial_cap", box("daily_cap", s.daily_cap))}
+        ${field("trial.s_tier", "trial_tier", `<select name="tier" data-init="${d.tier ? "" : esc(s.tier)}"><option value=""${d.tier ? " selected" : ""}>${esc(t("trial.tier_auto", { tier: d.tier ? tierLabel(s.tier) : "" }).trim())}</option>
+          ${Object.entries(tiers).map(([k, x]) => `<option value="${esc(k)}"${!d.tier && s.tier === k ? " selected" : ""}>${esc(tierNameText(k, x.label))}</option>`).join("")}</select>`)}
+        ${field("trial.s_share", "trial_share", share("share_pct", s.share_pct, d.share_pct), "trial.u_pct")}
+        ${field("trial.s_share_5h", "trial_share_5h", share("share_5h_pct", s.share_5h_pct, d.share_5h_pct), "trial.u_pct")}
+        ${field("trial.s_follow_pct", "trial_follow_pct", box("follow_pct", s.follow_pct, "decimal"), "trial.u_pct")}
+        ${field("trial.s_follow_days", "trial_follow_days", box("follow_days", s.follow_days), "trial.u_days")}
+      </div>
+      <div style="margin-top:12px"><button class="btn small primary" type="submit">${t("app.save")}</button></div>
+      <div class="error" id="trial-settings-err"></div>
     </form></div>`;
 }
 function wireTrialSettings() {

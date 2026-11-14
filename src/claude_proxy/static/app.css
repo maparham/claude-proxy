@@ -580,3 +580,8 @@ code { unicode-bidi: isolate; direction: ltr; }
 /* The free trial card, highlighted once when the home page's "Try free" button brought the user here (2026-11-14). */
 .trial-card.flash { animation: trial-flash 2s ease-out 1; }
 @keyframes trial-flash { from { box-shadow: 0 0 0 3px var(--accent, #d77757); } to { box-shadow: none; } }
+/* The free trial settings (2026-11-14): label above each box, the unit after it. */
+.trial-settings .form-grid { grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px 16px; margin-top: 12px; max-width: 860px; }
+.trial-settings label.check { margin-top: 4px; }
+.unit-in { display: flex; align-items: center; gap: 6px; }
+.unit-in input, .unit-in select { flex: 1; min-width: 0; width: 100%; }
