@@ -22,6 +22,12 @@ def test_section_loads(tmp_path, monkeypatch):
     assert (cfg.telegram.token(), cfg.telegram.webhook_secret()) == ("123:abc", "s3cret")
 
 
+def test_webhook_url_loads(tmp_path):
+    cfg = Config.load(write(tmp_path, '[telegram]\nbot_username = "rahkar_bot"\nadmin_chat_id = -1\n'
+                                      'webhook_url = "https://hooks.rahkar.pro/telegram/webhook"\n'))
+    assert cfg.telegram.webhook_url == "https://hooks.rahkar.pro/telegram/webhook"
+
+
 def test_secrets_missing_read_none(monkeypatch):
     monkeypatch.delenv("TELEGRAM_BOT_TOKEN", raising=False)
     monkeypatch.delenv("TELEGRAM_WEBHOOK_SECRET", raising=False)
@@ -34,7 +40,8 @@ CHAT_MSG = r"admin_chat_id must be"
 
 
 @pytest.mark.parametrize("body, reason", [
-    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = -1\nbot_token = "x"\n', r"takes only bot_username and admin_chat_id"),   # a secret in the file: refused
+    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = -1\nbot_token = "x"\n', r"takes only bot_username, admin_chat_id and webhook_url"),   # a secret in the file: refused
+    ('[telegram]\nbot_username = "bot"\nadmin_chat_id = -1\nwebhook_url = "http://x/telegram/webhook"\n', r"webhook_url must be an https URL"),
     ('[telegram]\nadmin_chat_id = -1\n', USERNAME_MSG),
     ('[telegram]\nbot_username = ""\nadmin_chat_id = -1\n', USERNAME_MSG),
     ('[telegram]\nbot_username = "@bot"\nadmin_chat_id = -1\n', USERNAME_MSG),

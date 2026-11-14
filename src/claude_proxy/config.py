@@ -559,14 +559,17 @@ class Config:
             cfg.zarinpal = ZarinpalConfig(sandbox=z.get("sandbox", False), vat_percent=float(vat))
         if "telegram" in data:
             tg = data["telegram"]
-            if set(tg) - {"bot_username", "admin_chat_id"}:
-                raise ConfigError(f"{toml_path}: [telegram] takes only bot_username and admin_chat_id; the token and webhook "
+            if set(tg) - {"bot_username", "admin_chat_id", "webhook_url"}:
+                raise ConfigError(f"{toml_path}: [telegram] takes only bot_username, admin_chat_id and webhook_url; the token and webhook "
                                   "secret are TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET in the environment")
             name, chat = tg.get("bot_username"), tg.get("admin_chat_id")
             if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9_]{3,64}", name):
                 raise ConfigError(f"{toml_path}: [telegram] bot_username must be the bot's username, without the @")
             if isinstance(chat, bool) or not isinstance(chat, int) or chat == 0:
                 raise ConfigError(f"{toml_path}: [telegram] admin_chat_id must be the admin group's chat id (a number)")
-            cfg.telegram = TelegramConfig(bot_username=name, admin_chat_id=chat)
+            hook = tg.get("webhook_url", "")
+            if not isinstance(hook, str) or (hook and not hook.startswith("https://")):
+                raise ConfigError(f"{toml_path}: [telegram] webhook_url must be an https URL (Telegram delivers only over https)")
+            cfg.telegram = TelegramConfig(bot_username=name, admin_chat_id=chat, webhook_url=hook)
         cfg.config_file = toml_path
         return cfg
