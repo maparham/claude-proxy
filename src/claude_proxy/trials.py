@@ -8,12 +8,14 @@ from __future__ import annotations
 import dataclasses
 import json
 import sqlite3
+import time
 from dataclasses import dataclass
 
 from . import db, tickets
 from .config import Config
 
 SETTINGS_KEY = "trial"
+NO_ROOM = "The free trial can't start right now; try again later."
 DAY = 86400
 
 
@@ -52,6 +54,10 @@ def _stored(conn) -> Settings:
 def default_tier(cfg: Config, conn) -> str | None:
     tiers = list(cfg.tickets.tiers)
     return min(tiers, key=lambda t: tickets.effective_share(conn, cfg, t)) if tiers else None
+
+
+def tier_label(cfg: Config, tier: str | None) -> str | None:
+    return cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
 
 
 def settings(conn: sqlite3.Connection, cfg: Config) -> Settings:
@@ -163,7 +169,7 @@ def offer(conn: sqlite3.Connection, cfg: Config, user, now: float) -> dict:
     s = settings(conn, cfg)
     c = open_claim(conn, user["id"], now)
     reason = _refusal(conn, cfg, user, now)
-    return {"can_claim": reason is None, "reason": reason, "duration_min": s.duration_min, "tier": s.tier,
+    return {"can_claim": reason is None, "reason": reason, "duration_min": s.duration_min, "tier": s.tier, "label": tier_label(cfg, s.tier),
             "claim": {"claimed_at": c["claimed_at"], "expires_at": c["expires_at"]} if c else None}
 
 
@@ -217,9 +223,13 @@ def admin_grant(conn: sqlite3.Connection, cfg: Config, actor: int, user, now: fl
 
 # ---------- starting ----------
 
-def _start_locked(conn, cfg, user_id: int, now: int) -> dict:
+def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict | None:
+    """`auto`: a request's start, which finds the claim gone or a pass running under the lock (another request of the
+    user's started it meanwhile) and returns None rather than refuse."""
     from . import capacity   # here, not at the top: capacity imports tickets
     c = open_claim(conn, user_id, now)
+    if auto and (c is None or tickets.running(conn, user_id, now)):
+        return None
     if c is None:
         raise TrialError(409, "You have no free trial waiting to start.")
     s = settings(conn, cfg)
@@ -230,7 +240,7 @@ def _start_locked(conn, cfg, user_id: int, now: int) -> dict:
     try:
         capacity.check(conn, cfg, tickets.ACCOUNT_ID, s.share_pct, s.share_5h_pct, now, end, now)
     except tickets.CapacityError as e:
-        raise TrialError(409, "The free trial can't start right now; try again later.") from e
+        raise TrialError(409, NO_ROOM) from e
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is None
     tid = conn.execute(
         "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, "
@@ -242,18 +252,18 @@ def _start_locked(conn, cfg, user_id: int, now: int) -> dict:
         db.audit(conn, None, "credit_removed", user["name"], {"ticket_id": tid})
     unit = None
     if s.follow_pct > 0:
-        unit = conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at) VALUES(?,?,?,?,'saved',?)",
+        unit = conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at, source) VALUES(?,?,?,?,'saved',?,'trial')",
                             (user_id, s.follow_pct, now, end + s.follow_days * DAY, now)).lastrowid
     db.audit(conn, None, "trial_start", user["name"], {"claim_id": c["id"], "ticket_id": tid, "ends_at": end, "share_pct": s.share_pct,
                                                        **({"unit_id": unit} if unit else {})})
     return tickets.get(conn, tid)
 
 
-def start(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> dict:
+def start(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float, auto: bool = False) -> dict | None:
     """Turn the user's waiting claim into a running trial pass; TrialError when there is none or no room."""
     conn.execute("BEGIN IMMEDIATE")
     try:
-        t = _start_locked(conn, cfg, user_id, int(now))
+        t = _start_locked(conn, cfg, user_id, int(now), auto)
         conn.execute("COMMIT")
     except BaseException:
         conn.execute("ROLLBACK")
@@ -261,15 +271,24 @@ def start(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> di
     return t
 
 
+_NO_ROOM: dict[int, float] = {}   # user id -> monotonic time until which a start found no room: not tried again before
+NO_ROOM_RETRY_S = 60
+
+
 def autostart(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> str | None:
     """On a metered request: a waiting claim starts when the user has no pass running. None: nothing to do or started;
-    else the refusal to send (no room now). One indexed query when there is no claim, as for nearly every request."""
+    else the refusal (no room now), remembered for NO_ROOM_RETRY_S so a full gateway isn't rechecked on every request.
+    One indexed query when there is no claim, as for nearly every request."""
     if open_claim(conn, user_id, now) is None or tickets.running(conn, user_id, now):
         return None
+    if _NO_ROOM.get(user_id, 0) > time.monotonic():
+        return NO_ROOM
     try:
-        start(conn, cfg, user_id, now)
+        start(conn, cfg, user_id, now, auto=True)
     except TrialError as e:
+        _NO_ROOM[user_id] = time.monotonic() + NO_ROOM_RETRY_S
         return e.message
+    _NO_ROOM.pop(user_id, None)
     return None
 
 
@@ -280,7 +299,7 @@ def public_offer(conn: sqlite3.Connection, cfg: Config, now: float) -> dict | No
     s = settings(conn, cfg)
     if not (cfg.tickets.enabled and s.enabled and s.tier) or claims_today(conn, now) >= s.daily_cap:
         return None
-    return {"duration_min": s.duration_min, "tier": s.tier}
+    return {"duration_min": s.duration_min, "tier": s.tier, "label": tier_label(cfg, s.tier)}
 
 
 def admin_view(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:

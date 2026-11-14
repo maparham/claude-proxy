@@ -194,3 +194,62 @@ def test_pass_card_marks_the_trial(env):
     assert card["current"]["trial"] is True
     card = passcard.build(conn, cfg, ids["alice"], NOW + 2 * 3600)
     assert card["past"][0]["trial"] is True
+
+
+# ---------- review fixes ----------
+
+def test_model_list_does_not_start_it(env):
+    conn, cfg, ids = env
+    trials.claim(conn, cfg, user(conn, ids["alice"]), NOW)
+    limits.evaluate(conn, cfg, ids["alice"], None, "/v1/models", now=NOW + 60)
+    assert trials.open_claim(conn, ids["alice"], NOW + 61) is not None
+
+
+def test_a_start_by_another_request_is_not_a_refusal(env, monkeypatch):
+    conn, cfg, ids = env
+    trials.claim(conn, cfg, user(conn, ids["alice"]), NOW)
+    real = trials.start
+
+    def racing(conn_, cfg_, uid, now, auto=False):
+        real(conn_, cfg_, uid, now)              # the other request wins the race
+        return real(conn_, cfg_, uid, now, auto)
+    monkeypatch.setattr(trials, "start", racing)
+    assert trials.autostart(conn, cfg, ids["alice"], NOW) is None
+
+
+def test_no_room_serves_a_user_with_credit_and_is_remembered(env, monkeypatch):
+    conn, cfg, ids = env
+    alice = ids["alice"]
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)", (alice, "cost_total", "*", "5", "usd", NOW))
+    trials.claim(conn, cfg, user(conn, alice), NOW)
+    from claude_proxy import capacity
+    calls = []
+
+    def full(*a, **k):
+        calls.append(1)
+        raise tickets.CapacityError("full")
+    monkeypatch.setattr(capacity, "check", full)
+    trials._NO_ROOM.clear()
+    assert limits.evaluate(conn, cfg, alice, "claude-sonnet-5", "/v1/messages", now=NOW + 60) is None   # the credit serves
+    limits.evaluate(conn, cfg, alice, "claude-sonnet-5", "/v1/messages", now=NOW + 61)
+    assert len(calls) == 1 and trials.open_claim(conn, alice, NOW + 62) is not None
+    trials._NO_ROOM.clear()
+
+
+def test_trial_keeps_the_friend_discount_and_earns_nothing_itself(env):
+    conn, cfg, ids = env
+    from claude_proxy import referrals
+    referrals.set_settings(conn, ids["admin"], {"enabled": True})
+    conn.execute("UPDATE users SET referred_by=? WHERE id=?", (ids["admin"], ids["alice"]))
+    trials.claim(conn, cfg, user(conn, ids["alice"]), NOW)
+    trials.start(conn, cfg, ids["alice"], NOW)
+    assert referrals.first_pass(conn, ids["alice"]) is True
+    q = referrals.quote(conn, cfg, ids["alice"], "lite", "week", 10.0, NOW + 60)
+    assert q["kind"] == "friend"
+
+
+def test_trial_unit_does_not_count_toward_referral_limits(env):
+    conn, cfg, ids = env
+    trials.claim(conn, cfg, user(conn, ids["alice"]), NOW)
+    trials.start(conn, cfg, ids["alice"], NOW)
+    assert conn.execute("SELECT source FROM referral_units WHERE user_id=?", (ids["alice"],)).fetchone()[0] == "trial"

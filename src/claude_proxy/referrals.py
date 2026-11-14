@@ -204,7 +204,8 @@ def first_pass(conn: sqlite3.Connection, user_id: int) -> bool:
     again would earn the referrer a unit each time (review of 40197c3)."""
     row = conn.execute("SELECT email, name FROM users WHERE id=?", (user_id,)).fetchone()
     email = (row["email"] or row["name"] or "").lower()
-    if conn.execute("SELECT 1 FROM tickets WHERE user_id=? OR lower(user_name)=? LIMIT 1", (user_id, email)).fetchone():
+    # A free trial (2026-11-14) is not a pass here: a friend who tried first keeps their discount.
+    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND trial=0 LIMIT 1", (user_id, email)).fetchone():
         return False
     if conn.execute("SELECT 1 FROM orders WHERE status='done' AND lower(email)=? LIMIT 1", (email,)).fetchone():
         return False
@@ -420,7 +421,7 @@ def on_granted(conn: sqlite3.Connection, order_id: int, now: int, floored_to_zer
     if friend is None or _active_user(conn, friend["referred_by"]) is None:
         return
     email = (friend["email"] or friend["name"] or "").lower()
-    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? LIMIT 1",
+    if conn.execute("SELECT 1 FROM tickets WHERE (user_id=? OR lower(user_name)=?) AND id IS NOT ? AND trial=0 LIMIT 1",
                     (o["user_id"], email, o["ticket_id"])).fetchone():
         return
     rid = conn.execute("INSERT INTO referral_rewards(referrer_id, friend_id, order_id, created_at, status) "
@@ -445,9 +446,10 @@ def earn(conn: sqlite3.Connection, reward_id: int, actor: int | None, now: int) 
     expire(conn, now)   # an overdue saved unit no longer counts as held
     s = settings(conn)
     referrer = r["referrer_id"]
-    held = conn.execute("SELECT COUNT(*) FROM referral_units WHERE user_id=? AND state IN ('saved','held')",
+    # A free trial's follow-up unit (source 'trial') was not earned by referring: it counts toward neither limit.
+    held = conn.execute("SELECT COUNT(*) FROM referral_units WHERE user_id=? AND state IN ('saved','held') AND source IS NOT 'trial'",
                         (referrer,)).fetchone()[0]
-    this_month = conn.execute("SELECT COUNT(*) FROM referral_units WHERE user_id=? AND earned_at>=?",
+    this_month = conn.execute("SELECT COUNT(*) FROM referral_units WHERE user_id=? AND earned_at>=? AND source IS NOT 'trial'",
                               (referrer, _month_start(now))).fetchone()[0]
     detail = {"reward_id": reward_id, "order_id": r["order_id"], "friend_id": r["friend_id"]}
     if held >= s.max_held or this_month >= s.max_per_month:

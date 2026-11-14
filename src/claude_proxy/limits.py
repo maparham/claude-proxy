@@ -592,9 +592,11 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
         return Decision(402, TICKET, _pay(PAUSED))
-    if cfg.tickets.enabled and not is_count_tokens and not third_party:
-        # A free trial claimed and waiting starts with the first request it can serve (2026-11-14)
-        if (refused := trials.autostart(conn, cfg, user_id, now)) is not None:
+    if cfg.tickets.enabled and model is not None and not is_count_tokens and not third_party:
+        # A free trial claimed and waiting starts with the first metered request (2026-11-14): not the model list,
+        # which gclaude's setup asks for. With no room, a user still on hand-set limits (a sign-up credit) is served
+        # by those meanwhile; a gated one has nothing else to serve them.
+        if (refused := trials.autostart(conn, cfg, user_id, now)) is not None and _gated(conn, cfg, user_id):
             return Decision(402, TICKET, _pay(refused))
     gated = _gated(conn, cfg, user_id)
     run, t = None, None

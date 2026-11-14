@@ -2295,7 +2295,7 @@ def _ticket_name(conn, cfg, user_id: int, now: float) -> str | None:
     if t is None:
         return None
     tier = tickets.tier_now(conn, t)
-    return f"{cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier} {t['length']} pass"
+    return f"{cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier} {'free trial' if t.get('trial') else t['length'] + ' pass'}"
 
 
 def _status_line(user, states, account, weeks: dict | None = None, ticket: str | None = None) -> str:

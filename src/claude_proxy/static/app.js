@@ -687,7 +687,7 @@ async function renderOverview(main) {
   const fableClose = $("#fable-close", main);
   if (fableClose) fableClose.onclick = () => { S.prefs.fableNoteSeen = true; savePrefs(); $("#fable-note", main).remove(); };
   if (tk) wireOrdering(main, tk, order);
-  if (trial) wireTrial(main, trial);
+  if (trial) wireTrial(main, trial); else if (!isAdmin()) takeTrialParam();
   if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">${t("ov.no_figures")}</p>`;
   if (isAdmin()) {
     const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
@@ -705,7 +705,7 @@ async function renderOverview(main) {
 // Offered to a user with no pass who never had one: a claim button, then Start now while the claim waits.
 function trialCard(tr) {
   if (!tr || !(tr.can_claim || tr.claim)) return "";
-  const vars = { len: trialLen(tr.duration_min), tier: tierName(tr.tier, tr.tier === "lite" ? "Lite" : tr.tier === "standard" ? "Standard" : tr.tier) };
+  const vars = { len: trialLen(tr.duration_min), tier: tierName(tr.tier, tr.label || tr.tier) };
   return `<div class="card trial-card" id="trial-card"><h3>${t("trial.title")}</h3>
     ${tr.claim ? `<p class="sub">${t("trial.waiting", { ...vars, date: fmtDate(tr.claim.expires_at) })}</p>
       <p><button class="btn primary" id="trial-start">${t("trial.start_btn")}</button></p>`
@@ -738,13 +738,15 @@ function wireTrial(root, tr) {
     if (r) { infoInline(t("trial.title"), t("trial.started", { date: fmtShort(r.ends_at) })); render(); }
   };
   // From the home page's "Try free" button: /dashboard?trial=1 brings the card into view once.
+  if (takeTrialParam()) { card.scrollIntoView({ block: "center" }); card.classList.add("flash"); }
+}
+// True once when the URL carries ?trial=1, which it then drops, whether or not a trial card is shown.
+function takeTrialParam() {
   const q = new URLSearchParams(location.search);
-  if (q.get("trial") === "1") {
-    q.delete("trial");
-    history.replaceState(null, "", `${location.pathname}${q.toString() ? `?${q}` : ""}${location.hash}`);
-    card.scrollIntoView({ block: "center" });
-    card.classList.add("flash");
-  }
+  if (q.get("trial") !== "1") return false;
+  q.delete("trial");
+  history.replaceState(null, "", `${location.pathname}${q.toString() ? `?${q}` : ""}${location.hash}`);
+  return true;
 }
 // The usage totals as tiles: on the admin's overview over 24 h / 7 d / 30 d, with their own switch; under everyone else's
 // usage history, `tot` is the chart's range summed, so the chart's range switch drives both.
@@ -946,7 +948,7 @@ function userLimitsCard(me, tk, order) {
       <div class="ticket-head"><div class="muted">${t("pass.list", { btn: `<span class="btn small btn-ref">${t("pass.pin")}</span>` })}</div><div class="row-actions">${renew}</div></div>
       ${hero}${passList(c, no)}${extras}</div>`
     : c ? `<div class="ticket">
-      <div class="ticket-head"><div>${t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
+      <div class="ticket-head"><div>${c.trial ? `<b>${t("trial.title")}</b> <span class="muted">${tierName(c.tier, c.label)}</span>` : t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
       <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) })}`
         : noWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
       ${split}${passTokens(c)}${extras}

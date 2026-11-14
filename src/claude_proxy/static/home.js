@@ -196,13 +196,13 @@ document.getElementById("length-toggle").addEventListener("click", (e) => {
 // dashboard's trial card) and a line above the cards. Whether this visitor already had one is the dashboard's to say.
 function trialOffer(tr) {
   if (!tr) return;
-  const len = trialLen(tr.duration_min), tier = I18N.en[`tier.${tr.tier}`] ? t(`tier.${tr.tier}`) : tr.tier;
+  const len = trialLen(tr.duration_min), tier = tierName({ tier: tr.tier, label: tr.label || tr.tier });
   const btn = document.getElementById("trial-btn"), line = document.getElementById("trial-line");
   btn.textContent = t("home.trial_btn", { len });
   btn.hidden = false;
   document.getElementById("hero-signin").classList.remove("primary");
   btn.onclick = (e) => { if (!(e.metaKey || e.ctrlKey || e.shiftKey) && signInPopup(btn.href)) e.preventDefault(); };
-  line.textContent = t("home.trial_line", { len, tier });
+  line.innerHTML = t("home.trial_line", { len, tier });   // tier: bdi(), escaped
   line.hidden = false;
 }
 // ZarinPal's trust logo links to javascript:showZPTrust(), which the CSP blocks; open its trust page the way that function does.
