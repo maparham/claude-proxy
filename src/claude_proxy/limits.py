@@ -14,7 +14,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import db, quota, tickets
+from . import db, quota, tickets, trials
 from .capacity import _capacity, _debt, _pass_cap, _week_use, _weighted_since, fresh, room
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
@@ -592,6 +592,10 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
         return Decision(402, TICKET, _pay(PAUSED))
+    if cfg.tickets.enabled and not is_count_tokens and not third_party:
+        # A free trial claimed and waiting starts with the first request it can serve (2026-11-14)
+        if (refused := trials.autostart(conn, cfg, user_id, now)) is not None:
+            return Decision(402, TICKET, _pay(refused))
     gated = _gated(conn, cfg, user_id)
     run, t = None, None
     if gated:

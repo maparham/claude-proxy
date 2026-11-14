@@ -1168,6 +1168,8 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     now = _now(now)
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
+    if ticket.get("trial"):
+        raise TicketError("A free trial can't be upgraded; buy a pass instead.")
     if ticket["cancelled_at"] is not None or not ticket["starts_at"] <= now < ticket["effective_end"]:
         raise TicketError("Only a running pass can be upgraded.")
     if len(running(conn, ticket["user_id"], now)) > 1:

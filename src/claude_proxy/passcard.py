@@ -43,6 +43,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         share_5h = cur["share_5h_pct"] if cur["share_5h_pct"] is not None else cur["share_pct"]
         now_tier = tickets.tier_now(conn, cur)
         out["current"] = {"tier": now_tier, "label": label({"tier": now_tier}), "starts_at": cur["starts_at"], "length": cur["length"],
+                          "trial": bool(cur["trial"]),
                           "upgraded_from": {"tier": cur["tier"], "label": label(cur)} if ups else None,
                           "ends_at": cur["ends_at"], "effective_end": cur["effective_end"],
                           "bonus_days": sum(b["extra_days"] for b in tickets.bonuses(conn, cur["id"]) if b["cancelled_at"] is None),
@@ -84,17 +85,17 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
         out["current"]["tokens"] = served[cur["id"]]
         out["current"]["passes"] = [] if len(run) + len(later) < 2 else [
             {"tier": (x := tickets.tier_now(conn, t)), "label": label({"tier": x}), "starts_at": t["starts_at"], "length": t["length"],
-             "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
+             "trial": bool(t["trial"]), "bought_at": t["granted_at"], "effective_end": t["effective_end"], "serving": serving is not None and t["id"] == serving["id"],
              "held": serving is None and picked is not None and t["id"] == picked["id"] and not uses[t["id"]].get("used_up"),
              "pinned": t["id"] == pin, "tokens": served[t["id"]], **uses[t["id"]]} for t in run] + [{"tier": t["tier"], "label": label(t), "length": t["length"], "starts_at": t["starts_at"],
-                              "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
+                              "trial": bool(t["trial"]), "bought_at": t["granted_at"], "effective_end": t["effective_end"], "queued": True} for t in later]
         out["current"]["serving_end"] = (serving or cur)["effective_end"]
         out["current"]["day_bonuses"] = [{"extra_days": b["extra_days"], "note": b["note"]} for b in tickets.bonuses(conn, cur["id"])
                                          if b["cancelled_at"] is None and b["extra_days"] > 0 and b["id"] not in shown]
     if st["queued"]:
         q = st["queued"]
-        out["queued"] = {"tier": q["tier"], "label": label(q), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
-    out["past"] = [{"tier": t["tier"], "label": label(t), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
+        out["queued"] = {"tier": q["tier"], "label": label(q), "trial": bool(q.get("trial")), "starts_at": q["starts_at"], "effective_end": q["effective_end"]}
+    out["past"] = [{"tier": t["tier"], "label": label(t), "trial": bool(t["trial"]), "how": t["how"], "starts_at": t["starts_at"], "ended_at": t["ended_at"],
                     "amount": t["amount"], "currency": t["currency"], "tokens": served[t["id"]]} for t in past]
     # The gateway's own currency (IRT), as on the home page, whatever the running pass was bought in; the dashboard
     # offers USD beside it. Not the running pass's currency: a pass granted in EUR turned the whole list into euros.

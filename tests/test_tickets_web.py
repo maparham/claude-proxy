@@ -368,7 +368,7 @@ async def test_me_tickets_lists_past_tickets_newest_first(env):
         ("cancelled", gone["starts_at"], now - DAY),
         ("used_up", used["starts_at"], used["starts_at"] + 2 * DAY),
         ("ended", ran["starts_at"], ran["ends_at"])]
-    assert past[0] == {"tier": "lite", "label": "Lite", "how": "cancelled", "starts_at": gone["starts_at"], "ended_at": now - DAY,
+    assert past[0] == {"tier": "lite", "label": "Lite", "trial": False, "how": "cancelled", "starts_at": gone["starts_at"], "ended_at": now - DAY,
                        "amount": gone["amount"], "currency": "EUR", "tokens": {"weighted": 0.0, "raw": 0}}   # no ids, no shares
 
 

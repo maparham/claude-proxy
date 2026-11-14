@@ -431,6 +431,20 @@ SCHEMA = [
         updated_at INTEGER NOT NULL
     )""",
     "CREATE INDEX IF NOT EXISTS idx_referral_units_user ON referral_units(user_id, state)",
+    # Free trial claims (2026-11-14): one per email, ever. user_id goes NULL with the account; email stays, so signing
+    # up again with it gets no second trial. ticket_id: set once started. granted_by: the admin; NULL: self-service.
+    """CREATE TABLE IF NOT EXISTS trial_claims (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        email TEXT NOT NULL,
+        claimed_at INTEGER NOT NULL,
+        expires_at INTEGER NOT NULL,
+        granted_by INTEGER,
+        ticket_id INTEGER,
+        started_at INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_trial_claims_user ON trial_claims(user_id)",
+    "CREATE INDEX IF NOT EXISTS idx_trial_claims_email ON trial_claims(email)",
     # One row per friend purchase that could earn the referrer a unit. `referrer_id` has no foreign key, so the
     # history survives a deleted referrer (the referrer simply earns nothing further).
     """CREATE TABLE IF NOT EXISTS referral_rewards (
@@ -599,6 +613,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE orders ADD COLUMN windows INTEGER NOT NULL DEFAULT 0")
     if "ip" not in _columns(conn, "requests"):   # the address each request came from (2026-11-10); NULL before
         conn.execute("ALTER TABLE requests ADD COLUMN ip TEXT")
+    if "trial" not in _columns(conn, "tickets"):   # a free trial pass (2026-11-14): price 0, never upgraded or refunded
+        conn.execute("ALTER TABLE tickets ADD COLUMN trial INTEGER NOT NULL DEFAULT 0")
     for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)
         if col not in _columns(conn, "payments"):
             conn.execute(f"ALTER TABLE payments ADD COLUMN {col} INTEGER")
