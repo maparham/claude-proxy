@@ -678,8 +678,10 @@ if mode == "on":
                 'why= code= models=$(mktemp "${TMPDIR:-/tmp}/gclaude-models.XXXXXX" 2>/dev/null) || models=/dev/null\n'
                 "# The gateway's /health, beside the dashboard's request so the start takes no longer: when it does not answer\n"
                 "# within 3 s (or Cloudflare answers for it, 5xx), Claude Code starts on the relay the dashboard named (below).\n"
+                "# It uploads 64 KB, as a request does: from Iran, Cloudflare passes a small request but stalls on an upload.\n"
                 'probe=; if [ -f "$CLAUDE_CONFIG_DIR/fallback-settings.json" ] && probe=$(mktemp "${TMPDIR:-/tmp}/gclaude-probe.XXXXXX" 2>/dev/null); then\n'
-                f"  curl -s -o /dev/null --max-time 3 -w '%{{http_code}}' {shlex.quote(c.get('url', '').rstrip('/') + '/health')} >\"$probe\" 2>/dev/null &\n"
+                f"  head -c 65536 /dev/zero | curl -s -o /dev/null --max-time 3 -w '%{{http_code}}' -X POST --data-binary @-"
+                f" {shlex.quote(c.get('url', '').rstrip('/') + '/health')} >\"$probe\" 2>/dev/null &\n"
                 "fi\n"
                 "if [ -z \"$key\" ]; then\n"
                 "  why='signed out (/logout_gclaude)'\n"

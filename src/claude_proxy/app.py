@@ -243,6 +243,17 @@ def create_app(gw: Gateway) -> FastAPI:
         fresh = oldest_newest is not None and time.time() - oldest_newest <= usage_fresh_s(gw.cfg.quota)
         return {"ok": True, "credential": gw.backend.describe().healthy, "usage_fresh": fresh}
 
+    @app.post("/health")
+    async def health_upload(request: Request):
+        # gclaude's start check: from Iran, Cloudflare passes a small request but stalls once some tens of KB are
+        # uploaded, so it sends 64 KB here. The answer comes only after the whole body arrived (at most 256 KB read).
+        n = 0
+        async for chunk in request.stream():
+            n += len(chunk)
+            if n > 256 * 1024:
+                return JSONResponse({"ok": False, "error": "too large"}, status_code=413)
+        return {"ok": True, "received": n}
+
     @app.api_route("/{path:path}", methods=METHODS)
     async def proxy(request: Request, path: str):
         return await handle(gw, request, "/" + path)

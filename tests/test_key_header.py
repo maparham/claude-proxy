@@ -129,3 +129,11 @@ def test_health_freshness_query_uses_the_bucket_index(db):
     from claude_proxy.app import USAGE_FRESH_SQL
     plan = " ".join(r[3] for r in db[1].execute("EXPLAIN QUERY PLAN " + USAGE_FRESH_SQL))
     assert "idx_quota_bucket_time" in plan and "SCAN quota_snapshots" not in plan
+
+
+async def test_health_takes_gclaudes_upload_whole_and_refuses_a_large_one(setup):
+    gw, *_ = setup
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/health", content=b"\0" * 65536)
+        assert r.status_code == 200 and r.json() == {"ok": True, "received": 65536}
+        assert (await c.post("/health", content=b"\0" * (256 * 1024 + 1))).status_code == 413

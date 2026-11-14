@@ -29,6 +29,7 @@ class Stub:
         self.install: str | None = None   # GET /install, the dashboard's installer; None: 404
         self.default_models = ""   # /api/me/status?format=models: the NAME=value lines gclaude's launcher applies
         self.health = 200   # /health's status; a 5xx is the gateway down behind Cloudflare
+        self.health_upload = None   # bytes the last POST /health carried
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -63,7 +64,10 @@ class Stub:
 
             def do_POST(self):
                 stub.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}))
-                if self.path == "/api/me/logout":
+                if self.path == "/health":   # gclaude's start check uploads 64 KB, as a request does
+                    stub.health_upload = len(self.rfile.read(int(self.headers.get("content-length", 0))))
+                    code, body = stub.health, {"ok": True}
+                elif self.path == "/api/me/logout":
                     code, body = stub.logout
                 elif self.path == "/api/device/start":
                     code, body = 200, {"device_code": "dc-1", "user_code": "ABCD-EFGH", "interval": 0.1, "expires_in": 20,
@@ -1312,6 +1316,7 @@ def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_n
     assert not any(p == "/health" for p, _ in stub.requests)   # no relay yet, so nothing to check
     r = run_gclaude(home, launcher, "-p", "hi")
     assert r.stdout.strip() == "claude started -p hi" and r.stderr == "" and any(p == "/health" for p, _ in stub.requests)
+    assert stub.health_upload == 65536   # an upload, which Cloudflare stalls from Iran where a small request passes
     stub.health = 502
     r = run_gclaude(home, launcher, "-p", "hi")
     assert r.returncode == 0 and r.stdout.strip() == f"claude started --settings {relay} -p hi", r.stderr

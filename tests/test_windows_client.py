@@ -97,7 +97,11 @@ class Stub:
                     self.reply(404, {})
 
             def do_POST(self):
-                body = json.loads(self.rfile.read(int(self.headers.get("content-length", 0))) or b"{}")
+                raw = self.rfile.read(int(self.headers.get("content-length", 0)))
+                if self.path == "/health":   # gclaude.cmd's start check uploads probe.bin, as a request does
+                    d.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, {"size": len(raw)}))
+                    return self.reply(d.health, {"ok": True})
+                body = json.loads(raw or b"{}")
                 d.requests.append((self.path, {k.lower(): v for k, v in self.headers.items()}, body))
                 if self.path == "/api/device/start":
                     self.reply(200, {"device_code": "dc-1", "user_code": CODE, "interval": 0.1, "expires_in": 20,
@@ -626,6 +630,7 @@ def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_n
     assert json.loads(relay.read_text(encoding="utf-8")) == {"env": {"ANTHROPIC_BASE_URL": "https://relay.example.com"}}
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert claude_saw(tmp_path) == f"{win.gdir}|-p hi" and "/health" in stub.paths(), r.out
+    assert [b for p, _, b in stub.requests if p == "/health"][-1] == {"size": 65536}
     stub.health = 502
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|--settings {relay} -p hi", r.out
@@ -633,7 +638,7 @@ def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_n
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "--settings", "mine.json"], **fake)
     assert claude_saw(tmp_path) == f"{win.gdir}|--settings mine.json", r.out
     assert "relay: https://relay.example.com" in win.cg("status").out
-    assert win.cg("off").returncode == 0 and not relay.exists()
+    assert win.cg("off").returncode == 0 and not relay.exists() and not (win.gdir / "probe.bin").exists()
 
 
 @on_windows

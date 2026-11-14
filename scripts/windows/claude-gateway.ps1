@@ -354,6 +354,9 @@ function Update-Models([string]$File) {   # the dashboard's NAME=value lines (/a
 }
 
 function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude's settings.json, not from here
+  # The 64 KB gclaude.cmd uploads to the gateway's /health at start (cmd has no way to make one itself).
+  New-Item -ItemType Directory -Path $GDir -Force | Out-Null
+  [IO.File]::WriteAllBytes((Join-Path $GDir 'probe.bin'), (New-Object byte[] 65536))
   if (-not (Test-Path -LiteralPath $Bin)) { New-Item -ItemType Directory -Path $Bin -Force | Out-Null }
   $ver = Get-Version   # sent with the status request, so the dashboard can say a newer gclaude is ready
   $verHeader = if ($ver) { "-H `"X-Gclaude-Version: $ver`" " } else { '' }
@@ -422,9 +425,11 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'rem The gateway''s /health: when it does not answer within 3 s (curl''s 000) or Cloudflare answers for it (5xx), Claude',
     'rem Code starts on the relay the dashboard named, unless an argument names settings of its own. Its --settings outranks',
     'rem settings.json, which an ANTHROPIC_BASE_URL in the environment would not. Without curl.exe, nothing changes.',
+    'rem It uploads probe.bin (64 KB, written with this file), as a request does: from Iran, Cloudflare passes a small',
+    'rem request but stalls on an upload.',
     'rem GW_HEALTH is never empty: cmd mangles a line that takes a substring of an unset variable.',
     'set "GW_RELAY=" & set "GW_HEALTH=none" & set "GW_ARGS="',
-    ("if exist `"%CLAUDE_CONFIG_DIR%\fallback-settings.json`" for /f %%h in ('curl.exe -s -o nul --max-time 3 -w `"%%{http_code}`" `"" +
+    ("if exist `"%CLAUDE_CONFIG_DIR%\fallback-settings.json`" for /f %%h in ('curl.exe -s -o nul --max-time 3 -X POST --data-binary `"@%CLAUDE_CONFIG_DIR%\probe.bin`" -w `"%%{http_code}`" `"" +
      ($c.url.TrimEnd('/') + '/health').Replace('%', '%%') + "`" 2^>nul') do set `"GW_HEALTH=%%h`""),
     'if not "%GW_HEALTH%"=="none" set "GW_RELAY=1"',
     'for %%c in (2 3 4) do if "%GW_HEALTH:~0,1%"=="%%c" set "GW_RELAY="',
@@ -592,6 +597,7 @@ function Gclaude-Off {
   if ($s -is [psobject]) { Remove-Ours $s $rec; Write-Json $Settings $s -Private }
   Remove-Item -LiteralPath (Join-Path $GDir 'signed-out') -Force -ErrorAction SilentlyContinue
   Remove-Item -LiteralPath (Join-Path $GDir 'fallback-settings.json') -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath (Join-Path $GDir 'probe.bin') -Force -ErrorAction SilentlyContinue
   $cmds = Join-Path $GDir 'commands'
   foreach ($name in 'usage', 'account', 'logout_gclaude', 'logout') {   # logout: an older gclaude's
     $file = Join-Path $cmds "$name.md"
