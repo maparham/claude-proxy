@@ -3,6 +3,7 @@ import httpx
 import pytest
 
 from claude_proxy import clerk_proxy
+from claude_proxy.config import TelegramConfig
 from claude_proxy.gateway import Gateway
 from claude_proxy.web import COOKIE, create_dashboard_app
 from tests.conftest import asgi_client
@@ -126,3 +127,62 @@ async def test_drops_cloudflare_headers(up):
                                                     "cf-ipcountry": "IR", "cf-visitor": '{"scheme":"https"}'})
     h = fake.seen[0].headers
     assert not [k for k in h if k.lower().startswith("cf-") or k.lower() == "cdn-loop"]
+
+
+async def test_only_clerk_cookies_are_forwarded(up):
+    gw, fake = up
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        await c.get("/__clerk/v1/client", headers={"cookie": f"{COOKIE}=abc; ref=CODE1; __client=x; __client_uat=1; __session=s"})
+    assert fake.seen[0].headers.get("cookie") == "__client=x; __client_uat=1; __session=s"
+
+
+async def test_large_body_refused(up):
+    gw, fake = up
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.post("/__clerk/v1/client/sign_ins", content=b"x" * (clerk_proxy.MAX_BODY + 1))
+    assert r.status_code == 413 and not fake.seen
+
+
+async def test_raw_path_kept(up):
+    gw, fake = up
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        await c.get("/__clerk/v1/a%2Fb/c?x=%2F")
+    assert fake.seen[0].url.raw_path == b"/v1/a%2Fb/c?x=%2F"
+
+
+class Tracked(Body):
+    closed = False
+
+    async def aclose(self):
+        Tracked.closed = True
+
+
+async def test_upstream_response_closed(up):
+    gw, fake = up
+    Tracked.closed = False
+    fake.reply = lambda: httpx.Response(200, stream=Tracked(b"{}"))
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        await c.get("/__clerk/v1/environment")
+    assert Tracked.closed
+
+
+async def test_not_advertised_without_secret(up, monkeypatch):
+    gw, fake = up
+    monkeypatch.delenv("CLERK_SECRET_KEY")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/auth-config")
+        assert (await c.get("/__clerk/v1/environment")).status_code == 404
+    assert r.json()["clerk"]["proxy_url"] == ""
+    assert "clerk.test.dev" in r.headers["content-security-policy"]
+
+
+async def test_hooks_host_serves_only_the_webhook(up, monkeypatch):
+    gw, fake = up
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "1:x")
+    monkeypatch.setenv("TELEGRAM_WEBHOOK_SECRET", "s")
+    gw.cfg.telegram = TelegramConfig(bot_username="b", admin_chat_id=-1, webhook_url="https://hooks.test/telegram/webhook")
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("http://hooks.test/dashboard")).status_code == 404
+        assert (await c.get("http://hooks.test/__clerk/v1/environment")).status_code == 404
+        assert (await c.post("http://hooks.test/telegram/webhook", json={})).status_code == 403   # reached; no secret
+        assert (await c.get("http://dash.test/__clerk/v1/environment")).status_code == 200

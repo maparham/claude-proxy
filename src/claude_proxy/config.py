@@ -510,6 +510,10 @@ class Config:
                 if not hasattr(target, k):
                     raise ConfigError(f"{toml_path}: unknown key [{name}].{k}")
                 setattr(target, k, v)
+        proxy = cfg.signup.clerk_proxy_url.rstrip("/")
+        if proxy and (not proxy.startswith("https://") or proxy != f"{cfg.listener.dashboard_url.rstrip('/')}/__clerk"):
+            raise ConfigError(f"{toml_path}: [signup] clerk_proxy_url must be <[listener] dashboard_url>/__clerk over https, "
+                              "where the dashboard serves Clerk's proxy")
         if "retention_days" in data:
             cfg.retention_days = int(data["retention_days"])
         if "keep_usage" in data:

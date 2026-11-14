@@ -623,3 +623,17 @@ async def test_the_gateway_serves_the_client_itself(env, monkeypatch):
     async with app(gw) as c:
         assert (await c.get("/client/install.sh")).status_code == 404
         assert f"curl -fsSL --connect-timeout 15 --max-time 60 {gw.cfg.signup.installer_url} | sh -s -- on" in (await c.get("/install")).text
+
+
+@pytest.mark.parametrize("proxy, ok", [("https://dash.rahkar.pro/__clerk", True), ("https://dash.rahkar.pro/__clerk/", True),
+                                       ("https://dash.rahkar.pro/clerk", False), ("https://other.example/__clerk", False),
+                                       ("http://dash.rahkar.pro/__clerk", False)])
+def test_clerk_proxy_url_checked(tmp_path, proxy, ok):
+    from claude_proxy.config import Config, ConfigError
+    p = tmp_path / "c.toml"
+    p.write_text(f'[listener]\ndashboard_url = "https://dash.rahkar.pro"\n[signup]\nclerk_proxy_url = "{proxy}"\n')
+    if ok:
+        assert Config.load(str(p)).signup.clerk_proxy_url == proxy
+    else:
+        with pytest.raises(ConfigError, match="clerk_proxy_url"):
+            Config.load(str(p))

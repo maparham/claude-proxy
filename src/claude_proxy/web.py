@@ -181,6 +181,20 @@ class HomeHost(BaseHTTPMiddleware):
         return await call_next(request)
 
 
+class HookHost(BaseHTTPMiddleware):
+    """Telegram's webhook host ([telegram] webhook_url, on Cloudflare while the dashboard is served from Iran) answers
+    only the webhook, not the whole dashboard."""
+
+    def __init__(self, app, host: str, path: str):
+        super().__init__(app)
+        self.host, self.path = host, path
+
+    async def dispatch(self, request, call_next):
+        if request.url.hostname == self.host and request.url.path != self.path:
+            return PlainTextResponse("Not found.", status_code=404)
+        return await call_next(request)
+
+
 def who(names: dict, user_id: int | None) -> str:
     """A user's name for a chart; NULL is deleted users' anonymized requests."""
     return "(deleted users)" if user_id is None else names.get(user_id, f"#{user_id}")
@@ -190,6 +204,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     app = FastAPI(title="claude-proxy dashboard", docs_url=None, redoc_url=None, openapi_url=None)
     conn, cfg = gw.conn, gw.cfg
     verifier = None
+    proxied = False   # Clerk's Frontend API through /__clerk (design 2026-11-14-iran-hosting)
     if cfg.signup.clerk_publishable_key:
         if not cfg.listener.dashboard_url:
             logger.error("Clerk sign-in is off: it needs [listener] dashboard_url, the origin its tokens are made for.")
@@ -197,9 +212,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http,
                                       proxy_url=cfg.signup.clerk_proxy_url)
             if cfg.signup.clerk_proxy_url and cfg.signup.clerk_secret():
-                clerk_proxy.mount(app, cfg.signup.clerk_proxy_url, cfg.signup.clerk_secret(), gw.http, COOKIE)
-    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None, clerk_proxied=bool(cfg.signup.clerk_proxy_url),
+                clerk_proxy.mount(app, cfg.signup.clerk_proxy_url, cfg.signup.clerk_secret(), gw.http)
+                proxied = True
+            elif cfg.signup.clerk_proxy_url:
+                logger.error("Clerk's proxy is off: [signup] clerk_proxy_url needs CLERK_SECRET_KEY; the browser talks to Clerk directly.")
+    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None, clerk_proxied=proxied,
                        turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
+    hook = urlsplit(cfg.telegram.webhook_url) if cfg.telegram and cfg.telegram.webhook_url else None
+    if hook and hook.hostname != urlsplit(cfg.listener.dashboard_url).hostname:
+        app.add_middleware(HookHost, host=hook.hostname, path=hook.path)
     if cfg.listener.home_url and cfg.listener.dashboard_url:
         app.add_middleware(HomeHost, home_host=urlsplit(cfg.listener.home_url).hostname,
                            dashboard=cfg.listener.dashboard_url.rstrip("/"))
@@ -307,7 +328,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def auth_config():
         # Before sign-in: whether to offer Clerk's sign-in, and with which (public) key; the install commands, for the how-to-join steps.
         return {"clerk": {"publishable_key": cfg.signup.clerk_publishable_key, "frontend_api": verifier.fapi,
-                          "proxy_url": cfg.signup.clerk_proxy_url.rstrip("/")} if verifier else None,
+                          "proxy_url": cfg.signup.clerk_proxy_url.rstrip("/") if proxied else ""} if verifier else None,
                 "signup": bool(verifier and cfg.signup.enabled),
                 "install": install_command(), "install_windows": install_command(windows=True), "install_windows_file": install_file()}
 
