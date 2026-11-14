@@ -87,7 +87,7 @@ case ":$PATH:" in
   *)
     mark="# added by claude-gateway's installer"
     line='case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) export PATH="$HOME/.local/bin:$PATH" ;; esac'
-    case ${SHELL##*/} in
+    sh_=${SHELL:-}; case ${sh_##*/} in
       zsh) rc=${ZDOTDIR:-$HOME}/.zshrc ;;
       bash) if [ "$(uname -s)" = Darwin ]; then rc=$HOME/.bash_profile; else rc=$HOME/.bashrc; fi ;;
       fish) rc=${XDG_CONFIG_HOME:-$HOME/.config}/fish/conf.d/claude-gateway.fish

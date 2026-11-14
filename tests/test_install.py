@@ -178,15 +178,17 @@ def test_install_from_the_gateways_own_archive(home, tmp_path):
 
 
 @pytest.mark.parametrize("shell, rc", [("/bin/zsh", ".zshrc"), ("/bin/sh", ".profile"),
+                                       pytest.param(None, ".profile", marks=pytest.mark.skipif(   # macOS's sh (bash) sets one
+                                           sys.platform == "darwin", reason="sh sets SHELL itself here")),
                                        ("/bin/bash", ".bash_profile" if sys.platform == "darwin" else ".bashrc")])
 def test_install_puts_local_bin_on_the_path_of_the_next_terminal_once(home, tarball, shell, rc):
     """A fresh Debian root has no ~/.local/bin on PATH: gclaude was "command not found" after a working install."""
     (home / rc).write_text("# mine\n")
-    r = install(home, tarball, SHELL=shell)
+    r = install(home, tarball, **({"SHELL": shell} if shell else {}))   # None: no SHELL at all (cron, Docker, CI)
     assert r.returncode == 0, r.stderr
     assert f"Added ~/.local/bin to your PATH in ~/{rc}." in r.stdout
     assert f"open a new terminal (or run '. ~/{rc}')" in r.stdout
-    assert install(home, tarball, SHELL=shell).returncode == 0   # again: not added twice
+    assert install(home, tarball, **({"SHELL": shell} if shell else {})).returncode == 0   # again: not added twice
     text = (home / rc).read_text()
     assert text.startswith("# mine\n") and text.count("added by claude-gateway") == 1
     bin_ = str(home / ".local" / "bin")
