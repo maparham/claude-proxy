@@ -62,7 +62,8 @@ and if Iran's link goes down, so does the site. `claude.rahkar.pro` stays on Clo
   The VPS's previous Caddyfile is `/etc/caddy/Caddyfile.before-iran-hosting`.
 - **Test browser from Iran**: the VPS runs Chromium on a virtual display (`iranbrowser-xvfb`, `-wm`, `-vnc`,
   `-chromium` systemd units, user `browser`), with noVNC on `127.0.0.1:6080` and DevTools on `127.0.0.1:9222`
-  (started with `--disable-quic` during testing). View it with
+  (started with `--disable-quic` during testing). Off since 2026-11-14 to save memory; turn on with
+  `systemctl enable --now iranbrowser-xvfb iranbrowser-wm iranbrowser-vnc iranbrowser-chromium`. View it with
   `ssh -N -L 6080:127.0.0.1:6080 -L 9222:127.0.0.1:9222 gateway-ir` and http://localhost:6080/vnc.html.
 
 ## Automatic deploys
