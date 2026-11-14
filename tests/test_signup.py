@@ -249,11 +249,23 @@ async def test_sign_in_refuses_removed_admin_unverified_and_closed(env):
         assert r.status_code == 403 and "closed" in r.json()["error"]
 
 
+async def test_auth_config_and_csp_with_proxy(env):
+    gw, *_ = env
+    gw.cfg.signup.clerk_proxy_url = f"{DASH}/__clerk"
+    async with app(gw) as c:
+        r = await c.get("/api/auth-config")
+    assert r.json()["clerk"]["proxy_url"] == f"{DASH}/__clerk"
+    csp = dict(d.strip().split(" ", 1) for d in r.headers["content-security-policy"].split(";"))
+    assert FAPI not in csp["script-src"] and FAPI not in csp["connect-src"]
+    assert "https://challenges.cloudflare.com" in csp["script-src"] and "https://challenges.cloudflare.com" in csp["frame-src"]
+    assert "https://img.clerk.com" in csp["img-src"]
+
+
 async def test_auth_config_and_csp(env):
     gw, *_ = env
     async with app(gw) as c:
         r = await c.get("/api/auth-config")
-        assert r.json() == {"clerk": {"publishable_key": PK, "frontend_api": FAPI}, "signup": True,
+        assert r.json() == {"clerk": {"publishable_key": PK, "frontend_api": FAPI, "proxy_url": ""}, "signup": True,
                             "install": f"curl -fsSL {DASH}/install | sh", "install_windows": f"irm {DASH}/install.ps1 | iex",
                             "install_windows_file": f"{DASH}/install.cmd"}
         csp = r.headers["content-security-policy"]

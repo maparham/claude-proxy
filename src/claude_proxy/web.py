@@ -133,16 +133,18 @@ class LoginLimiter:
 
 
 class SecurityHeaders(BaseHTTPMiddleware):
-    def __init__(self, app, clerk_host: str | None = None, turnstile: bool = False):
+    def __init__(self, app, clerk_host: str | None = None, turnstile: bool = False, clerk_proxied: bool = False):
         super().__init__(app)
+        # Proxied (design 2026-11-14-iran-hosting), Clerk's scripts and API come from this dashboard ('self'); its
+        # bot check and avatar images still come from Cloudflare and img.clerk.com.
         # Clerk's sign-in runs from its Frontend API host, with Cloudflare's bot check in a frame; the home page's order
         # dialog loads that same check (Turnstile) as a script and a frame, and needs nothing else from Cloudflare.
         # The home page shows the eNamad trust seal, an image from trustseal.enamad.ir, and ZarinPal's trust logo, a script
         # from www.zarinpal.com that loads cdn.zarinpal.com's, which writes in its image.
-        clerk = f" https://{clerk_host}" if clerk_host else ""
+        clerk = f" https://{clerk_host}" if clerk_host and not clerk_proxied else ""
         bot = " https://challenges.cloudflare.com" if clerk_host or turnstile else ""
         self.csp = (f"default-src 'self'; script-src 'self' https://cdn.jsdelivr.net/npm/echarts@5.6.0/ https://www.zarinpal.com https://cdn.zarinpal.com{clerk}{bot}; "
-                    f"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https://trustseal.enamad.ir https://zarinpal.com https://*.zarinpal.com{clerk}{' https://img.clerk.com' if clerk else ''}; "
+                    f"style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; img-src 'self' data: https://trustseal.enamad.ir https://zarinpal.com https://*.zarinpal.com{clerk}{' https://img.clerk.com' if clerk_host else ''}; "
                     "font-src 'self' https://fonts.gstatic.com; "
                     f"connect-src 'self'{clerk}; frame-src{bot or ' ' + repr('none')}; worker-src 'self' blob:; "
                     "frame-ancestors 'none'; base-uri 'none'; form-action 'self'")
@@ -196,7 +198,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                       proxy_url=cfg.signup.clerk_proxy_url)
             if cfg.signup.clerk_proxy_url and cfg.signup.clerk_secret():
                 clerk_proxy.mount(app, cfg.signup.clerk_proxy_url, cfg.signup.clerk_secret(), gw.http, COOKIE)
-    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None,
+    app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None, clerk_proxied=bool(cfg.signup.clerk_proxy_url),
                        turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
     if cfg.listener.home_url and cfg.listener.dashboard_url:
         app.add_middleware(HomeHost, home_host=urlsplit(cfg.listener.home_url).hostname,
@@ -304,7 +306,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/auth-config")
     async def auth_config():
         # Before sign-in: whether to offer Clerk's sign-in, and with which (public) key; the install commands, for the how-to-join steps.
-        return {"clerk": {"publishable_key": cfg.signup.clerk_publishable_key, "frontend_api": verifier.fapi} if verifier else None,
+        return {"clerk": {"publishable_key": cfg.signup.clerk_publishable_key, "frontend_api": verifier.fapi,
+                          "proxy_url": cfg.signup.clerk_proxy_url.rstrip("/")} if verifier else None,
                 "signup": bool(verifier and cfg.signup.enabled),
                 "install": install_command(), "install_windows": install_command(windows=True), "install_windows_file": install_file()}
 

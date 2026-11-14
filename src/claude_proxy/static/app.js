@@ -2588,9 +2588,12 @@ function setupClerk() {
   clerkReady ??= (async () => {
     const cfg = await api("/api/auth-config");
     if (!cfg.clerk) return null;
-    const npm = `https://${cfg.clerk.frontend_api}/npm`;
+    // Proxied (design 2026-11-14-iran-hosting), Clerk's scripts and API come through this dashboard: from Iran Clerk's own host freezes.
+    const proxy = cfg.clerk.proxy_url;
+    const npm = `${proxy || `https://${cfg.clerk.frontend_api}`}/npm`;
     await loadScript(`${npm}/@clerk/ui@1/dist/ui.browser.js`);
-    await loadScript(`${npm}/@clerk/clerk-js@6/dist/clerk.browser.js`, { "data-clerk-publishable-key": cfg.clerk.publishable_key });
+    await loadScript(`${npm}/@clerk/clerk-js@6/dist/clerk.browser.js`,
+      { "data-clerk-publishable-key": cfg.clerk.publishable_key, ...(proxy ? { "data-clerk-proxy-url": proxy } : {}) });
     // Clerk's own Persian text (vendored: its Frontend API does not serve localizations); English if it fails to load.
     const base = LANG === "fa" ? await import(document.querySelector("meta[name=clerk-fa-ir]").content).then((m) => m.faIR, () => undefined) : undefined;
     // The code and link steps' subtitles otherwise read "to continue to <Clerk app name>".
