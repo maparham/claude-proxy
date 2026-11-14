@@ -717,7 +717,6 @@ if mode == "on":
                 '  case $(cat "$probe" 2>/dev/null) in [234]??) ;; *)\n'
                 '    own=; for a in "$@"; do case $a in --settings|--settings=*) own=1 ;; esac; done\n'
                 '    if [ -z "$own" ] && [ -f "$CLAUDE_CONFIG_DIR/fallback-settings.json" ]; then\n'
-                f"      echo {shlex.quote('gclaude: ' + c.get('url', '').rstrip('/') + ' does not answer, so this session uses the relay.')} >&2\n"
                 '      set -- --settings "$CLAUDE_CONFIG_DIR/fallback-settings.json" "$@"\n'
                 "    fi ;;\n"
                 "  esac\n"

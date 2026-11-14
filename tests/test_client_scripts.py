@@ -1331,7 +1331,7 @@ def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_n
     stub.health = 502
     r = run_gclaude(home, launcher, "-p", "hi")
     assert r.returncode == 0 and r.stdout.strip() == f"claude started --settings {relay} -p hi", r.stderr
-    assert "does not answer, so this session uses the relay" in r.stderr
+    assert r.stderr == ""   # silently: the relay is the user's business only when it fails too
     r = run_gclaude(home, launcher, "--settings", "mine.json")   # the user's own settings: left alone
     assert r.stdout.strip() == "claude started --settings mine.json"
     assert not list((home / "tmp").glob("gclaude-probe.*"))

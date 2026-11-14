@@ -438,7 +438,6 @@ function Write-Launcher($c) {   # gclaude.cmd, which reads the key from gclaude'
     'for %%c in (2 3 4) do if "%GW_HEALTH:~0,1%"=="%%c" set "GW_RELAY="',
     'if defined GW_RELAY for %%a in (%*) do if /i "%%~a"=="--settings" set "GW_RELAY="',
     ('if defined GW_RELAY (' + "`r`n" +
-     '  echo gclaude: ' + $c.url.TrimEnd('/').Replace('%', '%%') + ' does not answer, so this session uses the relay. 1>&2' + "`r`n" +
      '  set GW_ARGS=--settings "%CLAUDE_CONFIG_DIR%\fallback-settings.json"' + "`r`n" +
      ')'),
     ('if defined GW_WHY (' + "`r`n" +

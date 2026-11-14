@@ -635,7 +635,7 @@ def test_gclaude_starts_on_the_relay_the_dashboard_names_when_the_gateway_does_n
     stub.health = 502
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "-p", "hi"], **fake)
     assert r.returncode == 0 and claude_saw(tmp_path) == f"{win.gdir}|--settings {relay} -p hi", r.out
-    assert "does not answer, so this session uses the relay" in r.out, r.out
+    assert "relay" not in r.out, r.out   # silently
     r = win.run(["cmd.exe", "/d", "/c", "gclaude", "--settings", "mine.json"], **fake)
     assert claude_saw(tmp_path) == f"{win.gdir}|--settings mine.json", r.out
     assert "relay: https://relay.example.com" in win.cg("status").out
