@@ -102,3 +102,27 @@ async def test_off_without_config(up):
     async with asgi_client(create_dashboard_app(gw)) as c:
         r = await c.get("/__clerk/v1/environment")
     assert r.status_code == 404 and not fake.seen
+
+
+@pytest.mark.parametrize("exc, status", [(httpx.ConnectError("refused"), 502), (httpx.ReadTimeout("slow"), 504)])
+async def test_upstream_failure_is_a_gateway_error(up, exc, status):
+    gw, fake = up
+
+    async def fail(request):
+        raise exc
+
+    fake.handle_async_request = fail
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/__clerk/v1/environment")
+    assert r.status_code == status
+
+
+async def test_drops_cloudflare_headers(up):
+    # After a DNS rollback requests come through cloudflared; Clerk's own host is on Cloudflare too, and a forwarded
+    # cdn-loop or cf-* header must not reach it.
+    gw, fake = up
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        await c.get("/__clerk/v1/client", headers={"cdn-loop": "cloudflare", "cf-ray": "1", "cf-connecting-ip": "1.2.3.4",
+                                                    "cf-ipcountry": "IR", "cf-visitor": '{"scheme":"https"}'})
+    h = fake.seen[0].headers
+    assert not [k for k in h if k.lower().startswith("cf-") or k.lower() == "cdn-loop"]

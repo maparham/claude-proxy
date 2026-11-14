@@ -55,7 +55,10 @@ jobs:
           check() {
             curl -fsS --max-time 15 -o /dev/null https://rahkar.pro/ || { echo "rahkar.pro unreachable"; return 1; }
             body=$(curl -fsS --max-time 15 https://dash.rahkar.pro/api/auth-config) || { echo "dash.rahkar.pro unreachable"; return 1; }
-            jq -e '.clerk.proxy_url != ""' <<<"$body" >/dev/null
+            jq -e '(.clerk.proxy_url // "") != ""' <<<"$body" >/dev/null || { echo "Clerk sign-in or its proxy is off"; return 1; }
+            # Through the proxy to Clerk: a broken proxy setup answers with errors instead of the instance's settings.
+            env=$(curl -fsS --max-time 15 https://dash.rahkar.pro/__clerk/v1/environment) || { echo "Clerk proxy unreachable"; return 1; }
+            jq -e '.auth_config.object == "auth_config"' <<<"$env" >/dev/null || { echo "Clerk proxy answered: ${env:0:200}"; return 1; }
           }
           check && exit 0
           echo "::warning::first check failed; rechecking in 2 minutes"

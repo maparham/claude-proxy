@@ -6,10 +6,14 @@ proxy mode requires. The upstream host is fixed: no part of the request chooses 
 session cookie and any Authorization header are not passed on."""
 from __future__ import annotations
 
+import logging
+
 import httpx
 from fastapi import FastAPI, Request
 from starlette.background import BackgroundTask
-from starlette.responses import StreamingResponse
+from starlette.responses import PlainTextResponse, StreamingResponse
+
+logger = logging.getLogger(__name__)
 
 UPSTREAM_HOST = "frontend-api.clerk.dev"
 PREFIX = "/__clerk"
@@ -33,14 +37,24 @@ def mount(app: FastAPI, proxy_url: str, secret: str, http: httpx.AsyncClient, ow
     async def clerk_frontend_api(path: str, request: Request):
         url = httpx.URL(scheme="https", host=UPSTREAM_HOST, path="/" + path.lstrip("/"),
                         query=request.url.query.encode())
-        headers = [(k, v) for k, v in request.headers.items() if k.lower() not in DROP_REQUEST]
+        # Cloudflare's own headers (cf-*, cdn-loop) arrive when the dashboard is reached through cloudflared; Clerk's host
+        # is on Cloudflare too and must not see them.
+        headers = [(k, v) for k, v in request.headers.items()
+                   if k.lower() not in DROP_REQUEST and not k.lower().startswith("cf-") and k.lower() != "cdn-loop"]
         cookie = _cookies_without(request.headers.get("cookie", ""), own_cookie)
         if cookie:
             headers.append(("cookie", cookie))
         headers += [("clerk-proxy-url", proxy_url), ("clerk-secret-key", secret),
                     ("x-forwarded-for", request.client.host if request.client else "")]
         req = http.build_request(request.method, url, headers=headers, content=await request.body(), timeout=TIMEOUT_S)
-        resp = await http.send(req, stream=True)
+        try:
+            resp = await http.send(req, stream=True)
+        except httpx.TimeoutException:
+            logger.warning("Clerk's Frontend API timed out for %s %s", request.method, url.path)
+            return PlainTextResponse("Clerk did not answer in time.", status_code=504)
+        except httpx.HTTPError as e:
+            logger.warning("Clerk's Frontend API unreachable for %s %s: %s", request.method, url.path, e)
+            return PlainTextResponse("Clerk is unreachable.", status_code=502)
         out = [(k, v) for k, v in resp.headers.multi_items() if k.lower() not in DROP_RESPONSE]
         r = StreamingResponse(resp.aiter_raw(), status_code=resp.status_code, background=BackgroundTask(resp.aclose))
         r.raw_headers = [(k.encode("latin-1"), v.encode("latin-1")) for k, v in out]
