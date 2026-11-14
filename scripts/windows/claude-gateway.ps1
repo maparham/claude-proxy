@@ -55,7 +55,10 @@ $OneMModels = [ordered]@{ ANTHROPIC_DEFAULT_FABLE_MODEL = 'claude-fable-5-2[1m]'
 # again) and goes on with the same turn. Scope "capacity" keeps the long waits to 429/529: a gateway outage still fails fast.
 $GclaudeEnv = [ordered]@{ DISABLE_LOGIN_COMMAND = '1'; DISABLE_LOGOUT_COMMAND = '1'; DISABLE_UPGRADE_COMMAND = '1'
                           DISABLE_EXTRA_USAGE_COMMAND = '1'; DISABLE_INSTALL_GITHUB_APP_COMMAND = '1'
-                          CLAUDE_CODE_RETRY_WATCHDOG = '1'; CLAUDE_CODE_RETRY_WATCHDOG_SCOPE = 'capacity' }
+                          CLAUDE_CODE_RETRY_WATCHDOG = '1'; CLAUDE_CODE_RETRY_WATCHDOG_SCOPE = 'capacity'
+                          # Claude Code's own calls to Anthropic (feature flags, MCP server list, telemetry) bypass the
+                          # gateway, from Iranian addresses too. Off; MCP works, gclaude update still updates Claude Code.
+                          CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC = '1' }
 $Issue = 'https://github.com/maparham/claude-proxy/issues/22'
 
 function Get-Version {   # MAJOR.MINOR.N, as version() in scripts/claude-gateway works it out; '' when unknown

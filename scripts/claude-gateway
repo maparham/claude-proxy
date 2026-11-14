@@ -202,6 +202,10 @@ GCLAUDE_ENV = {k: "1" for k in ("DISABLE_LOGIN_COMMAND", "DISABLE_LOGOUT_COMMAND
 # any over 60 s and the turn ends, to be resumed by hand; its retry watchdog waits it out (up to 6 h a sleep, then asks
 # again) and goes on with the same turn. Scope "capacity" keeps the long waits to 429/529: a gateway outage still fails fast.
 GCLAUDE_ENV.update({"CLAUDE_CODE_RETRY_WATCHDOG": "1", "CLAUDE_CODE_RETRY_WATCHDOG_SCOPE": "capacity"})
+# Claude Code's own calls to Anthropic (feature flags, the official MCP server list, telemetry) go from the user's computer
+# straight to api.anthropic.com, past the gateway, so from Iranian addresses too; without a claude.ai login they carry no
+# account. Off. MCP servers still work, and `claude update` (gclaude update) still updates it; its background one stops.
+GCLAUDE_ENV["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] = "1"
 s = json.load(open(settings))
 env = s.setdefault("env", {})
 c = json.load(open(client)) if os.path.exists(client) else {}

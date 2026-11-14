@@ -879,6 +879,17 @@ def test_gclaude_waits_out_limits_with_claude_codes_retry_watchdog_but_global_mo
     assert json.loads(gsettings.read_text()) == {}
 
 
+def test_gclaude_keeps_claude_code_from_calling_anthropic_past_the_gateway_but_global_mode_does_not(stub, home):
+    """Feature flags, the MCP server list and telemetry would go from the user's own address, Iranian ones too."""
+    assert cg(home, "on", "--gclaude", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    _, gsettings, _ = gc_paths(home)
+    assert json.loads(gsettings.read_text())["env"]["CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC"] == "1"
+    assert cg(home, "on", "--global", "--url", stub.url, "--key", "sk-proxy-full").returncode == 0
+    assert "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" not in json.loads((home / ".claude" / "settings.json").read_text())["env"]
+    assert cg(home, "off", "--gclaude").returncode == 0
+    assert json.loads(gsettings.read_text()) == {}
+
+
 def test_gclaude_keeps_a_model_the_user_chose_for_an_alias(stub, home):
     _, gsettings, _ = gc_paths(home)
     gsettings.parent.mkdir(parents=True)
