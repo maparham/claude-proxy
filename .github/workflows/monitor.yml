@@ -1,4 +1,4 @@
-# Hourly check from outside: the gateway answers through Cloudflare, its subscription login works, and
+# Hourly check from outside: the gateway answers through Cloudflare and through the Iranian relay, its subscription login works, and
 # Anthropic's usage figures are fresh (without them share limits and paid tickets run on estimates).
 # A failed run makes GitHub email whoever last changed this schedule. One recheck after 2 minutes keeps
 # a deploy's few-second restart from raising an alarm. Hourly keeps it near 720 of the free plan's
@@ -30,3 +30,19 @@ jobs:
           echo "::warning::first check failed; rechecking in 2 minutes"
           sleep 120
           check || { echo "::error::gateway is down, its subscription login is broken, or Anthropic's usage figures are stale"; exit 1; }
+      # The Iranian relay (deploy/lightsail/README.md): Caddy on the VPS, its Xray tunnel to the gateway box. Only
+      # whether it reaches the gateway; the step above already judges the login and the usage figures. Runs when
+      # that one failed too, so an alarm says which of the two is down.
+      - name: Iranian relay reaches the gateway
+        if: always()
+        shell: bash
+        run: |
+          check() {
+            body=$(curl -fsS --max-time 15 https://claude-ir.rahkar.pro/health) || { echo "unreachable"; return 1; }
+            echo "$body"
+            jq -e '.ok == true' <<<"$body" >/dev/null
+          }
+          check && exit 0
+          echo "::warning::first check failed; rechecking in 2 minutes"
+          sleep 120
+          check || { echo "::error::the relay at claude-ir.rahkar.pro does not reach the gateway (VPS, Caddy or the Xray tunnel: ssh gateway-ir)"; exit 1; }
