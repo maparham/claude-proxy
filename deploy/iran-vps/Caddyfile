@@ -1,0 +1,32 @@
+# Iranian relay: claude-ir.rahkar.pro -> Xray tunnel (127.0.0.1:18480) -> AWS gateway API.
+# Caddy replaces X-Forwarded-For with the real client IP; the gateway trusts it from 127.0.0.1.
+claude-ir.rahkar.pro {
+	# WireGuard-over-WebSocket (wstunnel v10) for TunnelBahn's TCP wrapper
+	handle /<WSTUNNEL_PATH>/* {
+		reverse_proxy 127.0.0.1:8088
+	}
+	handle {
+		reverse_proxy 127.0.0.1:18480 {
+			flush_interval -1
+		}
+	}
+}
+
+# wg-easy admin UI
+claude-ir.rahkar.pro:51821 {
+	reverse_proxy 127.0.0.1:51822
+}
+
+# rahkar.pro (home) and dash.rahkar.pro (dashboard, Clerk via /__clerk) for everyone, DNS only in Cloudflare:
+# Cloudflare freezes larger downloads from Iran (docs/superpowers/specs/2026-11-14-iran-hosting-design.md).
+# Through Xray's dash inbound to the gateway box's dashboard listener; Caddy sets X-Forwarded-For/Proto.
+rahkar.pro, dash.rahkar.pro {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:18481 {
+		flush_interval -1
+	}
+}
+
+www.rahkar.pro {
+	redir https://rahkar.pro{uri} permanent
+}

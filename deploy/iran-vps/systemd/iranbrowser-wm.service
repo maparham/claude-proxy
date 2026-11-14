@@ -1,0 +1,12 @@
+[Unit]
+Description=Iran browser: window manager
+After=iranbrowser-xvfb.service
+Requires=iranbrowser-xvfb.service
+[Service]
+User=browser
+Environment=DISPLAY=:99
+ExecStartPre=/bin/sleep 1
+ExecStart=/usr/bin/openbox
+Restart=always
+[Install]
+WantedBy=multi-user.target

@@ -27,12 +27,10 @@ sees real client IPs.
 
 ## Iranian relay (`claude-ir.rahkar.pro`)
 
-An ArvanCloud VPS (`95.38.187.63`, Debian 13, `ssh gateway-ir`) relays the API for users in Iran:
-Caddy on it serves `claude-ir.rahkar.pro` (DNS only in Cloudflare, Let's Encrypt certificate) and hands requests
-to Xray, whose VLESS + Reality tunnel reaches Xray on this box (port 443, open in Lightsail to the VPS's address
-only), which delivers them to `127.0.0.1:18480` and `127.0.0.1:18481` and nothing else. Anthropic sees only this box. Both ends run
-`xray.service` with `/usr/local/etc/xray/config.json`; the tunnel's keys are only there, not in the repo. The
-gateway records each user's own IP (Caddy's X-Forwarded-For, trusted from 127.0.0.1).
+An ArvanCloud VPS (`95.38.187.63`, `ssh gateway-ir`) relays the API for users in Iran over an Xray (VLESS + Reality)
+tunnel to Xray on this box (port 443, open in Lightsail to the VPS's address only), which delivers only to
+`127.0.0.1:18480` and `127.0.0.1:18481`. Setup, config templates, key rotation and the test browser:
+**`deploy/iran-vps/README.md`**.
 
 `[listener] relay_url` in `config.toml` names it to gclaude, which starts on it when `claude.rahkar.pro/health`
 does not answer within 3 s (or answers 5xx). A user can also make it their gateway outright:
@@ -55,16 +53,12 @@ and if Iran's link goes down, so does the site. `claude.rahkar.pro` stays on Clo
 - **Telegram** cannot reach Iranian addresses, so its webhook is `https://hooks.rahkar.pro/telegram/webhook`
   (`[telegram] webhook_url`, on this tunnel); after changing it run `claude-proxy telegram set-webhook` in the
   container.
-- **Monitor**: `monitor.yml` checks `rahkar.pro` and `dash.rahkar.pro/api/auth-config` hourly.
+- **Monitor**: `monitor.yml` checks `rahkar.pro`, `dash.rahkar.pro/api/auth-config` and Clerk through `/__clerk` hourly.
 - **Rollback**: in Cloudflare DNS, set `rahkar.pro` and `dash.rahkar.pro` back to CNAME
   `7305f1ba-193d-47a3-941f-b32413742358.cfargotunnel.com` and `www.rahkar.pro` to CNAME `rahkar.pro`, all
   proxied (the tunnel routes above are still there). Clerk's proxy can stay on: it works through Cloudflare too.
   The VPS's previous Caddyfile is `/etc/caddy/Caddyfile.before-iran-hosting`.
-- **Test browser from Iran**: the VPS runs Chromium on a virtual display (`iranbrowser-xvfb`, `-wm`, `-vnc`,
-  `-chromium` systemd units, user `browser`), with noVNC on `127.0.0.1:6080` and DevTools on `127.0.0.1:9222`
-  (started with `--disable-quic` during testing). Off since 2026-11-14 to save memory; turn on with
-  `systemctl enable --now iranbrowser-xvfb iranbrowser-wm iranbrowser-vnc iranbrowser-chromium`. View it with
-  `ssh -N -L 6080:127.0.0.1:6080 -L 9222:127.0.0.1:9222 gateway-ir` and http://localhost:6080/vnc.html.
+- **Test browser from Iran**: off by default; see `deploy/iran-vps/README.md`.
 
 ## Automatic deploys
 

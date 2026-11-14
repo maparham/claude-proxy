@@ -1,0 +1,11 @@
+[Unit]
+Description=Iran browser: VNC on localhost:5900 + noVNC on localhost:6080
+After=iranbrowser-xvfb.service
+Requires=iranbrowser-xvfb.service
+[Service]
+User=browser
+ExecStartPre=/bin/sleep 1
+ExecStart=/bin/sh -c '/usr/bin/x11vnc -display :99 -localhost -rfbport 5900 -nopw -forever -shared -quiet & exec /usr/bin/websockify --web /usr/share/novnc 127.0.0.1:6080 127.0.0.1:5900'
+Restart=always
+[Install]
+WantedBy=multi-user.target

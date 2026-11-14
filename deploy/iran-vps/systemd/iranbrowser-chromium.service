@@ -1,0 +1,13 @@
+[Unit]
+Description=Iran browser: Chromium on display :99 (CDP on localhost:9222)
+After=iranbrowser-wm.service
+Requires=iranbrowser-xvfb.service
+[Service]
+User=browser
+Environment=DISPLAY=:99
+ExecStartPre=/bin/sleep 2
+ExecStart=/usr/bin/chromium --no-first-run --no-default-browser-check --start-maximized --disable-quic --remote-debugging-port=9222 --remote-debugging-address=127.0.0.1 --user-data-dir=/home/browser/profile --lang=fa-IR https://rahkar.pro/
+Restart=always
+RestartSec=3
+[Install]
+WantedBy=multi-user.target

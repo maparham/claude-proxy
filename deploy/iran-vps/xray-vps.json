@@ -1,0 +1,60 @@
+{
+  "log": {
+    "loglevel": "warning"
+  },
+  "inbounds": [
+    {
+      "listen": "127.0.0.1",
+      "port": 18480,
+      "protocol": "dokodemo-door",
+      "tag": "api",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 18480,
+        "network": "tcp"
+      }
+    },
+    {
+      "listen": "127.0.0.1",
+      "port": 18481,
+      "protocol": "dokodemo-door",
+      "tag": "dash",
+      "settings": {
+        "address": "127.0.0.1",
+        "port": 18481,
+        "network": "tcp"
+      }
+    }
+  ],
+  "outbounds": [
+    {
+      "protocol": "vless",
+      "tag": "aws",
+      "settings": {
+        "vnext": [
+          {
+            "address": "<AWS_GATEWAY_IP>",
+            "port": 443,
+            "users": [
+              {
+                "id": "<CLIENT_UUID>",
+                "flow": "xtls-rprx-vision",
+                "encryption": "none"
+              }
+            ]
+          }
+        ]
+      },
+      "streamSettings": {
+        "network": "tcp",
+        "security": "reality",
+        "realitySettings": {
+          "serverName": "www.microsoft.com",
+          "fingerprint": "chrome",
+          "publicKey": "<PUBLICKEY>",
+          "shortId": "<SHORT_ID>"
+        }
+      }
+    }
+  ]
+}
