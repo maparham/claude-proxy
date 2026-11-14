@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
+from . import api_credit, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -192,7 +192,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not cfg.listener.dashboard_url:
             logger.error("Clerk sign-in is off: it needs [listener] dashboard_url, the origin its tokens are made for.")
         else:
-            verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http)
+            verifier = clerk.Verifier(cfg.signup.clerk_publishable_key, cfg.signup.clerk_secret(), cfg.listener.dashboard_url, gw.http,
+                                      proxy_url=cfg.signup.clerk_proxy_url)
+            if cfg.signup.clerk_proxy_url and cfg.signup.clerk_secret():
+                clerk_proxy.mount(app, cfg.signup.clerk_proxy_url, cfg.signup.clerk_secret(), gw.http, COOKIE)
     app.add_middleware(SecurityHeaders, clerk_host=verifier.fapi if verifier else None,
                        turnstile=cfg.tickets.enabled and cfg.tickets.turnstile_on())
     if cfg.listener.home_url and cfg.listener.dashboard_url:

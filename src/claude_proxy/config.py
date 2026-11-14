@@ -87,6 +87,9 @@ class SignupConfig:
     """Self-service accounts (sign-up design, 2026-09-26): people sign in with Clerk; a new account gets no credit."""
     enabled: bool = False              # False: Clerk sign-in still links existing accounts, but creates none
     clerk_publishable_key: str = ""    # public; the secret key is CLERK_SECRET_KEY in the environment
+    # Clerk "proxy" mode: the browser reaches Clerk's Frontend API at this URL on the dashboard (<dashboard_url>/__clerk),
+    # which the gateway forwards to Clerk; from Iran Clerk's own host freezes. Empty: the browser talks to Clerk directly.
+    clerk_proxy_url: str = ""
     installer_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.sh"
     installer_ps1_url: str = "https://raw.githubusercontent.com/maparham/claude-proxy/master/install.ps1"   # Windows
 

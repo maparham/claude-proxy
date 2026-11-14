@@ -47,11 +47,14 @@ def _public_key(jwk: dict) -> rsa.RSAPublicKey:
 
 
 class Verifier:
-    def __init__(self, publishable_key: str, secret_key: str | None, dashboard_url: str, http: httpx.AsyncClient):
+    def __init__(self, publishable_key: str, secret_key: str | None, dashboard_url: str, http: httpx.AsyncClient,
+                 proxy_url: str = ""):
         self.fapi = frontend_api(publishable_key)
         if not self.fapi:
             raise ClerkError("signup.clerk_publishable_key is not a Clerk publishable key")
         self.secret, self.origin, self.http = secret_key, dashboard_url.rstrip("/"), http
+        # Tokens name the Frontend API as issuer, or the proxy URL when Clerk runs in proxy mode.
+        self.issuers = {f"https://{self.fapi}"} | ({proxy_url.rstrip("/")} if proxy_url else set())
         self._keys: dict[str, rsa.RSAPublicKey] = {}
         self._fetched = 0.0
 
@@ -90,7 +93,7 @@ class Verifier:
             raise ClerkError("token expired")
         if isinstance(nbf, (int, float)) and nbf - LEEWAY_S > now:
             raise ClerkError("token not valid yet")
-        if claims.get("iss") != f"https://{self.fapi}":
+        if claims.get("iss") not in self.issuers:
             raise ClerkError("token from another Clerk instance")
         # A session token (it has a session id) made in this dashboard, not any other token the instance signs.
         if not isinstance(claims.get("azp"), str) or claims["azp"].rstrip("/") != self.origin:

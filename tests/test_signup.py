@@ -127,6 +127,15 @@ async def test_clerk_tokens_are_checked(env, bad, why):
         await v.verify(jwt(claims(**bad)))
 
 
+async def test_proxy_issuer_accepted(env):
+    gw, _, _ = env
+    v = clerk.Verifier(PK, "sk_test_secret", DASH, gw.http, proxy_url=f"{DASH}/__clerk/")
+    assert (await v.verify(jwt(claims(iss=f"{DASH}/__clerk"))))["sub"] == "user_1"
+    assert (await v.verify(jwt(claims())))["sub"] == "user_1"
+    with pytest.raises(clerk.ClerkError, match="another Clerk instance"):
+        await v.verify(jwt(claims(iss="https://clerk.other.dev")))
+
+
 async def test_clerk_token_signature_and_key_id(env):
     gw, _, fake = env
     v = clerk.Verifier(PK, "sk_test_secret", DASH, gw.http)
