@@ -1,0 +1,12 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<rect class="k" x="256" y="30" width="124" height="114" rx="8"/><path class="w" d="M250 32a8 8 0 0 1 8-8h86l30 30v78a8 8 0 0 1-8 8H258a8 8 0 0 1-8-8z"/>
+<path class="c2" d="M344 24v22a8 8 0 0 0 8 8h22z"/>
+<rect class="c" x="266" y="40" width="54" height="8" rx="4"/>
+<rect class="c2" x="266" y="62" width="22" height="6" rx="3"/><rect class="f" x="294" y="58" width="64" height="14" rx="4"/><rect class="c" x="299" y="63" width="40" height="4" rx="2"/>
+<rect class="c2" x="266" y="84" width="22" height="6" rx="3"/><rect class="f" x="294" y="80" width="64" height="14" rx="4"/><rect class="c" x="299" y="85" width="28" height="4" rx="2"/>
+<rect class="c2" x="266" y="106" width="22" height="6" rx="3"/><rect class="f" x="294" y="102" width="14" height="14" rx="3"/><path class="sc" d="m297 109 3 3 6-7"/>
+<rect class="c" x="226" y="112" width="40" height="20" rx="5"/><text x="246" y="126" text-anchor="middle">PDF</text>
+<g transform="rotate(35 400 80)"><rect class="w" x="392" y="26" width="16" height="74" rx="4"/><rect class="c2" x="392" y="36" width="16" height="8"/><path class="w" d="m392 100 8 18 8-18z"/></g>
+<path class="s2" d="M352 128q14-8 22 2t20-4"/>
+<path class="w2" d="m168 50 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/><path class="w3" d="m470 112 3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+</svg>

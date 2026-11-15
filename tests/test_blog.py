@@ -56,7 +56,15 @@ def test_a_post_gets_a_table_of_contents_linking_its_headings():
 def test_home_cards_show_each_posts_cover_icon_badge_tag_and_color():
     visa = blog.card(blog.find("visa-documents-lite-pass"), "h3")
     assert 'style="--c: var(--s1)"' in visa and '<span class="tag">مهاجرت</span>' in visa
-    assert visa.index(blog.ICONS["plane"]) < visa.index('class="post-ic"') < visa.index(blog.ICONS["doc"])
+    assert visa.index('<svg class="art"') < visa.index('class="post-ic"') < visa.index(blog.ICONS["doc"])
+
+
+def test_every_post_has_its_own_cover_illustration_and_one_without_falls_back_to_its_icon(tmp_path):
+    assert all(p.art.startswith('<svg class="art"') and p.art.endswith("</svg>") for p in blog.posts())
+    assert not {p.stem for p in blog.COVERS.glob("*.svg")} - {p.slug for p in blog.posts()}   # no orphan covers
+    plain = tmp_path / "plain.html"
+    plain.write_text("<!--\ntitle: t\ndescription: d\ndate: 2026-11-03\nicon: plane\n-->\n<p>.</p>", encoding="utf-8")
+    assert blog.ICONS["plane"] in blog.cover(blog._parse(plain))
 
 
 def test_a_post_header_with_an_unknown_icon_or_color_is_refused(tmp_path):
@@ -82,4 +90,4 @@ def test_a_post_opens_with_its_cover_badge_and_tag_above_the_title():
     p = blog.find("mvp-in-a-day-standard-pass")
     out = blog.post_page("https://rahkar.pro", p, None)
     assert '<article class="post" style="--c: var(--s2)"><div class="post-cover">' in out
-    assert out.index(blog.ICONS["rocket"]) < out.index('<span class="tag">ساخت محصول</span>') < out.index("<h1>")
+    assert out.index('<svg class="art"') < out.index('<span class="tag">ساخت محصول</span>') < out.index("<h1>")

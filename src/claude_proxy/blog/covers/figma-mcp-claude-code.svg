@@ -1,0 +1,13 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<rect class="k" x="160" y="42" width="130" height="100" rx="10"/><rect class="w" x="154" y="36" width="130" height="100" rx="10"/>
+<circle class="c" cx="180" cy="62" r="12"/><rect class="c2" x="200" y="54" width="68" height="8" rx="4"/><rect class="c2" x="200" y="66" width="44" height="6" rx="3"/>
+<rect class="c" x="168" y="84" width="102" height="38" rx="6" opacity=".8"/><path class="s" d="m178 116 18-16 12 10 10-8 18 14"/>
+<path class="s" d="M300 89h40m-12-12 12 12-12 12"/>
+<rect class="k" x="362" y="42" width="136" height="100" rx="10"/><rect class="w" x="356" y="36" width="136" height="100" rx="10"/>
+<circle class="c2" cx="370" cy="48" r="3.5"/><circle class="c2" cx="381" cy="48" r="3.5"/><circle class="c2" cx="392" cy="48" r="3.5"/>
+<rect class="c" x="370" y="64" width="40" height="7" rx="3.5"/><rect class="c2" x="414" y="64" width="50" height="7" rx="3.5"/>
+<rect class="c2" x="384" y="78" width="70" height="7" rx="3.5"/><rect class="c" x="384" y="92" width="34" height="7" rx="3.5"/>
+<rect class="c2" x="422" y="92" width="44" height="7" rx="3.5"/><rect class="c2" x="384" y="106" width="56" height="7" rx="3.5"/>
+<rect class="c" x="370" y="120" width="28" height="7" rx="3.5"/>
+<path class="w2" d="m118 54 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+</svg>

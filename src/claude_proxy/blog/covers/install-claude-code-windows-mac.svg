@@ -1,0 +1,11 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<rect class="k" x="196" y="34" width="244" height="108" rx="10"/><rect class="d" x="190" y="28" width="244" height="108" rx="10"/>
+<path class="w" d="M190 38a10 10 0 0 1 10-10h224a10 10 0 0 1 10 10v8H190z"/>
+<circle class="c" cx="204" cy="37" r="3.5"/><circle class="c2" cx="215" cy="37" r="3.5"/><circle class="c2" cx="226" cy="37" r="3.5"/>
+<path class="s" d="m206 62 8 6-8 6"/><rect class="w" x="222" y="64" width="118" height="7" rx="3.5"/>
+<rect class="w2" x="206" y="84" width="150" height="10" rx="5"/><rect class="c" x="206" y="84" width="110" height="10" rx="5"/>
+<path class="s" d="m206 112 8 6-8 6"/><rect class="w3" x="222" y="114" width="60" height="7" rx="3.5"/>
+<rect class="w" x="288" y="112" width="4" height="11"/>
+<circle class="w" cx="476" cy="64" r="26"/><path class="sc" d="M476 50v24m-10-10 10 10 10-10M464 80h24"/>
+<path class="w2" d="m150 60 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+</svg>

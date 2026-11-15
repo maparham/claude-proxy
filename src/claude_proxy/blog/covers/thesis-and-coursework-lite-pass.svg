@@ -1,0 +1,14 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<rect class="w3" x="318" y="44" width="120" height="96" rx="8" transform="rotate(6 378 92)"/>
+<rect class="w2" x="310" y="40" width="120" height="96" rx="8" transform="rotate(3 370 88)"/>
+<rect class="w" x="300" y="36" width="120" height="96" rx="8"/>
+<rect class="c" x="314" y="48" width="56" height="7" rx="3.5"/>
+<rect class="c2" x="318" y="96" width="14" height="24" rx="2"/><rect class="c" x="338" y="80" width="14" height="40" rx="2"/>
+<rect class="c2" x="358" y="88" width="14" height="32" rx="2"/><rect class="c" x="378" y="68" width="14" height="52" rx="2"/>
+<path class="sc" d="M314 122h92"/>
+<g transform="translate(220 74) rotate(-10)">
+<path class="w2" d="M-22 6v16q22 12 44 0V6"/><path class="w" d="M0-16 40 0 0 16-40 0z"/>
+<path class="s" d="M0 0 30 10v22"/><circle class="w" cx="30" cy="34" r="5"/>
+</g>
+<path class="w2" d="m480 46 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+</svg>

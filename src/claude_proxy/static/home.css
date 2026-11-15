@@ -167,6 +167,19 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .cover { position: relative; height: 96px; overflow: hidden; background: linear-gradient(135deg, color-mix(in srgb, var(--c) 85%, #fff), color-mix(in srgb, var(--c) 70%, #000)); }
 .cover::after { content: ""; position: absolute; inset: 0; background-image: radial-gradient(rgba(255, 255, 255, 0.22) 1.2px, transparent 1.4px); background-size: 14px 14px; }
 .cover .big { position: absolute; inset-inline-start: 16px; bottom: -18px; width: 92px; height: 92px; color: rgba(255, 255, 255, 0.22); stroke-width: 1.4; }
+/* A post's own illustration, when it has one (blog/covers/<slug>.svg): white shapes over the cover, tinted with the
+   post's color; drawn on a 640×160 canvas cropped to fit, so the scene keeps to its middle. */
+.cover .art { position: absolute; inset: 0; z-index: 1; width: 100%; height: 100%; }
+.art .w { fill: #fff; } .art .w2 { fill: rgba(255, 255, 255, 0.6); } .art .w3 { fill: rgba(255, 255, 255, 0.22); }
+.art .k { fill: rgba(0, 0, 0, 0.16); } .art .d { fill: color-mix(in srgb, var(--c) 35%, #000); }
+.art .c { fill: var(--c); } .art .c2 { fill: color-mix(in srgb, var(--c) 32%, #fff); }
+.art .f { fill: #fff; stroke: color-mix(in srgb, var(--c) 40%, #fff); stroke-width: 2; }
+.art .s, .art .s2, .art .sc, .art .ray path { fill: none; stroke-linecap: round; stroke-linejoin: round; }
+.art .s { stroke: #fff; stroke-width: 3.5; } .art .s2 { stroke: rgba(255, 255, 255, 0.6); stroke-width: 3; }
+.art .sc { stroke: var(--c); stroke-width: 3.5; } .art .ray path { stroke: #fff; stroke-width: 9; }
+.art .cur { fill: #fff; stroke: color-mix(in srgb, var(--c) 60%, #000); stroke-width: 2; stroke-linejoin: round; }
+.art .gear { fill: none; stroke: rgba(255, 255, 255, 0.7); stroke-width: 12; stroke-dasharray: 7 4.5; }
+.art text { fill: #fff; font: 700 11px system-ui, sans-serif; direction: ltr; }
 .post-ic { position: relative; z-index: 1; margin: -26px 20px 0; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; background: var(--surface); color: var(--c); box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border); }
 .post-ic .ic { width: 26px; height: 26px; }
 .latest-list .card-body { padding: 14px 20px 20px; }

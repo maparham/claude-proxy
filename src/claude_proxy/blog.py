@@ -13,7 +13,8 @@ crawler sees the whole text. Each post is blog/<slug>.html, an HTML fragment und
 
 The slug is the file name, in Latin letters so links stay readable once copied. icon and badge (the cover's large icon and
 the small one on the card, from ICONS; badge defaults to icon), tag and color (a series color, s1 to s8) are optional
-and dress the post's card on the home page.
+and dress the post's card on the home page. A post's
+illustration for its cover, blog/covers/<slug>.svg, takes the large icon's place.
 
 A post can carry a table of the packages that suit its tasks; the server fills in each package's name, usage and
 today's price, so the table follows the rate and discounts. Each row names its task and package:
@@ -33,6 +34,7 @@ from functools import lru_cache
 from pathlib import Path
 
 POSTS = Path(__file__).parent / "blog"
+COVERS = POSTS / "covers"   # <slug>.svg: a post's own illustration, drawn on its cover in place of the large icon
 # Search keywords for the meta tag, not shown on the page: Iranians also write Claude as کلود or کلاود, which are less
 # correct, so they appear here and at most once per post in parentheses, never in the site's own wording.
 KEYWORDS = "کلاد, کلود, کلاود, Claude, خرید کلاد, خرید کلود, خرید کلاود, اشتراک کلاد, اشتراک کلود, اشتراک کلاود, خرید Claude, Claude Code, Anthropic"
@@ -57,6 +59,7 @@ ICONS = {
     "form": '<rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4M12 16h4M8 11h.01M8 16h.01"/>',
     "pen": '<path d="M12 20h9"/><path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z"/>',
     "figma": '<path d="M5 5.5A3.5 3.5 0 0 1 8.5 2H12v7H8.5A3.5 3.5 0 0 1 5 5.5z"/><path d="M12 2h3.5a3.5 3.5 0 1 1 0 7H12V2z"/><path d="M12 12.5a3.5 3.5 0 1 1 7 0 3.5 3.5 0 1 1-7 0z"/><path d="M5 19.5A3.5 3.5 0 0 1 8.5 16H12v3.5a3.5 3.5 0 1 1-7 0z"/><path d="M5 12.5A3.5 3.5 0 0 1 8.5 9H12v7H8.5A3.5 3.5 0 0 1 5 12.5z"/>',
+    "chart": '<path d="M3 3v18h18"/><path d="M18 17V9M13 17V5M8 17v-3"/>',
     "terminal": '<rect x="2" y="4" width="20" height="16" rx="2"/><path d="m6 9 3 3-3 3M12 15h5"/>',
     # Anthropic's mark is a filled shape, not a stroke, so it fills itself and drops the stroke.
     "anthropic": '<path fill="currentColor" stroke="none" d="M17.3041 3.541h-3.6718l6.696 16.918H24Zm-10.6082 0L0 20.459h3.7442l1.3693-3.5527h7.0052l1.3693 3.5528h3.7442L10.5363 3.5409Zm-.3712 10.2232 2.2914-5.9456 2.2914 5.9456Z"/>',
@@ -76,6 +79,7 @@ class Post:
     badge: str = "doc"   # the small icon on the card; the cover shows `icon` large
     tag: str = ""
     color: str = "s1"
+    art: str = ""   # the cover illustration, an inline SVG
 
 
 def _parse(path: Path) -> Post:
@@ -91,6 +95,8 @@ def _parse(path: Path) -> Post:
     if look.get("color", "s1") not in COLORS:
         raise ValueError(f"{path.name}: unknown color {look['color']!r}")
     look.setdefault("badge", look.get("icon", "doc"))
+    if (art := COVERS / f"{path.stem}.svg").exists():
+        look["art"] = art.read_text(encoding="utf-8").strip()
     return Post(path.stem, meta["title"], meta["description"], datetime.date.fromisoformat(meta["date"]), text[m.end():], **look)
 
 
@@ -255,12 +261,16 @@ def icon(name: str, cls: str) -> str:
     return f'<svg class="{cls}" viewBox="0 0 24 24" aria-hidden="true">{ICONS[name]}</svg>'
 
 
+def cover(p: Post) -> str:
+    return f'<div class="cover">{p.art or icon(p.icon, "ic big")}</div>'
+
+
 def card(p: Post, heading: str) -> str:
-    """A post as a card, on the home page and the blog's list: a cover in the post's color with its icon, a badge
-    icon, its tag, title (as `heading`), date and description."""
+    """A post as a card, on the home page and the blog's list: a cover in the post's color with its illustration (or,
+    without one, its icon), a badge icon, its tag, title (as `heading`), date and description."""
     tag = f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else ""
     return (f'<li><a href="/blog/{p.slug}" style="--c: var(--{p.color})">'
-            f'<div class="cover">{icon(p.icon, "ic big")}</div><div class="post-ic">{icon(p.badge, "ic")}</div>'
+            f'{cover(p)}<div class="post-ic">{icon(p.badge, "ic")}</div>'
             f'<div class="card-body">{tag}<{heading}>{html.escape(p.title)}</{heading}>'
             f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>'
             f"<p>{html.escape(p.description)}</p></div></a></li>")
@@ -305,7 +315,7 @@ def post_page(base: str, p: Post, prices: dict | None) -> str:
     body, toc = contents(packages(p.body, prices))
     tag = f'<span class="tag">{html.escape(p.tag)}</span>' if p.tag else ""
     main = (f'<div class="post-layout">{toc}<article class="post" style="--c: var(--{p.color})">'
-            f'<div class="post-cover"><div class="cover">{icon(p.icon, "ic big")}</div><div class="post-ic">{icon(p.badge, "ic")}</div></div>'
+            f'<div class="post-cover">{cover(p)}<div class="post-ic">{icon(p.badge, "ic")}</div></div>'
             f'{tag}<h1>{html.escape(p.title)}</h1>'
             f'<p class="post-date"><time datetime="{p.date.isoformat()}">{jalali(p.date)}</time></p>\n{body}'
             '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article></div>')

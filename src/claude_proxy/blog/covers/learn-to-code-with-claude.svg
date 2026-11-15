@@ -1,0 +1,10 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<path class="k" d="M326 80q-44-16-96-8v66q52-8 96 8q44-16 96-8V72q-52-8-96 8z"/>
+<path class="w" d="M320 74q-44-16-96-8v66q52-8 96 8z"/><path class="w2" d="M320 74q44-16 96-8v66q-52-8-96 8z"/>
+<rect class="c2" x="238" y="80" width="66" height="6" rx="3"/><rect class="c2" x="238" y="94" width="50" height="6" rx="3"/><rect class="c2" x="238" y="108" width="60" height="6" rx="3"/>
+<path class="sc" d="m346 92-10 10 10 10M384 92l10 10-10 10M371 88l-12 28"/>
+<path class="w" d="M380 20h64a10 10 0 0 1 10 10v22a10 10 0 0 1-10 10h-44l-12 10V62h-8a10 10 0 0 1-10-10V30a10 10 0 0 1 10-10z"/>
+<path class="sc" d="m398 32-7 9 7 9M426 32l7 9-7 9"/>
+<circle class="w" cx="196" cy="48" r="18"/><rect class="w2" x="188" y="66" width="16" height="10" rx="3"/>
+<path class="sc" d="M190 48q6-8 12 0"/><path class="s2" d="M196 18v-6M170 26l-5-4M222 26l5-4"/>
+</svg>

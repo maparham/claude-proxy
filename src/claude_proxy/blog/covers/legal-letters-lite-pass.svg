@@ -1,0 +1,12 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<rect class="w2" x="140" y="62" width="84" height="56" rx="6"/><path class="s" d="m142 66 40 28 40-28"/>
+<rect class="k" x="248" y="30" width="122" height="114" rx="8"/><rect class="w" x="242" y="24" width="122" height="114" rx="8"/>
+<rect class="c" x="258" y="38" width="60" height="8" rx="4"/>
+<rect class="c2" x="258" y="56" width="90" height="6" rx="3"/><rect class="c2" x="258" y="68" width="82" height="6" rx="3"/>
+<rect class="c2" x="258" y="80" width="90" height="6" rx="3"/><rect class="c2" x="258" y="92" width="54" height="6" rx="3"/>
+<circle class="f" cx="334" cy="114" r="15"/><circle class="f" cx="334" cy="114" r="10" style="stroke-width:1.5"/>
+<path class="c" d="m334 107 2 5 5 .4-4 3.4 1.3 5-4.3-2.8-4.3 2.8 1.3-5-4-3.4 5-.4z"/>
+<rect class="c2" x="258" y="116" width="40" height="6" rx="3"/>
+<g transform="rotate(-35 450 70)"><rect class="w" x="424" y="40" width="52" height="22" rx="5"/><rect class="c2" x="440" y="40" width="20" height="22"/><rect class="w" x="446" y="62" width="8" height="54" rx="4"/></g>
+<rect class="w2" x="410" y="122" width="70" height="12" rx="4"/>
+</svg>
