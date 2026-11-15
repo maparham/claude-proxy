@@ -1263,7 +1263,7 @@ const I18N = {
     "app.theme": "تم",
     "app.theme_title": "تغییر تم",
     "app.signout": "خروج",
-    "login.about_title": "اشتراک کلاد <span class=\"h1-sub\">بدون پرداخت ارزی، بدون احراز هویت، راه اندازی فوری</span>",
+    "login.about_title": "اشتراک کلاد <span class=\"h1-tag\">برای حرفه‌ای‌ها</span> <span class=\"h1-sub\">بدون پرداخت ارزی، بدون احراز هویت، راه اندازی فوری</span>",
     "login.auth_title": "برای اتصال کامپیوترتان وارد شوید.",
     "login.auth_lede": "لینکی که باز کردید این کد را همراه دارد. پس از ورود، بررسی کنید که ترمینال‌تان همین کد را نشان می‌دهد و سپس آن را تأیید کنید.",
     "login.os_unix": "macOS / Linux",
