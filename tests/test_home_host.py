@@ -81,7 +81,7 @@ async def test_home_page_html_carries_its_persian_text_for_search_engines(env):
     async with client(create_dashboard_app(gw), "example.com") as c:
         html = (await c.get("/")).text
     assert "<title>خرید اشتراک کلاد" in html
-    assert "اشتراک کلاد<span" in html and "Your Claude Code access" not in html
+    assert "اشتراک کلاد <span" in html and "Your Claude Code access" not in html
     assert "به کارت ارزی یا فیلترشکن نیاز دارم؟" in html and "پرداخت ریالی است" in html
     assert '"@type": "FAQPage"' in html and '"به کارت ارزی یا فیلترشکن نیاز دارم؟"' in html
 
