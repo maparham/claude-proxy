@@ -1,0 +1,14 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<rect class="k" x="160" y="46" width="120" height="86" rx="10"/><rect class="d" x="154" y="40" width="120" height="86" rx="10"/>
+<rect class="c" x="166" y="52" width="36" height="16" rx="4"/><text x="184" y="64" text-anchor="middle">DAX</text>
+<rect class="w" x="166" y="78" width="70" height="6" rx="3"/><rect class="w2" x="178" y="92" width="80" height="6" rx="3"/>
+<rect class="w2" x="178" y="106" width="52" height="6" rx="3"/>
+<path class="s" d="M290 87h36m-11-11 11 11-11 11"/>
+<rect class="k" x="346" y="34" width="160" height="108" rx="10"/><rect class="w" x="340" y="28" width="160" height="108" rx="10"/>
+<rect class="c2" x="352" y="40" width="44" height="26" rx="5"/><rect class="c" x="358" y="46" width="22" height="6" rx="3"/><rect class="w" x="358" y="56" width="30" height="4" rx="2"/>
+<rect class="c2" x="402" y="40" width="86" height="26" rx="5" opacity=".55"/><path class="sc" d="m408 60 14-8 12 4 14-10 14 6 18-10" style="stroke-width:2.5"/>
+<rect class="c2" x="356" y="104" width="14" height="22" rx="2"/><rect class="c" x="376" y="88" width="14" height="38" rx="2"/>
+<rect class="c2" x="396" y="96" width="14" height="30" rx="2"/><rect class="c" x="416" y="76" width="14" height="50" rx="2"/>
+<circle class="c2" cx="466" cy="100" r="18"/><path class="c" d="M466 82a18 18 0 0 1 17 24l-17-6z"/>
+<path class="w2" d="m120 56 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/><path class="w3" d="m540 50 3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
+</svg>

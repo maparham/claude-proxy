@@ -1,0 +1,78 @@
+<!--
+title: اتصال کلاد به Power BI: مدل داده، DAX و گزارش با زبان ساده
+description: سرور MCP رسمی مایکروسافت برای Power BI را به کلاد (Claude Code) وصل کنید تا مدل داده را بخواند، Measure و کوئری DAX بنویسد، رابطه‌ها را مرتب کند و صفحه گزارش بسازد.
+date: 2026-11-15
+icon: chart
+badge: code
+tag: داده و گزارش
+color: s4
+-->
+<p>اگر با <strong>Power BI</strong> کار می‌کنید، می‌دانید بیشتر وقت صرف چه می‌شود: نوشتن Measureهای DAX، نام‌گذاری ستون‌ها، درست کردن رابطه‌ها و پیدا کردن اینکه چرا یک عدد درست درنمی‌آید. مایکروسافت برای Power BI یک سرور <strong>MCP</strong> رسمی ساخته که کلاد (Claude Code) با آن مستقیم به مدل داده شما وصل می‌شود: جدول‌ها و رابطه‌ها را می‌خواند، کوئری DAX اجرا می‌کند و نتیجه را می‌بیند، و با اجازه شما Measure و ستون و رابطه می‌سازد.</p>
+<p>اسم فعلی این سرور <strong>Power BI Authoring MCP</strong> است (قبلاً Power BI Modeling MCP بود و بسته‌اش هنوز همان نام قدیمی را دارد). نسخه ۱ آن منتشر شده و رایگان است.</p>
+
+<h2>پیش‌نیازها</h2>
+<ul>
+  <li><strong>ویندوز</strong> و <strong>Power BI Desktop</strong>. Power BI Desktop فقط روی ویندوز اجرا می‌شود؛ روی مک باید از ماشین مجازی ویندوز استفاده کنید.</li>
+  <li><strong>Node.js</strong> نسخه ۲۲ یا بالاتر، چون سرور با <code>npx</code> اجرا می‌شود. اگر نصب نیست، در PowerShell:
+    <pre><code>winget install --id OpenJS.NodeJS.LTS --source winget</code></pre></li>
+  <li>کلاد نصب و وصل باشد؛ اگر هنوز نه، <a href="/blog/install-claude-code-windows-mac">راهنمای نصب کلاد</a> را ببینید.</li>
+  <li>اجازه نوشتن (Write) روی مدلی که می‌خواهید تغییرش بدهید.</li>
+</ul>
+
+<h2>نصب</h2>
+<ol>
+  <li>فایل گزارش‌تان را در Power BI Desktop باز کنید و باز نگه دارید.</li>
+  <li>اول سرور را فقط‌خواندنی اضافه کنید تا اتصال را بی‌خطر امتحان کنید. در PowerShell:
+    <pre><code>gclaude mcp add --transport stdio --scope user powerbi-modeling-mcp -- npx -y @microsoft/powerbi-modeling-mcp@latest --start --accepteula --readonly</code></pre>
+    با <code>--accepteula</code> شرایط استفاده مایکروسافت را می‌پذیرید؛ بدون آن، همه ابزارهای سرور خطا می‌دهند. با <code>--scope user</code> در همه پوشه‌ها در دسترس است.</li>
+  <li><code>gclaude</code> را اجرا کنید و بگویید (نام فایل را همان‌طور که در نوار عنوان Power BI Desktop آمده بنویسید، بدون <code>.pbix</code>):
+    <pre class="prompt">Connect to 'Sales' in Power BI Desktop</pre></li>
+  <li>برای آزمایش بپرسید: «جدول‌ها و تعداد ردیف‌هایشان را فهرست کن» یا «رابطه‌های مدل را نشانم بده».</li>
+</ol>
+
+<h3>اجازه نوشتن</h3>
+<p>وقتی اتصال درست بود، از کلاد خارج شوید و سرور را بدون <code>--readonly</code> دوباره اضافه کنید:</p>
+<pre><code>gclaude mcp remove --scope user powerbi-modeling-mcp
+gclaude mcp add --transport stdio --scope user powerbi-modeling-mcp -- npx -y @microsoft/powerbi-modeling-mcp@latest --start --accepteula</code></pre>
+<p>از این به بعد کلاد پیش از اولین تغییر در هر مدل از شما تأیید می‌گیرد. آن پیام را با دقت بخوانید.</p>
+
+<h3>مدل‌های منتشرشده در Power BI Service</h3>
+<p>همین سرور به مدل‌های داخل یک Workspace در Fabric هم وصل می‌شود:</p>
+<pre class="prompt">Connect to semantic model 'Sales' in Fabric Workspace 'Finance'</pre>
+<p>مایکروسافت برای فقط پرسیدن سؤال از مدل‌های منتشرشده یک سرور اینترنتی هم دارد (<code>https://api.fabric.microsoft.com/v1/mcp/powerbi</code>) که نصب نمی‌خواهد و روی مک هم کار می‌کند، ولی مدیر Power BI سازمان باید گزینه <strong>Users can use the Power BI Model Context Protocol server endpoint</strong> را در تنظیمات Tenant فعال کرده باشد.</p>
+
+<p>این سرور روی کامپیوتر خودتان اجرا می‌شود و برای مدل‌های اینترنتی مستقیم به سرورهای مایکروسافت وصل می‌شود، نه از راه درگاه کلاد. ولی نام جدول‌ها و ستون‌ها، DAX و نتیجه کوئری‌ها برای کلاد فرستاده می‌شود؛ روی داده‌ای که نباید از سازمان بیرون برود کار نکنید.</p>
+
+<h2>با کلاد و Power BI چه کارهایی می‌شود کرد؟</h2>
+<ul>
+  <li><strong>نوشتن Measure:</strong> «یک Measure برای فروش سال قبل و درصد رشد نسبت به سال قبل بساز و در پوشه Time Intelligence بگذار.» کلاد آن را می‌سازد، با یک کوئری DAX امتحانش می‌کند و عدد را نشان‌تان می‌دهد.</li>
+  <li><strong>پیدا کردن خطا:</strong> «چرا جمع فروش در این Measure با جدول اصلی نمی‌خواند؟» کلاد Measure، رابطه‌ها و فیلترها را می‌خواند و با کوئری‌های کوچک ریشه مشکل را پیدا می‌کند.</li>
+  <li><strong>مرتب کردن مدل:</strong> «برای همه Measureهای جدول Sales توضیح (Description) بنویس، ستون‌های کلید را مخفی کن و نام‌ها را یکدست کن.»</li>
+  <li><strong>جدول تاریخ و رابطه‌ها:</strong> «یک جدول تاریخ با سال، فصل و ماه بساز و به ستون‌های تاریخ جدول‌های فروش وصلش کن.»</li>
+  <li><strong>امنیت سطری (RLS):</strong> «یک نقش بساز که هر مدیر منطقه فقط فروش منطقه خودش را ببیند.»</li>
+  <li><strong>مستندسازی:</strong> «از کل مدل یک سند فارسی بنویس: جدول‌ها، رابطه‌ها و توضیح هر Measure.»</li>
+</ul>
+
+<h3>ساختن صفحه گزارش</h3>
+<p>سرور MCP فقط با مدل داده کار می‌کند، نه با صفحه‌ها و نمودارها. برای ساختن صفحه گزارش، مایکروسافت افزونه‌ای (plugin) برای کلاد منتشر کرده که روی پروژه‌های <strong>PBIP</strong> کار می‌کند: فایل را در Power BI Desktop با File، Save as و نوع Power BI Project (*.pbip) ذخیره کنید و بعد:</p>
+<pre><code>npm install -g @microsoft/powerbi-report-authoring-cli@latest @microsoft/powerbi-desktop-bridge-cli@latest</code></pre>
+<p>و داخل کلاد:</p>
+<pre><code>/plugin marketplace add microsoft/skills-for-fabric
+/plugin install powerbi-authoring@fabric-collection</code></pre>
+<p>کلاد را دوباره باز کنید و مثلاً بگویید: «یک صفحه بساز با نمودار خطی فروش ماهانه و یک کارت برای جمع فروش.» این افزونه سرور MCP خودش را بدون <code>--readonly</code> تعریف می‌کند؛ با <code>gclaude mcp list</code> ببینید کدام فعال است.</p>
+
+<h2>چند نکته</h2>
+<ul>
+  <li>پیش از اجازه نوشتن، از فایل نسخه پشتیبان بگیرید. پروژه PBIP را در Git بگذارید تا هر تغییر کلاد قابل برگشت باشد.</li>
+  <li>پیش از هر درخواست، فایل را در Power BI Desktop ذخیره کنید و هم‌زمان با کلاد در Desktop تغییر ندهید، وگرنه یکی از دو تغییر از دست می‌رود.</li>
+  <li>دقیق بخواهید: «برای Measureهای جدول Sales پوشه بساز» بهتر از «مدل را مرتب کن» جواب می‌دهد.</li>
+  <li>اگر کلاد گفت مجوز (EULA) پذیرفته نشده، نگذارید با PowerShell دورش بزند؛ <code>--accepteula</code> را به دستور نصب اضافه کنید.</li>
+</ul>
+
+<h2>کدام بسته برای کدام کار</h2>
+<p>ابزارهای این سرور زیادند و کلاد برای هر کار ساختار مدل را می‌خواند، پس مصرف توکن از یک گفت‌وگوی ساده بیشتر است. برای چند Measure و رفع یک خطا بسته اقتصادی کافی است؛ برای ساختن مدل و گزارش کامل، بسته استاندارد.</p>
+<table class="packages">
+<tr data-package="lite/day"><td>نوشتن چند Measure یا پیدا کردن یک خطای DAX</td></tr>
+<tr data-package="standard/day"><td>مرتب و مستند کردن یک مدل کامل</td></tr>
+<tr data-package="standard/week"><td>ساختن مدل و صفحه‌های گزارش یک پروژه</td></tr>
+</table>
