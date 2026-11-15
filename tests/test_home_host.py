@@ -121,3 +121,19 @@ async def test_the_spelling_kalud_is_a_keyword_but_never_shown_on_the_home_page(
     head, body = html.split("</head>", 1)
     assert 'name="keywords"' in head and "کلود" in head and "کلاود" in head and '"alternateName"' in head
     assert "کلود" not in body
+
+
+async def test_promo_video_has_a_watch_page_for_search_engines(env):
+    # Google indexes a video only on a page where it is the main content; on the home page it is not.
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.dashboard_url = "https://dash.example.com/"
+    cfg.listener.home_url = "https://example.com"
+    async with client(create_dashboard_app(gw), "example.com") as c:
+        page = await c.get("/video")
+        assert page.status_code == 200
+        assert page.text.count("<video") == 1 and '<source src="/static/promo.mp4"' in page.text
+        assert '"@type": "VideoObject"' in page.text and '"contentUrl": "https://example.com/static/promo.mp4"' in page.text
+        assert '<link rel="canonical" href="https://example.com/video">' in page.text
+        assert "<loc>https://example.com/video</loc>" in (await c.get("/sitemap.xml")).text
+        assert "Allow: /video" in (await c.get("/robots.txt")).text
+        assert 'href="/video"' in (await c.get("/")).text

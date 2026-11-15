@@ -26,6 +26,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import html
+import json
 import re
 from dataclasses import dataclass
 from functools import lru_cache
@@ -173,7 +174,8 @@ def _asset(name: str) -> str:
     return f"/static/{name}?v={v}"
 
 
-def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website", wide: bool = False) -> str:
+def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website", wide: bool = False,
+          head: str = "") -> str:
     t, d, url = html.escape(title), html.escape(description), html.escape(f"{base}{path}")
     return f"""<!doctype html>
 <html lang="fa" dir="rtl">
@@ -201,7 +203,7 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <link rel="stylesheet" href="{_asset('app.css')}">
 <link rel="stylesheet" href="{_asset('home.css')}">
 <script src="{_asset('blog.js')}" defer></script>
-</head>
+{head}</head>
 <body class="home blog{' blog-wide' if wide else ''}">
 <header class="home-top">
   <a class="home-brand" href="/"><img src="/static/rahkar-icon.svg" alt="" width="36" height="36"><span>راهکار هوش برتر</span></a>
@@ -226,6 +228,27 @@ def index_page(base: str) -> str:
     items = "".join(card(p, "h2") for p in posts())
     main = f'<section class="blog-head"><h1>وبلاگ کلاد</h1><p class="hero-lede">کارهایی که با بسته‌های کلاد سریع‌تر انجام می‌شوند.</p></section>\n<ul class="latest-list post-cards">{items}</ul>'
     return _page(base, "/blog", "وبلاگ کلاد", "کارهایی که با بسته‌های روزانه و هفتگی کلاد سریع‌تر انجام می‌شوند.", main, wide=True)
+
+
+VIDEO_TITLE = "از خرید تا اولین درخواست به کلاد (Claude Code)، در کمتر از دو دقیقه"
+VIDEO_DESCRIPTION = "خرید اشتراک کلاد با پرداخت ریالی، نصب کلاد (Claude Code) در ترمینال و فرستادن اولین درخواست، بدون کارت ارزی و فیلترشکن."
+
+
+def video_page(base: str) -> str:
+    """The promo video's watch page: Google indexes a video only where it is the page's main content, and on the home
+    page it is not. One video, so it is the one indexed: the 16:9 cut (the vertical one is the YouTube Short)."""
+    ld = json.dumps({"@context": "https://schema.org", "@type": "VideoObject", "name": VIDEO_TITLE, "description": VIDEO_DESCRIPTION,
+                     "thumbnailUrl": f"{base}/static/promo-poster.jpg", "contentUrl": f"{base}/static/promo.mp4",
+                     "embedUrl": f"{base}/video", "uploadDate": "2026-11-08T16:16:34+01:00", "duration": "PT1M8S",
+                     "inLanguage": "fa"}, ensure_ascii=False).replace("</", "<\\/")
+    main = (f'<section class="video-sec video-page"><h1>{html.escape(VIDEO_TITLE)}</h1>'
+            '<video controls playsinline preload="metadata" poster="/static/promo-poster.jpg" width="1920" height="1080">'
+            '<source src="/static/promo.mp4" type="video/mp4"></video>'
+            f'<p>{html.escape(VIDEO_DESCRIPTION)}</p>'
+            '<p class="video-yt"><a href="https://youtu.be/054n-QUNp18" target="_blank" rel="noopener">تماشا در یوتیوب</a></p>'
+            '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></section>')
+    return _page(base, "/video", f"{VIDEO_TITLE} · کلاد", VIDEO_DESCRIPTION, main, og_type="video.other", wide=True,
+                 head=f'<script type="application/ld+json">{ld}</script>\n')
 
 
 def icon(name: str, cls: str) -> str:
