@@ -245,7 +245,7 @@ def video_page(base: str) -> str:
             '<video controls playsinline preload="metadata" poster="/static/promo-poster.jpg" width="1920" height="1080">'
             '<source src="/static/promo.mp4" type="video/mp4"></video>'
             f'<p>{html.escape(VIDEO_DESCRIPTION)}</p>'
-            '<p class="video-yt"><a href="https://youtu.be/054n-QUNp18" target="_blank" rel="noopener">تماشا در یوتیوب</a></p>'
+            '<p class="video-yt"><a href="https://youtu.be/054n-QUNp18" target="_blank" rel="noopener">تماشا در یوتیوب</a> · <a href="https://www.aparat.com/v/xes2l72" target="_blank" rel="noopener">تماشا در آپارات</a></p>'
             '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></section>')
     return _page(base, "/video", f"{VIDEO_TITLE} · کلاد", VIDEO_DESCRIPTION, main, og_type="video.other", wide=True,
                  head=f'<script type="application/ld+json">{ld}</script>\n')
