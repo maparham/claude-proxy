@@ -37,7 +37,7 @@ POSTS = Path(__file__).parent / "blog"
 COVERS = POSTS / "covers"   # <slug>.svg: a post's own illustration, drawn on its cover in place of the large icon
 # Search keywords for the meta tag, not shown on the page: Iranians also write Claude as کلود or کلاود, which are less
 # correct, so they appear here and at most once per post in parentheses, never in the site's own wording.
-KEYWORDS = "کلاد, کلود, کلاود, Claude, خرید کلاد, خرید کلود, خرید کلاود, اشتراک کلاد, اشتراک کلود, اشتراک کلاود, خرید Claude, Claude Code, Anthropic"
+KEYWORDS = "راهکار دات پرو, rahkar.pro, کلاد, کلود, کلاود, Claude, خرید کلاد, خرید کلود, خرید کلاود, اشتراک کلاد, اشتراک کلود, اشتراک کلاود, خرید Claude, Claude Code, Anthropic"
 SLUG = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 FA_DIGITS = str.maketrans("0123456789", "۰۱۲۳۴۵۶۷۸۹")
 FA_TIERS = {"lite": "اقتصادی", "standard": "استاندارد"}
@@ -224,6 +224,7 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 </main>
 <footer class="home-foot">
   <p><a href="/">کلاد</a> · <a href="/blog">وبلاگ</a> · <a href="/privacy">حریم خصوصی</a></p>
+  <p>راهکار دات پرو · <span dir="ltr">rahkar.pro</span></p>
 </footer>
 </body>
 </html>

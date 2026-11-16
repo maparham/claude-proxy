@@ -139,3 +139,12 @@ async def test_promo_video_has_a_watch_page_for_search_engines(env):
         assert "<loc>https://example.com/video</loc>" in (await c.get("/sitemap.xml")).text
         assert "Allow: /video" in (await c.get("/robots.txt")).text
         assert 'href="/video"' in (await c.get("/")).text
+
+
+async def test_the_brand_name_is_on_the_home_page_and_blog(env):
+    # "راهکار دات پرو" (rahkar.pro spelled out) is how people search for the site by name.
+    gw, conn, cfg, ids, keys = env
+    cfg.listener.home_url = "https://example.com"
+    async with client(create_dashboard_app(gw), "example.com") as c:
+        for path in ("/", "/blog", "/video"):
+            assert "راهکار دات پرو" in (await c.get(path)).text, path
