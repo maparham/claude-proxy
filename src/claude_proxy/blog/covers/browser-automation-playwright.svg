@@ -1,12 +1,14 @@
 <svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
-<rect class="k" x="186" y="32" width="220" height="110" rx="10"/><rect class="w" x="180" y="26" width="220" height="110" rx="10"/>
-<path class="c2" d="M180 36a10 10 0 0 1 10-10h200a10 10 0 0 1 10 10v12H180z" opacity=".6"/>
-<circle class="c" cx="194" cy="37" r="3.5"/><circle class="c2" cx="205" cy="37" r="3.5"/><rect class="w" x="222" y="32" width="120" height="10" rx="5"/>
-<rect class="f" x="196" y="60" width="140" height="18" rx="5"/><rect class="c" x="204" y="66.5" width="70" height="5" rx="2.5"/>
-<rect class="f" x="196" y="86" width="140" height="18" rx="5"/><rect class="c" x="204" y="92.5" width="48" height="5" rx="2.5"/>
-<rect class="c" x="196" y="112" width="60" height="16" rx="8"/>
-<path class="cur" d="m248 112 0 28 7-7 6 13 6-3-6-13h10z"/>
-<circle class="gear" cx="466" cy="56" r="22"/><circle class="w" cx="466" cy="56" r="9"/><circle class="c" cx="466" cy="56" r="4"/>
-<path class="s2" d="M444 70q-16 30-60 50" stroke-dasharray="2 8"/>
-<path class="w2" d="m140 52 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/>
+<rect class="k" x="182" y="38" width="100" height="100" rx="18"/><rect class="w" x="176" y="32" width="100" height="100" rx="18"/>
+<g transform="translate(0 -4)"><path fill="#EA4335" d="M226.00 70.50L256.26 70.50A34 34 0 0 0 197.45 67.54L212.58 93.75A15.5 15.5 0 0 1 226.00 70.50z"/><path fill="#34A853" d="M212.58 93.75L197.45 67.54A34 34 0 0 0 224.29 119.96L239.42 93.75A15.5 15.5 0 0 1 212.58 93.75z"/><path fill="#FBBC04" d="M239.42 93.75L224.29 119.96A34 34 0 0 0 256.26 70.50L226.00 70.50A15.5 15.5 0 0 1 239.42 93.75z"/></g>
+<circle fill="#4285F4" cx="226" cy="82" r="12.5"/>
+<path class="s2" d="M290 82h60" stroke-dasharray="2 9"/>
+<rect class="k" x="370" y="38" width="100" height="100" rx="18"/><rect class="w" x="364" y="32" width="100" height="100" rx="18"/>
+<g transform="translate(428 80) rotate(14)"><path fill="#D65348" d="M-21 -25Q0 -31 21 -25Q24 4 0 27Q-24 4 -21 -25z"/>
+<ellipse fill="#2D4552" cx="-9" cy="-9" rx="4.5" ry="3.5"/><ellipse fill="#2D4552" cx="9" cy="-9" rx="4.5" ry="3.5"/>
+<path fill="none" stroke="#2D4552" stroke-width="3.5" stroke-linecap="round" d="M-9 11q9-8 18 0"/></g>
+<g transform="translate(400 84) rotate(-10)"><path fill="#2EAD33" stroke="#fff" stroke-width="3" d="M-21 -25Q0 -31 21 -25Q24 4 0 27Q-24 4 -21 -25z"/>
+<ellipse fill="#2D4552" cx="-9" cy="-9" rx="4.5" ry="3.5"/><ellipse fill="#2D4552" cx="9" cy="-9" rx="4.5" ry="3.5"/>
+<path fill="none" stroke="#2D4552" stroke-width="3.5" stroke-linecap="round" d="M-9 6q9 9 18 0"/></g>
+<path class="w2" d="m130 52 4 10 10 4-10 4-4 10-4-10-10-4 10-4z"/><path class="w3" d="m520 46 3 7 7 3-7 3-3 7-3-7-7-3 7-3z"/>
 </svg>
