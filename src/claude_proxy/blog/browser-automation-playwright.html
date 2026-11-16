@@ -6,12 +6,27 @@ icon: browser
 tag: اتوماسیون
 color: s3
 -->
-<p>کلاد فقط کد نمی‌نویسد؛ اگر <strong>Playwright</strong> را به آن وصل کنید، یک مرورگر واقعی را باز می‌کند، کلیک می‌کند، تایپ می‌کند، صفحه را می‌خواند و اسکرین‌شات می‌گیرد. شما به فارسی می‌گویید چه می‌خواهید و کلاد خودش در مرورگر انجامش می‌دهد. نصبش یک دستور است.</p>
+<p>کلاد فقط کد نمی‌نویسد؛ اگر <strong>Playwright</strong> را به آن وصل کنید، یک مرورگر واقعی را باز می‌کند، کلیک می‌کند، تایپ می‌کند، صفحه را می‌خواند و اسکرین‌شات می‌گیرد. شما به فارسی می‌گویید چه می‌خواهید و کلاد خودش در مرورگر انجامش می‌دهد. برای راه انداختنش لازم نیست دستوری بلد باشید؛ کلاد خودش نصبش می‌کند.</p>
 
 <h2>نصب</h2>
 <ol>
+  <li>اگر هنوز کلاد را نصب نکرده‌اید، اول <a href="/blog/install-claude-code-windows-mac">راهنمای نصب کلاد</a> را دنبال کنید.</li>
+  <li>ترمینال را باز کنید: در ویندوز در منوی Start عبارت <strong>PowerShell</strong> را جست‌وجو و بازش کنید؛ در مک <strong>Cmd+Space</strong> را بزنید، <strong>Terminal</strong> را بنویسید و Enter بزنید.</li>
+  <li><code>gclaude</code> را بنویسید و Enter بزنید، بعد این پیام را کپی کنید، در آن بچسبانید و Enter بزنید:
+<pre class="prompt"><code>Set up Playwright so you can control a web browser for me:
+1. Check my operating system, and check with node -v that Node.js 18 or newer is installed. If it isn't, install it (Windows: winget install OpenJS.NodeJS.LTS, macOS: brew install node).
+2. If playwright is in gclaude mcp list, remove it with gclaude mcp remove playwright -s user.
+3. Add it with gclaude mcp add playwright -s user -- npx @playwright/mcp@latest. On Windows, use cmd /c npx instead of npx.
+4. Run npx playwright install chromium so the browser is downloaded.
+5. Finally, briefly tell me in Persian what you did and what is left for me to do.</code></pre></li>
+  <li>اگر کلاد برای اجرای دستوری اجازه خواست، تأیید کنید.</li>
+  <li>وقتی کارش تمام شد، <code>gclaude</code> را ببندید و دوباره باز کنید. برای امتحان بنویسید: «سایت rahkar.pro را در مرورگر باز کن و بگو در صفحه اولش چه نوشته.» اگر پنجره مرورگر باز شد، همه چیز آماده است.</li>
+</ol>
+
+<h3>نصب دستی (برای کسانی که با ترمینال راحت‌اند)</h3>
+<ol>
   <li><strong>Node.js نسخه ۱۸ یا بالاتر</strong> را نصب کنید. برای بررسی، در ترمینال <code>node -v</code> را بزنید.</li>
-  <li>Playwright را به کلاد اضافه کنید (در ویندوز در PowerShell، در مک و لینوکس در ترمینال):
+  <li>Playwright را به کلاد اضافه کنید:
     <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest</code></pre>
     با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی.<br>
     در ویندوز اگر <code>playwright</code> در <code>/mcp</code> وصل نشد، آن را با <code>gclaude mcp remove playwright -s user</code> پاک کنید و این‌طور دوباره اضافه کنید:
@@ -21,13 +36,13 @@ color: s3
 </ol>
 
 <h2>نصب در مرورگر کروم</h2>
-<p>به‌طور پیش‌فرض کلاد یک مرورگر جدا و خالی باز می‌کند که در هیچ سایتی وارد نشده‌اید. اگر می‌خواهید کلاد در همان Chrome که الان باز است کار کند، با همان حساب‌هایی که در آن‌ها وارد شده‌اید، ساده‌ترین راه این است که <code>gclaude</code> را باز کنید و این پیام را در آن بچسبانید تا کلاد خودش همه چیز را راه بیندازد:</p>
+<p>به‌طور پیش‌فرض کلاد یک مرورگر جدا و خالی باز می‌کند که در هیچ سایتی وارد نشده‌اید. اگر می‌خواهید کلاد در همان Chrome که الان باز است کار کند، با همان حساب‌هایی که در آن‌ها وارد شده‌اید، <code>gclaude</code> را باز کنید و این پیام را در آن بچسبانید تا کلاد خودش همه چیز را راه بیندازد:</p>
 <pre class="prompt"><code>Set up Playwright so you can work in the Chrome I already have open:
 1. Check my operating system, and check with node -v that Node.js 18 or newer is installed. If it isn't, install it (Windows: winget install OpenJS.NodeJS.LTS, macOS: brew install node).
 2. If playwright is in gclaude mcp list, remove it with gclaude mcp remove playwright -s user.
 3. Add it with gclaude mcp add playwright -s user -- npx @playwright/mcp@latest --extension. On Windows, use cmd /c npx instead of npx.
 4. Open this page in Chrome so I can install the Playwright MCP Bridge extension: https://chromewebstore.google.com/search/Playwright%20MCP%20Bridge
-5. Finally, briefly tell me what you did and what is left for me to do.</code></pre>
+5. Finally, briefly tell me in Persian what you did and what is left for me to do.</code></pre>
 <p>بعد از آن فقط سه کار با خودتان است: در Chrome Web Store دکمه <strong>Add to Chrome</strong> را بزنید، <code>gclaude</code> را ببندید و دوباره باز کنید، و بار اول که کلاد سراغ مرورگر می‌رود، تبی را که می‌خواهید در اختیارش بگذارید انتخاب کنید.</p>
 <p>اگر ترجیح می‌دهید خودتان قدم‌به‌قدم انجامش دهید:</p>
 <ol>
@@ -43,34 +58,34 @@ color: s3
 
 <h2>با کلاد و مرورگر چه کارهایی می‌شود کرد؟</h2>
 
-<h3>کارهای تکراری و جمع‌آوری انبوه داده از وب</h3>
+<h3>کارهای تکراری و جمع‌آوری داده از وب</h3>
 <ul>
-  <li><strong>پر کردن فرم‌های تکراری:</strong> ثبت ده‌ها مورد در یک پنل ادمین یا فرم‌های ثبت نام، از روی یک فایل اکسل.</li>
-  <li><strong>جمع‌آوری انبوه داده از وب:</strong> قیمت محصولات، آگهی‌های شغلی یا فهرست مقاله‌ها، مرتب در یک فایل CSV.</li>
-  <li><strong>مقایسه محتوا با فایل:</strong> «همه صفحه‌های محصول را باز کن و قیمت و توضیحات را با فایل اکسل مقایسه کن؛ هر جا فرق دارد فهرست کن.» برای فروشگاه‌ها بعد از هر به‌روزرسانی قیمت.</li>
+  <li><strong>پر کردن فرم‌های تکراری:</strong> ثبت ده‌ها مورد در یک پنل مدیریت سایت یا فرم‌های ثبت نام، از روی یک فایل اکسل.</li>
+  <li><strong>جمع‌آوری داده از وب:</strong> قیمت محصولات، آگهی‌های شغلی یا فهرست مقاله‌ها، مرتب در یک فایل اکسل.</li>
+  <li><strong>مقایسه سایت با فایل:</strong> «همه صفحه‌های محصول را باز کن و قیمت و توضیحات را با فایل اکسل مقایسه کن؛ هر جا فرق دارد فهرست کن.» برای فروشگاه‌ها بعد از هر به‌روزرسانی قیمت.</li>
 </ul>
 
-<h3>تست و رفع باگ</h3>
+<h3>گزارش و راهنما</h3>
 <ul>
-  <li><strong>تست سایت خودتان:</strong> مسیر ثبت نام و پرداخت را از اول تا آخر طی کند و هر خطا را با اسکرین‌شات گزارش بدهد.</li>
+  <li><strong>اسکرین‌شات و PDF:</strong> «از این ۲۰ صفحه سایت در اندازه موبایل و کامپیوتر اسکرین‌شات بگیر و یک PDF گزارش بساز.» برای نشان دادن کار به کارفرما یا نگه داشتن سابقه.</li>
+  <li><strong>نوشتن راهنما:</strong> «مراحل ساخت حساب در پنل مدیریت را انجام بده و از هر مرحله اسکرین‌شات بگیر، بعد یک راهنمای فارسی قدم‌به‌قدم بنویس.» برای راهنمای مشتری‌ها و آشنا کردن همکاران تازه.</li>
+</ul>
+
+<h3>سه نمونه که می‌توانید همین الان امتحان کنید</h3>
+<ul>
+  <li>«یک فروشگاه اینترنتی را باز کن و نام و قیمت ۱۰ لپ‌تاپ اول را در یک فایل اکسل بریز.»</li>
+  <li>«این پنج لینک آگهی را باز کن و عنوان، قیمت و شماره تماس هر کدام را در یک جدول برایم بنویس.»</li>
+  <li>«سایت فروشگاهم را در اندازه موبایل باز کن، یک محصول را به سبد خرید اضافه کن و هر جا چیزی خراب یا عجیب بود با اسکرین‌شات بگو.»</li>
+</ul>
+
+<h3>برای برنامه‌نویس‌ها: تست، رفع باگ و SEO</h3>
+<ul>
+  <li><strong>تست سایت خودتان:</strong> «سایت من روی localhost:3000 را باز کن، مسیر ثبت نام و پرداخت را از اول تا آخر طی کن و هر خطا را با اسکرین‌شات گزارش بده.»</li>
   <li><strong>بازسازی باگ:</strong> «این باگ را که کاربر گزارش داده بازسازی کن: وارد شو، سبد خرید را پر کن و دکمه پرداخت را بزن؛ خطای کنسول و درخواست‌های شبکه را بیاور و علتش را در کد پیدا کن.» از مرورگر مستقیم به رفع باگ در کد.</li>
-  <li><strong>نوشتن تست خودکار:</strong> از کاری که همین الان در مرورگر کرد یک تست Playwright بنویسد تا در CI هر بار اجرا شود.</li>
+  <li><strong>نوشتن تست خودکار:</strong> «از کاری که الان کردی یک تست Playwright بنویس و اجرایش کن» تا در CI هر بار اجرا شود.</li>
   <li><strong>تست در چند اندازه صفحه:</strong> «فرم ثبت نام را در سایز موبایل، تبلت و دسکتاپ امتحان کن و هر جا دکمه یا متن از صفحه بیرون زده گزارش بده.»</li>
   <li><strong>مقایسه ظاهر دو نسخه:</strong> «صفحه اصلی سایتم را با نسخه staging مقایسه کن و هر تفاوت ظاهری را با اسکرین‌شات نشان بده.» برای پیدا کردن استایل‌های خراب قبل از انتشار.</li>
-</ul>
-
-<h3>گزارش، SEO و مستندات</h3>
-<ul>
-  <li><strong>اسکرین‌شات و PDF:</strong> «از این ۲۰ صفحه سایت در سایز موبایل و دسکتاپ اسکرین‌شات بگیر و یک PDF گزارش بساز.» برای نشان دادن کار به کارفرما یا نگه داشتن سابقه.</li>
   <li><strong>بررسی SEO و دسترس‌پذیری:</strong> «سایتم را باز کن و بررسی کن کدام صفحه‌ها title، description یا alt عکس ندارند و لینک شکسته دارند؛ گزارش بده و درستشان کن.»</li>
-  <li><strong>نوشتن راهنما:</strong> «مراحل ساخت حساب در پنل ادمین را انجام بده و از هر مرحله اسکرین‌شات بگیر، بعد یک راهنمای فارسی قدم‌به‌قدم بنویس.» برای راهنمای کاربران و آشنا کردن همکاران تازه.</li>
-</ul>
-
-<h2>سه نمونه کاربردی</h2>
-<ul>
-  <li>«یک فروشگاه اینترنتی را باز کن و نام و قیمت ۱۰ لپ‌تاپ اول را در فایل laptops.csv بریز.»</li>
-  <li>«سایت من روی localhost:3000 را باز کن، ثبت نام را با یک ایمیل تستی انجام بده و هر خطایی دیدی با اسکرین‌شات گزارش کن.»</li>
-  <li>«از کاری که الان کردی یک تست Playwright بنویس و اجرایش کن.»</li>
 </ul>
 
 <h2>چند نکته ایمنی</h2>
