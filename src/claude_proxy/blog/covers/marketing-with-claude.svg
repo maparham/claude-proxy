@@ -1,0 +1,11 @@
+<svg class="art" viewBox="0 0 640 160" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+<path class="w2" d="M128 104l40-18v44l-40-18z"/><rect class="w2" x="114" y="102" width="16" height="12" rx="3"/><path class="s2" d="M180 96l14-8M182 108h16M180 120l14 8"/>
+<rect class="k" x="234" y="28" width="82" height="118" rx="12"/><rect class="w" x="228" y="22" width="82" height="118" rx="12"/>
+<rect class="c2" x="238" y="40" width="62" height="46" rx="4" opacity=".5"/><circle class="c" cx="256" cy="56" r="7"/><path class="c" d="M240 84l18-16 12 10 10-8 18 14z"/>
+<rect class="c" x="238" y="94" width="40" height="6" rx="3"/><rect class="c2" x="238" y="106" width="56" height="6" rx="3"/><rect class="c2" x="238" y="118" width="30" height="6" rx="3"/>
+<rect class="k" x="350" y="40" width="160" height="96" rx="8"/><rect class="w" x="344" y="34" width="160" height="96" rx="8"/>
+<rect class="c2" x="362" y="92" width="18" height="26" rx="3"/><rect class="c2" x="390" y="80" width="18" height="38" rx="3"/><rect class="c" x="418" y="66" width="18" height="52" rx="3"/><rect class="c" x="446" y="50" width="18" height="68" rx="3"/>
+<path class="s" d="M362 82l30-14 26 6 40-26"/><path class="s" d="M450 46h10v10"/>
+<g><rect class="w2" x="528" y="52" width="64" height="20" rx="10"/><circle class="f" cx="540" cy="62" r="6"/><rect class="c2" x="552" y="59" width="30" height="6" rx="3"/></g>
+<g><rect class="w" x="528" y="80" width="64" height="20" rx="10"/><circle class="c" cx="540" cy="90" r="6"/><path class="s" d="m537 90 2 2 4-5"/><rect class="c2" x="552" y="87" width="26" height="6" rx="3"/></g>
+</svg>
