@@ -41,14 +41,16 @@ async def test_search_engines_index_the_home_host_only(env):
     cfg.listener.home_url = "https://example.com"
     app = create_dashboard_app(gw)
     async with client(app, "example.com") as c:
-        assert '<link rel="canonical" href="https://example.com/">' in (await c.get("/")).text
+        home = await c.get("/")
+        assert '<link rel="canonical" href="https://example.com/">' in home.text and "x-robots-tag" not in home.headers
         robots = (await c.get("/robots.txt")).text
         assert "Allow: /$" in robots and "Allow: /sitemap.xml" in robots and "Sitemap: https://example.com/sitemap.xml" in robots
         sitemap = await c.get("/sitemap.xml")
         assert sitemap.headers["content-type"].startswith("application/xml")
         assert "<loc>https://example.com/</loc>" in sitemap.text and "<loc>https://example.com/privacy</loc>" in sitemap.text
     async with client(app, "dash.example.com") as c:
-        assert (await c.get("/robots.txt")).text == "User-agent: *\nDisallow: /\n"
+        assert (await c.get("/robots.txt")).text == "User-agent: *\nAllow: /\n"
+        assert (await c.get("/dashboard")).headers["x-robots-tag"] == "noindex"
         assert (await c.get("/sitemap.xml")).status_code == 404
 
 

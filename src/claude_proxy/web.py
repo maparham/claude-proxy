@@ -178,7 +178,12 @@ class HomeHost(BaseHTTPMiddleware):
         if request.url.hostname == self.home_host and path not in self.PUBLIC and not path.startswith(("/static/", "/blog")):
             query = f"?{request.url.query}" if request.url.query else ""
             return RedirectResponse(f"{self.dashboard}{path}{query}", status_code=302)
-        return await call_next(request)
+        resp = await call_next(request)
+        if request.url.hostname != self.home_host:
+            # Search engines may crawl the dashboard's host (its robots.txt allows it) only to learn it is not to be
+            # indexed: a Disallow kept them from seeing this, and Google indexed /dashboard from links alone.
+            resp.headers["X-Robots-Tag"] = "noindex"
+        return resp
 
 
 class HookHost(BaseHTTPMiddleware):
@@ -2024,12 +2029,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def on_home_host(request: Request) -> bool:
         return not cfg.listener.home_url or request.url.hostname == urlsplit(cfg.listener.home_url).hostname
 
-    # Search engines index the home and privacy pages, on the home host only: the dashboard's copy of the home page
-    # would be a duplicate, and the rest needs sign-in.
+    # Search engines index the home page, blog and privacy page, on the home host only: the dashboard's copy of the home
+    # page would be a duplicate, and the rest needs sign-in.
     @app.get("/robots.txt")
     async def robots(request: Request):
-        if not cfg.tickets.enabled or not on_home_host(request):
+        if not cfg.tickets.enabled:
             return PlainTextResponse("User-agent: *\nDisallow: /\n")
+        if not on_home_host(request):   # every response there says noindex (HomeHost), which crawlers must fetch to see
+            return PlainTextResponse("User-agent: *\nAllow: /\n")
         return PlainTextResponse("User-agent: *\nAllow: /$\nAllow: /privacy\nAllow: /blog\nAllow: /video\nAllow: /static/\nAllow: /api/pricing\nAllow: /sitemap.xml\n"
                                  f"Allow: /{INDEXNOW_KEY}.txt\nDisallow: /\n\n"
                                  f"Sitemap: {home_base(request)}/sitemap.xml\n")
