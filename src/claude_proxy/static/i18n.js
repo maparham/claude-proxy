@@ -2285,7 +2285,7 @@ const I18N = {
     "pc.setup": "برای وصل کردن یک کامپیوتر، این دستور را در ترمینالش اجرا کنید. همین صفحه برای تأیید باز می‌شود و بعد ابزار خودش راه می‌افتد.",
     "pc.windows_ps_or": "یا این دستور را در PowerShell اجرا کنید:",
     "pc.windows_download": "دانلود فایل نصب",
-    "pc.windows_file_how": "فایل دانلودشده را باز کنید. اگر Windows پیام «Windows protected your PC» نشان داد، روی «More info» و بعد «Run anyway» بزنید. وقتی کارش تمام شد، یک پنجره تازه PowerShell باز کنید و <code>gclaude</code> را بنویسید.",
+    "pc.windows_file_how": "فایل دانلودشده را باز کنید. اگر Windows پیام «Windows protected your PC» نشان داد، روی «More info» و بعد «Run anyway» بزنید. وقتی کارش تمام شد، یک پنجره تازه PowerShell باز کنید و <code>gclaude</code> را اجرا کنید.",
     "pc.computer": "نام",
     "pc.key": "کلید",
     "pc.authorized": "تأیید‌شده",
