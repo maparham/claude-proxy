@@ -180,9 +180,14 @@ def _asset(name: str) -> str:
     return f"/static/{name}?v={v}"
 
 
+STATIC = Path(__file__).parent / "static"   # og-<slug>.png: a post's social preview, drawn by scripts/blog_og.py
+RTL = "\u202b{}\u202c"   # LinkedIn shows a link's title and description left to right; an RTL embedding keeps them in order
+
+
 def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website", wide: bool = False,
-          head: str = "") -> str:
+          head: str = "", image: str = "og.png", image_alt: str = "کلاد: اشتراک کلاد بدون پرداخت ارزی") -> str:
     t, d, url = html.escape(title), html.escape(description), html.escape(f"{base}{path}")
+    ot, od = html.escape(RTL.format(title)), html.escape(RTL.format(description))
     return f"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
@@ -196,12 +201,12 @@ def _page(base: str, path: str, title: str, description: str, main: str, og_type
 <meta property="og:locale" content="fa_IR">
 <meta property="og:site_name" content="کلاد">
 <meta property="og:url" content="{url}">
-<meta property="og:title" content="{t}">
-<meta property="og:description" content="{d}">
-<meta property="og:image" content="{html.escape(base)}/static/og.png">
+<meta property="og:title" content="{ot}">
+<meta property="og:description" content="{od}">
+<meta property="og:image" content="{html.escape(base)}/static/{image}">
 <meta property="og:image:width" content="1200">
 <meta property="og:image:height" content="630">
-<meta property="og:image:alt" content="کلاد: اشتراک کلاد بدون پرداخت ارزی">
+<meta property="og:image:alt" content="{html.escape(image_alt)}">
 <meta name="twitter:card" content="summary_large_image">
 <link rel="alternate" type="application/rss+xml" title="وبلاگ کلاد" href="{html.escape(base)}/blog/feed.xml">
 <link rel="icon" href="/static/rahkar-favicon.svg" type="image/svg+xml">
@@ -322,7 +327,8 @@ def post_page(base: str, p: Post, prices: dict | None) -> str:
             '<p class="post-cta"><a class="btn primary" href="/#pricing">دیدن بسته‌ها و قیمت‌ها</a></p></article></div>')
     if more := "".join(card(q, "h3") for q in related(p)):
         main += f'<section class="latest-sec related" aria-labelledby="related-h"><h2 id="related-h">مطالب مرتبط</h2><ul class="latest-list">{more}</ul></section>'
-    return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article", wide=bool(toc))
+    return _page(base, f"/blog/{p.slug}", f"{p.title} · کلاد", p.description, main, og_type="article", wide=bool(toc),
+                 **({"image": f"og-{p.slug}.png", "image_alt": p.title} if (STATIC / f"og-{p.slug}.png").exists() else {}))
 
 
 def feed(base: str) -> str:
