@@ -65,7 +65,8 @@ async def test_blog_is_served_on_the_home_host_and_listed_in_the_sitemap(env):
         assert post.status_code == 200 and "بسته اقتصادی" in post.text
         assert '<link rel="canonical" href="https://example.com/blog/visa-documents-lite-pass">' in post.text
         assert '<meta property="og:image" content="https://example.com/static/og-visa-documents-lite-pass.png">' in post.text
-        assert '<meta property="og:title" content="\u202b' in post.text   # kept right to left on LinkedIn
+        assert '<meta property="og:title" content="\u202bآماده کردن مدارک ویزا' in post.text   # kept right to left on LinkedIn
+        assert '· کلاد\u202c">' not in post.text and '· کلاد</title>' in post.text   # the site name in the tab only
         assert (await c.get("/static/og-visa-documents-lite-pass.png")).headers["content-type"] == "image/png"
         home = (await c.get("/")).text
         assert '<meta property="og:image" content="https://example.com/static/og.png">' in home

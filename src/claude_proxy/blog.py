@@ -187,7 +187,8 @@ RTL = "\u202b{}\u202c"   # LinkedIn shows a link's title and description left to
 def _page(base: str, path: str, title: str, description: str, main: str, og_type: str = "website", wide: bool = False,
           head: str = "", image: str = "og.png", image_alt: str = "کلاد: اشتراک کلاد بدون پرداخت ارزی") -> str:
     t, d, url = html.escape(title), html.escape(description), html.escape(f"{base}{path}")
-    ot, od = html.escape(RTL.format(title)), html.escape(RTL.format(description))
+    # A shared link's card already names the site under its title, so the title's " · کلاد" stays in the tab only
+    ot, od = html.escape(RTL.format(title.removesuffix(" · کلاد"))), html.escape(RTL.format(description))
     return f"""<!doctype html>
 <html lang="fa" dir="rtl">
 <head>
