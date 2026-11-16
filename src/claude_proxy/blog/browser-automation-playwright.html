@@ -9,52 +9,44 @@ color: s3
 <p>کلاد فقط کد نمی‌نویسد؛ اگر <strong>Playwright</strong> را به آن وصل کنید، یک مرورگر واقعی را باز می‌کند، کلیک می‌کند، تایپ می‌کند، صفحه را می‌خواند و اسکرین‌شات می‌گیرد. شما به فارسی می‌گویید چه می‌خواهید و کلاد خودش در مرورگر انجامش می‌دهد. برای راه انداختنش لازم نیست دستوری بلد باشید؛ کلاد خودش نصبش می‌کند.</p>
 
 <h2>نصب</h2>
+<p>کلاد در همان Chrome که الان باز است کار می‌کند، با همان حساب‌هایی که در آن‌ها وارد شده‌اید.</p>
 <ol>
   <li>اگر هنوز کلاد را نصب نکرده‌اید، اول <a href="/blog/install-claude-code-windows-mac">راهنمای نصب کلاد</a> را دنبال کنید.</li>
   <li>ترمینال را باز کنید: در ویندوز در منوی Start عبارت <strong>PowerShell</strong> را جست‌وجو و بازش کنید؛ در مک <strong>Cmd+Space</strong> را بزنید، <strong>Terminal</strong> را بنویسید و Enter بزنید.</li>
   <li><code>gclaude</code> (جی کلاد) را اجرا کنید، بعد این پیام را کپی پیست کنید و Enter بزنید:
-<pre class="prompt"><code>Set up Playwright so you can control a web browser for me:
-1. Check my operating system, and check with node -v that Node.js 18 or newer is installed. If it isn't, install it (Windows: winget install OpenJS.NodeJS.LTS, macOS: brew install node).
-2. If playwright is in gclaude mcp list, remove it with gclaude mcp remove playwright -s user.
-3. Add it with gclaude mcp add playwright -s user -- npx @playwright/mcp@latest. On Windows, use cmd /c npx instead of npx.
-4. Run npx playwright install chromium so the browser is downloaded.
-5. Finally, briefly tell me in Persian what you did and what is left for me to do.</code></pre></li>
-  <li>اگر کلاد برای اجرای دستوری اجازه خواست، تأیید کنید.</li>
-  <li>وقتی کارش تمام شد، <code>gclaude</code> را ببندید و دوباره باز کنید. برای امتحان بنویسید: «سایت rahkar.pro را در مرورگر باز کن و بگو در صفحه اولش چه نوشته.» اگر پنجره مرورگر باز شد، همه چیز آماده است.</li>
-</ol>
-
-<h3>نصب دستی (برای کسانی که با ترمینال راحت‌اند)</h3>
-<ol>
-  <li><strong>Node.js نسخه ۱۸ یا بالاتر</strong> را نصب کنید. برای بررسی، در ترمینال <code>node -v</code> را بزنید.</li>
-  <li>Playwright را به کلاد اضافه کنید:
-    <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest</code></pre>
-    با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی.<br>
-    در ویندوز اگر <code>playwright</code> در <code>/mcp</code> وصل نشد، آن را با <code>gclaude mcp remove playwright -s user</code> پاک کنید و این‌طور دوباره اضافه کنید:
-    <pre><code>gclaude mcp add playwright -s user -- cmd /c npx @playwright/mcp@latest</code></pre></li>
-  <li><code>gclaude</code> را اجرا کنید، <code>/mcp</code> را بزنید و ببینید <code>playwright</code> وصل شده باشد.</li>
-  <li>بار اول مرورگر خودش دانلود می‌شود. اگر نشد، یک بار <code>npx playwright install chromium</code> را اجرا کنید.</li>
-</ol>
-
-<h2>نصب در مرورگر کروم</h2>
-<p>به‌طور پیش‌فرض کلاد یک مرورگر جدا و خالی باز می‌کند که در هیچ سایتی وارد نشده‌اید. اگر می‌خواهید کلاد در همان Chrome که الان باز است کار کند، با همان حساب‌هایی که در آن‌ها وارد شده‌اید، <code>gclaude</code> را اجرا کنید و این پیام را کپی پیست کنید تا کلاد خودش همه چیز را راه بیندازد:</p>
 <pre class="prompt"><code>Set up Playwright so you can work in the Chrome I already have open:
 1. Check my operating system, and check with node -v that Node.js 18 or newer is installed. If it isn't, install it (Windows: winget install OpenJS.NodeJS.LTS, macOS: brew install node).
 2. If playwright is in gclaude mcp list, remove it with gclaude mcp remove playwright -s user.
 3. Add it with gclaude mcp add playwright -s user -- npx @playwright/mcp@latest --extension. On Windows, use cmd /c npx instead of npx.
 4. Open this page in Chrome so I can install the Playwright MCP Bridge extension: https://chromewebstore.google.com/search/Playwright%20MCP%20Bridge
-5. Finally, briefly tell me in Persian what you did and what is left for me to do.</code></pre>
-<p>بعد از آن فقط سه کار با خودتان است: در Chrome Web Store دکمه <strong>Add to Chrome</strong> را بزنید، <code>gclaude</code> را ببندید و دوباره باز کنید، و بار اول که کلاد سراغ مرورگر می‌رود، تبی را که می‌خواهید در اختیارش بگذارید انتخاب کنید.</p>
-<p>اگر ترجیح می‌دهید خودتان قدم‌به‌قدم انجامش دهید:</p>
+5. Finally, briefly tell me in Persian what you did and what is left for me to do.</code></pre></li>
+  <li>اگر کلاد برای اجرای دستوری اجازه خواست، تأیید کنید.</li>
+  <li>در صفحه‌ای که در Chrome باز شد، افزونه <strong>Playwright MCP Bridge</strong> را با دکمه <strong>Add to Chrome</strong> نصب کنید.</li>
+  <li><code>gclaude</code> را ببندید و دوباره باز کنید. برای امتحان بنویسید: «سایت rahkar.pro را در مرورگر باز کن و بگو در صفحه اولش چه نوشته.» بار اول افزونه در Chrome می‌پرسد کدام تب را در اختیار کلاد بگذارد؛ تب را انتخاب و تأیید کنید.</li>
+</ol>
+<p>کلاد در این مرورگر هر کاری که شما می‌توانید بکنید، می‌تواند بکند. پس فقط برای کارهایی از آن استفاده کنید که واقعاً به حساب‌های شما نیاز دارند.</p>
+
+<h3>نصب دستی (برای کسانی که با ترمینال راحت‌اند)</h3>
 <ol>
+  <li><strong>Node.js نسخه ۱۸ یا بالاتر</strong> را نصب کنید. برای بررسی، در ترمینال <code>node -v</code> را بزنید.</li>
   <li>افزونه <strong>Playwright MCP Bridge</strong> را از Chrome Web Store در Chrome نصب کنید.</li>
   <li>اگر Playwright را قبلاً اضافه کرده‌اید، اول پاکش کنید:
     <pre><code>gclaude mcp remove playwright -s user</code></pre></li>
-  <li>دوباره با <code>--extension</code> اضافه‌اش کنید:
+  <li>Playwright را با <code>--extension</code> به کلاد اضافه کنید:
     <pre><code>gclaude mcp add playwright -s user -- npx @playwright/mcp@latest --extension</code></pre>
-    در ویندوز اگر وصل نشد، <code>npx</code> را به <code>cmd /c npx</code> تغییر دهید.</li>
-  <li>بار اول که کلاد سراغ مرورگر می‌رود، افزونه در Chrome می‌پرسد کدام تب را در اختیارش بگذارد. تب را انتخاب کنید و تأیید کنید.</li>
+    با <code>-s user</code> در همه پوشه‌ها در دسترس است، نه فقط پوشه فعلی. در ویندوز اگر وصل نشد، <code>npx</code> را به <code>cmd /c npx</code> تغییر دهید.</li>
+  <li><code>gclaude</code> را اجرا کنید، <code>/mcp</code> را بزنید و ببینید <code>playwright</code> وصل شده باشد.</li>
 </ol>
-<p>در این حالت کلاد هر کاری که شما در آن مرورگر می‌توانید بکنید، می‌تواند بکند. پس فقط برای کارهایی از آن استفاده کنید که واقعاً به حساب‌های شما نیاز دارند.</p>
+
+<h2>مرورگر جدا به‌جای Chrome خودتان</h2>
+<p>اگر نمی‌خواهید کلاد به حساب‌هایتان دسترسی داشته باشد، می‌تواند یک مرورگر جدا و خالی باز کند که در هیچ سایتی وارد نشده‌اید. <code>gclaude</code> را اجرا کنید و این پیام را کپی پیست کنید:</p>
+<pre class="prompt"><code>Set up Playwright so you can control a separate web browser for me:
+1. Check my operating system, and check with node -v that Node.js 18 or newer is installed. If it isn't, install it (Windows: winget install OpenJS.NodeJS.LTS, macOS: brew install node).
+2. If playwright is in gclaude mcp list, remove it with gclaude mcp remove playwright -s user.
+3. Add it with gclaude mcp add playwright -s user -- npx @playwright/mcp@latest. On Windows, use cmd /c npx instead of npx.
+4. Run npx playwright install chromium so the browser is downloaded.
+5. Finally, briefly tell me in Persian what you did and what is left for me to do.</code></pre>
+<p>بعد <code>gclaude</code> را ببندید و دوباره باز کنید. اگر دستی نصب می‌کنید، همان مراحل بالا را بدون افزونه و بدون <code>--extension</code> انجام دهید و یک بار <code>npx playwright install chromium</code> را اجرا کنید.</p>
 
 <h2>با کلاد و مرورگر چه کارهایی می‌شود کرد؟</h2>
 
@@ -90,7 +82,7 @@ color: s3
 
 <h2>چند نکته ایمنی</h2>
 <ul>
-  <li>Playwright به‌طور پیش‌فرض یک پروفایل جدا از مرورگر اصلی‌تان باز می‌کند و کلاد به حساب‌های شخصی‌تان دسترسی ندارد. با <code>--extension</code> این جدایی برداشته می‌شود؛ فقط وقتی لازم است از آن استفاده کنید.</li>
+  <li>با این نصب، کلاد در Chrome خودتان و با حساب‌های شما کار می‌کند. برای کارهایی که به حساب‌هایتان نیازی ندارند، مثل جمع کردن داده از سایت‌های عمومی، از «مرورگر جدا به‌جای Chrome خودتان» استفاده کنید.</li>
   <li>رمز عبور و اطلاعات کارت را به کلاد ندهید؛ این قدم‌ها را خودتان انجام دهید.</li>
   <li>قوانین سایت‌هایی را که از آن‌ها داده جمع می‌کنید رعایت کنید و درخواست‌ها را پشت سر هم و زیاد نفرستید.</li>
 </ul>
