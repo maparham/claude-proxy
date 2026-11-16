@@ -245,7 +245,7 @@ def video_page(base: str) -> str:
     page it is not. One video, so it is the one indexed: the 16:9 cut (the vertical one is the YouTube Short)."""
     ld = json.dumps({"@context": "https://schema.org", "@type": "VideoObject", "name": VIDEO_TITLE, "description": VIDEO_DESCRIPTION,
                      "thumbnailUrl": f"{base}/static/promo-poster.jpg", "contentUrl": f"{base}/static/promo.mp4",
-                     "embedUrl": f"{base}/video", "uploadDate": "2026-11-08T13:50:47+01:00", "duration": "PT1M39S",
+                     "uploadDate": "2026-11-08T13:50:47+01:00", "duration": "PT1M39S",
                      "inLanguage": "fa"}, ensure_ascii=False).replace("</", "<\\/")
     main = (f'<section class="video-sec video-page"><h1>{html.escape(VIDEO_TITLE)}</h1>'
             '<video controls playsinline preload="metadata" poster="/static/promo-poster.jpg" width="1920" height="1080">'
