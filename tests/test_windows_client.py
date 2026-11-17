@@ -111,6 +111,8 @@ class Stub:
                     self.reply(*(d.tokens.pop(0) if d.tokens else (400, {"error": "authorization_pending"})))
                 elif self.path == "/api/me/logout":
                     self.reply(*d.logout)
+                elif self.path == "/v1/messages":   # a session-naming request from the --warn hook
+                    self.reply(200, {"content": [{"type": "text", "text": json.dumps({"title": "Flaky login test"})}]})
                 else:
                     self.reply(404, {})
 
@@ -535,6 +537,20 @@ def test_the_warning_hook_warns_once_and_answers_usage(gclaude, stub):
     r = gclaude(" --warn", '{"prompt": "/usage"}')
     out = json.loads(r.stdout)
     assert out["decision"] == "block" and "$85/$100 85%" in out["reason"] and f"{stub.url}/dashboard" in out["reason"]
+
+
+@on_windows
+def test_the_warning_hook_names_the_session_once(gclaude, stub):
+    """gclaude turns off Claude Code's own naming with the rest of its nonessential traffic; the hook names it."""
+    stdin = json.dumps({"session_id": "s-1", "prompt": "fix the flaky login test"})
+    r = gclaude(" --warn", stdin)
+    assert r.returncode == 0, r.out
+    assert json.loads(r.stdout)["hookSpecificOutput"] == {"hookEventName": "UserPromptSubmit", "sessionTitle": "Flaky login test"}
+    sent = [(h, b) for p, h, b in stub.requests if p == "/v1/messages"]
+    assert sent[0][0]["x-claude-code-session-id"] == "s-1" and sent[0][0]["authorization"] == "Bearer sk-proxy-k"
+    assert sent[0][1]["output_config"]["format"]["schema"]["properties"] == {"title": {"type": "string"}}
+    assert not gclaude(" --warn", stdin).stdout.strip()   # once a session
+    assert not gclaude(" --warn", json.dumps({"session_id": "s-2", "prompt": "/usage x"})).stdout.count("sessionTitle")
 
 
 @on_windows

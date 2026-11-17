@@ -30,6 +30,8 @@ class Stub:
         self.default_models = ""   # /api/me/status?format=models: the NAME=value lines gclaude's launcher applies
         self.health = 200   # /health's status; a 5xx is the gateway down behind Cloudflare
         self.health_upload = None   # bytes the last POST /health carried
+        self.title = "Flaky login test"   # the name POST /v1/messages answers a session-naming request with; None: 500
+        self.messages: list[dict] = []   # bodies POST /v1/messages carried
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -67,6 +69,10 @@ class Stub:
                 if self.path == "/health":   # gclaude's start check uploads 64 KB, as a request does
                     stub.health_upload = len(self.rfile.read(int(self.headers.get("content-length", 0))))
                     code, body = stub.health, {"ok": True}
+                elif self.path == "/v1/messages":
+                    stub.messages.append(json.loads(self.rfile.read(int(self.headers.get("content-length", 0)))))
+                    code, body = (500, {}) if stub.title is None else \
+                        (200, {"content": [{"type": "text", "text": json.dumps({"title": stub.title})}]})
                 elif self.path == "/api/me/logout":
                     code, body = stub.logout
                 elif self.path == "/api/device/start":
@@ -252,6 +258,64 @@ def test_warning_and_usage_carry_the_percentage_too(stub, warn_env):
     assert json.loads(warn(warn_env).stdout)["systemMessage"] == "Gateway: alice · daily 90/100 req 90%"
     fresh(warn_env)
     assert json.loads(usage_prompt(warn_env).stdout)["reason"].startswith("Gateway: alice · daily 90/100 req 90% ·")
+
+
+# ---------- statusline.sh --warn names the session when Claude Code won't (nonessential traffic off) ----------
+
+def name_env(stub, warn_env):
+    return {**warn_env, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "ANTHROPIC_BASE_URL": stub.url}
+
+
+def prompt(env, text="fix the flaky login test", session="s-1", transcript=None):
+    return run(["sh", str(STATUSLINE), "--warn"], env, stdin=json.dumps(
+        {"session_id": session, "prompt": text, **({"transcript_path": str(transcript)} if transcript else {})}))
+
+
+def test_first_prompt_names_the_session_through_the_gateway_once(stub, warn_env):
+    env = name_env(stub, warn_env)
+    r = prompt(env)
+    assert json.loads(r.stdout) == {"hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "sessionTitle": "Flaky login test"}}
+    sent = [h for p, h in stub.requests if p == "/v1/messages"]
+    assert sent[0]["authorization"] == "Bearer sk-proxy-k" and sent[0]["x-claude-code-session-id"] == "s-1"
+    from claude_proxy import titles   # the gateway sees Claude Code's own naming request, and keeps the name too
+    assert titles.is_title_request(stub.messages[0]) and "fix the flaky login test" in stub.messages[0]["messages"][0]["content"]
+    assert prompt(env, "and the logout one").stdout == ""   # once a session
+    assert "sessionTitle" in prompt(env, session="s-2").stdout
+    assert len(stub.messages) == 2
+
+
+def test_no_name_while_claude_code_names_sessions_itself(stub, warn_env):
+    r = prompt({**warn_env, "ANTHROPIC_BASE_URL": stub.url})
+    assert r.returncode == 0 and r.stdout == "" and stub.messages == []
+
+
+def test_a_slash_command_waits_for_a_typed_prompt(stub, warn_env):
+    env = name_env(stub, warn_env)
+    assert prompt(env, "/clear").stdout == "" and stub.messages == []
+    assert "sessionTitle" in prompt(env).stdout
+
+
+def test_a_session_already_named_is_left_alone(stub, warn_env, tmp_path):
+    t = tmp_path / "s.jsonl"
+    t.write_text('{"type":"user"}\n{"type":"custom-title","customTitle":"Mine","sessionId":"s-1"}\n')
+    assert prompt(name_env(stub, warn_env), transcript=t).stdout == "" and stub.messages == []
+
+
+def test_a_failed_naming_says_nothing_and_tries_again(stub, warn_env):
+    env = name_env(stub, warn_env)
+    stub.title = None
+    r = prompt(env)
+    assert r.returncode == 0 and r.stdout == ""
+    stub.title = "Flaky login test"
+    assert "sessionTitle" in prompt(env).stdout
+
+
+def test_the_name_comes_with_a_limit_warning(stub, warn_env):
+    stub.status_line = "alice · daily 80/100 req"
+    stub.title = 'Quote " and \\ in it'
+    assert json.loads(prompt(name_env(stub, warn_env)).stdout) == {
+        "systemMessage": "Gateway: alice · daily 80/100 req 80%",
+        "hookSpecificOutput": {"hookEventName": "UserPromptSubmit", "sessionTitle": 'Quote " and \\ in it'}}
 
 
 # ---------- statusline.sh --warn answers gclaude's /usage (the hook blocks the prompt; no model call) ----------
