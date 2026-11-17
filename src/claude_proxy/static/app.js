@@ -615,12 +615,12 @@ async function subscriptionDialog() {
   };
   if (r.profile) walk(r.profile.profile, "");
   const util = ["5h", "7d", "7d_oi"].map((b) => `<div class="limit-row"><span>${t(`tk.bucket_${b}`)}</span><span class="num">${fmtPct(S.account?.[b]?.utilization_pct)}</span></div>`).join("");
-  // datetime-local takes the browser's local time; ends_at is UTC seconds.
+  // datetime-local takes the browser's local time; ends_at is UTC seconds. Unset, it starts at the weekly reset: still saved by hand.
   const live = r.ends_at_set && r.ends_at_set > Date.now() / 1000;   // a date already past counts as unset
   const local = (ts) => { const d = new Date(ts * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
   const end = `<form id="sub-end" style="margin-top:12px">
       <label style="display:block">${t("sub.end")}
-        <input type="datetime-local" name="ends_at" required value="${live ? local(r.ends_at_set) : ""}"></label>
+        <input type="datetime-local" name="ends_at" required value="${live ? local(r.ends_at_set) : r.weekly_reset ? local(r.weekly_reset) : ""}"></label>
       <button class="btn primary" type="submit" style="margin-top:8px">${t("sub.end_save")}</button>
       <p class="sub">${t("sub.end_help")}</p>
       ${live ? "" : `<p class="error">${t(r.ends_at_set ? "sub.end_expired" : "sub.end_unset", { date: r.weekly_reset ? fmtDate(r.weekly_reset) : "—" })}</p>`}
