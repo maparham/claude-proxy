@@ -614,10 +614,27 @@ async function subscriptionDialog() {
   };
   if (r.profile) walk(r.profile.profile, "");
   const util = ["5h", "7d", "7d_oi"].map((b) => `<div class="limit-row"><span>${t(`tk.bucket_${b}`)}</span><span class="num">${fmtPct(S.account?.[b]?.utilization_pct)}</span></div>`).join("");
-  openDialog(`<h3>${t("sub.title")}</h3>${util}
+  // datetime-local takes the browser's local time; ends_at is UTC seconds.
+  const live = r.ends_at_set && r.ends_at_set > Date.now() / 1000;   // a date already past counts as unset
+  const local = (ts) => { const d = new Date(ts * 1000); d.setMinutes(d.getMinutes() - d.getTimezoneOffset()); return d.toISOString().slice(0, 16); };
+  const end = `<form id="sub-end" style="margin-top:12px">
+      <label style="display:block">${t("sub.end")}
+        <input type="datetime-local" name="ends_at" required value="${live ? local(r.ends_at_set) : ""}"></label>
+      <button class="btn primary" type="submit" style="margin-top:8px">${t("sub.end_save")}</button>
+      <p class="sub">${t("sub.end_help")}</p>
+      ${live ? "" : `<p class="error">${t(r.ends_at_set ? "sub.end_expired" : "sub.end_unset", { date: r.weekly_reset ? fmtDate(r.weekly_reset) : "—" })}</p>`}
+      <div class="error" id="sub-end-err"></div></form>`;
+  const d = openDialog(`<h3>${t("sub.title")}</h3>${util}${end}
     ${r.profile ? `<p class="sub" style="margin-top:12px">${t("sub.checked", { date: fmtDate(r.profile.observed_at) })}</p>
       <dl class="kv" dir="ltr">${rows.join("")}</dl>` : `<p class="sub">${t("sub.none")}</p>`}
     <p><button class="btn primary" data-close>${t("app.done")}</button></p>`);
+  $("#sub-end", d).onsubmit = async (e) => {
+    e.preventDefault();
+    const ts = Math.floor(new Date(e.target.ends_at.value).getTime() / 1000);
+    if (!(ts > Date.now() / 1000)) { $("#sub-end-err", d).textContent = t("sub.end_past"); return; }
+    try { await api("/api/admin/subscription/end", { method: "POST", body: { ends_at: ts } }); } catch (x) { $("#sub-end-err", d).textContent = x.message; return; }
+    subscriptionDialog().catch(() => {});
+  };
 }
 $("#util-pill").onclick = () => subscriptionDialog().catch(() => {});
 
@@ -1578,6 +1595,8 @@ async function renderTickets(main) {
         ${cap.peak_week ? `<div class="limit-row" style="margin-top:8px"><span>${t("tk.peak_week", { date: fmtDate(cap.peak_week.start) })}</span><span class="num">${t("tk.of", { v: pts(cap.peak_week.sold), max: fmtShare(w.max_sold_pct) })}</span></div>${pct(cap.peak_week.sold, w.max_sold_pct)}` : ""}
         <div class="limit-row" style="margin-top:8px"><span>${t("tk.five_now")}</span><span class="num">${t("tk.of", { v: fmtPct(f.now, 1), max: fmtShare(f.max_sold_5h_pct) })}</span></div>${pct(f.now, f.max_sold_5h_pct)}
         <div class="limit-row" style="margin-top:8px"><span>${t("tk.five_peak")}</span><span class="num">${t("tk.of", { v: fmtPct(f.peak_30d, 1), max: fmtShare(f.max_sold_5h_pct) })}</span></div>${pct(f.peak_30d, f.max_sold_5h_pct)}
+        <div class="limit-row" style="margin-top:8px"><span>${t("sub.end")}</span><span class="num">${cap.subscription_end ? fmtDate(cap.subscription_end) : "—"} <a href="#" id="sub-end-edit">${t("sub.end_edit")}</a></span></div>
+        ${cap.subscription_end ? "" : `<p class="error">${t("sub.end_unset", { date: w.end ? fmtDate(w.end) : "—" })}</p>`}
         ${cap.hand_set_7d_pct ? `<p class="sub" style="margin-top:12px">${t("tk.hand_set", { v: fmtShare(cap.hand_set_7d_pct) })}</p>` : ""}</div>
     </div>
     <div class="controls"><button class="btn primary" id="grant">${t("tk.grant")}</button>
@@ -1605,6 +1624,7 @@ async function renderTickets(main) {
   };
   fill();
   $("#grant").onclick = () => grantDialog(users);
+  $("#sub-end-edit").onclick = (e) => { e.preventDefault(); subscriptionDialog().catch(() => {}); };
   $("#ticket-user").onchange = (e) => { const v = e.target.value; S.ticketUser = !v ? null : v.startsWith("d:") ? v : +v; render(); };
   $("#ticket-state").onchange = (e) => { S.ticketState = e.target.value; fill(); };
   wireSearch($("#ticket-q"), (v) => { S.ticketQ = v; fill(); });

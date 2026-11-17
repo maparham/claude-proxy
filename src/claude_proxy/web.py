@@ -1631,7 +1631,19 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def subscription(request: Request):
         # The subscription's latest profile from Anthropic, as sent: the header pill's details dialog shows it.
         admin(request)
-        return {"profile": quota.latest_profile(conn)}
+        now = time.time()
+        week = tickets.week_bounds(conn, cfg, now)
+        return {"profile": quota.latest_profile(conn), "ends_at_set": tickets.subscription_end_set(conn),
+                "ends_at": tickets.subscription_end(conn, week, now), "weekly_reset": week[1] if week else None}
+
+    @app.post("/api/admin/subscription/end")
+    async def set_subscription_end(request: Request):
+        # The subscription's end: no pass is sold, granted or offered to run past it (capacity.check_sub_end).
+        actor = admin(request, write=True)
+        body = await _json(request)
+        v = body.get("ends_at")
+        end = None if v in (None, "") else _number(v, "ends_at", whole=True)
+        return {"ok": True, "ends_at_set": ticket_call(tickets.set_subscription_end, conn, end, actor["id"])}
 
     @app.get("/api/admin/capacity")
     async def capacity(request: Request):
@@ -1642,7 +1654,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         for b in BUCKETS:
             att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
             util[b] = {"utilization_pct": att["utilization_pct"], "stale": att["stale"]}
-        return {**tickets.capacity(conn, cfg, now), "utilization": util}
+        end_set = tickets.subscription_end_set(conn)
+        return {**tickets.capacity(conn, cfg, now), "utilization": util,
+                "subscription_end": end_set if end_set is not None and end_set > now else None}
 
     def display_currency() -> str:
         return next(iter(cfg.tickets.currencies), "USD")

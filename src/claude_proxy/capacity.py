@@ -240,6 +240,7 @@ def room(conn: sqlite3.Connection, cfg: Config, account_id: int, week, att: dict
     return ceiling - att["utilization_pct"] - reserved(conn, cfg, account_id, week, att, rate, scale, now, exclude) - margin
 
 
+SUB_END_SLACK_S = 60   # a pass ending at the weekly reset, as the next snapshot moves it by a few seconds, still fits
 NO_REPORT = "No fresh usage report from Anthropic; try again in a few minutes."
 
 
@@ -321,12 +322,25 @@ def check_5h_room(conn: sqlite3.Connection, cfg: Config, account_id: int, share_
                                     f"{need:.1f}; it resets at {time.strftime('%H:%M', time.gmtime(att['resets_at']))} UTC.", att["resets_at"])
 
 
+def check_sub_end(conn: sqlite3.Connection, week, ends_at: float, now: float) -> None:
+    """A pass may not run past the Anthropic subscription's end (the admin's date, else the weekly reset): a week
+    pass is refused in a subscription's last week, a day pass in its last day, a month pass in its last month."""
+    end = tickets.subscription_end(conn, week, now)
+    if end is not None and ends_at > end + SUB_END_SLACK_S:
+        set_ = tickets.subscription_end_set(conn)
+        why = ("" if set_ is not None and set_ > now else " (the weekly reset; no end date is set)" if set_ is None
+               else " (the weekly reset; the end date set has passed)")
+        raise tickets.CapacityError(f"The subscription ends {time.strftime('%Y-%m-%d %H:%M', time.gmtime(end))} UTC"
+                                    f"{why}, before this pass would end.")
+
+
 def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
           ends_at: float, now: float, exclude=(), ctx: Context | None = None) -> None:
     """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails."""
     ctx = ctx or context(conn, cfg, account_id, now, exclude)
     if not ctx.fresh:
         raise tickets.CapacityError(NO_REPORT)
+    check_sub_end(conn, ctx.week, ends_at, now)
     ps = pieces(ctx.week, share, starts_at, ends_at)
     ws = ctx.week[0]
     need = ps.get(ws, 0.0) * ctx.scale / 100

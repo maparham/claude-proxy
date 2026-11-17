@@ -589,6 +589,39 @@ def set_recommended(conn: sqlite3.Connection, cfg: Config, tier, length, actor: 
     return {"tier": tier, "length": length}
 
 
+SUB_END_KEY = "subscription_ends_at"
+
+
+def subscription_end_set(conn: sqlite3.Connection) -> int | None:
+    """The end of the current Anthropic subscription as the admin set it; None when unset."""
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (SUB_END_KEY,)).fetchone()
+    try:
+        return int(row[0]) if row else None
+    except ValueError:
+        return None
+
+
+def subscription_end(conn: sqlite3.Connection, week: tuple[float, float] | None, now: float) -> float | None:
+    """When every pass must have ended: the admin's subscription end, or, while it is unset or already past, the
+    current weekly reset (week[1]), as the subscription is only sure to run until then. None without either."""
+    end = subscription_end_set(conn)
+    if end is not None and end > now:
+        return float(end)
+    return week[1] if week else None
+
+
+def set_subscription_end(conn: sqlite3.Connection, ends_at: int | None, actor: int | None, now: float | None = None) -> int | None:
+    """Set the subscription's end (UTC seconds), which must be in the future; None clears it."""
+    if ends_at is None:
+        conn.execute("DELETE FROM settings WHERE key=?", (SUB_END_KEY,))
+    else:
+        if ends_at <= _now(now):
+            raise TicketError("The subscription's end must be in the future.")
+        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (SUB_END_KEY, str(int(ends_at))))
+    db.audit(conn, actor, "subscription_end_set", "", {"ends_at": ends_at})
+    return ends_at
+
+
 # ---------- capacity (spec section 5) ----------
 
 TICKET_COLS = f"t.*, {db.TICKET_EFFECTIVE_END} AS effective_end"

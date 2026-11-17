@@ -34,6 +34,9 @@ def db(tmp_path):
     quota.clear_rate_cache()   # a connection id from a previous test's cache entry could otherwise be reused
     path = str(tmp_path / "test.db")
     conn = init_db(path)
+    # Passes may not run past the subscription's end (the weekly reset when unset); the tests sell passes of every
+    # length, so their subscription runs to 2100. Tests of the rule itself clear or move it.
+    conn.execute("INSERT INTO settings(key, value) VALUES('subscription_ends_at', '4102444800')")
     yield path, conn
     conn.close()
 
