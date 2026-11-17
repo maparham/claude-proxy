@@ -258,6 +258,30 @@ function installSteps() {
   }));
 }
 installSteps();
+// The home page's posts: arrows slide one card at a time; every 5 s it moves on by one card, back to the first after the
+// last, pausing while hovered or focused, and holding off 5 s after the reader scrolls it themselves.
+(function carousel() {
+  const box = document.querySelectorAll(".carousel")[0], row = box && box.querySelector(".slides");
+  if (!row) return;
+  const rtl = getComputedStyle(row).direction === "rtl";
+  const step = () => { const li = row.querySelector("li"); return li ? li.offsetWidth + parseFloat(getComputedStyle(row).columnGap || 16) : row.clientWidth; };
+  const atEnd = () => Math.abs(row.scrollLeft) + row.clientWidth >= row.scrollWidth - 4;
+  const atStart = () => Math.abs(row.scrollLeft) < 4;
+  const go = (d) => {
+    if (d > 0 && atEnd()) return row.scrollTo({ left: 0, behavior: "smooth" });
+    if (d < 0 && atStart()) return row.scrollTo({ left: (rtl ? -1 : 1) * row.scrollWidth, behavior: "smooth" });
+    row.scrollBy({ left: d * step() * (rtl ? -1 : 1), behavior: "smooth" });
+  };
+  let held = false, last = Date.now();
+  box.querySelectorAll(".car-btn").forEach((b) => (b.onclick = () => { go(+b.dataset.dir); last = Date.now(); }));
+  box.addEventListener("mouseenter", () => (held = true));
+  box.addEventListener("mouseleave", () => (held = false));
+  box.addEventListener("focusin", () => (held = true));
+  box.addEventListener("focusout", () => (held = false));
+  ["touchstart", "wheel"].forEach((e) => row.addEventListener(e, () => (last = Date.now()), { passive: true }));
+  if (matchMedia("(prefers-reduced-motion: reduce)").matches) return;
+  setInterval(() => { if (!held && !document.hidden && Date.now() - last >= 4500 && row.scrollWidth > row.clientWidth) { go(1); last = Date.now(); } }, 1000);
+})();
 fetch("/api/pricing", { credentials: "omit" }).then((r) => { if (!r.ok) throw new Error(r.status); return r.json(); }).then((d) => {
   data = d;
   currency = d.currency;   // default: the page's own currency (IRT today)

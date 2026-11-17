@@ -183,6 +183,19 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .art text { fill: #fff; font: 700 11px system-ui, sans-serif; direction: ltr; }
 .post-ic { position: relative; z-index: 1; margin: -26px 20px 0; width: 52px; height: 52px; display: grid; place-items: center; border-radius: 14px; background: var(--surface); color: var(--c); box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.25), 0 0 0 1px var(--border); }
 .post-ic .ic { width: 26px; height: 26px; }
+/* The home page's row of posts: slides sideways, a card snapping to the edge; arrows over the covers. */
+.carousel { position: relative; margin-bottom: 16px; }
+.latest-list.slides { display: flex; margin: 0; padding: 4px 0 8px; overflow-x: auto; scroll-snap-type: x mandatory; scrollbar-width: none; overscroll-behavior-x: contain; }
+.slides::-webkit-scrollbar { display: none; }
+.slides > li { flex: 0 0 calc((100% - 32px) / 3); scroll-snap-align: start; }
+@media (max-width: 900px) { .slides > li { flex-basis: calc((100% - 16px) / 2); } }
+@media (max-width: 600px) { .slides > li { flex-basis: 85%; } }
+.car-btn { position: absolute; top: 34px; z-index: 2; width: 38px; height: 38px; display: grid; place-items: center; padding: 0; border: 1px solid var(--border); border-radius: 999px; background: var(--surface); color: var(--ink); cursor: pointer; box-shadow: 0 6px 16px -6px rgba(0, 0, 0, 0.3); }
+.car-btn .ic { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+.car-btn[data-dir="-1"] { inset-inline-start: 8px; }
+.car-btn[data-dir="1"] { inset-inline-end: 8px; }
+.car-btn[data-dir="1"] .ic { transform: scaleX(-1); }   /* in RTL "next" lies to the left */
+@media (max-width: 600px) { .car-btn { display: none; } }
 .latest-list .card-body { padding: 14px 20px 20px; }
 .tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 999px; color: var(--c); background: color-mix(in srgb, var(--c) 12%, transparent); margin-bottom: 8px; }
 .post-cover { margin-bottom: 16px; }
