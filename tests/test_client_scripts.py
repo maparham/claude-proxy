@@ -32,6 +32,7 @@ class Stub:
         self.health_upload = None   # bytes the last POST /health carried
         self.title = "Flaky login test"   # the name POST /v1/messages answers a session-naming request with; None: 500
         self.messages: list[dict] = []   # bodies POST /v1/messages carried
+        self.answer: str | None = None   # the model's text as is, in place of {"title": title}
         self.requests: list[tuple[str, dict]] = []
         stub = self
 
@@ -71,8 +72,8 @@ class Stub:
                     code, body = stub.health, {"ok": True}
                 elif self.path == "/v1/messages":
                     stub.messages.append(json.loads(self.rfile.read(int(self.headers.get("content-length", 0)))))
-                    code, body = (500, {}) if stub.title is None else \
-                        (200, {"content": [{"type": "text", "text": json.dumps({"title": stub.title})}]})
+                    answer = stub.answer if stub.answer is not None else json.dumps({"title": stub.title})
+                    code, body = (500, {}) if stub.title is None else (200, {"content": [{"type": "text", "text": answer}]})
                 elif self.path == "/api/me/logout":
                     code, body = stub.logout
                 elif self.path == "/api/device/start":
@@ -308,6 +309,36 @@ def test_a_failed_naming_says_nothing_and_tries_again(stub, warn_env):
     assert r.returncode == 0 and r.stdout == ""
     stub.title = "Flaky login test"
     assert "sessionTitle" in prompt(env).stdout
+
+
+def test_naming_gives_up_after_three_failed_tries(stub, warn_env):
+    env = name_env(stub, warn_env)
+    stub.title = None
+    for _ in range(4):
+        assert prompt(env, "fix it").stdout == ""
+    assert len(stub.messages) == 3
+
+
+def test_no_naming_while_the_gateway_is_down(stub, warn_env):
+    stub.status_line = None   # the status fetch fails: a naming call would only add its wait to every prompt
+    assert prompt(name_env(stub, warn_env)).stdout == "" and stub.messages == []
+
+
+def test_a_session_claude_code_says_is_named_is_left_alone(stub, warn_env):
+    r = run(["sh", str(STATUSLINE), "--warn"], name_env(stub, warn_env),
+            stdin=json.dumps({"session_id": "s-1", "prompt": "fix it", "session_title": "Mine"}))
+    assert r.stdout == "" and stub.messages == []
+
+
+@pytest.mark.parametrize("answer", ['```json\n{"title": "Fenced name"}\n```', '{"title": null}', '["x"]', '{"title": 3}'])
+def test_odd_model_answers(stub, warn_env, answer):
+    stub.answer = answer
+    r = prompt(name_env(stub, warn_env))
+    assert r.returncode == 0
+    if "Fenced" in answer:
+        assert json.loads(r.stdout)["hookSpecificOutput"]["sessionTitle"] == "Fenced name"
+    else:
+        assert r.stdout == ""
 
 
 def test_the_name_comes_with_a_limit_warning(stub, warn_env):

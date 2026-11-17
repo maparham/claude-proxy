@@ -62,8 +62,11 @@ own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNE
 # Session names. CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC (gclaude sets it, so nothing goes to Anthropic past the
 # gateway) also stops Claude Code naming its sessions, so /resume listed them unnamed. Under it, --warn names the
 # session at its first prompt instead: the gateway's small model writes the name, asked the way Claude Code asks
-# (the gateway keeps it for the dashboard too), and the hook gives it back as sessionTitle. Once a session: a
-# session already named (resumed, or /rename) is left alone, and a slash command waits for a typed prompt.
+# (the gateway keeps it for the dashboard too), and the hook gives it back as sessionTitle. A session already named
+# (resumed, or /rename) is left alone, and a slash command waits for a typed prompt. The marker file counts the
+# tries ("x" each, "done" once named): three at most, each counted before it is made, so a hook stopped at its
+# timeout mid-call counts too. Naming comes after the status fetch and is skipped when that failed (the gateway
+# down), so the hook stays within its 10 s: 3 s for the status, 4 s here.
 NAMER='
 import json, os, subprocess, sys, tempfile
 SYSTEM = """You are naming a coding session so the user can pick it out of a long list of sessions. The title is a name for what the session is about, not a sentence describing the task: a short noun phrase of two to five words, in sentence case (capitalize only the first word, plus proper nouns, acronyms, and code identifiers exactly as written). The thing acted on leads, and the title never opens with a verb. A generic label that could sit on dozens of sessions is not a name; when the message is mostly pasted code, logs, or an error, name the session by the specific function, file, or error inside it.
@@ -74,16 +77,26 @@ d = json.loads(sys.stdin.read())
 sid, prompt, path = d.get("session_id"), d.get("prompt"), d.get("transcript_path")
 if not (isinstance(sid, str) and sid and isinstance(prompt, str) and prompt.strip()) or prompt.lstrip().startswith("/"):
     sys.exit()
+if isinstance(d.get("session_title"), str) and d["session_title"].strip():
+    sys.exit()
 marks = os.path.join(tempfile.gettempdir(), "claude-gateway-titles.%d" % os.getuid())
 mark = os.path.join(marks, "".join(c for c in sid if c.isalnum() or c in "-_")[:100])
-if os.path.exists(mark):
-    sys.exit()
 os.makedirs(marks, 0o700, exist_ok=True)
-open(mark, "w").close()
-if isinstance(path, str) and os.path.isfile(path):
+try:
+    tries = open(mark).read()
+except OSError:
+    tries = ""
+if tries == "done" or len(tries) >= 3:
+    sys.exit()
+def mark_as(s):
+    with open(mark, "w") as f:
+        f.write(s)
+if not tries and isinstance(path, str) and os.path.isfile(path):
     with open(path, "rb") as f:
         if any(b"\"type\":\"custom-title\"" in l or b"\"type\":\"ai-title\"" in l for l in f):
+            mark_as("done")
             sys.exit()
+mark_as(tries + "x")
 text = prompt.strip()
 if len(text) > 4000:
     text = text[:2000] + "\n...\n" + text[-2000:]
@@ -98,33 +111,36 @@ try:
     with os.fdopen(fd, "w") as f:
         f.write("Authorization: Bearer %s\nanthropic-version: 2023-06-01\ncontent-type: application/json\nx-claude-code-session-id: %s\n"
                 % (os.environ.get("CG_KEY", ""), sid))
-    r = subprocess.run(["curl", "-fsS", "--max-time", "6", "-H", "@" + hdr, "--data-binary", "@-",
+    r = subprocess.run(["curl", "-fsS", "--max-time", "4", "-H", "@" + hdr, "--data-binary", "@-",
                         os.environ.get("ANTHROPIC_BASE_URL", "").rstrip("/") + "/v1/messages"],
                        input=json.dumps(body).encode(), capture_output=True)
 finally:
     os.remove(hdr)
 try:
-    reply = json.loads(r.stdout)
-    title = json.loads("".join(b.get("text", "") for b in reply["content"] if b.get("type") == "text"))["title"]
-except (ValueError, KeyError, TypeError):
-    os.remove(mark)   # try again at the next prompt
-    sys.exit()
-title = " ".join(str(title).split())[:80]
+    answer = "".join(b["text"] for b in json.loads(r.stdout)["content"] if b.get("type") == "text").strip()
+    if answer.startswith("```"):   # a model without structured outputs may fence its JSON
+        answer = answer.split("\n", 1)[-1].rsplit("```", 1)[0]
+    title = json.loads(answer)["title"]
+except Exception:
+    sys.exit()   # tried again at the next prompt, up to three times
+title = " ".join(title.split())[:80] if isinstance(title, str) else ""
 if title:
+    mark_as("done")
     print(title)
 '
 title=
-if [ -n "$warn" ] && [ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ] && [ -n "${ANTHROPIC_BASE_URL:-}" ] &&
-  [ -z "$usage$account_prompt$logout" ]; then
-  title=$(printf '%s' "$input" | CG_KEY=$(gateway_key) python3 -c "$NAMER" 2>/dev/null | head -n 1)
-fi
 warn_out() {   # the --warn hook's answer: a message to show ($1) and the session's new name, each when there is one
+  if [ -n "$warn" ] && [ -z "$gateway_down$usage$account_prompt$logout" ] && [ -n "${CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC:-}" ] &&
+    [ -n "${ANTHROPIC_BASE_URL:-}" ]; then
+    title=$(printf '%s' "$input" | CG_KEY=$(gateway_key) python3 -c "$NAMER" 2>/dev/null | head -n 1)
+  fi
   out=
   [ -n "$1" ] && out="\"systemMessage\": \"$(json_str "$1")\""
   [ -n "$title" ] && out="${out:+$out, }\"hookSpecificOutput\": {\"hookEventName\": \"UserPromptSubmit\", \"sessionTitle\": \"$(json_str "$title")\"}"
   [ -n "$out" ] && printf '{%s}\n' "$out"
   exit 0
 }
+gateway_down=
 if [ -n "$logout" ]; then   # gclaude's /logout_gclaude: revoke this computer's key on the gateway, then drop every copy of it here
   key=$(gateway_key) reply=
   if [ -n "$key" ] && [ -n "${CLAUDE_GATEWAY_DASHBOARD:-}" ]; then
@@ -233,7 +249,7 @@ if [ -z "$usage$account_prompt" ] && [ -f "$cache" ] && [ "$(age "$cache")" -lt 
 elif line=$(status text); then
   printf '%s\n' "$line" > "$cache"
 else
-  line=
+  line= gateway_down=1
 fi
 
 # model_tag: [the session's model] from Claude Code's statusline JSON, red when it costs more per token than the

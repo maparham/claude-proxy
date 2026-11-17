@@ -54,21 +54,27 @@ try {
 
   # Session names, as statusline.sh does (see NAMER there): under CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, which
   # gclaude sets, Claude Code names no session, so --warn names it at its first typed prompt, with the gateway's
-  # small model, and hands the name back as sessionTitle. Once a session; a session already named is left alone.
+  # small model, and hands the name back as sessionTitle. A session already named is left alone; the marker file
+  # counts the tries (three at most, "done" once named), and naming is skipped when the status fetch failed.
   function Name-Session {
     $j = $stdin | ConvertFrom-Json
     $sid = [string]$j.session_id; $prompt = [string]$j.prompt; $path = [string]$j.transcript_path
     if (-not $sid -or -not $prompt.Trim() -or $prompt.TrimStart().StartsWith('/')) { return '' }
+    if (([string]$j.session_title).Trim()) { return '' }
     $marks = Join-Path ([IO.Path]::GetTempPath()) 'claude-gateway-titles'
     $name = $sid -replace '[^A-Za-z0-9_-]', ''
     if ($name.Length -gt 100) { $name = $name.Substring(0, 100) }
     if (-not $name) { return '' }
     $mark = Join-Path $marks $name
-    if (Test-Path -LiteralPath $mark) { return '' }
     [void](New-Item -ItemType Directory -Force -Path $marks)
-    [IO.File]::WriteAllText($mark, '')
-    if ($path -and (Test-Path -LiteralPath $path -PathType Leaf) -and
-        (Select-String -LiteralPath $path -SimpleMatch -Pattern '"type":"custom-title"', '"type":"ai-title"' -Quiet)) { return '' }
+    $tries = ''
+    if (Test-Path -LiteralPath $mark) { $tries = [IO.File]::ReadAllText($mark) }
+    if ($tries -eq 'done' -or $tries.Length -ge 3) { return '' }
+    if (-not $tries -and $path -and (Test-Path -LiteralPath $path -PathType Leaf) -and
+        (Select-String -LiteralPath $path -SimpleMatch -Pattern '"type":"custom-title"', '"type":"ai-title"' -Quiet)) {
+      [IO.File]::WriteAllText($mark, 'done'); return ''
+    }
+    [IO.File]::WriteAllText($mark, $tries + 'x')   # counted before the call: a hook stopped at its timeout counts too
     $text = $prompt.Trim()
     if ($text.Length -gt 4000) { $text = $text.Substring(0, 2000) + "`n...`n" + $text.Substring($text.Length - 2000) }
     $model = 'claude-haiku-5-5'
@@ -82,22 +88,26 @@ try {
                                                                                  required = @('title'); additionalProperties = $false } } }
     }
     try {
-      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 6 -Method Post -Uri (([string]$env:ANTHROPIC_BASE_URL).TrimEnd('/') + '/v1/messages') `
+      $r = Invoke-WebRequest -UseBasicParsing -TimeoutSec 4 -Method Post -Uri (([string]$env:ANTHROPIC_BASE_URL).TrimEnd('/') + '/v1/messages') `
         -ContentType 'application/json' -Body $utf8.GetBytes((ConvertTo-Json -Compress -Depth 10 -InputObject $body)) `
         -Headers @{ Authorization = "Bearer $env:ANTHROPIC_AUTH_TOKEN"; 'anthropic-version' = '2023-06-01'; 'x-claude-code-session-id' = $sid }
       $reply = $utf8.GetString($r.RawContentStream.ToArray()) | ConvertFrom-Json
-      $answer = (@($reply.content | Where-Object { $_.type -eq 'text' } | ForEach-Object { [string]$_.text }) -join '') | ConvertFrom-Json
-      $title = (@(([string]$answer.title) -split '\s+' | Where-Object { $_ }) -join ' ')
+      $answer = (@($reply.content | Where-Object { $_.type -eq 'text' } | ForEach-Object { [string]$_.text }) -join '').Trim()
+      if ($answer.StartsWith('```')) { $answer = ($answer -replace '^```[^\n]*\n', '') -replace '```\s*$', '' }   # a model without structured outputs may fence its JSON
+      $t = ($answer | ConvertFrom-Json).title
+      $title = ''
+      if ($t -is [string]) { $title = (@($t -split '\s+' | Where-Object { $_ }) -join ' ') }
     } catch {
-      Remove-Item -LiteralPath $mark -ErrorAction SilentlyContinue   # try again at the next prompt
-      return ''
+      return ''   # tried again at the next prompt, up to three times
     }
     if ($title.Length -gt 80) { $title = $title.Substring(0, 80) }
+    if ($title) { [IO.File]::WriteAllText($mark, 'done') }
     return $title
   }
-  $title = ''
-  if ($warn -and $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC -and $env:ANTHROPIC_BASE_URL) { try { $title = Name-Session } catch { } }
+  $gatewayDown = $false
   function Warn-Out([string]$msg) {   # the --warn hook's answer: a message to show and the session's new name, each when there is one
+    $title = ''
+    if ($warn -and -not $gatewayDown -and $env:CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC -and $env:ANTHROPIC_BASE_URL) { try { $title = Name-Session } catch { } }
     $o = [ordered]@{}
     if ($msg) { $o.systemMessage = $msg }
     if ($title) { $o.hookSpecificOutput = [ordered]@{ hookEventName = 'UserPromptSubmit'; sessionTitle = $title } }
@@ -246,6 +256,7 @@ try {
     $line = ([IO.File]::ReadAllText($cache)).Trim()
   } else {
     $line = Status 'text'
+    if (-not $line) { $gatewayDown = $true }
     if ($line) { [IO.File]::WriteAllText($cache, $line + "`n", $utf8) }
   }
 
