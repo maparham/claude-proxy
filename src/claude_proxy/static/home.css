@@ -118,7 +118,7 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .tier h3 .rec { display: inline-block; vertical-align: middle; margin-inline-start: 6px; font-size: 12px; font-weight: 650; padding: 2px 8px; border-radius: 999px; background: var(--s1); color: #fff; }
 .tier h3 { margin: 0; font-size: 18px; }
 .tier .compare { margin: 0; font-weight: 600; color: var(--ink); }
-.tier .share { margin: 0; font-size: 13px; color: var(--muted); }
+.tier .share { margin: 0; font-size: 15px; font-weight: 650; color: var(--ink); }
 .tier .price { margin: 12px 0 0; font-size: 34px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
 .tier .price s { font-size: 18px; color: var(--muted); }
 .tier .per { margin: 0; font-size: 14px; color: var(--muted); }

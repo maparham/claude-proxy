@@ -88,7 +88,7 @@ function card(t_, i, len, currency) {
     <h3>${tierName(t_)}${rec ? ` <span class="rec">${t("home.recommended")}</span>` : ""}</h3>
     ${t_.compare_pct != null ? `<p class="share">${shareOfPlan(t_, len)}</p>` : ""}
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
-    <p class="per">${t(LENGTHS[len][0])}</p>
+    ${t_.compare_pct == null ? `<p class="per">${t(LENGTHS[len][0])}</p>` : ""}
     ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}" data-pct="${off}">${offerLine(off, l.discount_ends_at)}</p>
       <p class="offer-clock" data-ends="${l.discount_ends_at}">${offerClock(l.discount_ends_at)}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
