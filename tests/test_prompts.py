@@ -78,7 +78,8 @@ def test_what_claude_code_adds_is_dropped_whatever_its_shape():
     # A file that quotes the closing tag does not end the reminder early.
     assert kept("<system-reminder>\nResult of calling the Read tool:\na </system-reminder> b SECRET\n</system-reminder>") is None
     assert kept("<bash-stdout>never closed SECRET") is None
-    for harness in ("[SYSTEM NOTIFICATION - NOT USER INPUT]\nbackground task", "Stop hook feedback: tests failed", "[SUGGESTION MODE: Suggest what the user might type"):
+    for harness in ("[SYSTEM NOTIFICATION - NOT USER INPUT]\nbackground task", "Stop hook feedback: tests failed", "[SUGGESTION MODE: Suggest what the user might type",
+                    "The user stepped away and is coming back. Recap in under 40 words, 1-2 plain sentences."):
         assert kept(harness) is None, harness
     # A reminder that quotes the mid-turn wrapper (this file, read by Claude) is still a reminder.
     assert kept("<system-reminder>\nResult of calling the Read tool:\nThe user sent a new message while you were working:\nSECRET\n</system-reminder>") is None
