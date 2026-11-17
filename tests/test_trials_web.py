@@ -79,6 +79,43 @@ async def test_admin_grant(env):
         assert (await c.post("/api/admin/users/9999/trial", json={})).status_code == 404
 
 
+
+async def test_admin_lists_and_cancels_a_waiting_trial(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/trial", json={})).status_code == 200
+        cid = conn.execute("SELECT id FROM trial_claims").fetchone()[0]
+        listed = (await c.get("/api/admin/tickets")).json()["trial_claims"]
+        assert [(x["id"], x["user_name"], x["tier"], x["granted_by_name"]) for x in listed] == [(cid, "alice", "lite", "admin")]
+        assert (await c.get(f"/api/admin/tickets?user_id={ids['admin']}")).json()["trial_claims"] == []
+        assert (await c.post(f"/api/admin/trial-claims/{cid}/cancel", json={})).status_code == 200
+        assert (await c.get("/api/admin/tickets")).json()["trial_claims"] == []
+        assert (await c.post(f"/api/admin/trial-claims/{cid}/cancel", json={})).status_code == 409
+        assert (await c.post("/api/admin/trial-claims/9999/cancel", json={})).status_code == 404
+        assert (await c.get("/api/admin/trial")).json()["lapsed"] == 0   # a cancelled claim is not counted as lapsed
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/trial", json={"confirm": True})).status_code == 200
+        conn.execute("UPDATE trial_claims SET user_id=NULL")   # the account deleted: its claim can never start
+        assert (await c.get("/api/admin/tickets")).json()["trial_claims"] == []
+    async with client(gw) as c:
+        h = bearer(keys["alice"])
+        assert (await c.get("/api/me/trial", headers=h)).json()["claim"] is None
+        assert (await c.post("/api/me/trial/start", headers=h, json={})).status_code == 409
+        assert (await c.post(f"/api/admin/trial-claims/{cid}/cancel", headers=h, json={})).status_code == 403
+
+
+async def test_a_started_trial_is_not_cancelled_as_a_claim(env):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/trial", json={})).status_code == 200
+        cid = conn.execute("SELECT id FROM trial_claims").fetchone()[0]
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/start", headers=bearer(keys["alice"]), json={})).status_code == 200
+    async with admin_client(gw) as c:
+        assert (await c.get("/api/admin/tickets")).json()["trial_claims"] == []
+        assert (await c.post(f"/api/admin/trial-claims/{cid}/cancel", json={})).status_code == 409
+        tid = conn.execute("SELECT ticket_id FROM trial_claims WHERE id=?", (cid,)).fetchone()[0]
+        assert (await c.post(f"/api/admin/tickets/{tid}/cancel", json={})).status_code == 200
+
 async def test_pricing_shows_the_offer_until_the_cap(env):
     gw, conn, cfg, ids, keys = env
     async with client(gw) as c:
@@ -227,3 +264,24 @@ async def test_no_discount_line_at_zero_follow_pct_and_minutes(env, sent):
     await flush()
     [(_, _, body)] = sent
     assert "90 minutes" in body and "%" not in body
+
+
+ROW_STUBS = UI_STUBS + """
+var t = (k, v = {}) => `${k}${JSON.stringify(v)}`, bdi = esc, iso = (v) => v, nf0 = new Intl.NumberFormat("en-US");
+var lengthName = (len) => `L:${len}`, fmtDurLong = (s) => `S:${s}`, fmtPrice = (v) => `$${v}`, money = (a, c) => `${a} ${c}`;
+var fmtNum = (v) => `${v}`, stateBadge = (s) => `[${s}]`, weekCell = () => "W", bonusDays = () => 0, S = { tickets: { lengths: { day: 1, week: 7 } } };
+"""
+
+
+def test_pass_list_rows_split_the_period_and_show_the_duration(tmp_path):
+    from tests.test_tickets_web import _app_fn
+    tk = ('{ id: 1, user_id: 2, user_name: "alice", tier: "lite", share_pct: 20, trial: 1, length: "day", starts_at: 0, ends_at: 3600, '
+          'effective_end: 3600, amount: 0, currency: "USD", usd: 0, state: "ended", bonuses: [], note: "Free trial" }')
+    week = '{ id: 2, user_id: 2, user_name: "alice", tier: "lite", share_pct: 20, length: "week", starts_at: 0, ends_at: 604800, effective_end: 604800, amount: 9, currency: "EUR", usd: 10, state: "active", bonuses: [] }'
+    claim = '{ id: 5, user_name: "bob", tier: "lite", label: "Lite", share_pct: 20, expires_at: 99, duration_min: 60, granted_by_name: "admin" }'
+    out = _app_fn(tmp_path, ["ticketRow", "claimRow", "passDuration", "tokensInline"],
+                  ROW_STUBS + f"var out = [ticketRow({tk}), ticketRow({week}), claimRow({claim})];")
+    trial, paid, waiting = out
+    assert "trial.short" not in trial and "S:3600" in trial and "<div" not in trial.split('<div class="row-actions"')[0]
+    assert "L:week" in paid and "<td class=\"nowrap\">D0</td>" in paid and "D604800" in paid and "$10" in paid
+    assert "[waiting]" in waiting and "S:3600" in waiting and 'data-cact="5"' in waiting and "D99" in waiting

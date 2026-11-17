@@ -1572,7 +1572,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             if t["user_id"] is not None:   # the user's current name, falling back to the name stored at grant for a deleted user
                 t["user_name"] = n.get(t["user_id"], t["user_name"])
         gone = [r[0] for r in conn.execute("SELECT DISTINCT user_name FROM tickets WHERE user_id IS NULL ORDER BY user_name")]
-        return {"tickets": rows, "deleted_users": gone}
+        # Free trials claimed or granted but not started yet: no pass until they start, listed beside the passes.
+        claims = [] if deleted is not None else trials.waiting_claims(conn, cfg, now, user_id)
+        for c in claims:
+            c["granted_by_name"] = n.get(c["granted_by"])
+        return {"tickets": rows, "deleted_users": gone, "trial_claims": claims}
 
     def grant_args(body) -> tuple:
         return (target_user(body.get("user") or body.get("user_id")), str(body.get("tier", "")), str(body.get("length", "")),
@@ -1617,6 +1621,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         need_tickets()
         return {"ok": True, **ticket_call(tickets.cancel, conn, cfg, actor["id"], tid)}
+
+    @app.post("/api/admin/trial-claims/{cid}/cancel")
+    async def trial_claim_cancel(request: Request, cid: int):
+        actor = admin(request, write=True)
+        need_tickets()
+        return {"ok": True, "claim": trials.cancel_claim(conn, actor["id"], cid, time.time())}
 
     @app.post("/api/admin/tickets/{tid}/bonus")
     async def ticket_bonus(request: Request, tid: int):

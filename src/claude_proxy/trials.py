@@ -123,7 +123,8 @@ def _claim_row(conn, claim_id: int) -> dict:
 
 def open_claim(conn: sqlite3.Connection, user_id: int, now: float) -> dict | None:
     """The user's claim still waiting to start, or None."""
-    r = conn.execute("SELECT * FROM trial_claims WHERE user_id=? AND ticket_id IS NULL AND expires_at>? ORDER BY id DESC LIMIT 1",
+    r = conn.execute("SELECT * FROM trial_claims WHERE user_id=? AND ticket_id IS NULL AND cancelled_at IS NULL AND expires_at>? "
+                     "ORDER BY id DESC LIMIT 1",
                      (user_id, int(now))).fetchone()
     return dict(r) if r else None
 
@@ -219,6 +220,41 @@ def admin_grant(conn: sqlite3.Connection, cfg: Config, actor: int, user, now: fl
         conn.execute("ROLLBACK")
         raise
     return c
+
+
+
+def waiting_claims(conn: sqlite3.Connection, cfg: Config, now: float, user_id: int | None = None) -> list[dict]:
+    """Claims still waiting to start, newest first, for the admin's pass list: the tier and share they would start with."""
+    s = settings(conn, cfg)
+    where, params = ("AND c.user_id=?", (int(now), user_id)) if user_id is not None else ("", (int(now),))
+    rows = conn.execute("SELECT c.id, c.user_id, c.email, c.claimed_at, c.expires_at, c.granted_by, u.name AS user_name FROM trial_claims c "
+                        "LEFT JOIN users u ON u.id=c.user_id WHERE c.user_id IS NOT NULL AND c.ticket_id IS NULL AND c.cancelled_at IS NULL AND c.expires_at>? "
+                        f"{where} ORDER BY c.id DESC", params).fetchall()
+    return [dict(r) | {"user_name": r["user_name"] or r["email"], "tier": s.tier, "label": tier_label(cfg, s.tier), "share_pct": s.share_pct,
+                       "duration_min": s.duration_min} for r in rows]
+
+
+def cancel_claim(conn: sqlite3.Connection, actor: int, claim_id: int, now: float) -> dict:
+    """The admin's cancel of a claim still waiting to start. A started trial is a pass, cancelled as any pass is."""
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        r = conn.execute("SELECT c.*, u.name AS user_name FROM trial_claims c LEFT JOIN users u ON u.id=c.user_id WHERE c.id=?",
+                         (claim_id,)).fetchone()
+        if r is None:
+            raise TrialError(404, "No such trial.")
+        if r["cancelled_at"] is not None:
+            raise TrialError(409, "This trial is already cancelled.")
+        if r["ticket_id"] is not None:
+            raise TrialError(409, "This trial has started: cancel its pass instead.")
+        if r["expires_at"] <= now:
+            raise TrialError(409, "This trial has already lapsed.")
+        conn.execute("UPDATE trial_claims SET cancelled_at=?, cancelled_by=? WHERE id=?", (int(now), actor, claim_id))
+        db.audit(conn, actor, "trial_claim_cancel", r["user_name"] or r["email"], {"claim_id": claim_id})
+        conn.execute("COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return _claim_row(conn, claim_id)
 
 
 # ---------- starting ----------
@@ -369,7 +405,7 @@ def admin_view(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:
     s = settings(conn, cfg)
     stored = _stored(conn)
     counts = conn.execute("SELECT COUNT(*) AS claimed, COUNT(ticket_id) AS started, "
-                          "SUM(CASE WHEN ticket_id IS NULL AND expires_at<=? THEN 1 ELSE 0 END) AS lapsed FROM trial_claims",
+                          "SUM(CASE WHEN ticket_id IS NULL AND cancelled_at IS NULL AND expires_at<=? THEN 1 ELSE 0 END) AS lapsed FROM trial_claims",
                           (int(now),)).fetchone()
     bought = conn.execute("SELECT COUNT(DISTINCT c.user_id) FROM trial_claims c JOIN tickets t ON t.user_id=c.user_id "
                           "WHERE c.ticket_id IS NOT NULL AND t.trial=0 AND t.granted_at>=c.started_at").fetchone()[0]

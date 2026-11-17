@@ -1575,9 +1575,11 @@ function userActions(u) {
 const stateBadge = (s) => `<span class="badge state-${s}">${esc(I18N.en[`state.${s}`] ? t(`state.${s}`) : s)}</span>`;
 
 async function renderTickets(main) {
-  const [cap, { tickets, deleted_users }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
+  const [cap, { tickets, deleted_users, trial_claims: claims = [] }, { users }] = await Promise.all([api("/api/admin/capacity"), api(`/api/admin/tickets${S.ticketUser == null ? "" : typeof S.ticketUser === "number" ? `?user_id=${S.ticketUser}` : `?deleted=${encodeURIComponent(S.ticketUser.slice(2))}`}`), api("/api/users")]);
   const pct = (v, max) => meter((100 * v) / max);
   const pts = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
+  // A state no row has any more (its last row cancelled) has no option in the select: show every state instead of none.
+  if (S.ticketState && !(S.ticketState === "waiting" ? claims.length : tickets.some((tk) => tk.state === S.ticketState))) S.ticketState = "";
   const w = cap.week, f = cap.five_hour;
   // The week's 100 points, piece by piece; each piece and its legend chip carry the same tip, on hover or tap.
   const pieces = [["used", w.used], ["reserved", w.reserved], ["margin", w.margin], ["free", w.free], ["headroom", 100 - w.max_sold_pct]];
@@ -1602,7 +1604,7 @@ async function renderTickets(main) {
     </div>
     <div class="controls"><button class="btn primary" id="grant">${t("tk.grant")}</button>
       <select id="ticket-user"><option value="">${t("tk.all_users")}</option>${users.filter((u) => u.ticket && u.ticket.has_tickets).map((u) => `<option value="${u.id}" ${S.ticketUser === u.id ? "selected" : ""}>${esc(u.name)}</option>`).join("")}${(deleted_users || []).map((n) => `<option value="d:${esc(n)}" ${S.ticketUser === `d:${n}` ? "selected" : ""}>${esc(t("tk.deleted_name", { name: n }))}</option>`).join("")}</select>
-      <select id="ticket-state"><option value="">${t("tk.all_states")}</option>${[...new Set(tickets.map((tk) => tk.state))].map((st) => `<option value="${esc(st)}" ${S.ticketState === st ? "selected" : ""}>${esc(I18N.en[`state.${st}`] ? t(`state.${st}`) : st)}</option>`).join("")}</select>
+      <select id="ticket-state"><option value="">${t("tk.all_states")}</option>${[...new Set([...(claims.length ? ["waiting"] : []), ...tickets.map((tk) => tk.state)])].map((st) => `<option value="${esc(st)}" ${S.ticketState === st ? "selected" : ""}>${esc(I18N.en[`state.${st}`] ? t(`state.${st}`) : st)}</option>`).join("")}</select>
       ${searchBox("ticket-q", S.ticketQ, t("tk.search"))}</div>
     <div class="card table-wrap" id="tk-list"></div>
   </section>`;
@@ -1615,13 +1617,15 @@ async function renderTickets(main) {
   }
   const fill = () => {
     const q = (S.ticketQ || "").trim().toLowerCase();
-    const shown = tickets.filter((tk) => (!S.ticketState || tk.state === S.ticketState)
-      && (!q || [tk.user_name, tk.note, tk.tier].some((v) => (v || "").toLowerCase().includes(q))));
+    const hit = (x) => !q || [x.user_name, x.note, x.tier].some((v) => (v || "").toLowerCase().includes(q));
+    const shown = tickets.filter((tk) => (!S.ticketState || tk.state === S.ticketState) && hit(tk));
+    const waiting = claims.filter((c) => (!S.ticketState || S.ticketState === "waiting") && hit(c));
     const list = $("#tk-list");
-    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.period")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th class="r">${t("tk.this_week")}${tipI("week_col")}</th><th class="r">${t("pass.tokens")}${tipI("weighted")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
-      <tbody>${foldRows(shown.map(ticketRow)) || `<tr><td colspan="10" class="muted">${t(tickets.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(shown.length)}`;
+    list.innerHTML = `<table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("price.tier")}</th><th>${t("tk.start")}</th><th>${t("tk.end")}</th><th>${t("tk.duration")}</th><th class="r">${t("tk.paid")}</th><th>${t("tk.state")}</th><th class="r">${t("tk.this_week")}${tipI("week_col")}</th><th class="r">${t("pass.tokens")}${tipI("weighted")}</th><th>${t("tk.bonuses")}</th><th>${t("tk.note")}</th><th></th></tr></thead>
+      <tbody>${foldRows([...waiting.map(claimRow), ...shown.map(ticketRow)]) || `<tr><td colspan="12" class="muted">${t(tickets.length || claims.length ? "search.none" : "tk.none")}</td></tr>`}</tbody></table>${moreButton(waiting.length + shown.length)}`;
     wireMore(list);
     list.querySelectorAll("[data-tact]").forEach((b) => b.addEventListener("click", () => ticketAction(b.dataset.tact, tickets.find((x) => x.id === +b.dataset.id), tickets)));
+    list.querySelectorAll("[data-cact]").forEach((b) => b.addEventListener("click", () => cancelClaim(claims.find((x) => x.id === +b.dataset.cact))));
   };
   fill();
   $("#grant").onclick = () => grantDialog(users);
@@ -1636,22 +1640,49 @@ function weekCell(w) {
   if (!w) return `<span class="muted">—</span>`;
   const n = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v);
   const over = w.used > w.sold + 0.05;
-  return `<span class="num${over ? " over" : ""}">${t("tk.week_use", { used: n(w.used), sold: n(w.sold) })}</span>${w.reserved > 0.05 ? `<div class="muted">${t("tk.week_reserved", { v: n(w.reserved) })}</div>` : ""}`;
+  return `<span class="num${over ? " over" : ""}">${t("tk.week_use", { used: n(w.used), sold: n(w.sold) })}</span>${w.reserved > 0.05 ? ` <span class="muted">${t("tk.week_reserved", { v: n(w.reserved) })}</span>` : ""}`;
 }
 // A pass's bonus days, from its bonuses: not effective_end - ends_at, which is negative for a pass used up early.
 const bonusDays = (tk) => tk.bonuses.filter((b) => !b.cancelled_at).reduce((n, b) => n + (b.extra_days || 0), 0);
 // An IPv6 address cut to its first four groups (the network part) for narrow cells; the full one is on hover and on the user's page.
 const shortIp = (ip) => { const g = ip.split(":"); return g.length > 4 ? `${g.slice(0, 4).join(":")}:…` : ip; };
+// A pass's bought length, bonus days aside: its length's name when it ran the full length ("1 week"), else spelled
+// out ("1 hour" for a free trial, or a pass ended early).
+// tokensCell on one line, for the pass list: weighted, then raw in grey.
+function tokensInline(x) {
+  return x && x.tokens ? `<td class="r nowrap">${fmtNum(x.tokens.weighted)} <span class="muted">${t("pass.tokens_raw", { v: fmtNum(x.tokens.raw) })}</span></td>` : `<td class="r muted">—</td>`;
+}
+function passDuration(len, secs) {
+  return S.tickets && S.tickets.lengths && S.tickets.lengths[len] * 86400 === secs ? lengthName(len) : fmtDurLong(secs);
+}
 function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "used_up" || tk.state === "queued";
   const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
   return `<tr><td><b>${bdi(tk.user_name)}</b>${tk.user_id == null ? ` <span class="badge">${t("tk.deleted")}</span>` : ""}</td>
-    <td>${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span>${tk.trial ? ` <span class="muted">(${t("trial.short")})</span>` : ""}</td>
-    <td class="nowrap">${fmtDate(tk.starts_at)} ${t("app.arrow")} ${fmtDate(tk.effective_end)}${bonusDays(tk) ? ` <span class="muted">(${t("tk.bonus_days", { n: nf0.format(bonusDays(tk)) })})</span>` : ""}</td>
-    <td class="r">${esc(money(tk.amount, tk.currency))}${tk.discount_id ? `<div class="muted"><s>${fmtPrice(tk.list_usd)}</s> ${fmtPrice(tk.usd)}</div>` : `<div class="muted">${fmtPrice(tk.usd)}</div>`}</td>
-    <td>${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td>${tokensCell(tk)}<td class="muted">${esc(bonus) || "—"}</td><td class="muted">${bdi(tk.note || "")}</td>
-    <td><div class="row-actions">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
+    <td class="nowrap">${tierName(tk.tier, tk.tier)} <span class="muted">${fmtShare(tk.share_pct)}</span></td>
+    <td class="nowrap">${fmtDate(tk.starts_at)}</td>
+    <td class="nowrap">${fmtDate(tk.effective_end)}${bonusDays(tk) ? ` <span class="muted">${t("tk.bonus_days", { n: nf0.format(bonusDays(tk)) })}</span>` : ""}</td>
+    <td class="nowrap">${passDuration(tk.length, tk.ends_at - tk.starts_at)}</td>
+    <td class="r nowrap">${esc(money(tk.amount, tk.currency))}${tk.currency === "USD" && !tk.discount_id ? "" : ` <span class="muted">${tk.discount_id ? `<s>${fmtPrice(tk.list_usd)}</s> ` : ""}${fmtPrice(tk.usd)}</span>`}</td>
+    <td class="nowrap">${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td>${tokensInline(tk)}<td class="muted nowrap">${esc(bonus) || "—"}</td><td class="muted nowrap">${bdi(tk.note || "")}</td>
+    <td class="nowrap"><div class="row-actions" style="flex-wrap:nowrap">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
       ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${tk.id}" data-tip="act_ticket_cancel">${t("app.cancel_ticket")}</button>` : ""}</div></td></tr>`;
+}
+// A free trial claimed or granted but not started: no pass yet, so no period, price or use; Cancel takes the claim back.
+function claimRow(c) {
+  const none = `<td class="r muted">—</td>`;
+  return `<tr><td><b>${bdi(c.user_name)}</b></td>
+    <td class="nowrap">${tierName(c.tier, c.label || c.tier)} <span class="muted">${fmtShare(c.share_pct)}</span></td>
+    <td class="nowrap muted">${t("tk.trial_start_by", { date: fmtDate(c.expires_at) })}</td><td class="muted">—</td><td class="nowrap">${fmtDurLong(c.duration_min * 60)}</td>${none}
+    <td class="nowrap">${stateBadge("waiting")}</td>${none}${none}<td class="muted">—</td><td class="muted nowrap">${c.granted_by_name ? t("tk.trial_granted_by", { name: bdi(c.granted_by_name) }) : t("tk.trial_self")}</td>
+    <td class="nowrap"><div class="row-actions" style="flex-wrap:nowrap"><button class="btn small danger" data-cact="${c.id}">${t("app.cancel_ticket")}</button></div></td></tr>`;
+}
+async function cancelClaim(c) {
+  if (!c || !confirmInline(t("tk.confirm_cancel_trial", { name: iso(c.user_name) }))) return;
+  try {
+    await api(`/api/admin/trial-claims/${c.id}/cancel`, { method: "POST", body: {} });
+    render();
+  } catch (e) { alertInline(e.message); }
 }
 async function ticketAction(act, tk, list) {
   if (act === "bonus") return bonusDialog(tk, list);

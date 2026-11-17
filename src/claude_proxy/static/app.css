@@ -393,7 +393,7 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
 .pricing .data td { vertical-align: top; }
 
 .badge.state-active { border-color: var(--good); color: var(--good-text); }
-.badge.state-queued, .badge.state-upcoming { border-color: var(--s1); color: var(--s1); }
+.badge.state-queued, .badge.state-upcoming, .badge.state-waiting { border-color: var(--s1); color: var(--s1); }
 .num.over { color: var(--critical-text); }
 .badge.state-used_up { border-color: var(--warning); color: var(--ink); }
 .badge.state-cancelled { border-color: var(--critical); color: var(--critical-text); }

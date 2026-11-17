@@ -454,7 +454,9 @@ SCHEMA = [
         expires_at INTEGER NOT NULL,
         granted_by INTEGER,
         ticket_id INTEGER,
-        started_at INTEGER
+        started_at INTEGER,
+        cancelled_at INTEGER,
+        cancelled_by INTEGER
     )""",
     "CREATE INDEX IF NOT EXISTS idx_trial_claims_user ON trial_claims(user_id)",
     "CREATE INDEX IF NOT EXISTS idx_trial_claims_email ON trial_claims(email)",
@@ -635,6 +637,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE referral_units ADD COLUMN source TEXT")
     if "pct" not in _columns(conn, "ticket_discounts"):   # a percentage off the regular price (2026-11-17); NULL: usd is the price
         conn.execute("ALTER TABLE ticket_discounts ADD COLUMN pct REAL")
+    for col in ("cancelled_at", "cancelled_by"):   # an admin's cancel of a trial claim waiting to start (2026-11-17)
+        if col not in _columns(conn, "trial_claims"):
+            conn.execute(f"ALTER TABLE trial_claims ADD COLUMN {col} INTEGER")
     if "trial" not in _columns(conn, "tickets"):   # a free trial pass (2026-11-14): price 0, never upgraded or refunded
         conn.execute("ALTER TABLE tickets ADD COLUMN trial INTEGER NOT NULL DEFAULT 0")
     for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)
