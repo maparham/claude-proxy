@@ -152,7 +152,7 @@ let pageStale = false;
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
   "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_share", "trial_share_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
@@ -3185,11 +3185,26 @@ const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key)
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
           <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td>${showContent ? `<td>${r.has_content ? `<button class="btn small" data-content="${r.id}">${t("req.view")}</button>` : ""}</td>` : ""}</tr>`))}
         </tbody></table>${moreButton(requests.length)}`;
+// The admin's rows carry how many prompts the session holds (prompts.py); the button opens them.
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
-        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td></tr>`;
+        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td>${isAdmin() ? `<td>${s.prompts ? `<button class="btn small" data-prompts="${esc(s.session_id)}" data-user="${esc(s.user_id)}" data-title="${esc(s.title || s.session_id.slice(0, 8))}">${nfFull.format(s.prompts)}</button>` : ""}</td>` : ""}</tr>`;
+document.addEventListener("click", async (e) => {
+  const b = e.target.closest?.("[data-prompts]");
+  if (!b) return;
+  b.disabled = true;
+  try {
+    const d = await api(`/api/sessions/${encodeURIComponent(b.dataset.prompts)}/prompts?user_id=${encodeURIComponent(b.dataset.user)}`);
+    const dlg = openDialog(`<h3>${t("sess.prompts_title")} · ${bdi(b.dataset.title)}</h3>
+      <div class="convo">${d.prompts.map((p) => `<div class="turn"><div class="turn-role">${fmtTime(p.at)}</div><pre dir="auto">${esc(p.text)}</pre></div>`).join("")}</div>
+      <div class="dialog-actions"><button class="btn primary" id="prompts-close">${t("app.close")}</button></div>`);
+    dlg.classList.add("wide");
+    dlg.addEventListener("close", () => dlg.classList.remove("wide"), { once: true });
+    $("#prompts-close", dlg).onclick = () => dlg.close();
+  } finally { b.disabled = false; }
+});
 function sessionsTable(sessions, showUser, fold = false) {
   const rows = sessions.map((s) => sessionRow(s, showUser));
-  return `<table class="data"><thead><tr><th>${t("sess.session")}${tipI("session")}</th>${showUser ? `<th>${t("app.user")}${tipI("sess_user")}</th>` : ""}<th>${t("sess.started")}${tipI("sess_started")}</th><th class="r">${t("sess.duration")}${tipI("sess_duration")}</th><th class="r">${t("metric.requests")}${tipI("sess_requests")}</th><th class="r">${t("models.m_weighted")}${tipI("sess_weighted")}</th><th class="r">${t("models.m_cost")}${tipI("sess_cost")}</th><th>${t("sess.models")}${tipI("sess_models")}</th></tr></thead><tbody>
+  return `<table class="data"><thead><tr><th>${t("sess.session")}${tipI("session")}</th>${showUser ? `<th>${t("app.user")}${tipI("sess_user")}</th>` : ""}<th>${t("sess.started")}${tipI("sess_started")}</th><th class="r">${t("sess.duration")}${tipI("sess_duration")}</th><th class="r">${t("metric.requests")}${tipI("sess_requests")}</th><th class="r">${t("models.m_weighted")}${tipI("sess_weighted")}</th><th class="r">${t("models.m_cost")}${tipI("sess_cost")}</th><th>${t("sess.models")}${tipI("sess_models")}</th>${isAdmin() ? `<th>${t("sess.prompts")}${tipI("sess_prompts")}</th>` : ""}</tr></thead><tbody>
       ${fold ? foldRows(rows) : rows.join("")}
     </tbody></table>${fold ? moreButton(rows.length) : ""}`;
 }

@@ -410,12 +410,14 @@ Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
   `claude-proxy login`; a user's says only that the gateway can't serve Claude right now), and the
   admin's dashboard shows a red banner. A running server picks up
   the new login without a restart.
-- Claude Code's prompts and responses are never stored, only metadata and token counts. The one
-  exception is the short title Claude Code generates for each session, kept so the Requests tab can
-  show sessions by name; the admin and the session's owner can see it. Requests sent with an API key
+- Of a Claude Code session, the gateway keeps metadata, token counts and the prompts the person typed
+  (only the typed text: no tool results, files or images), which only the admin can read, from the
+  Sessions tab. Responses are never stored. It also keeps the short title Claude Code generates for
+  each session, or the start of the first prompt when there is none (gclaude turns that request off),
+  so sessions show by name; the admin and the session's owner can see it. Requests sent with an API key
   by SDKs or curl (no session id) are kept in full, request and reply, for the key's owner and the
-  admin to open in the Requests tab. Requests, quota reports, session titles and request contents
-  older than `retention_days` (default 180) are deleted; contents go then even with `keep_usage`.
+  admin to open in the Requests tab. Requests, quota reports, session titles, prompts and request contents
+  older than `retention_days` (default 180) are deleted; prompts and contents go then even with `keep_usage`.
 - To remove someone, **Revoke** them: their key stops working at once and their usage stays in the
   history. **Delete** (on a revoked user, in the dashboard or `claude-proxy user delete <name>`) also
   removes their recorded usage from totals and charts. Revoking also stops the person's OpenCode key.

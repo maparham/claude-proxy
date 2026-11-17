@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
+from . import api_credit, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -586,11 +586,22 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         titled = {(t["user_id"], t["session_id"]): t["title"] for t in conn.execute(
             f"SELECT user_id, session_id, title FROM session_titles WHERE {where} "
             f"AND session_id IN ({','.join('?' * len(ids))})", (*params, *ids))}
+        # How many prompts each holds, and whose it is, so the admin can open them (prompts.py); no one else is told.
+        kept = {(p["user_id"], p["session_id"]): p["n"] for p in conn.execute(
+            f"SELECT user_id, session_id, COUNT(*) AS n FROM prompts WHERE {where} AND session_id IN ({','.join('?' * len(ids))}) "
+            f"GROUP BY user_id, session_id", (*params, *ids))} if is_admin(user) else {}
         return {"sessions": [{"session_id": r["session_id"], "title": titled.get((r["user_id"], r["session_id"])),
+                              **({"user_id": r["user_id"], "prompts": kept.get((r["user_id"], r["session_id"]), 0)} if is_admin(user) else {}),
                               "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
                               "duration_s": r["last"] - r["first"], "requests": r["n"], "models": (r["models"] or "").split(","),
                               **{k: v for k, v in tot.get(f"{r['user_id']}|{r['session_id']}", usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
                              for r in meta], "more": more}
+
+    @app.get("/api/sessions/{session_id}/prompts")
+    async def session_prompts(request: Request, session_id: str, user_id: int):
+        """What the person typed in one Claude Code session, in order: for the admin only."""
+        admin(request)
+        return {"prompts": prompts.of_session(conn, user_id, session_id)}
 
     @app.get("/api/errors")
     async def errors(request: Request, range: str = "7d", tz_offset: int = 0, user_id: int | None = None,

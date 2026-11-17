@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import api_credit, contents, geo, limits, mail, quota, titles
+from . import api_credit, contents, geo, limits, mail, prompts, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
@@ -188,10 +188,11 @@ def _usage_fresh(conn) -> float | None:
     return conn.execute(USAGE_FRESH_SQL).fetchone()[0]
 
 
-def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> bool:
-    """One request's log row, its API charge, its session title and its content, on a db worker thread; and the address
-    it came from, in the user's IP history (db.note_ip). True when that address is new for the user."""
+def _save(conn, row: dict, title: str | None, content: tuple | None = None, prompt: tuple | None = None) -> bool:
+    """One request's log row, its API charge, its session title, its content and the prompt typed in it, on a db worker
+    thread; and the address it came from, in the user's IP history (db.note_ip). True when that address is new for the user."""
     ip = row.get("ip")
+    rid = None
     try:
         rid = insert_request(conn, **row)
         if content:
@@ -202,6 +203,11 @@ def _save(conn, row: dict, title: str | None, content: tuple | None = None) -> b
             api_credit.charge(conn, row["user_id"], row["api_key_id"], rid, model_, row)
     except Exception:
         logger.exception("could not record request")
+    if prompt and row.get("user_id") and row.get("session_id"):
+        try:
+            prompts.save(conn, row["user_id"], row["session_id"], rid, row["started_at"], *prompt)
+        except Exception:
+            logger.exception("could not record prompt")
     if title:
         try:
             set_session_title(conn, row["user_id"], row["session_id"], title)
@@ -294,13 +300,14 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # trusts it only from 127.0.0.1. A proxy reaching the gateway from elsewhere (a Docker bridge) would be recorded instead.
     base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host[:64] if request.client else None}
     held = False   # this request is counted in `inflight` until it is recorded
+    prompt = None  # what the person typed in this request (prompts.py), kept with its row however it ends
 
     async def record(title: str | None = None, content: tuple | None = None, **kw) -> None:
         # The slot is given back once the row is written, never before: between the two the request would count
         # nowhere, and a burst could pass limits it should not. Shielded, so a client disconnect (which cancels the
         # relay) still records and charges the request and frees its slot.
         nonlocal held
-        fut = gw.db.run(_save, {**base, "ended_at": time.time(), **kw}, title, content)
+        fut = gw.db.run(_save, {**base, "ended_at": time.time(), **kw}, title, content, prompt)
         if held:
             uid = base["user_id"]
             fut.add_done_callback(lambda _: inflight.release(uid))
@@ -333,6 +340,11 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
     client_body = body if contents.wanted(is_api, base["session_id"], request.method, path) else None
+    if not wants_title and prompts.wanted(base["session_id"], request.method, path, request.headers, data):
+        try:
+            prompt = prompts.extract(data)
+        except Exception:   # never affects forwarding
+            logger.exception("could not read the request's prompt")
 
     if is_api and not cfg.api.enabled:
         await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")

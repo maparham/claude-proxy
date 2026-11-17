@@ -123,7 +123,7 @@ SCHEMA = [
         stream INTEGER NOT NULL,
         truncated INTEGER NOT NULL DEFAULT 0
     )""",
-    # Latest title Claude Code gave each of its sessions (titles.py); Claude Code's only conversation content kept.
+    # Latest title Claude Code gave each of its sessions (titles.py), or its first prompt (prompts.py).
     """CREATE TABLE IF NOT EXISTS session_titles (
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
         session_id TEXT NOT NULL,
@@ -131,6 +131,18 @@ SCHEMA = [
         updated_at REAL NOT NULL,
         PRIMARY KEY (user_id, session_id)
     )""",
+    # What the person typed in a Claude Code session (prompts.py), for the admin only; never a reply.
+    """CREATE TABLE IF NOT EXISTS prompts (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        session_id TEXT NOT NULL,
+        request_id INTEGER,         -- the request it arrived in (requests.id)
+        at REAL NOT NULL,
+        seq INTEGER NOT NULL,       -- the turn's place in the conversation: with the text, tells a retry from a repeat
+        text TEXT NOT NULL
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_prompts_session ON prompts(user_id, session_id, id)",
+    "CREATE INDEX IF NOT EXISTS idx_prompts_at ON prompts(at)",
     """CREATE TABLE IF NOT EXISTS sessions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -832,7 +844,7 @@ def delete_user(conn: sqlite3.Connection, user_id: int, actor: int | None = None
                      (user_id,)).rowcount
     # Their Telegram chat and its messages go too (cascade); the FK alone would only unlink the chat.
     conn.execute("DELETE FROM telegram_chats WHERE user_id=?", (user_id,))
-    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits, sessions and titles cascade; tickets keep user_name
+    conn.execute("DELETE FROM users WHERE id=?", (user_id,))   # limits, sessions, titles and prompts cascade; tickets keep user_name
     audit(conn, actor, "delete_user", u["name"], {"anonymized_requests": n})
     return n
 
@@ -895,13 +907,15 @@ def delete_session(conn: sqlite3.Connection, raw_token: str) -> None:
 
 def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = False) -> dict[str, int]:
     """Delete expired sessions and events older than the retention period; with `keep_usage`, only the expired.
-    Request contents go after the retention period even with `keep_usage`: they are what the usage is kept without."""
+    Request contents and prompts go after the retention period even with `keep_usage`: they are what the usage is
+    kept without."""
     now = time.time()
     cutoff = float("-inf") if keep_usage else now - retention_days * 86400
     out = {
         "sessions": conn.execute("DELETE FROM sessions WHERE expires_at<?", (int(now),)).rowcount,
         "request_contents": conn.execute("DELETE FROM request_contents WHERE request_id IN (SELECT id FROM requests "
                                          "WHERE started_at<?)", (now - retention_days * 86400,)).rowcount,
+        "prompts": conn.execute("DELETE FROM prompts WHERE at<?", (now - retention_days * 86400,)).rowcount,
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
         "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
