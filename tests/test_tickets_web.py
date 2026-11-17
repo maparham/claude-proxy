@@ -679,7 +679,8 @@ def test_home_saving_is_hidden_when_nothing_is_saved(tmp_path):
 
 def test_home_shows_a_discount_ribbon(tmp_path):
     r = _run_home(tmp_path, _prices(_tier(week={"usd": 6, "amount": 6, "discount_ends_at": 2_000_000})))
-    assert "−25%" in r["cards"]["week"] and "<s>" in r["cards"]["week"] and "−" not in r["cards"]["month"]
+    assert "25% off" in r["cards"]["week"] and "25% off for " in r["cards"]["week"] and "<s>" in r["cards"]["week"]
+    assert "% off" not in r["cards"]["month"]
 
 
 def test_home_highlights_the_second_tier_only(tmp_path):
