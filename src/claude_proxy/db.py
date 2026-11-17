@@ -129,6 +129,7 @@ SCHEMA = [
         session_id TEXT NOT NULL,
         title TEXT NOT NULL,
         updated_at REAL NOT NULL,
+        from_prompt INTEGER NOT NULL DEFAULT 0,   -- 1: the start of the session's first prompt, not Claude Code's title
         PRIMARY KEY (user_id, session_id)
     )""",
     # What the person typed in a Claude Code session (prompts.py), for the admin only; never a reply.
@@ -537,6 +538,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE requests ADD COLUMN provider TEXT NOT NULL DEFAULT 'anthropic'")
     if "requested_model" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN requested_model TEXT")
+    if "from_prompt" not in _columns(conn, "session_titles"):
+        conn.execute("ALTER TABLE session_titles ADD COLUMN from_prompt INTEGER NOT NULL DEFAULT 0")
+        # Titles prompts.save wrote before the column existed: it gives a title its prompt's own time.
+        conn.execute("UPDATE session_titles SET from_prompt=1 WHERE EXISTS (SELECT 1 FROM prompts p WHERE p.user_id="
+                     "session_titles.user_id AND p.session_id=session_titles.session_id AND p.at=session_titles.updated_at)")
     if "csrf_token" not in _columns(conn, "sessions"):
         conn.execute("ALTER TABLE sessions ADD COLUMN csrf_token TEXT NOT NULL DEFAULT ''")
     if "routes_key_hash" not in _columns(conn, "users"):
@@ -867,7 +873,7 @@ def rename_user(conn: sqlite3.Connection, user_id: int, new: str, actor: int | N
 def set_session_title(conn: sqlite3.Connection, user_id: int, session_id: str, title: str) -> None:
     # Keyed by user too: the session id comes from the client, so one user can never rename another's session.
     conn.execute("INSERT INTO session_titles(user_id, session_id, title, updated_at) VALUES(?,?,?,?) "
-                 "ON CONFLICT(user_id, session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at",
+                 "ON CONFLICT(user_id, session_id) DO UPDATE SET title=excluded.title, updated_at=excluded.updated_at, from_prompt=0",
                  (user_id, session_id, title, time.time()))
 
 
@@ -918,7 +924,9 @@ def cleanup(conn: sqlite3.Connection, retention_days: int, keep_usage: bool = Fa
         "prompts": conn.execute("DELETE FROM prompts WHERE at<?", (now - retention_days * 86400,)).rowcount,
         "requests": conn.execute("DELETE FROM requests WHERE started_at<?", (cutoff,)).rowcount,
         "quota_snapshots": conn.execute("DELETE FROM quota_snapshots WHERE observed_at<?", (cutoff,)).rowcount,
-        "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<?", (cutoff,)).rowcount,
+        # A title taken from a prompt is prompt text: it goes when the prompt does.
+        "session_titles": conn.execute("DELETE FROM session_titles WHERE updated_at<? OR (from_prompt=1 AND updated_at<?)",
+                                       (cutoff, now - retention_days * 86400)).rowcount,
         "user_ips": conn.execute("DELETE FROM user_ips WHERE last_seen<?", (cutoff,)).rowcount,
         "ip_geo": conn.execute("DELETE FROM ip_geo WHERE ip NOT IN (SELECT ip FROM user_ips)").rowcount,
         "device_requests": conn.execute("DELETE FROM device_requests WHERE expires_at<?", (int(now),)).rowcount,

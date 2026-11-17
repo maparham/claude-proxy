@@ -6,8 +6,9 @@ from fastapi.responses import JSONResponse
 
 from claude_proxy import prompts
 from claude_proxy.app import create_app
-from claude_proxy.db import cleanup, create_user, delete_user, revoke
-from claude_proxy.web import create_dashboard_app
+from claude_proxy.db import cleanup, create_session, create_user, delete_user, revoke
+from claude_proxy.db import set_session_title as db_set_title
+from claude_proxy.web import COOKIE, create_dashboard_app
 from tests.conftest import asgi_client, make_gateway, message_json, seed_oauth
 from tests.test_proxy import TITLE_REQ
 
@@ -65,6 +66,39 @@ def test_slash_commands():
              "<local-command-stdout>Compacted</local-command-stdout>\n"]
     assert prompts.extract(body(user(*local, "say bye"))) == (0, "say bye")
     assert prompts.extract(body(user(*local))) is None
+
+
+def test_what_claude_code_adds_is_dropped_whatever_its_shape():
+    kept = lambda *blocks: prompts.extract(body(user(*blocks)))   # noqa: E731
+    # `!cat .env` in bash mode: the command's output is two elements in one block.
+    assert kept("<bash-input>cat .env</bash-input>", "<bash-stdout>AWS_SECRET=abc</bash-stdout><bash-stderr></bash-stderr>") is None
+    assert kept('<system-reminder id="0123">\nfile: SECRET\n</system-reminder id="0123">') is None
+    assert kept('<task-notification id="1">done</task-notification>', "<ide_selection>x = SECRET</ide_selection>") is None
+    assert kept("<system-reminder>\nfile\n</system-reminder>\nfix it") == (0, "fix it")
+    # A file that quotes the closing tag does not end the reminder early.
+    assert kept("<system-reminder>\nResult of calling the Read tool:\na </system-reminder> b SECRET\n</system-reminder>") is None
+    assert kept("<bash-stdout>never closed SECRET") is None
+    for harness in ("[SYSTEM NOTIFICATION - NOT USER INPUT]\nbackground task", "Stop hook feedback: tests failed", "[SUGGESTION MODE: Suggest what the user might type"):
+        assert kept(harness) is None, harness
+    # A reminder that quotes the mid-turn wrapper (this file, read by Claude) is still a reminder.
+    assert kept("<system-reminder>\nResult of calling the Read tool:\nThe user sent a new message while you were working:\nSECRET\n</system-reminder>") is None
+
+
+def test_what_the_person_typed_is_kept_even_when_it_looks_like_markup():
+    kept = lambda *blocks: prompts.extract(body(user(*blocks)))   # noqa: E731
+    assert kept("<div>please center this</div>") == (0, "<div>please center this</div>")
+    mention = "why does <command-name>/foo</command-name> appear in the transcript?"
+    assert kept(mention) == (0, mention)
+    # Older Claude Code puts the command's message first.
+    assert kept("<command-message>review</command-message>\n<command-name>/review</command-name>\n<command-args>x</command-args>") == (0, "/review x")
+
+
+def test_reading_a_prompt_takes_time_in_proportion_to_its_size():
+    for hostile in ("<command-name>x" * 40_000, "<a-b>" * 40_000, "".join(f"<a-{i}></a-{i}>" for i in range(20_000)),
+                    "<system-reminder>" * 20_000 + "</system-reminder>" * 20_000):
+        started = time.perf_counter()
+        prompts.extract(body(user(hostile)))
+        assert time.perf_counter() - started < 0.5, hostile[:20]
 
 
 def test_long_prompts_are_cut_and_titles_are_one_short_line():
@@ -158,6 +192,11 @@ async def test_only_the_admin_reads_prompts(setup):
         got = (await c.get(url, headers=bearer(admin_key))).json()["prompts"]
         assert [p["text"] for p in got] == ["my secret plan"] and got[0]["at"] > 0
         assert (await c.get("/api/sessions/sess-1/prompts?user_id=999", headers=bearer(admin_key))).json() == {"prompts": []}
+        # An admin signed in to the dashboard with a machine's key never acts as an admin.
+        admin_id = conn.execute("SELECT id FROM users WHERE name='admin'").fetchone()[0]
+        kid = conn.execute("INSERT INTO keys(user_id, label, key_hash, key_prefix, created_at) VALUES(?,?,?,?,0)", (admin_id, "laptop", "h", "p")).lastrowid
+        token, _ = create_session(conn, admin_id, key_id=kid)
+        assert (await c.get(url, headers={"Cookie": f"{COOKIE}={token}"})).status_code == 403
         mine = (await c.get("/api/sessions", headers=bearer(key))).json()["sessions"][0]
         assert "prompts" not in mine and "user_id" not in mine and mine["title"] == "my secret plan"
         theirs = (await c.get("/api/sessions", headers=bearer(admin_key))).json()["sessions"][0]
@@ -172,8 +211,12 @@ def test_prompts_go_at_retention_even_when_usage_is_kept_and_with_their_user(db)
     now = time.time()
     prompts.save(conn, uid, "old", None, now - 200 * 86400, 0, "old prompt")
     prompts.save(conn, uid, "new", None, now, 0, "new prompt")
+    db_set_title(conn, uid, "titled", "Claude Code's title")
+    conn.execute("UPDATE session_titles SET updated_at=? WHERE session_id='titled'", (now - 200 * 86400,))
     assert cleanup(conn, 180, keep_usage=True)["prompts"] == 1
     assert [r["text"] for r in conn.execute("SELECT text FROM prompts")] == ["new prompt"]
+    # The old prompt's title was its own text and went with it; Claude Code's title is usage, and stays.
+    assert titles(conn) == {(uid, "new"): "new prompt", (uid, "titled"): "Claude Code's title"}
     revoke(conn, uid)
     delete_user(conn, uid)
     assert conn.execute("SELECT COUNT(*) FROM prompts").fetchone()[0] == 0

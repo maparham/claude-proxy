@@ -587,9 +587,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             f"SELECT user_id, session_id, title FROM session_titles WHERE {where} "
             f"AND session_id IN ({','.join('?' * len(ids))})", (*params, *ids))}
         # How many prompts each holds, and whose it is, so the admin can open them (prompts.py); no one else is told.
+        pairs = [v for r in meta for v in (r["user_id"], r["session_id"])]
         kept = {(p["user_id"], p["session_id"]): p["n"] for p in conn.execute(
-            f"SELECT user_id, session_id, COUNT(*) AS n FROM prompts WHERE {where} AND session_id IN ({','.join('?' * len(ids))}) "
-            f"GROUP BY user_id, session_id", (*params, *ids))} if is_admin(user) else {}
+            f"SELECT user_id, session_id, COUNT(*) AS n FROM prompts WHERE (user_id, session_id) IN (VALUES {','.join(['(?,?)'] * len(meta))}) "
+            f"GROUP BY user_id, session_id", pairs)} if is_admin(user) and meta else {}
         return {"sessions": [{"session_id": r["session_id"], "title": titled.get((r["user_id"], r["session_id"])),
                               **({"user_id": r["user_id"], "prompts": kept.get((r["user_id"], r["session_id"]), 0)} if is_admin(user) else {}),
                               "user": n.get(r["user_id"]), "first": r["first"], "last": r["last"],
@@ -597,7 +598,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                               **{k: v for k, v in tot.get(f"{r['user_id']}|{r['session_id']}", usage.Totals()).to_dict().items() if k in ("raw", "weighted", "cost_usd")}}
                              for r in meta], "more": more}
 
-    @app.get("/api/sessions/{session_id}/prompts")
+    @app.get("/api/sessions/{session_id:path}/prompts")   # the id is the client's own header: it may hold a slash
     async def session_prompts(request: Request, session_id: str, user_id: int):
         """What the person typed in one Claude Code session, in order: for the admin only."""
         admin(request)
