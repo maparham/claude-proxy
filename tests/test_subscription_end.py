@@ -78,3 +78,18 @@ async def test_admin_sets_and_reads_the_end(env):  # noqa: F811
         assert (await c.post("/api/admin/subscription/end", json={"ends_at": int(time.time()) - 10})).status_code == 400
         assert (await c.post("/api/admin/subscription/end", json={"ends_at": ""})).status_code == 200
         assert (await c.get("/api/admin/subscription")).json()["ends_at_set"] is None
+
+
+def test_buyers_see_when_it_is_back_not_the_subscription(db):
+    from claude_proxy import orders
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    end = int(NOW + 5 * DAY + 3 * 3600)
+    tickets.set_subscription_end(conn, end, ids["admin"], now=NOW)
+    lite = next(x for x in tickets.price_table(conn, cfg, NOW, "EUR")["tiers"] if x["tier"] == "lite")["lengths"]
+    assert (lite["week"]["sold_out"], lite["week"]["available_at"]) == (True, end)
+    assert (lite["day"]["sold_out"], lite["day"]["available_at"]) == (False, None)
+    with pytest.raises(orders.OrderError) as e:
+        orders._check_on_sale(conn, cfg, "lite", "week", NOW, None, True)
+    assert str(e.value) == "That pass is sold out; it is available again in 5 days and 3 hours."
+    assert "subscription" not in str(e.value).lower()

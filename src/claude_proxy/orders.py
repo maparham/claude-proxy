@@ -124,6 +124,11 @@ def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str
     if isinstance(miss, tickets.FiveHourFull):
         raise OrderError(409, f"That pass is sold out until the 5-hour reset; try again in "
                               f"{max(1, math.ceil((miss.resets_at - now) / 60))} minutes.")
+    if isinstance(miss, tickets.SubscriptionEnds):   # never name the subscription to a buyer
+        left = max(60, math.ceil(miss.resets_at - now))
+        d, h = divmod(math.ceil(left / 3600), 24)
+        raise OrderError(409, f"That pass is sold out; it is available again in {d} days and {h} hours." if d else
+                              f"That pass is sold out; it is available again in {max(1, h)} hours.")
     if miss is not None:
         raise OrderError(409, "That pass is sold out.")
 

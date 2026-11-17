@@ -255,6 +255,15 @@ class FiveHourFull(CapacityError):
         self.resets_at = resets_at
 
 
+class SubscriptionEnds(CapacityError):
+    """The pass would run past the subscription's end (capacity.check_sub_end); buyers are told only that it is back
+    on sale at `resets_at`, never about the subscription."""
+
+    def __init__(self, message: str, resets_at: float):
+        super().__init__(message)
+        self.resets_at = resets_at
+
+
 class QuoteChanged(TicketError):
     """The price or rate moved between the grant form's preview and the grant."""
 
@@ -1393,8 +1402,9 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                # the USD price with VAT, for a page showing USD beside its own currency
                                "usd_total": round_local(p["usd"], 1, USD_ROUND_TO, vat), "list_usd_total": round_local(p["list_usd"], 1, USD_ROUND_TO, vat),
                                "sold_out": (miss := _misfit(conn, cfg, tid, length, now, None, exclude, ctx_now) if ctx_now.fresh else None) is not None,
-                               # sold out only until Anthropic's 5-hour window resets: when it is back on sale
-                               "available_at": miss.resets_at if isinstance(miss, FiveHourFull) else None,
+                               # sold out only until Anthropic's 5-hour window resets, or the subscription's end
+                               # (when it renews): when it is back on sale
+                               "available_at": miss.resets_at if isinstance(miss, (FiveHourFull, SubscriptionEnds)) else None,
                                "unavailable": not ctx_now.fresh,
                                # a buyer's list: whether one starting at `starts_at` (after their passes) fits too
                                **({"sold_out_later": sold_out(conn, cfg, tid, length, now, starts_at, None, ctx_later)} if later else {})}

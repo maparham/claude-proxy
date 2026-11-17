@@ -330,8 +330,8 @@ def check_sub_end(conn: sqlite3.Connection, week, ends_at: float, now: float) ->
         set_ = tickets.subscription_end_set(conn)
         why = ("" if set_ is not None and set_ > now else " (the weekly reset; no end date is set)" if set_ is None
                else " (the weekly reset; the end date set has passed)")
-        raise tickets.CapacityError(f"The subscription ends {time.strftime('%Y-%m-%d %H:%M', time.gmtime(end))} UTC"
-                                    f"{why}, before this pass would end.")
+        raise tickets.SubscriptionEnds(f"The subscription ends {time.strftime('%Y-%m-%d %H:%M', time.gmtime(end))} UTC"
+                                       f"{why}, before this pass would end.", end)
 
 
 def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
