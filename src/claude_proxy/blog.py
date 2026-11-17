@@ -283,10 +283,10 @@ def card(p: Post, heading: str) -> str:
             f"<p>{html.escape(p.description)}</p></div></a></li>")
 
 
-def latest(n: int = 9) -> str:
-    """The newest posts as a sliding row of cards for the home page (home.js scrolls it), in Persian whichever
+def latest() -> str:
+    """Every post, newest first, as a sliding row of cards for the home page (home.js scrolls it), in Persian whichever
     language the page is shown in."""
-    items = "".join(card(p, "h3") for p in posts()[:n])
+    items = "".join(card(p, "h3") for p in posts())
     if not items:
         return ""
     arrow = '<svg class="ic" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></svg>'
