@@ -292,6 +292,69 @@ def autostart(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -
     return None
 
 
+# ---------- the claim's email (design 2026-11-17) ----------
+
+def _length(minutes: int, lang: str) -> str:
+    """As the dashboard's trialLen: whole hours as hours, else minutes."""
+    n, unit = (minutes // 60, ("hour", "ساعت")) if minutes % 60 == 0 else (minutes, ("minute", "دقیقه"))
+    if lang == "fa":
+        return f"{tickets.fa_num(n)} {unit[1]}"
+    return f"{n} {unit[0]}{'' if n == 1 else 's'}"
+
+
+def claim_mail_text(conn: sqlite3.Connection, cfg: Config, claim: dict, lang: str) -> tuple[str, str]:
+    """(subject, body) for the user once a trial is claimed or granted to them: its length and tier, how it starts,
+    the date it must start by, the discount on a first purchase after it, and the Windows setup every pass mail has."""
+    from . import orders   # here, not at the top: orders imports referrals, which imports tickets, as this module does
+    s = settings(conn, cfg)
+    dash = cfg.listener.dashboard_url.rstrip("/")
+    setup = orders.windows_setup(cfg, {"lang": lang})
+    if lang == "fa":
+        tier = orders.fa_label(cfg, s.tier)
+        lines = [f"آزمایش رایگان شما آماده است: {_length(s.duration_min, 'fa')} با بسته {tier}، بدون پرداخت.", "",
+                 "با اولین درخواست شما در کلاد شروع می‌شود" + (f"، یا وقتی در داشبورد ({dash}) «شروع از الان» را بزنید." if dash else "."),
+                 f"تا {tickets.terms_date(claim['expires_at'], 'fa')} شروعش کنید، وگرنه از دست می‌رود."]
+        if s.follow_pct > 0:
+            lines.append(f"پس از آن، تا {tickets.fa_num(s.follow_days)} روز {tickets.fa_num(f'{s.follow_pct:g}')}٪ تخفیف روی اولین خرید خود دارید.")
+        return "آزمایش رایگان شما آماده است", "\n".join(lines) + "\n" + setup
+    tier = tier_label(cfg, s.tier)
+    lines = [f"Your free trial is ready: {_length(s.duration_min, 'en')} on a {tier} pass, no payment.", "",
+             "It starts with your first request in Claude Code" + (f", or when you press Start now on the dashboard ({dash})." if dash else "."),
+             f"Start it by {tickets.terms_date(claim['expires_at'], 'en')}, or it lapses."]
+    if s.follow_pct > 0:
+        lines.append(f"After it, your first purchase gets {s.follow_pct:g}% off for {s.follow_days} days.")
+    return "Your free trial is ready", "\n".join(lines) + "\n" + setup
+
+
+def _mail_to(user) -> str | None:
+    from . import orders
+    to = (user["email"] or user["name"] or "").strip()
+    return to if orders.EMAIL.match(to) else None
+
+
+async def send_claim_mail(conn: sqlite3.Connection, cfg: Config, claim_id: int, lang: str | None) -> None:
+    """After the claim's response: tell the user their trial is ready. `lang` None (an admin grant): the language of
+    their latest order, else English. No address or no [email]: nothing. A failure is logged and never touches the claim."""
+    import asyncio
+    import logging
+    from . import mail
+    if cfg.email is None:
+        return
+    c = _claim_row(conn, claim_id)
+    user = conn.execute("SELECT * FROM users WHERE id=?", (c["user_id"],)).fetchone() if c["user_id"] else None
+    to = _mail_to(user) if user else None
+    if to is None:
+        return
+    if lang is None:
+        row = conn.execute("SELECT lang FROM orders WHERE user_id=? ORDER BY id DESC LIMIT 1", (user["id"],)).fetchone()
+        lang = row[0] if row else "en"
+    subject, body = claim_mail_text(conn, cfg, c, "fa" if lang == "fa" else "en")
+    try:
+        await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), to, subject, body)
+    except Exception as e:
+        logging.getLogger("claude_proxy").warning("trial claim #%d: mail to %s failed: %s", claim_id, to, e)
+
+
 # ---------- what the pages show ----------
 
 def public_offer(conn: sqlite3.Connection, cfg: Config, now: float) -> dict | None:

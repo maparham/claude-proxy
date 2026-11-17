@@ -121,3 +121,109 @@ def test_trial_settings_card_shows_tier_defaults_empty(tmp_path):
     assert 'name="share_pct" data-init="" value=""' in out          # the tier's own: left empty
     assert 'name="share_5h_pct" data-init="5" value="5"' in out      # set by the admin
     assert '<option value="" selected>' in out                       # tier: the default
+
+
+# ---------- the claim's email (design 2026-11-17) ----------
+
+import asyncio  # noqa: E402
+
+from claude_proxy import mail, web  # noqa: E402
+from claude_proxy.config import EmailConfig  # noqa: E402
+
+
+@pytest.fixture
+def sent(env, monkeypatch):
+    """[email] configured, alice with an account email, mail.send faked: the list of (to, subject, body) sent."""
+    gw, conn, cfg, ids, keys = env
+    cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    cfg.listener.dashboard_url = "https://dash.example.com"
+    cfg.listener.public_url = "https://gw.example.com"
+    conn.execute("UPDATE users SET email='alice@example.com' WHERE id=?", (ids["alice"],))
+    out = []
+    monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: out.append((to, subject, body)))
+    return out
+
+
+async def flush():
+    await asyncio.gather(*list(web._mail_tasks))
+
+
+async def test_claim_mails_the_user(env, sent):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={"lang": "en"})).status_code == 200
+    await flush()
+    [(to, subject, body)] = sent
+    assert to == "alice@example.com" and "free trial" in subject.lower()
+    assert "1 hour" in body and "Lite" in body and "https://dash.example.com" in body and "10%" in body
+    assert "Start now" in body and "https://dash.example.com/install.cmd" in body
+
+
+async def test_claim_mail_in_persian(env, sent):
+    gw, conn, cfg, ids, keys = env
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={"lang": "fa"})).status_code == 200
+    await flush()
+    [(_, subject, body)] = sent
+    assert "آزمایش رایگان" in subject and "کلاد" in body and "۱ ساعت" in body and "Claude Code" not in body
+
+
+async def test_admin_grant_mails_in_the_last_order_language(env, sent):
+    gw, conn, cfg, ids, keys = env
+    conn.execute("INSERT INTO orders(user_id, name, email, tier, length, currency, quoted_amount, quoted_usd, quoted_rate, message, status, admin_mail, buyer_mail, created_at, "
+                 "updated_at, lang) VALUES(?, 'alice', 'alice@example.com', 'lite', 'day', 'USD', 1, 1, 1, '', 'withdrawn', 'off', 'off', 1, 1, 'fa')",
+                 (ids["alice"],))
+    async with admin_client(gw) as c:
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/trial", json={"confirm": True})).status_code == 200
+    await flush()
+    [(to, subject, _)] = sent
+    assert to == "alice@example.com" and "آزمایش رایگان" in subject
+
+
+async def test_admin_grant_mails_in_english_without_orders(env, sent):
+    gw, conn, cfg, ids, keys = env
+    async with admin_client(gw) as c:
+        assert (await c.post(f"/api/admin/users/{ids['alice']}/trial", json={})).status_code == 200
+    await flush()
+    [(_, subject, _)] = sent
+    assert "free trial" in subject.lower()
+
+
+async def test_no_address_no_mail(env, sent):
+    gw, conn, cfg, ids, keys = env
+    conn.execute("UPDATE users SET email=NULL WHERE id=?", (ids["alice"],))
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={})).status_code == 200
+    await flush()
+    assert sent == []
+
+
+async def test_no_mail_without_email_config(env, sent):
+    gw, conn, cfg, ids, keys = env
+    cfg.email = None
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={})).status_code == 200
+    await flush()
+    assert sent == []
+
+
+async def test_mail_failure_keeps_the_claim(env, sent, monkeypatch):
+    gw, conn, cfg, ids, keys = env
+
+    def down(*a, **k):
+        raise OSError("smtp down")
+    monkeypatch.setattr(mail, "send", down)
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={})).status_code == 200
+    await flush()
+    assert conn.execute("SELECT COUNT(*) FROM trial_claims").fetchone()[0] == 1
+
+
+async def test_no_discount_line_at_zero_follow_pct_and_minutes(env, sent):
+    gw, conn, cfg, ids, keys = env
+    trials.set_settings(conn, cfg, ids["admin"], {"follow_pct": 0, "duration_min": 90})
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={})).status_code == 200
+    await flush()
+    [(_, _, body)] = sent
+    assert "90 minutes" in body and "%" not in body

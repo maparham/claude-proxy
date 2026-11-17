@@ -750,7 +750,7 @@ function wireTrial(root, tr) {
         "expired-callback": () => { token = ""; claim.disabled = true; } });
     }).catch(() => { err.textContent = t("app.could_not"); });
   }
-  if (claim) claim.onclick = async () => { if (await apiPost("/api/me/trial/claim", { turnstile_token: token }, err, claim)) render(); };
+  if (claim) claim.onclick = async () => { if (await apiPost("/api/me/trial/claim", { turnstile_token: token, lang: LANG }, err, claim)) render(); };
   if (start) start.onclick = async () => {
     const r = await apiPost("/api/me/trial/start", {}, err, start);
     if (r) { infoInline(t("trial.title"), t("trial.started", { date: fmtShort(r.ends_at) })); render(); }

@@ -1190,6 +1190,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         need_tickets()
         body = await _json(request)
         c = trials.admin_grant(conn, cfg, actor["id"], target_user(uid), time.time(), confirm=bool(body.get("confirm")))
+        if cfg.email is not None:
+            mail.spawn(trials.send_claim_mail(conn, cfg, c["id"], None))   # in the user's last order's language
         return {"ok": True, "expires_at": c["expires_at"]}
 
     @app.get("/api/admin/trial")
@@ -1228,7 +1230,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                                     headers={"Retry-After": "30"}) from e
             if not ok:
                 fail(400, "The verification failed; please try again.")
-        trials.claim(conn, cfg, user, time.time())
+        c = trials.claim(conn, cfg, user, time.time())
+        if cfg.email is not None:
+            mail.spawn(trials.send_claim_mail(conn, cfg, c["id"], "fa" if body.get("lang") == "fa" else "en"))
         return trials.offer(conn, cfg, user, time.time())
 
     @app.post("/api/me/trial/start")
