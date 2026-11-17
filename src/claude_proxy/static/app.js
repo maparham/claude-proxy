@@ -1973,7 +1973,7 @@ async function renderPricing(main) {
         <button class="btn primary" type="submit">${t("pr.create_discount")}</button></form>
       <div class="error" id="disc-err"></div>
       <div class="table-wrap" style="margin-top:12px"><table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.length")}</th><th class="r">USD</th><th>${t("tk.period")}</th><th>${t("tk.state")}</th><th></th></tr></thead><tbody>
-      ${p.discounts.map((x) => `<tr><td>${p.tiers[x.tier] ? tierName(x.tier, p.tiers[x.tier].label) : esc(x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${x.pct != null ? `−${fmtPct(x.pct, Number.isInteger(x.pct) ? 0 : 2)}` : fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
+      ${p.discounts.filter((x) => ["active", "upcoming"].includes(dstate(x))).map((x) => `<tr><td>${p.tiers[x.tier] ? tierName(x.tier, p.tiers[x.tier].label) : esc(x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${x.pct != null ? `−${fmtPct(x.pct, Number.isInteger(x.pct) ? 0 : 2)}` : fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
         <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">${t("app.cancel_ticket")}</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("pr.no_discounts")}</td></tr>`}
       </tbody></table></div></div>
     ${trialSettingsCard(trial, p.tiers)}
