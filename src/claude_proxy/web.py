@@ -566,12 +566,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         src = by_source(source)
         since = time.time() - RANGES.get(range, RANGES["7d"])
         match, mparams = "", ()
-        if q := q.strip():   # a title, a session id prefix, or a user's name
+        if q := q.strip():   # a title, a session id prefix, or a user's name; for the admin, the text of a prompt too
             ids = named(names(), q)
+            in_prompts = ("OR EXISTS (SELECT 1 FROM prompts p WHERE p.user_id=requests.user_id AND p.session_id=requests.session_id "
+                          "AND p.text LIKE ? ESCAPE '\\')") if is_admin(user) else ""
             match = (f"AND (session_id LIKE ? ESCAPE '\\' OR user_id IN ({','.join('?' * len(ids)) or 'NULL'}) OR EXISTS "
                      f"(SELECT 1 FROM session_titles st WHERE st.user_id=requests.user_id AND st.session_id=requests.session_id "
-                     f"AND st.title LIKE ? ESCAPE '\\')) ")
-            mparams = (_like(q, prefix=True), *ids, _like(q))
+                     f"AND st.title LIKE ? ESCAPE '\\') {in_prompts}) ")
+            mparams = (_like(q, prefix=True), *ids, _like(q), *((_like(q),) if is_admin(user) else ()))
         meta = conn.execute(
             f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
             f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "

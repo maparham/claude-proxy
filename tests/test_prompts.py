@@ -206,6 +206,22 @@ async def test_only_the_admin_reads_prompts(setup):
             assert "my secret plan" not in (await c.get(route, headers=bearer(key))).text.replace('"title":"my secret plan"', "")
 
 
+async def test_the_admin_finds_a_session_by_the_text_of_any_of_its_prompts(setup):
+    gw, conn, uid, h, key, admin_key = setup
+    async with asgi_client(create_app(gw)) as c:
+        await c.post("/v1/messages", json=body(user("fix the login")), headers=h)
+        await c.post("/v1/messages", json=body(user("fix the login"), {"role": "assistant", "content": "ok"}, user("then deploy 100% of it")), headers=h)
+        await c.post("/v1/messages", json=body(user("unrelated")), headers={**h, "x-claude-code-session-id": "sess-2"})
+    bearer = lambda k: {"Authorization": f"Bearer {k}"}   # noqa: E731
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        found = lambda k, q: c.get("/api/sessions", params={"q": q}, headers=bearer(k))   # noqa: E731
+        ids = lambda r: [s["session_id"] for s in r.json()["sessions"]]   # noqa: E731
+        assert ids(await found(admin_key, "DEPLOY 100%")) == ["sess-1"]   # a later prompt, not the title; % is literal
+        assert ids(await found(admin_key, "deploy 1_0")) == []
+        assert ids(await found(key, "deploy")) == []                      # the owner searches titles only
+        assert ids(await found(key, "fix the")) == ["sess-1"]
+
+
 def test_prompts_go_at_retention_even_when_usage_is_kept_and_with_their_user(db):
     conn = db[1]
     uid, _ = create_user(conn, "alice")
