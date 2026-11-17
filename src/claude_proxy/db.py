@@ -633,6 +633,8 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE requests ADD COLUMN ip TEXT")
     if "source" not in _columns(conn, "referral_units"):   # 'trial': a free trial's follow-up discount; NULL: earned by referring
         conn.execute("ALTER TABLE referral_units ADD COLUMN source TEXT")
+    if "pct" not in _columns(conn, "ticket_discounts"):   # a percentage off the regular price (2026-11-17); NULL: usd is the price
+        conn.execute("ALTER TABLE ticket_discounts ADD COLUMN pct REAL")
     if "trial" not in _columns(conn, "tickets"):   # a free trial pass (2026-11-14): price 0, never upgraded or refunded
         conn.execute("ALTER TABLE tickets ADD COLUMN trial INTEGER NOT NULL DEFAULT 0")
     for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)

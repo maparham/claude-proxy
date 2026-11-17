@@ -373,16 +373,24 @@ def active_discount(conn: sqlite3.Connection, tier: str, length: str, now: float
 
 
 def create_discount(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, usd, starts_at, ends_at, actor: int | None,
-                    now: float | None = None) -> dict:
+                    now: float | None = None, pct=None) -> dict:
+    """A sale: either a fixed discounted price (`usd`), or with `pct` a percentage off whatever the regular price is
+    while it runs (`usd` is then ignored and stored as the price it gives at creation, for the record)."""
     now = _now(now)
     _check_tier_length(cfg, tier, length)
-    usd = _usd(usd, "The discounted price")
+    regular = regular_price(conn, tier, length)
+    if pct is not None:
+        if isinstance(pct, bool) or not isinstance(pct, (int, float)) or not math.isfinite(pct) or not 0 < pct < 100:
+            raise TicketError("A percentage discount must be above 0 and below 100.")
+        pct = round(float(pct), 2)
+        usd = _pct_price(regular, pct)
+    else:
+        usd = _usd(usd, "The discounted price")
     starts_at, ends_at = int(starts_at), int(ends_at)
     if starts_at >= ends_at:
         raise TicketError("A discount must start before it ends.")
     if ends_at <= now:
         raise TicketError("A discount must end in the future.")
-    regular = regular_price(conn, tier, length)
     if usd >= regular:
         raise TicketError(f"A discount must be below the regular price (${regular:g}).")
     # Interval overlap against every non-cancelled discount of the tier and length, not a check at `now`.
@@ -390,10 +398,16 @@ def create_discount(conn: sqlite3.Connection, cfg: Config, tier: str, length: st
                          "ORDER BY id LIMIT 1", (tier, length, ends_at, starts_at)).fetchone()
     if clash:
         raise TicketError(f"Discount #{clash[0]} already covers part of that period; cancel it first.")
-    cur = conn.execute("INSERT INTO ticket_discounts(tier, length, usd, starts_at, ends_at, created_by, created_at) VALUES(?,?,?,?,?,?,?)",
-                       (tier, length, usd, starts_at, ends_at, actor, now))
-    db.audit(conn, actor, "discount_create", f"{tier}:{length}", {"id": cur.lastrowid, "usd": usd, "starts_at": starts_at, "ends_at": ends_at})
+    cur = conn.execute("INSERT INTO ticket_discounts(tier, length, usd, pct, starts_at, ends_at, created_by, created_at) VALUES(?,?,?,?,?,?,?,?)",
+                       (tier, length, usd, pct, starts_at, ends_at, actor, now))
+    db.audit(conn, actor, "discount_create", f"{tier}:{length}",
+             {"id": cur.lastrowid, "usd": usd, "pct": pct, "starts_at": starts_at, "ends_at": ends_at})
     return dict(conn.execute("SELECT * FROM ticket_discounts WHERE id=?", (cur.lastrowid,)).fetchone())
+
+
+def _pct_price(list_usd: float, pct: float) -> float:
+    """`list_usd` less `pct` percent, to the cent and never below $0.01."""
+    return max(0.01, round(list_usd * (1 - pct / 100), 2))
 
 
 def cancel_discount(conn: sqlite3.Connection, discount_id: int, actor: int | None, now: float | None = None) -> None:
@@ -416,6 +430,8 @@ def price_now(conn: sqlite3.Connection, tier: str, length: str, now: float) -> d
     lowered to or below an active discount is charged as is, and no strike-through is shown."""
     list_usd = regular_price(conn, tier, length)
     d = active_discount(conn, tier, length, now)
+    if d and d.get("pct") is not None:   # a percentage follows the regular price as it is now
+        d["usd"] = _pct_price(list_usd, d["pct"])
     if d and d["usd"] < list_usd:
         return {"list_usd": list_usd, "usd": d["usd"], "discount_id": d["id"], "discount_ends_at": d["ends_at"]}
     return {"list_usd": list_usd, "usd": list_usd, "discount_id": None, "discount_ends_at": None}

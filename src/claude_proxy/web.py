@@ -1450,8 +1450,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         starts_at = _number(body.get("starts_at"), "starts_at (epoch seconds)", whole=True)
         ends_at = _number(body.get("ends_at"), "ends_at (epoch seconds)", whole=True)
+        pct = None if body.get("pct") in (None, "") else _number(body["pct"], "The percentage off")
+        usd = None if pct is not None else _number(body.get("usd"), "The discounted price")
         d = ticket_call(tickets.create_discount, conn, cfg, str(body.get("tier", "")), str(body.get("length", "")),
-                        _number(body.get("usd"), "The discounted price"), starts_at, ends_at, actor["id"])
+                        usd, starts_at, ends_at, actor["id"], pct=pct)
         return {"ok": True, "discount": d}
 
     @app.post("/api/admin/discounts/{did}/cancel")

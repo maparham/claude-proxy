@@ -1966,13 +1966,14 @@ async function renderPricing(main) {
       <form id="f-disc" class="form-grid">
         <label>${t("price.tier")}<select name="tier">${Object.entries(p.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))}</option>`).join("")}</select></label>
         <label>${t("tk.length")}<select name="length">${Object.keys(p.lengths).map((l) => `<option value="${esc(l)}">${lengthName(l)}</option>`).join("")}</select></label>
-        <label>${t("pr.price_usd")}<input type="text" inputmode="decimal" dir="ltr" name="usd" step="0.01" min="0.01" required></label>
+        <label>${t("pr.price_usd")}<input type="text" inputmode="decimal" dir="ltr" name="usd"></label>
+        <label>${t("pr.pct_off")}<input type="text" inputmode="decimal" dir="ltr" name="pct"></label>
         <label>${t("tk.from")}<input type="datetime-local" name="starts_at" value="${toLocal(now)}" required></label>
         <label>${t("tk.until")}<input type="datetime-local" name="ends_at" value="${toLocal(now + 7 * 86400)}" required></label>
         <button class="btn primary" type="submit">${t("pr.create_discount")}</button></form>
       <div class="error" id="disc-err"></div>
       <div class="table-wrap" style="margin-top:12px"><table class="data"><thead><tr><th>${t("price.tier")}</th><th>${t("tk.length")}</th><th class="r">USD</th><th>${t("tk.period")}</th><th>${t("tk.state")}</th><th></th></tr></thead><tbody>
-      ${p.discounts.map((x) => `<tr><td>${p.tiers[x.tier] ? tierName(x.tier, p.tiers[x.tier].label) : esc(x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
+      ${p.discounts.map((x) => `<tr><td>${p.tiers[x.tier] ? tierName(x.tier, p.tiers[x.tier].label) : esc(x.tier)}</td><td>${lengthName(x.length)}</td><td class="r">${x.pct != null ? `−${fmtPct(x.pct, Number.isInteger(x.pct) ? 0 : 2)}` : fmtPrice(x.usd)}</td><td class="nowrap">${fmtDate(x.starts_at)} ${t("app.arrow")} ${fmtDate(x.ends_at)}</td>
         <td>${stateBadge(dstate(x))}</td><td>${dstate(x) === "active" || dstate(x) === "upcoming" ? `<button class="btn small danger" data-dcancel="${x.id}">${t("app.cancel_ticket")}</button>` : ""}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("pr.no_discounts")}</td></tr>`}
       </tbody></table></div></div>
     ${trialSettingsCard(trial, p.tiers)}
@@ -2044,7 +2045,7 @@ async function renderPricing(main) {
       if (changed.length || compares.length) render();
     };
   }
-  $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, usd: num(f.usd.value), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
+  $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; const pct = f.pct.value.trim(); post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, ...(pct ? { pct: num(pct) } : { usd: num(f.usd.value) }), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
   main.querySelectorAll("[data-dcancel]").forEach((b) => (b.onclick = () => post(`/api/admin/discounts/${b.dataset.dcancel}/cancel`, {})));
 }
 

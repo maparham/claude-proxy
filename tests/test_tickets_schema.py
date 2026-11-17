@@ -13,7 +13,7 @@ def cols(conn, table):
 def test_ticket_tables_exist_with_the_spec_columns(db):
     conn = db[1]
     assert cols(conn, "ticket_prices") == {"tier", "length", "usd", "updated_at", "updated_by"}
-    assert cols(conn, "ticket_discounts") == {"id", "tier", "length", "usd", "starts_at", "ends_at", "created_by", "created_at", "cancelled_at"}
+    assert cols(conn, "ticket_discounts") == {"id", "tier", "length", "usd", "starts_at", "ends_at", "created_by", "created_at", "cancelled_at", "pct"}
     assert cols(conn, "fx_rates") == {"id", "currency", "rate", "set_at", "set_by"}
     assert cols(conn, "tickets") >= {"id", "user_id", "user_name", "account_id", "tier", "share_pct", "length", "days", "starts_at",
                                       "ends_at", "list_usd", "usd", "discount_id", "currency", "rate", "amount", "granted_by",

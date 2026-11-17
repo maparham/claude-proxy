@@ -76,6 +76,18 @@ def test_discount_replaces_the_price_while_active(db):
     assert conn.execute("SELECT action, target FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()[:] == ("discount_create", "lite:week")
 
 
+def test_percentage_discount_follows_the_regular_price(db):
+    conn, cfg, ids = seeded(db)
+    d = tickets.create_discount(conn, cfg, "lite", "week", None, NOW, NOW + DAY, ids["admin"], now=NOW, pct=25)
+    assert (d["pct"], d["usd"]) == (25, 6)
+    assert tickets.price_now(conn, "lite", "week", NOW) == {"list_usd": 8, "usd": 6, "discount_id": d["id"], "discount_ends_at": NOW + DAY}
+    tickets.set_price(conn, cfg, "lite", "week", 12, ids["admin"], now=NOW)
+    assert tickets.price_now(conn, "lite", "week", NOW + 1)["usd"] == 9            # 25% off the new regular price
+    for bad in (0, 100, -5, True, float("nan")):
+        with pytest.raises(tickets.TicketError, match="above 0 and below 100"):
+            tickets.create_discount(conn, cfg, "lite", "day", None, NOW, NOW + DAY, ids["admin"], now=NOW, pct=bad)
+
+
 def test_discount_must_be_below_the_regular_price_and_in_the_future(db):
     conn, cfg, ids = seeded(db)
     with pytest.raises(tickets.TicketError, match="below the regular price"):
