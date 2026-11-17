@@ -36,12 +36,13 @@ function money(amount, currency) {
   catch { return `${nf0.format(amount)} ${currency}`; }
 }
 // Clock-style countdown: English keeps its zero-padded "00h 30m"; Persian spells the units out, unpadded.
-function countdown(endsAt) {
+// coarse: days and hours only once a day or more is left ("2 days and 12 hours"), for the offer line.
+function countdown(endsAt, coarse = false) {
   const s = Math.max(0, Math.floor(endsAt - serverNow()));
   const d = Math.floor(s / 86400), h = Math.floor((s % 86400) / 3600), m = Math.floor((s % 3600) / 60);
   const hm = LANG === "fa" ? nf0 : nf2;
   const vars = { d: nf0.format(d), h: hm.format(h), m: hm.format(m) };
-  return t(d ? "home.countdown_full" : "home.countdown", vars);
+  return t(d ? (coarse ? "home.countdown_days" : "home.countdown_full") : "home.countdown", vars);
 }
 // What a week or a month saves against buying the day ticket every day, on the charged prices (discounts count).
 function savePct(t_, len) {
@@ -66,6 +67,16 @@ function shareOfPlan(t_, len) {
 function isFeatured(d, t_, i, len) {
   return d.recommended ? d.recommended.tier === t_.tier && d.recommended.length === len : i === 1;
 }
+// "53% off for 2 days and 12 hours"; without a percentage (list price unknown), only the time left.
+function offerLine(off, endsAt) {
+  const text = countdown(endsAt, true);
+  return off > 0 ? t("home.offer_for", { n: nf0.format(off), text }) : t("home.offer_ends_in", { text });
+}
+// The ticking clock under the offer line, as on the dashboard: "Offer ends in 2d 12h 52m 07s".
+function offerClock(endsAt) {
+  const s = Math.max(0, Math.floor(endsAt - serverNow()));
+  return s ? t(s >= 86400 ? "price.offer_ends" : "price.offer_ends_short", { d: nf0.format(Math.floor(s / 86400)), h: nf2.format(Math.floor((s % 86400) / 3600)), m: nf2.format(Math.floor((s % 3600) / 60)), s: nf2.format(s % 60) }) : t("price.offer_ended");
+}
 function card(t_, i, len, currency) {
   const l = t_.lengths[len];
   const rec = !!data.recommended && isFeatured(data, t_, i, len);
@@ -78,7 +89,8 @@ function card(t_, i, len, currency) {
     ${t_.compare_pct != null ? `<p class="share">${shareOfPlan(t_, len)}</p>` : ""}
     <p class="price">${l.discount_ends_at ? `<s>${esc(money(p.list_amount, currency))}</s> ` : ""}<b>${esc(money(p.amount, currency))}</b></p>
     <p class="per">${t(LENGTHS[len][0])}</p>
-    ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}">${t("home.offer_ends_in", { text: esc(countdown(l.discount_ends_at)) })}</p>` : ""}
+    ${l.discount_ends_at ? `<p class="countdown" data-ends="${l.discount_ends_at}" data-pct="${off}">${offerLine(off, l.discount_ends_at)}</p>
+      <p class="offer-clock" data-ends="${l.discount_ends_at}">${offerClock(l.discount_ends_at)}</p>` : ""}
     ${save > 0 ? `<p class="save">${t("home.save_pct", { n: nf0.format(save) })}</p>` : ""}
     ${l.sold_out && l.available_at ? `<span class="btn get countdown" aria-disabled="true" data-ends="${l.available_at}" data-key="home.available_in">${t("home.available_in", { text: esc(countdown(l.available_at)) })}</span>`
       : l.sold_out || l.unavailable ? `<span class="btn get" aria-disabled="true">${t(l.unavailable ? "home.unavailable" : "home.sold_out")}</span>`
@@ -114,13 +126,14 @@ function render() {
 function tick() {
   if (reloaded) return;
   let ended = null, offer = false;
+  document.querySelectorAll(".offer-clock").forEach((el) => { el.textContent = offerClock(+el.dataset.ends); });
   document.querySelectorAll(".countdown").forEach((el) => {
     const ends = +el.dataset.ends;
     // data-key: a card back on sale at the 5-hour reset counts down with its own words; any countdown's end reloads
     if (ends <= serverNow()) {
       el.textContent = el.dataset.key ? t(el.dataset.key, { text: countdown(ends) }) : t("price.offer_ended");
       if (!reloadedFor(ends)) { ended = ends; offer ||= !el.dataset.key; }
-    } else el.textContent = t(el.dataset.key || "home.offer_ends_in", { text: countdown(ends) });
+    } else el.textContent = el.dataset.key ? t(el.dataset.key, { text: countdown(ends) }) : offerLine(+el.dataset.pct, ends);
   });
   if (ended == null) return;
   reloaded = true; markReloaded(ended);

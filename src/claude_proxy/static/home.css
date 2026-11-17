@@ -123,6 +123,7 @@ html[dir="rtl"] .support-menu { inset-inline: 0 auto; }
 .tier .price s { font-size: 18px; color: var(--muted); }
 .tier .per { margin: 0; font-size: 14px; color: var(--muted); }
 .tier .countdown, .tier .save { margin: 0; font-size: 13px; }
+.tier .offer-clock { margin: 0; font-size: 13px; font-weight: 700; color: var(--s2); font-variant-numeric: tabular-nums; }
 .tier .save { color: var(--good-text); font-weight: 600; }
 .tier .get { margin-top: auto; text-align: center; padding: 9px 12px; font-weight: 600; }
 .tier .get[aria-disabled="true"] { cursor: not-allowed; color: var(--muted); }
