@@ -1530,7 +1530,7 @@ function userRow(u) {
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
-    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? `<div style="font-size:12px"><bdi>${esc(u.last_ip)}</bdi>${u.last_place ? ` · ${esc(fmtPlace(u.last_place))}` : ""}</div>` : ""}</td>
+    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? `<div style="font-size:12px"><bdi title="${esc(u.last_ip)}">${esc(shortIp(u.last_ip))}</bdi>${u.last_place ? `<br>${esc(fmtPlace(u.last_place))}` : ""}</div>` : ""}</td>
     <td>${userActions(u)}</td></tr>`;
 }
 // One "⋯" button per user opening a menu of every action (an auto popover: outside clicks and Escape close it).
@@ -1640,6 +1640,8 @@ function weekCell(w) {
 }
 // A pass's bonus days, from its bonuses: not effective_end - ends_at, which is negative for a pass used up early.
 const bonusDays = (tk) => tk.bonuses.filter((b) => !b.cancelled_at).reduce((n, b) => n + (b.extra_days || 0), 0);
+// An IPv6 address cut to its first four groups (the network part) for narrow cells; the full one is on hover and on the user's page.
+const shortIp = (ip) => { const g = ip.split(":"); return g.length > 4 ? `${g.slice(0, 4).join(":")}:…` : ip; };
 function ticketRow(tk) {
   const live = tk.state === "active" || tk.state === "used_up" || tk.state === "queued";
   const bonus = tk.bonuses.filter((b) => !b.cancelled_at).map((b) => `${b.share_pct ? `+${fmtShare(b.share_pct)}` : ""}${b.share_pct && b.extra_days ? " " : ""}${b.extra_days ? t("tk.plus_days", { n: nf0.format(b.extra_days) }) : ""}`).join(t("app.list_sep"));
