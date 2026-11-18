@@ -1798,7 +1798,7 @@ const I18N = {
     "pk.desktop": "Claude Desktop",
     "pk.desktop_steps": "<ol><li><bdi>Help → Troubleshooting → Enable Developer Mode</bdi>.</li><li><bdi>Developer → Configure Third-Party Inference → Gateway</bdi>.</li><li>در <bdi>Base URL</bdi> آدرس زیر و در <bdi>API key</bdi> کلید اپ خود را بگذارید.</li></ol><p class=\"muted\">به Claude Desktop نسخه 1.2581.0 یا جدیدتر نیاز دارد.</p>",
     "pk.other": "اپ‌های دیگر",
-    "pk.other_steps": "هر اپی که با قالب API شرکت Anthropic کار می‌کند: آدرس پایه و کلید API آن را این‌ها بگذارید.",
+    "pk.other_steps": "هر اپی که با قالب API شرکت Anthropic کار می‌کند: آدرس پایه و کلید API آن را روی این مقادیر بگذارید.",
     "pk.base_url": "آدرس پایه",
     "pk.api_key": "کلید API",
     "pk.your_key": "کلید اپ شما:",

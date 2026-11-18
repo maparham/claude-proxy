@@ -164,7 +164,7 @@ def test_pass_limits_apply(env):
 def test_inflight_and_rpm(env):
     conn, cfg, ids, t = env
     uid = ids["alice"]
-    d = passkeys.evaluate(conn, cfg, uid, SONNET, MSG, inflight=4, pass_inflight=4, now=TNOW)
+    d = passkeys.evaluate(conn, cfg, uid, SONNET, MSG, inflight=4, pass_inflight=4, pass_metered_inflight=4, now=TNOW)
     assert (d.status, d.kind, d.retry_after) == (429, "pass_key_inflight", 1)
     assert d.body["error"]["type"] == "rate_limit_error"
     assert passkeys.evaluate(conn, cfg, uid, SONNET, "/v1/messages/count_tokens", pass_inflight=4, now=TNOW) is None

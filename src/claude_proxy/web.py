@@ -2420,9 +2420,6 @@ def _account_line(conn, user) -> str:
         parts.append(f"key {k['key_prefix']}… for {k['label']}, authorized {time.strftime('%Y-%m-%d', time.gmtime(k['created_at']))}")
     elif user.get("key_scope") == "routes":
         parts.append(f"routes-only key {user['routes_key_prefix']}…")
-    elif user.get("key_scope") == "pass":
-        k = conn.execute("SELECT key_prefix, label FROM pass_keys WHERE id=?", (user["pass_key_id"],)).fetchone()
-        parts.append(f"pass app key {k['key_prefix']}… for {k['label']}")
     elif user.get("key_scope") == "full":
         parts.append(f"key {user['key_prefix']}… (your first key)")
     return " · ".join(parts)

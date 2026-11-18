@@ -95,10 +95,10 @@ def _err(status: int, kind: str, etype: str, msg: str, retry_after: int | None =
 
 
 def evaluate(conn, cfg, user_id: int, model: str | None, path: str, inflight: int = 0, pass_inflight: int = 0,
-             now: float | None = None, served: dict | None = None) -> limits.Decision | None:
+             pass_metered_inflight: int = 0, now: float | None = None, served: dict | None = None) -> limits.Decision | None:
     """None to serve a pass-key request, or the rejection to send. Only a running pass serves it (never hand-set limits,
     never a free trial waiting to start: that starts with Claude Code's first request). `inflight`: the user's requests in
-    flight, Claude Code and apps together; `pass_inflight`: the apps' share. The pass's own limits then apply as to Claude
+    flight, Claude Code and apps together; `pass_inflight`: all the apps' requests in flight (for the rpm); `pass_metered_inflight`: the metered ones (the apps' cap). The pass's own limits then apply as to Claude
     Code, so the apps can never get around them (they share the same use)."""
     now = time.time() if now is None else now
     if not (cfg.tickets.enabled and tickets.is_gated(conn, user_id) and tickets.running(conn, user_id, now)):
@@ -106,7 +106,7 @@ def evaluate(conn, cfg, user_id: int, model: str | None, path: str, inflight: in
     if model is not None and cfg.route_for(model) is not None:
         # limits.evaluate lets a gated user's routed model through on a hand-set cost limit: that would be hand-set limits.
         return _err(403, REJECT_ROUTE, "permission_error", "Pass app keys work with Claude models only.")
-    if path != COUNT_TOKENS_PATH and model is not None and pass_inflight >= PASS_KEY_MAX_INFLIGHT:
+    if path != COUNT_TOKENS_PATH and model is not None and pass_metered_inflight >= PASS_KEY_MAX_INFLIGHT:
         return _err(429, REJECT_INFLIGHT, "rate_limit_error",
                     f"At most {PASS_KEY_MAX_INFLIGHT} requests from app keys may run at once; wait for one to finish.", 1)
     recent = conn.execute("SELECT COUNT(*) FROM requests WHERE user_id=? AND pass_key_id IS NOT NULL AND rejected_by IS NULL "

@@ -113,8 +113,21 @@ async def test_models_list_has_no_routes(penv, anthropic):
     anthropic.queue.append(lambda req: JSONResponse({"data": [{"id": "claude-sonnet-5"}, {"id": "claude-x-1"}], "has_more": False}))
     async with asgi_client(create_app(gw)) as c:
         r = await c.get("/v1/models", headers=h)
-    assert r.status_code == 200 and [m["id"] for m in r.json()["data"]] == ["claude-sonnet-5", "claude-x-1"]
+    assert r.status_code == 200 and [m["id"] for m in r.json()["data"]] == ["claude-sonnet-5"]
     assert last(conn)["pass_key_id"] == kid and slots(gw, ids["alice"]) == (0, 0)
+
+
+async def test_models_list_priced_only_for_pass_key(penv, anthropic):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    assert cfg.pricing.price_for("claude-unpriced-9") is None
+    listing = {"data": [{"id": "claude-sonnet-5"}, {"id": "claude-unpriced-9"}], "has_more": False}
+    anthropic.queue.append(lambda req: JSONResponse(listing))
+    anthropic.queue.append(lambda req: JSONResponse(listing))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.get("/v1/models", headers=h)
+        cc = await c.get("/v1/models", headers=bearer(keys["alice"]))
+    assert [m["id"] for m in r.json()["data"]] == ["claude-sonnet-5"] and r.json()["last_id"] == "claude-sonnet-5"
+    assert [m["id"] for m in cc.json()["data"]][:2] == ["claude-sonnet-5", "claude-unpriced-9"]
 
 
 async def test_contents_kept_without_session(penv, anthropic):
@@ -161,7 +174,7 @@ async def test_inflight_shared(penv, anthropic):
         assert slots(gw, uid) == (passkeys.PASS_KEY_MAX_INFLIGHT + 1, passkeys.PASS_KEY_MAX_INFLIGHT)
         gate.set()
         assert [x.status_code for x in await asyncio.gather(*apps, cc_task)] == [200] * (passkeys.PASS_KEY_MAX_INFLIGHT + 1)
-    assert slots(gw, uid) == (0, 0)
+    assert slots(gw, uid) == (0, 0) and inflight_of(gw, "pass_metered_inflight").get(uid) == 0
     rows = conn.execute("SELECT pass_key_id, ticket_id FROM requests WHERE rejected_by IS NULL AND pass_key_id IS NOT NULL").fetchall()
     assert len(rows) == passkeys.PASS_KEY_MAX_INFLIGHT and all(r["ticket_id"] == t["id"] for r in rows)
 
@@ -182,6 +195,32 @@ async def test_count_tokens_and_models_hold_only_an_app_slot(penv, anthropic):
         assert (await c.post("/v1/messages/count_tokens", json={"model": "claude-sonnet-5", "messages": []}, headers=h)).status_code == 200
         assert (await c.get("/v1/models", headers=h)).status_code == 200
     assert seen == [(0, 1), (0, 1)] and slots(gw, ids["alice"]) == (0, 0)
+
+
+async def test_count_tokens_do_not_use_the_apps_cap(penv, anthropic):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    uid = ids["alice"]
+    gate = asyncio.Event()
+
+    async def held_body(body):
+        await gate.wait()
+        yield json.dumps(body).encode()
+
+    count = {"model": "claude-sonnet-5", "messages": []}
+    anthropic.default = lambda req: StreamingResponse(
+        held_body({"input_tokens": 3} if req["path"].endswith("count_tokens") else message_json("claude-sonnet-5")),
+        media_type="application/json")
+    n = passkeys.PASS_KEY_MAX_INFLIGHT
+    async with asgi_client(create_app(gw)) as c:
+        counts = [asyncio.create_task(c.post("/v1/messages/count_tokens", json=count, headers=h)) for _ in range(n)]
+        await asyncio.sleep(0.1)
+        assert slots(gw, uid) == (0, n) and inflight_of(gw, "pass_metered_inflight").get(uid) == 0
+        msg = asyncio.create_task(c.post("/v1/messages", json=MSG, headers=h))   # not refused by the four counts
+        await asyncio.sleep(0.1)
+        assert inflight_of(gw, "pass_metered_inflight").get(uid) == 1
+        gate.set()
+        assert [x.status_code for x in await asyncio.gather(*counts, msg)] == [200] * (n + 1)
+    assert slots(gw, uid) == (0, 0) and inflight_of(gw, "pass_metered_inflight").get(uid) == 0
 
 
 def test_usage_queries_never_filter_pass_key():
@@ -208,3 +247,4 @@ async def test_slots_released_on_failure(penv, anthropic):
         r = await c.post("/v1/messages", json=MSG, headers=h)
     assert r.status_code == 502 and last(conn)["error_type"] == "gateway_upstream_unreachable"
     assert slots(gw, ids["alice"]) == (0, 0)
+    assert inflight_of(gw, "pass_metered_inflight").get(ids["alice"]) == 0
