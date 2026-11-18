@@ -302,6 +302,23 @@ def test_a_session_already_named_is_left_alone(stub, warn_env, tmp_path):
     assert prompt(name_env(stub, warn_env), transcript=t).stdout == "" and stub.messages == []
 
 
+def test_a_name_carried_over_by_clear_is_replaced(stub, warn_env, tmp_path):
+    """/clear starts a new session but carries the old one's name into it; a name this hook gave another session
+    is not the new session's own, so its first prompt names it afresh. A name the person gave stays."""
+    env = name_env(stub, warn_env)
+    assert "Flaky login test" in prompt(env).stdout
+    t = tmp_path / "s2.jsonl"
+    t.write_text('{"type":"custom-title","customTitle":"Flaky login test","sessionId":"s-2"}\n')
+    stub.title = "Logout redirect bug"
+    assert json.loads(prompt(env, "the logout redirect", session="s-2", transcript=t).stdout)[
+        "hookSpecificOutput"]["sessionTitle"] == "Logout redirect bug"
+    r = run(["sh", str(STATUSLINE), "--warn"], env,   # Claude Code says the name, and it is still the carried one
+            stdin=json.dumps({"session_id": "s-3", "prompt": "x", "session_title": "Logout redirect bug"}))
+    assert "sessionTitle" in r.stdout
+    t.write_text('{"type":"custom-title","customTitle":"Mine","sessionId":"s-4"}\n')
+    assert prompt(env, session="s-4", transcript=t).stdout == "" and len(stub.messages) == 3
+
+
 def test_a_failed_naming_says_nothing_and_tries_again(stub, warn_env):
     env = name_env(stub, warn_env)
     stub.title = None

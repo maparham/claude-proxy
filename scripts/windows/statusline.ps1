@@ -54,13 +54,13 @@ try {
 
   # Session names, as statusline.sh does (see NAMER there): under CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, which
   # gclaude sets, Claude Code names no session, so --warn names it at its first typed prompt, with the gateway's
-  # small model, and hands the name back as sessionTitle. A session already named is left alone; the marker file
+  # small model, and hands the name back as sessionTitle. A session already named is left alone (but not a name /clear carried over from
+  # a session this hook named); the marker file
   # counts the tries (three at most, "done" once named), and naming is skipped when the status fetch failed.
   function Name-Session {
     $j = $stdin | ConvertFrom-Json
     $sid = [string]$j.session_id; $prompt = [string]$j.prompt; $path = [string]$j.transcript_path
     if (-not $sid -or -not $prompt.Trim() -or $prompt.TrimStart().StartsWith('/')) { return '' }
-    if (([string]$j.session_title).Trim()) { return '' }
     $marks = Join-Path ([IO.Path]::GetTempPath()) 'claude-gateway-titles'
     $name = $sid -replace '[^A-Za-z0-9_-]', ''
     if ($name.Length -gt 100) { $name = $name.Substring(0, 100) }
@@ -69,10 +69,23 @@ try {
     [void](New-Item -ItemType Directory -Force -Path $marks)
     $tries = ''
     if (Test-Path -LiteralPath $mark) { $tries = [IO.File]::ReadAllText($mark) }
-    if ($tries -eq 'done' -or $tries.Length -ge 3) { return '' }
-    if (-not $tries -and $path -and (Test-Path -LiteralPath $path -PathType Leaf) -and
-        (Select-String -LiteralPath $path -SimpleMatch -Pattern '"type":"custom-title"', '"type":"ai-title"' -Quiet)) {
-      [IO.File]::WriteAllText($mark, 'done'); return ''
+    if ($tries.StartsWith('done') -or $tries.Length -ge 3) { return '' }
+    $named = $null
+    if ($j.session_title -is [string]) { $named = $j.session_title }
+    elseif ($path -and (Test-Path -LiteralPath $path -PathType Leaf)) {
+      foreach ($m in @(Select-String -LiteralPath $path -SimpleMatch -Pattern '"type":"custom-title"', '"type":"ai-title"')) {
+        $named = '?'
+        try { $e = $m.Line | ConvertFrom-Json; if ($e.customTitle) { $named = [string]$e.customTitle } elseif ($e.aiTitle) { $named = [string]$e.aiTitle } } catch { }
+      }
+    }
+    # /clear carries the old session's name into the new one: a name this hook gave another session is not this one's
+    $inherited = $false
+    if ($named -and $named.Trim()) {
+      $want = "done`n" + $named.Trim()
+      foreach ($f in @(Get-ChildItem -LiteralPath $marks -File -ErrorAction SilentlyContinue)) {
+        if ($f.Name -ne $name -and [IO.File]::ReadAllText($f.FullName) -eq $want) { $inherited = $true; break }
+      }
+      if (-not $inherited) { [IO.File]::WriteAllText($mark, 'done'); return '' }
     }
     [IO.File]::WriteAllText($mark, $tries + 'x')   # counted before the call: a hook stopped at its timeout counts too
     $text = $prompt.Trim()
@@ -101,7 +114,7 @@ try {
       return ''   # tried again at the next prompt, up to three times
     }
     if ($title.Length -gt 80) { $title = $title.Substring(0, 80) }
-    if ($title) { [IO.File]::WriteAllText($mark, 'done') }
+    if ($title) { [IO.File]::WriteAllText($mark, "done`n" + $title) }
     return $title
   }
   $gatewayDown = $false

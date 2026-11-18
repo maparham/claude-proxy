@@ -63,7 +63,9 @@ own_line() { [ -n "$then" ] && printf '%s' "$input" | CLAUDE_GATEWAY_STATUS_INNE
 # gateway) also stops Claude Code naming its sessions, so /resume listed them unnamed. Under it, --warn names the
 # session at its first prompt instead: the gateway's small model writes the name, asked the way Claude Code asks
 # (the gateway keeps it for the dashboard too), and the hook gives it back as sessionTitle. A session already named
-# (resumed, or /rename) is left alone, and a slash command waits for a typed prompt. The marker file counts the
+# (resumed, or /rename) is left alone, and a slash command waits for a typed prompt. /clear carries the old
+# session name into the new one, so a name this hook gave another session (kept in that session marker, "done"
+# and the name) is not taken as this one's. The marker file counts the
 # tries ("x" each, "done" once named): three at most, each counted before it is made, so a hook stopped at its
 # timeout mid-call counts too. Naming comes after the status fetch and is skipped when that failed (the gateway
 # down), so the hook stays within its 10 s: 3 s for the status, 4 s here.
@@ -77,25 +79,41 @@ d = json.loads(sys.stdin.read())
 sid, prompt, path = d.get("session_id"), d.get("prompt"), d.get("transcript_path")
 if not (isinstance(sid, str) and sid and isinstance(prompt, str) and prompt.strip()) or prompt.lstrip().startswith("/"):
     sys.exit()
-if isinstance(d.get("session_title"), str) and d["session_title"].strip():
-    sys.exit()
 marks = os.path.join(tempfile.gettempdir(), "claude-gateway-titles.%d" % os.getuid())
 mark = os.path.join(marks, "".join(c for c in sid if c.isalnum() or c in "-_")[:100])
 os.makedirs(marks, 0o700, exist_ok=True)
 try:
-    tries = open(mark).read()
+    tries = open(mark, encoding="utf-8", errors="replace").read()
 except OSError:
     tries = ""
-if tries == "done" or len(tries) >= 3:
+if tries.startswith("done") or len(tries) >= 3:
     sys.exit()
 def mark_as(s):
-    with open(mark, "w") as f:
+    with open(mark, "w", encoding="utf-8") as f:
         f.write(s)
-if not tries and isinstance(path, str) and os.path.isfile(path):
+named = d.get("session_title") if isinstance(d.get("session_title"), str) else None
+if named is None and isinstance(path, str) and os.path.isfile(path):
     with open(path, "rb") as f:
-        if any(b"\"type\":\"custom-title\"" in l or b"\"type\":\"ai-title\"" in l for l in f):
-            mark_as("done")
-            sys.exit()
+        for l in f:
+            if b"\"type\":\"custom-title\"" in l or b"\"type\":\"ai-title\"" in l:
+                try:
+                    e = json.loads(l)
+                    named = e.get("customTitle") or e.get("aiTitle") or "?"
+                except ValueError:
+                    named = "?"
+def ours_elsewhere(t):   # /clear carries the old session name into the new one: a name this hook gave another session
+    try:
+        for n in os.listdir(marks):
+            if n != os.path.basename(mark):
+                with open(os.path.join(marks, n), encoding="utf-8", errors="replace") as f:
+                    if f.read() == "done\n" + t:
+                        return True
+    except OSError:
+        pass
+    return False
+if named and named.strip() and not ours_elsewhere(named.strip()):
+    mark_as("done")
+    sys.exit()
 mark_as(tries + "x")
 text = prompt.strip()
 if len(text) > 4000:
@@ -125,7 +143,7 @@ except Exception:
     sys.exit()   # tried again at the next prompt, up to three times
 title = " ".join(title.split())[:80] if isinstance(title, str) else ""
 if title:
-    mark_as("done")
+    mark_as("done\n" + title)
     print(title)
 '
 title=
