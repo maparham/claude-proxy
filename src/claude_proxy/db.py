@@ -345,6 +345,18 @@ SCHEMA = [
         revoked_at INTEGER
     )""",
     "CREATE INDEX IF NOT EXISTS idx_api_keys_user ON api_keys(user_id)",
+    # Pass app keys (design 2026-11-18): any Anthropic-format app on a running pass.
+    """CREATE TABLE IF NOT EXISTS pass_keys (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        key_hash TEXT NOT NULL UNIQUE,
+        key_prefix TEXT NOT NULL,
+        label TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_used_at INTEGER,
+        revoked_at INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_pass_keys_user ON pass_keys(user_id)",
     # USD per million tokens per model glob; the longest matching pattern wins.
     """CREATE TABLE IF NOT EXISTS api_rates (
         pattern TEXT PRIMARY KEY,
@@ -591,6 +603,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "api_key_id" not in _columns(conn, "requests"):
         conn.execute("ALTER TABLE requests ADD COLUMN api_key_id INTEGER")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_api_key ON requests(api_key_id, started_at)")
+    if "pass_key_id" not in _columns(conn, "requests"):
+        conn.execute("ALTER TABLE requests ADD COLUMN pass_key_id INTEGER")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_pass_key ON requests(pass_key_id, started_at)")
     if "ticket_id" not in _columns(conn, "requests"):
         # The pass that served the request (2026-10-28): each pass's limits count only its own requests, as if another
         # user held it. Requests from before go to the pass that covered them, the earliest when passes ran side by side.
@@ -680,6 +695,7 @@ def hash_key(raw: str) -> str:
 FULL_KEY_PREFIX = "sk-proxy-"
 ROUTES_KEY_PREFIX = "sk-proxy-r-"   # only for people to tell the keys apart; scope comes from the column that matched
 API_KEY_PREFIX = "sk-proxy-a-"      # an API key (2026-10-21): Claude Code billed per token against prepaid credit
+PASS_KEY_PREFIX = "sk-proxy-p-"     # a pass app key (2026-11-18): any Anthropic-format app, served while the user's pass runs
 
 
 
@@ -705,7 +721,7 @@ def create_user(conn: sqlite3.Connection, name: str, role: str = "user", passwor
 
 def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
     """The user a gateway key belongs to, with `key_scope`: "full" for their Claude Code key or a machine's key,
-    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows), "api" for an API key."""
+    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows), "api" for an API key, "pass" for a pass app key."""
     h = hash_key(raw_key)
     row = conn.execute("SELECT * FROM users WHERE key_hash=? OR routes_key_hash=?", (h, h)).fetchone()
     if row is not None:
@@ -718,6 +734,14 @@ def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
             conn.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, a["id"]))
         # Never admin powers, like a machine key: an API key is handed to tools and pasted into config files.
         return {**dict(row), "key_scope": "api", "role": "user", "api_key_id": a["id"]}
+    p = conn.execute("SELECT id, user_id, last_used_at FROM pass_keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
+    if p is not None:
+        row = conn.execute("SELECT * FROM users WHERE id=?", (p["user_id"],)).fetchone()
+        now = int(time.time())
+        if (p["last_used_at"] or 0) < now - 3600:
+            conn.execute("UPDATE pass_keys SET last_used_at=? WHERE id=?", (now, p["id"]))
+        # Never admin powers: like an API key it is pasted into other apps' settings.
+        return {**dict(row), "key_scope": "pass", "role": "user", "pass_key_id": p["id"]}
 
     k = conn.execute("SELECT id, user_id, last_used_at FROM keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
     row = conn.execute("SELECT * FROM users WHERE id=?", (k["user_id"],)).fetchone() if k else None
