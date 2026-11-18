@@ -371,6 +371,21 @@ account or to a new one named after its email. With an `[email]` section (passwo
 an email for each order and the buyer a confirmation that contains nothing they typed. Design:
 `docs/superpowers/specs/2026-10-04-order-requests-design.md`.
 
+### Using a pass in other apps (Claude Desktop)
+
+A pass holder can use their pass in any app that speaks the Anthropic API format. They create a pass app key
+(`sk-proxy-p-…`, shown once; up to 20) on the dashboard's **API** tab, which also lists the keys and their usage per day;
+an admin can make or revoke one on the user's page. To set up Claude Desktop (1.2581.0 or newer):
+
+1. Help → Troubleshooting → Enable Developer Mode.
+2. Developer → Configure Third-Party Inference → Gateway.
+3. Base URL: the gateway's address (`[listener] public_url`); API key: the app key.
+
+Other apps take the same base URL and key. A key works only while its owner has a running pass, and it is counted by
+that pass under every one of its limits (plus at most 4 requests at once and 60 a minute across the user's app keys); it
+reaches Claude models only. Web search, fast mode and the 1M-token context are refused. App traffic shows as **Apps** in
+the source switch on the usage views. Design: `docs/superpowers/specs/2026-11-18-pass-app-keys-design.md`.
+
 ## API keys (pay per token)
 
 With an `[api]` section in the config, a user can run Claude Code (terminal or the VS Code extension) on an API key

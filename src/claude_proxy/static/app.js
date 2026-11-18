@@ -127,10 +127,15 @@ const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
 const METRICS = Object.fromEntries(["weighted", "raw", "cost_usd", "requests"].map((k) => [k, t(`metric.${k}`)]));
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
-// The usage views count CLI requests or API-key ones, by the switch on top of them; everything while API keys are off.
+// The usage views count CLI requests, API-key ones or pass app keys' (Apps), by the switch on top of them; everything
+// while both API keys and passes are off. A source whose feature is off falls back to CLI.
 const BY_SOURCE = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|users)(\?|$)/;
-const apiView = () => S.api?.enabled && S.prefs.source === "api";
-const withSource = (path) => (S.api?.enabled && BY_SOURCE.test(path) ? `${path}${path.includes("?") ? "&" : "?"}source=${S.prefs.source}` : path);
+const sourcesOn = () => ["cli", ...(S.api?.enabled ? ["api"] : []), ...(S.tickets?.enabled ? ["apps"] : [])];
+const source = () => (sourcesOn().includes(S.prefs.source) ? S.prefs.source : "cli");
+const apiView = () => source() === "api";
+// Requests made with a key (API or app) rather than from Claude Code: listed one by one, with the key's name.
+const keyView = () => source() !== "cli";
+const withSource = (path) => (sourcesOn().length > 1 && BY_SOURCE.test(path) ? `${path}${path.includes("?") ? "&" : "?"}source=${source()}` : path);
 
 async function api(path, opts = {}) {
   if (!opts.method || opts.method === "GET") path = withSource(path);
@@ -152,7 +157,7 @@ let pageStale = false;
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
   "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_share", "trial_share_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
@@ -499,7 +504,7 @@ const VIEWS = {
   orders: { render: renderOrders, admin: true, feature: "tickets" },
   pricing: { render: renderPricing, admin: true, feature: "tickets" },
   referrals: { render: renderReferrals, admin: true, feature: "tickets" },
-  api: { render: renderApi, feature: "api" },
+  api: { render: renderApi, feature: "api_or_tickets" },
   authorize: { render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { render: renderQuota, admin: true },
   accounts: { render: renderAccounts, admin: true },
@@ -511,8 +516,9 @@ const VIEWS = {
   user: { render: renderUser, admin: true, hidden: true, parent: "users" },   // #user/<id>, opened from Users & limits
 };
 const isAdmin = () => S.user && S.user.role === "admin";
-// A view's feature is "tickets" or "api": on when that config section is.
-const featureOn = (v) => !v.feature || (v.feature === "api" ? S.api?.enabled : S.tickets?.enabled);
+// A view's feature is "tickets" or "api": on when that config section is; "api_or_tickets" when either is (the API tab
+// holds the credit keys and the pass app keys).
+const featureOn = (v) => !v.feature || (v.feature === "api" ? S.api?.enabled : v.feature === "tickets" ? S.tickets?.enabled : S.api?.enabled || S.tickets?.enabled);
 
 function renderTabs() {
   const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && featureOn(v));
@@ -548,12 +554,12 @@ function subTabs(main, view) {
   };
   show(panes.some((p) => p.dataset.sub === S.sub[view]) ? S.sub[view] : panes[0].dataset.sub);
 }
-// CLI | API on the usage views, first in the view's controls row; the views' calls carry it (withSource).
+// CLI | API | Apps on the usage views, first in the view's controls row; the views' calls carry it (withSource).
 const SOURCE_VIEWS = new Set(["overview", "usage", "users", "user", "models", "activity", "sessions", "errors"]);
 function sourceSwitch(main, view) {
-  if (!S.api?.enabled || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
+  if (sourcesOn().length < 2 || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
   const box = document.createElement("span");
-  box.innerHTML = seg("source", [["cli", t("source.cli"), "source:cli"], ["api", t("source.api"), "source:api"]], S.prefs.source);
+  box.innerHTML = seg("source", sourcesOn().map((k) => [k, t(`source.${k}`), `source:${k}`]), source());
   // No controls row and no lede (a new buyer's overview, with nothing used yet): no switch.
   const row = main.querySelector(".controls"), lede = main.querySelector(".lede");
   if (!row && !lede) return;
@@ -2288,13 +2294,20 @@ async function apiPost(path, body, errEl, btn) {
 const numv = (v) => num(String(v ?? "").replace(/\u2212/g, "-"));   // the page prints negatives with U+2212
 const badNum = (vals, errEl) => (vals.some(Number.isNaN) ? (errEl ? (errEl.textContent = t("api.bad_number")) : alertInline(t("api.bad_number")), true) : false);
 
+// The API tab: the credit part while [api] is on, the pass app keys card while passes are on.
 async function renderApi(main) {
   // The zone name lets usage days follow clock changes; the offset is the fallback for a zone the server doesn't know.
   const tz = new URLSearchParams({ tz_offset_s: -new Date().getTimezoneOffset() * 60, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" });
-  const me = await api(`/api/me/api?${tz}`);
+  const [me, pk] = await Promise.all([S.api?.enabled ? api(`/api/me/api?${tz}`) : null, S.tickets?.enabled ? api(`/api/me/passkeys?${tz}`) : null]);
+  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>${me ? apiCreditHtml(me) : ""}${pk ? passKeysCard(pk) : ""}</section>`;
+  if (me) wireApiCredit(main);
+  if (pk) wirePassKeys(main);
+  wireMore(main);
+}
+function apiCreditHtml(me) {
   const keyName = Object.fromEntries(me.keys.map((k) => [k.id, k.label]));
   const env = me.base_url ? `ANTHROPIC_BASE_URL=${me.base_url}\nANTHROPIC_API_KEY=sk-proxy-a-…` : t("api.no_base_url");
-  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>
+  return `
     <p class="lede">${t("api.lede")}</p>
     <div class="grid cols-2">
       <div class="card tile"><div class="label">${t("api.balance")}</div><div class="value num ${me.balance <= 0 ? "critical" : ""}">${fmtSigned(me.balance)}</div>
@@ -2316,18 +2329,58 @@ async function renderApi(main) {
         <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`)) || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
       </tbody></table>${moreButton(me.usage.length)}</div></div>
     ${isAdmin() ? "" : `<div class="card" data-sub="rates" data-sub-label="${esc(t("sub.rates"))}" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
-      <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}
-  </section>`;
-
+      <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}`;
+}
+function wireApiCredit(main) {
   $("#f-akey").onsubmit = async (e) => {
     e.preventDefault();
     const r = await apiPost("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"), e.submitter);
     if (r) { await render(); keyDialog(t("api.new_key"), r.key, t("api.key_how")); }
   };
-  wireMore(main);
   main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
     if (!confirm(t("api.revoke_confirm"))) return;
     if (await apiPost(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {}, null, b)) render();
+  }));
+}
+
+// ---------- pass app keys (design 2026-11-18): any Anthropic-format app (Claude Desktop) on the running pass ----------
+
+// The keys table, the user's own (Task 4's /api/me/passkeys) or, on a user's page, the admin's view of theirs.
+const passKeysTable = (keys) => `<div class="table-wrap"><table class="data"><thead><tr><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
+  ${keys.map((k) => `<tr><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
+    <td><button class="btn small danger" data-pkrevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">${t("pk.no_keys")}</td></tr>`}
+  </tbody></table></div>`;
+const passKeyForm = () => `<form id="f-pkey" class="form-grid"><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("pk.label_eg"))}"></label>
+  <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="pkey-err"></div>`;
+function passKeysCard(pk) {
+  const keyName = Object.fromEntries(pk.keys.map((k) => [k.id, k.label]));
+  const base = pk.base_url ? `<code dir="ltr" class="key">${esc(pk.base_url)}</code>` : `<p class="muted">${t("api.no_base_url")}</p>`;
+  return `<div class="card" data-sub="apps" data-sub-label="${esc(t("pk.title"))}" style="margin-top:16px"><h3>${t("pk.title")}</h3>
+    <p class="sub">${t("pk.lede")}</p><p class="sub">${t("pk.note")}</p>
+    ${passKeyForm()}
+    ${passKeysTable(pk.keys)}
+    <h3 style="margin-top:16px">${t("pk.setup")}</h3>
+    <div class="grid cols-2">
+      <div><h4>${t("pk.desktop")}</h4>${t("pk.desktop_steps")}<p>${t("pk.base_url")}</p>${base}</div>
+      <div><h4>${t("pk.other")}</h4><p>${t("pk.other_steps")}</p><p>${t("pk.base_url")}</p>${base}<p>${t("pk.api_key")}</p><p>${t("pk.your_key")} <code dir="ltr">sk-proxy-p-…</code></p></div>
+    </div>
+    <h3 style="margin-top:16px">${t("pk.usage")}</h3>
+    <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.day")}</th><th>${t("api.key_label")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("pk.cache_w")}</th><th class="r">${t("api.cr")}</th></tr></thead><tbody>
+    ${foldRows(pk.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.pass_key_id] != null ? bdi(keyName[u.pass_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
+      <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input_tokens)}</td><td class="r num">${fmtNum(u.output_tokens)}</td><td class="r num">${fmtNum(u.cache_write_tokens)}</td><td class="r num">${fmtNum(u.cache_read_tokens)}</td></tr>`)) || `<tr><td colspan="7" class="muted">${t("api.no_usage")}</td></tr>`}
+    </tbody></table>${moreButton(pk.usage.length)}</div></div>`;
+}
+// `user`: an admin making and revoking another user's keys on their page; without it, the user's own.
+function wirePassKeys(main, user) {
+  $("#f-pkey", main).onsubmit = async (e) => {
+    e.preventDefault();
+    const label = e.target.label.value;
+    const r = await apiPost(user ? "/api/admin/passkeys" : "/api/me/passkeys", user ? { user: user.id, label } : { label }, $("#pkey-err", main), e.submitter);
+    if (r) { await render(); user ? keyDialog(t("pk.new_key_for", { name: bdi(r.name) }), r.key, t("pk.key_how_admin")) : keyDialog(t("pk.new_key"), r.key, t("pk.key_how")); }
+  };
+  main.querySelectorAll("[data-pkrevoke]").forEach((b) => (b.onclick = async () => {
+    if (!confirm(t("pk.revoke_confirm"))) return;
+    if (await apiPost(user ? `/api/admin/passkeys/${b.dataset.pkrevoke}/revoke` : `/api/me/passkeys/${b.dataset.pkrevoke}/revoke`, {}, null, b)) render();
   }));
 }
 
@@ -2877,10 +2930,11 @@ async function renderUser(main) {
     main.innerHTML = `<section class="view"><p><a href="#users">${t("user.back")}</a></p><p class="muted">${t("user.gone")}</p></section>`;
     return;
   }
-  const [ov, series, models, heat, sess, errs, reqs, keys, ips] = await Promise.all([
+  const [ov, series, models, heat, sess, errs, reqs, keys, ips, pk] = await Promise.all([
     api(`/api/overview?user_id=${id}`), api(`/api/series?range=${range}&granularity=${gran}&split=model&${q}`),
     api(`/api/models?range=${range}&${q}`), api(`/api/heatmap?range=${range}&${q}`), api(`/api/sessions?range=${range}&${q}`),
-    api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`), api(`/api/keys?user_id=${id}`), api(`/api/admin/users/${id}/ips`)]);
+    api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`), api(`/api/keys?user_id=${id}`), api(`/api/admin/users/${id}/ips`),
+    S.tickets?.enabled ? api(`/api/admin/users/${id}/passkeys`) : null]);
   const tot = ov.totals[period];
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
   const share = (b) => `<div class="card tile"><div class="label">${t("user.est_share", { bucket: t(`quota.bucket_${b}`) })}${tipI("share")}</div>
@@ -2916,6 +2970,8 @@ async function renderUser(main) {
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("sess.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.recent_requests")}${tipI("recent_requests")} <span class="badge">${nfFull.format(reqs.requests.length)}</span></h3></summary><p class="sub">${plural("user.last_n", reqs.requests.length, { n: nfFull.format(reqs.requests.length) })}</p>${reqs.requests.length ? requestsTable(reqs.requests, false) : `<p class="muted">${t("user.no_requests")}</p>`}</details>
       ${machinesCard(keys.keys, null, u.name)}
+      ${pk ? `<details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("pk.title")} <span class="badge">${nfFull.format(pk.keys.length)}</span></h3></summary><p class="sub">${t("pk.admin_sub")}</p>
+        ${passKeyForm()}${passKeysTable(pk.keys)}</details>` : ""}
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("user.ips")}${tipI("user_ips")} <span class="badge">${nfFull.format(ips.ips.length)}${ips.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.ips_sub")}</p>${ips.ips.length ? `<table class="data"><thead><tr><th>${t("user.ip")}</th><th>${t("user.ip_place")}</th><th>${t("user.ip_source")}</th><th>${t("user.ip_first")}</th><th>${t("user.ip_last")}</th><th class="r">${t("user.ip_count")}</th></tr></thead><tbody>
         ${ips.ips.map((r) => `<tr><td><bdi class="nowrap">${esc(r.ip)}</bdi></td><td>${r.country ? esc(fmtPlace(r)) : "—"}</td><td>${t(`user.ip_src_${r.source}`)}</td><td class="nowrap">${fmtDate(r.first_seen)}</td><td class="nowrap">${fmtAgo(r.last_seen)}</td><td class="r">${nfFull.format(r.count)}</td></tr>`).join("")}
         </tbody></table>` : `<p class="muted">${t("user.no_ips")}</p>`}</details>
@@ -2923,6 +2979,7 @@ async function renderUser(main) {
   wireSegs(main, render);
   wireUserActions(main, users);
   wireMachines(main);
+  if (pk) wirePassKeys(main, u);
   wireMore(main);
   wireContent(main);
   if (series.points.length) stackedTime($("#u-usage"), series.points, "weighted", "model", gran);
@@ -3133,7 +3190,7 @@ function heatmap(el, cells) {
 const SESS_PAGE = 50;
 const API_REQ_PAGE = 200;
 async function renderSessions(main) {
-  if (apiView()) return renderApiRequests(main);
+  if (keyView()) return renderApiRequests(main);
   const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.sessQ || "")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
     <div class="controls">${searchBox("sess-q", S.sessQ, t(isAdmin() ? "sess.search_admin" : "sess.search"))}</div>
@@ -3150,10 +3207,10 @@ async function renderSessions(main) {
   await fill();
 }
 // API keys are used by SDKs and curl, which send no session id, so the API view lists the requests themselves;
-// Claude Code run on an API key does send one, and its sessions come first.
+// Claude Code run on an API key does send one, and its sessions come first. Apps (pass app keys) are listed the same way.
 async function renderApiRequests(main) {
-  const range = S.prefs.range === "1d" ? "1d" : "7d";
-  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_api")} ${t("req.lede_content")}</p>
+  const range = S.prefs.range === "1d" ? "1d" : "7d", apps = source() === "apps";
+  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(apps ? "sess.lede_apps" : "sess.lede_api")} ${t("req.lede_content")}</p>
     <div class="controls">${searchBox("api-q", S.apiQ, t(isAdmin() ? "sess.search_api_admin" : "sess.search_api"))}</div>
     <div id="api-sess"></div><div class="card table-wrap" id="api-list"></div></section>`;
   const fill = latest(async (fresh) => {
@@ -3162,8 +3219,8 @@ async function renderApiRequests(main) {
     if (!fresh()) return;
     $("#api-sess").innerHTML = sess.sessions.length ? `<div class="card table-wrap" style="margin-bottom:16px">${sessionsTable(sess.sessions, isAdmin(), true)}</div>` : "";
     const list = $("#api-list");
-    list.innerHTML = d.requests.length ? `<p class="sub">${plural("sess.api_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
-      : `<p class="muted">${t(S.apiQ ? "search.none" : "sess.api_none")}</p>`;
+    list.innerHTML = d.requests.length ? `<p class="sub">${apps ? plural("sess.apps_last_n", d.requests.length, { n: nfFull.format(d.requests.length) }) : plural("sess.api_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
+      : `<p class="muted">${t(S.apiQ ? "search.none" : apps ? "sess.apps_none" : "sess.api_none")}</p>`;
     wireMore(main);
     wireContent(list);
   });
