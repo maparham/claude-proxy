@@ -2750,6 +2750,8 @@ const ERR_FA = {
   "Give a note of 1-200 characters, such as how it was paid.": "یادداشتی ۱ تا ۲۰۰ نویسه‌ای بنویسید، مثلاً اینکه چطور پرداخت شد.",
   "Name the key in 1-64 characters, such as the computer it is for.": "برای کلید نامی ۱ تا ۶۴ نویسه‌ای بگذارید، مثلاً نام کامپیوتری که برای آن است.",
   "You have 20 API keys already; revoke one first.": "همین حالا ۲۰ کلید API دارید؛ اول یکی را ابطال کنید.",
+  "Name the key in 1-64 characters, such as the app it is for.": "برای کلید نامی ۱ تا ۶۴ نویسه‌ای بگذارید، مثلاً نام اپی که برای آن است.",
+  "You have 20 app keys already; revoke one first.": "همین حالا ۲۰ کلید اپ دارید؛ اول یکی را ابطال کنید.",
   "Concurrent requests must be a whole number from 1 to 10000, or empty for the default.": "تعداد درخواست‌های هم‌زمان باید عدد صحیحی از ۱ تا ۱۰۰۰۰ باشد، یا خالی برای مقدار پیش‌فرض.",
   "Requests per minute must be a whole number from 1 to 10000, or empty for the default.": "تعداد درخواست در دقیقه باید عدد صحیحی از ۱ تا ۱۰۰۰۰ باشد، یا خالی برای مقدار پیش‌فرض.",
   "A computer's key cannot manage API or app keys. Sign in with your first key to manage them.": "کلید یک کامپیوتر نمی‌تواند کلیدهای API یا اپ را مدیریت کند. برای مدیریت آن‌ها با کلید اصلی‌تان وارد شوید.",
