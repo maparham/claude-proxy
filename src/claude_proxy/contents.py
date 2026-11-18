@@ -1,5 +1,5 @@
-"""The full request and reply of API clients' requests (SDKs, curl: an API key, no session id), kept so the key's
-owner and the admin can read them in the Requests tab. Of Claude Code's own traffic only titles (titles.py) and typed prompts (prompts.py) are kept."""
+"""The full request and reply of API clients' requests (SDKs, curl: an API key; apps: a pass app key; no session id
+either way), kept so the key's owner and the admin can read them in the Requests tab. Of Claude Code's own traffic only titles (titles.py) and typed prompts (prompts.py) are kept."""
 from __future__ import annotations
 
 import json

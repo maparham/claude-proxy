@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
+from . import api_credit, passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -83,7 +83,9 @@ def prerender_fa(html: str) -> str:
 COOKIE = "cp_session"
 RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400, "365d": 365 * 86400}
 GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
-SOURCES = {"all": "1=1", "cli": "api_key_id IS NULL", "api": "api_key_id IS NOT NULL"}
+PASS_KEY_REFUSAL = "Pass app keys work only in apps (/v1/messages); sign in to the dashboard instead."
+SOURCES = {"all": "1=1", "cli": "api_key_id IS NULL AND pass_key_id IS NULL", "api": "api_key_id IS NOT NULL",
+           "apps": "pass_key_id IS NOT NULL"}
 BUCKETS = ("5h", "7d")
 IS_ERROR = "(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL)"
 ERROR_KIND = ("CASE WHEN rejected_by = 'auth' THEN 'gateway_auth' WHEN rejected_by = 'request' THEN 'gateway_bad_request' "
@@ -261,6 +263,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 fail(e.status, e.body["error"]["message"])
             if user["key_scope"] == "api":
                 fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
+            if user["key_scope"] == "pass":
+                fail(403, PASS_KEY_REFUSAL)
             # A routes-only key (OpenCode) may read its own status and nothing else, and never acts as an admin.
             if user["key_scope"] != "full" and not (routes_ok and user["key_scope"] == "routes"):
                 fail(403, "This key only works for third-party models; use your Claude Code key for the dashboard.")
@@ -325,6 +329,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(401, "Unknown, disabled or revoked key.")
         if user["key_scope"] == "api":   # a valid key, so not counted as a failed attempt
             fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
+        if user["key_scope"] == "pass":
+            fail(403, PASS_KEY_REFUSAL)
         if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
         return start_session(user, ip, key_id=user.get("machine_key_id"))
@@ -463,9 +469,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return "user_id=?", (user_id,)
 
     def by_source(source: str) -> str:
-        """Requests sent from Claude Code with a gateway key ("cli"), with a pay-per-token API key ("api"), or both."""
+        """Requests sent from Claude Code with a gateway key ("cli"), with a pay-per-token API key ("api"), from an app with a pass app key ("apps"), or all."""
         if source not in SOURCES:
-            fail(400, "source must be all, cli or api")
+            fail(400, "source must be all, cli, api or apps")
         return SOURCES[source]
 
     def quota_view(now: float) -> list[dict]:
@@ -665,19 +671,23 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if q := q.strip():   # a user's name, an API key's label or prefix, or a model
             ids = named(names(), q)
             match = (f"AND (model LIKE ? ESCAPE '\\' OR user_id IN ({','.join('?' * len(ids)) or 'NULL'}) OR api_key_id IN "
-                     f"(SELECT id FROM api_keys WHERE label LIKE ? ESCAPE '\\' OR key_prefix LIKE ? ESCAPE '\\')) ")
-            mparams = (_like(q), *ids, _like(q), _like(q, prefix=True))
+                     f"(SELECT id FROM api_keys WHERE label LIKE ? ESCAPE '\\' OR key_prefix LIKE ? ESCAPE '\\') OR pass_key_id IN "
+                     f"(SELECT id FROM pass_keys WHERE label LIKE ? ESCAPE '\\' OR key_prefix LIKE ? ESCAPE '\\')) ")
+            mparams = (_like(q), *ids, _like(q), _like(q, prefix=True), _like(q), _like(q, prefix=True))
         # The address each came from, and its place: the admin's only, like the users' IP history.
         geo_cols, geo_join = ("requests.ip, g.city, g.region, g.country, ", "LEFT JOIN ip_geo g ON g.ip=requests.ip ") \
             if is_admin(user) else ("", "")
         rows = conn.execute(
-            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, {geo_cols}"
+            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, pass_key_id, {geo_cols}"
             f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind, EXISTS(SELECT 1 FROM request_contents rc WHERE rc.request_id=requests.id) "
             f"AS has_content FROM requests {geo_join}WHERE {where} AND {src} {match}"
             f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, *mparams, min(max(limit, 1), 500))).fetchall()
         kids = {r["api_key_id"] for r in rows if r["api_key_id"]}
         key_names = {k["id"]: k["label"] or f"{k['key_prefix']}…" for k in conn.execute(
             f"SELECT id, label, key_prefix FROM api_keys WHERE id IN ({','.join('?' * len(kids))})", tuple(kids))} if kids else {}
+        pids = {r["pass_key_id"] for r in rows if r["pass_key_id"]}
+        key_names.update({-k["id"]: k["label"] or f"{k['key_prefix']}…" for k in conn.execute(
+            f"SELECT id, label, key_prefix FROM pass_keys WHERE id IN ({','.join('?' * len(pids))})", tuple(pids))} if pids else {})
         ids = [r["id"] for r in rows]
         marks = ",".join("?" * len(ids))
         tot = usage.grouped(conn, cfg.pricing, f"id IN ({marks})", tuple(ids), group="id") if ids else {}
@@ -694,7 +704,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "provider": r["provider"], "model": r["model"], "status": r["status"], "stream": bool(r["stream"]),
                         "kind": r["kind"] if is_admin(user) else _user_error_kind(r["kind"]),
                         "rejected_by": r["rejected_by"] if is_admin(user) else _user_rejected_by(r["rejected_by"]),
-                        "session_id": r["session_id"], "key": key_names.get(r["api_key_id"]),
+                        "session_id": r["session_id"], "key": key_names.get(r["api_key_id"] or -(r["pass_key_id"] or 0)),
                         "title": titled.get((r["user_id"], r["session_id"])), "has_content": bool(r["has_content"]),
                         **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")},
                         **({k: r[k] for k in ("ip", "city", "region", "country")} if is_admin(user) else {})})
@@ -1060,7 +1070,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def not_a_computer(user):
         # A leaked laptop key must not mint API keys that outlive the laptop's removal, nor revoke the owner's others.
         if user.get("machine_key_id") or user.get("session_key_id"):
-            fail(403, "A computer's key cannot manage API keys. Sign in with your first key to manage them.")
+            fail(403, "A computer's key cannot manage API or app keys. Sign in with your first key to manage them.")
 
     def credit_call(fn, *args):
         try:
@@ -1095,6 +1105,70 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         not_a_computer(user)
         if not api_credit.revoke_key(conn, user["id"], kid, user["id"]):
             fail(404, "No such API key.")
+        return {"ok": True}
+
+    # ---------- pass app keys (2026-11-18 spec) ----------
+
+    def need_passes():
+        if not cfg.tickets.enabled:
+            fail(404, "Passes are not enabled on this gateway.")
+
+    def pass_call(fn, *args):
+        try:
+            return fn(*args)
+        except passkeys.PassKeyError as e:
+            fail(400, str(e))
+
+    @app.get("/api/me/passkeys")
+    async def me_passkeys(request: Request, tz_offset_s: int = 0, tz: str = ""):
+        user = principal(request)
+        need_passes()
+        tz_offset_s = max(-50400, min(50400, tz_offset_s))
+        return {"enabled": cfg.tickets.enabled, "keys": passkeys.keys(conn, user["id"]),
+                "usage": passkeys.usage(conn, user["id"], time.time() - 30 * 86400, tz_offset_s, tz[:64] or None),
+                "base_url": cfg.listener.public_url}
+
+    @app.post("/api/me/passkeys")
+    async def me_passkey_add(request: Request):
+        user = principal(request, write=True)
+        need_passes()
+        not_a_computer(user)
+        body = await _json(request)
+        kid, raw = pass_call(passkeys.create_key, conn, user["id"], str(body.get("label", "")))
+        return {"ok": True, "id": kid, "key": raw}
+
+    @app.post("/api/me/passkeys/{kid}/revoke")
+    async def me_passkey_revoke(request: Request, kid: int):
+        user = principal(request, write=True)
+        need_passes()
+        not_a_computer(user)
+        if not passkeys.revoke_key(conn, user["id"], kid, user["id"]):
+            fail(404, "No such app key.")
+        return {"ok": True}
+
+    @app.get("/api/admin/users/{uid}/passkeys")
+    async def admin_user_passkeys(request: Request, uid: int):
+        admin(request)
+        need_passes()
+        u = target_user(str(uid))
+        return {"keys": passkeys.keys(conn, u["id"])}
+
+    @app.post("/api/admin/passkeys")
+    async def admin_passkey_add(request: Request):
+        actor = admin(request, write=True)
+        need_passes()
+        body = await _json(request)
+        u = target_user(body.get("user"))
+        kid, raw = pass_call(passkeys.create_key, conn, u["id"], str(body.get("label", "")), actor["id"])
+        return {"ok": True, "id": kid, "key": raw, "name": u["name"]}
+
+    @app.post("/api/admin/passkeys/{kid}/revoke")
+    async def admin_passkey_revoke(request: Request, kid: int):
+        actor = admin(request, write=True)
+        need_passes()
+        owner = passkeys.key_owner(conn, kid)
+        if owner is None or not passkeys.revoke_key(conn, owner, kid, actor["id"]):
+            fail(404, "No such app key.")
         return {"ok": True}
 
     @app.get("/api/admin/api")
@@ -2346,6 +2420,9 @@ def _account_line(conn, user) -> str:
         parts.append(f"key {k['key_prefix']}… for {k['label']}, authorized {time.strftime('%Y-%m-%d', time.gmtime(k['created_at']))}")
     elif user.get("key_scope") == "routes":
         parts.append(f"routes-only key {user['routes_key_prefix']}…")
+    elif user.get("key_scope") == "pass":
+        k = conn.execute("SELECT key_prefix, label FROM pass_keys WHERE id=?", (user["pass_key_id"],)).fetchone()
+        parts.append(f"pass app key {k['key_prefix']}… for {k['label']}")
     elif user.get("key_scope") == "full":
         parts.append(f"key {user['key_prefix']}… (your first key)")
     return " · ".join(parts)

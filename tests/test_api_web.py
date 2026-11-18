@@ -97,7 +97,7 @@ async def test_a_computers_key_cannot_create_or_revoke_api_keys(env):  # noqa: F
     assert [k["label"] for k in api_credit.keys(conn, ids["alice"])] == ["ci"]
 
 
-MACHINE = "A computer's key cannot manage API keys. Sign in with your first key to manage them."
+MACHINE = "A computer's key cannot manage API or app keys. Sign in with your first key to manage them."
 
 
 async def test_usage_takes_the_viewers_time_zone(env):  # noqa: F811
