@@ -4,7 +4,7 @@
 
 **Goal:** Pass holders create named API keys for any Anthropic-format app (Claude Desktop included); those keys are gated and counted by their running pass.
 
-**Architecture:** A fourth key scope `pass` (`sk-proxy-p-…`, table `pass_keys`, column `requests.pass_key_id`). A new module `passkeys.py` holds key CRUD and a gate that requires a running pass, applies its own in-flight/rpm, then delegates to `limits.evaluate` with trial auto-start off. `app.py` routes the scope through that gate; `web.py` and `static/app.js` add the "apps" source and the Pass app keys card.
+**Architecture:** A fourth key scope `pass` (`sk-proxy-p-…`, table `pass_keys`, column `requests.pass_key_id`). A new module `passkeys.py` holds key CRUD and a gate that requires a running pass, applies an app sub-cap and rpm, then delegates to `limits.evaluate` (shared in-flight count, trial auto-start off), so pass limits apply to app traffic exactly as to Claude Code. `app.py` routes the scope through that gate; `web.py` and `static/app.js` add the "apps" source and the Pass app keys card.
 
 **Tech Stack:** Python 3 / FastAPI / SQLite (`src/claude_proxy`), vanilla JS dashboard (`static/app.js`, `static/i18n.js`), pytest (`uv run pytest`).
 
@@ -15,7 +15,7 @@
 - Key prefix `sk-proxy-p-`; stored as SHA-256 via `db.generate_virtual_key`; shown once; `MAX_KEYS = 20` live per account; label 1–64 chars.
 - Scope `pass`: `role="user"` always, never admin; reaches only `POST /v1/messages`, `POST /v1/messages/count_tokens` (Claude models, `route is None`), `GET /v1/models`.
 - Served only while `cfg.tickets.enabled and tickets.is_gated(uid) and tickets.running(uid, now)`; else 403 `permission_error`, `rejected_by='pass_key_no_pass'`, message "This key works while you have a running pass." A pass-key request never calls `trials.autostart`.
-- Own pool: in-flight registry `pass_inflight`, `PASS_KEY_MAX_INFLIGHT = 4`, `PASS_KEY_RPM = 60` (rpm counts `requests` rows with `pass_key_id IS NOT NULL AND rejected_by IS NULL` in the last 60 s plus in flight).
+- **Never around pass limits.** Pass-key requests hold a slot in the shared `inflight` registry (so Claude Code + apps stay under `[limits] max_inflight`) and also one in `pass_inflight` (sub-cap `PASS_KEY_MAX_INFLIGHT = 4`). `PASS_KEY_RPM = 60` counts `requests` rows with `pass_key_id IS NOT NULL AND rejected_by IS NULL` in the last 60 s plus pass in flight. Pass-key rows have `api_key_id` NULL and `ticket_id` set; no usage or limit query may filter on `pass_key_id` (only the dashboard `SOURCES`).
 - Extras refused with `rejected_by='api_extra'`, app-neutral wording (no `/fast`, no `[1m]`).
 - Pass-key rows: `api_key_id` NULL, `pass_key_id` set, `ticket_id` from `served` (so they count in the pass's use).
 - A computer's key or session (`machine_key_id` / `session_key_id`) cannot create or revoke pass keys.
@@ -28,6 +28,7 @@
 - A user with a waiting (claimed, not started) free trial pings with a pass key: refused, and the trial stays waiting → test in Task 2.
 - Pass-key traffic never shows under `source=cli` and never under `source=api` → test in Task 4.
 - A revoked pass key gets 401 at once, while the user's Claude Code key keeps working → test in Task 1.
+- Pass-key traffic is counted in pass use exactly like Claude Code traffic, in both directions (apps use up a limit → Claude Code is refused, and vice versa), and the shared in-flight cap holds across both → tests in Tasks 2 and 3.
 - Pass keys used against the dashboard (`/api/me`, login form) get 403 with a pass-key message, not "third-party models only" → test in Task 4.
 
 ---
@@ -63,7 +64,7 @@
 **Interfaces:**
 - Consumes: Task 1.
 - Produces: `limits.evaluate(..., autostart: bool = True)`: when False, the `trials.autostart` block is skipped. Nothing else changes for existing callers.
-- Produces: `passkeys.NO_PASS = "pass_key_no_pass"`, `REJECT_INFLIGHT = "pass_key_inflight"`, `REJECT_RPM = "pass_key_rpm"`, `PASS_KEY_MAX_INFLIGHT = 4`, `PASS_KEY_RPM = 60`; `passkeys.evaluate(conn, cfg, user_id, model, path, inflight=0, now=None, served=None) -> Decision | None`. Order: running pass (403 NO_PASS, every path incl. `/v1/models`); in-flight ≥ 4 for non-count_tokens with a model (429 `rate_limit_error`, retry 1); rpm (429, retry 60); then `limits.evaluate(..., inflight=0, served=served, autostart=False)` (its own `max_inflight` must not see the pass pool, hence 0).
+- Produces: `passkeys.NO_PASS = "pass_key_no_pass"`, `REJECT_INFLIGHT = "pass_key_inflight"`, `REJECT_RPM = "pass_key_rpm"`, `PASS_KEY_MAX_INFLIGHT = 4`, `PASS_KEY_RPM = 60`; `passkeys.evaluate(conn, cfg, user_id, model, path, inflight=0, pass_inflight=0, now=None, served=None) -> Decision | None`, where `inflight` is the user's shared in-flight count (Claude Code + apps) and `pass_inflight` the apps' share of it. Order: running pass (403 NO_PASS, every path incl. `/v1/models`); `pass_inflight` ≥ 4 for non-count_tokens with a model (429 `rate_limit_error`, retry 1); rpm on `pass_inflight` (429, retry 60); then `limits.evaluate(..., inflight=inflight, served=served, autostart=False)`, which applies the shared `max_inflight` and every pass and window limit.
 - Produces: `api_credit.refuse_extras(data, beta_header, app: bool = False)`: with `app=True`, messages are "Web search is not available with pass app keys; turn web search off in the app.", "Fast mode is not available with pass app keys.", "The 1M-token context is not available with pass app keys; pick a standard model."
 
 - [ ] **Step 1: Write failing tests** (use `tests/tickets_helpers.py` `tcfg`/`seeded`/`live` for a running pass):
@@ -72,7 +73,9 @@
   - `test_waiting_trial_not_started`: user with a claimed, not-started trial → 403, and the trial row's `starts_at` unchanged.
   - `test_running_pass_allowed_and_served`: running pass → `None`, `served["ticket_id"] == t["id"]`.
   - `test_pass_limits_apply`: running pass whose 5-hour share is used up (as `test_tickets_limits.py` sets it up) → 429 with the pass's `share_5h` kind.
-  - `test_inflight_and_rpm`: `inflight=4` → 429 `pass_key_inflight`; 60 recent pass-key rows → 429 `pass_key_rpm`.
+  - `test_inflight_and_rpm`: `pass_inflight=4` → 429 `pass_key_inflight`; `inflight=cfg.limits.max_inflight, pass_inflight=0` → 429 `max_inflight`; 60 recent pass-key rows → 429 `pass_key_rpm`.
+  - `test_app_use_counts_as_pass_use`: one Claude Code row and one pass-key row with equal tokens, both `ticket_id=t`; `capacity._weighted_since(..., ticket_id=t)` counts both equally, and `tickets.was_used(t)` is True with only the pass-key row.
+  - `test_limit_reached_by_apps_blocks_claude_code_and_back`: pass-key rows that use up the 5-hour share → `limits.evaluate` (Claude Code) 429 and `passkeys.evaluate` 429; same with Claude Code rows using it up.
   - `test_refuse_extras_app_wording`: `refuse_extras({"tools":[{"type":"web_search_20250305"}]}, None, app=True)` message contains "pass app keys" and not "/fast"; default `app=False` messages unchanged.
 - [ ] **Step 2:** run → FAIL.
 - [ ] **Step 3:** Implement as specified.
@@ -87,7 +90,7 @@
 
 **Interfaces:**
 - Consumes: Tasks 1–2.
-- Produces: `scope_allows("pass", ...)` identical to `"api"`. In the handler: `is_pass = key_scope == "pass"`; `base["pass_key_id"] = user.get("pass_key_id")`; inflight registry `"pass_inflight"`; scope-refusal message "Pass app keys reach Claude models only, through /v1/messages."; `refuse_extras(..., app=True)` for pass keys on `/v1/messages`; `counted = metered or is_api or is_pass`; gate `passkeys.evaluate(..., inflight=held_now, served=served)`; `/v1/models` 200 for a pass key returns Anthropic's list as-is (no route entries). No `[api]` check for pass keys. `contents.wanted(keep: bool, session_id, method, path)` — callers pass `is_api or is_pass`. The `record` writer stores `pass_key_id` (follow how `api_key_id` reaches the `requests` insert).
+- Produces: `scope_allows("pass", ...)` identical to `"api"`. In the handler: `is_pass = key_scope == "pass"`; `base["pass_key_id"] = user.get("pass_key_id")`; a pass-key request holds a slot in the shared `inflight` registry **and** in `"pass_inflight"`, takes both before the gate and releases both on every exit path; scope-refusal message "Pass app keys reach Claude models only, through /v1/messages."; `refuse_extras(..., app=True)` for pass keys on `/v1/messages`; `counted = metered or is_api or is_pass`; gate `passkeys.evaluate(..., inflight=held_now, served=served)`; `/v1/models` 200 for a pass key returns Anthropic's list as-is (no route entries). No `[api]` check for pass keys. `contents.wanted(keep: bool, session_id, method, path)` — callers pass `is_api or is_pass`. The `record` writer stores `pass_key_id` (follow how `api_key_id` reaches the `requests` insert).
 
 - [ ] **Step 1: Write failing tests** modelled on `tests/test_api_proxy.py` (`env` fixture with a running pass via `tickets_helpers`, `{"authorization": f"Bearer {raw}"}` to cover Desktop's Bearer scheme):
   - `test_pass_scope` parametrized like `test_api_scope`, with `"pass"`.
@@ -97,7 +100,8 @@
   - `test_works_with_api_disabled`: `cfg.api.enabled = False` → still 200.
   - `test_models_list_has_no_routes`: `GET /v1/models` → no routed model ids.
   - `test_contents_kept_without_session`: no session header → request contents stored (as `test_request_contents.py` checks for API keys).
-  - `test_inflight_separate`: user's Claude Code requests at `cfg.limits.max_inflight` in flight do not block a pass-key request.
+  - `test_inflight_shared`: with the user's Claude Code requests at `cfg.limits.max_inflight` in flight, a pass-key request gets 429 `max_inflight`; with 4 pass-key requests in flight, a fifth gets 429 `pass_key_inflight` while a Claude Code request still passes; after requests finish, both registries are back to 0.
+  - `test_usage_queries_never_filter_pass_key`: `grep -rn "pass_key_id IS NULL" src/claude_proxy` matches only `web.py` `SOURCES` (assert in the test by reading the sources).
 - [ ] **Step 2:** run → FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** `uv run pytest -q` → PASS.

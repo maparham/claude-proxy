@@ -51,9 +51,15 @@ Decided by the user:
 - **Own source "apps".** Pass-key traffic is a third source next to `cli` and `api` in Sessions/Requests
   (`SOURCES`, the source toggle, `web.py` filters on `pass_key_id`). Prompts and reply contents follow the credit-key
   rules (`contents.wanted` treats a pass key like an API key).
-- **Own pool.** Pass keys get their own in-flight pool (`pass_inflight`) and an rpm per account, like credit keys;
-  defaults are module constants (`PASS_KEY_MAX_INFLIGHT = 4`, `PASS_KEY_RPM = 60`; builder's call on the values).
-  Weekly points stay shared through the pass.
+- **Never around pass limits (overrides "own pool", 2026-11-18).** Pass-key usage must never let a user get past
+  their pass's limits. Concretely:
+  - Pass-key requests count in the user's shared in-flight registry (`inflight`), so Claude Code and app keys
+    together stay under `[limits] max_inflight`: the overshoot bound of a pass is unchanged.
+  - Within that, app keys hold at most `PASS_KEY_MAX_INFLIGHT = 4` (tracked in a second registry,
+    `pass_inflight`) and `PASS_KEY_RPM = 60` per account, so Desktop can't take every slot.
+  - Pass-key rows are written with `api_key_id` NULL and `ticket_id` set, so every pass-use query (`_weighted_since`,
+    `_week_use`, window limits, `was_used`, capacity, quota attribution) counts them exactly like Claude Code rows.
+    No usage or limit query may filter on `pass_key_id`; only the dashboard source filter does.
 
 Builder's calls (marked as such):
 - Every three-way key-scope check learns `pass`: `app.scope_allows`, the `is_api` uses in `app.py`,
