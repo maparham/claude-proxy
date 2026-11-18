@@ -7,9 +7,15 @@ import sqlite3
 import time
 import zoneinfo
 
-from . import db
+from . import db, limits, tickets
+from .forwarder import COUNT_TOKENS_PATH
 
 MAX_KEYS = 20
+NO_PASS = "pass_key_no_pass"          # rejected_by: no running pass to serve the key
+REJECT_INFLIGHT = "pass_key_inflight"
+REJECT_RPM = "pass_key_rpm"
+PASS_KEY_MAX_INFLIGHT = 4             # the apps' share of the user's in-flight cap
+PASS_KEY_RPM = 60
 
 
 class PassKeyError(ValueError):
@@ -80,3 +86,26 @@ def usage(conn, user_id: int, since: float, tz_offset_s: int = 0, tz: str | None
                         "WHERE user_id=? AND pass_key_id IS NOT NULL AND started_at>=? "
                         "GROUP BY day, pass_key_id ORDER BY day DESC, pass_key_id", (user_id, since))
     return [dict(r) for r in rows]
+
+
+def _err(status: int, kind: str, etype: str, msg: str, retry_after: int | None = None) -> limits.Decision:
+    return limits.Decision(status, kind, {"type": "error", "error": {"type": etype, "message": msg}}, retry_after)
+
+
+def evaluate(conn, cfg, user_id: int, model: str | None, path: str, inflight: int = 0, pass_inflight: int = 0,
+             now: float | None = None, served: dict | None = None) -> limits.Decision | None:
+    """None to serve a pass-key request, or the rejection to send. Only a running pass serves it (never hand-set limits,
+    never a free trial waiting to start: that starts with Claude Code's first request). `inflight`: the user's requests in
+    flight, Claude Code and apps together; `pass_inflight`: the apps' share. The pass's own limits then apply as to Claude
+    Code, so the apps can never get around them (they share the same use)."""
+    now = time.time() if now is None else now
+    if not (cfg.tickets.enabled and tickets.is_gated(conn, user_id) and tickets.running(conn, user_id, now)):
+        return _err(403, NO_PASS, "permission_error", "This key works while you have a running pass.")
+    if path != COUNT_TOKENS_PATH and model is not None and pass_inflight >= PASS_KEY_MAX_INFLIGHT:
+        return _err(429, REJECT_INFLIGHT, "rate_limit_error",
+                    f"At most {PASS_KEY_MAX_INFLIGHT} requests from app keys may run at once; wait for one to finish.", 1)
+    recent = conn.execute("SELECT COUNT(*) FROM requests WHERE user_id=? AND pass_key_id IS NOT NULL AND rejected_by IS NULL "
+                          "AND started_at>=?", (user_id, now - 60)).fetchone()[0]
+    if recent + pass_inflight >= PASS_KEY_RPM:
+        return _err(429, REJECT_RPM, "rate_limit_error", f"App keys may make {PASS_KEY_RPM} requests a minute; try again shortly.", 60)
+    return limits.evaluate(conn, cfg, user_id, model, path, now=now, inflight=inflight, served=served, autostart=False)

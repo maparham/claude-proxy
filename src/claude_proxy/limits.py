@@ -573,10 +573,11 @@ UNPRICED = "unpriced_model"     # rejected_by for a model with no [pricing] entr
 
 
 def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | None, path: str,
-             now: float | None = None, inflight: int = 0, served: dict | None = None) -> Decision | None:
+             now: float | None = None, inflight: int = 0, served: dict | None = None, autostart: bool = True) -> Decision | None:
     """None to allow, or the rejection to send. `inflight`: how many of the user's metered requests are being served
     right now; recorded only when they finish, they would otherwise slip past every limit. `served`: given, an allowed
-    request's pass goes in as served["ticket_id"], for its row (each pass counts only its own requests)."""
+    request's pass goes in as served["ticket_id"], for its row (each pass counts only its own requests). `autostart`
+    False: a waiting free trial is left waiting (pass app keys never start one)."""
     now = time.time() if now is None else now
     is_count_tokens = path == COUNT_TOKENS_PATH
     third_party = cfg.route_for(model) is not None
@@ -592,7 +593,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
         # Their sign-up credit went with the first ticket and they may have no other limit: switching tickets off must
         # not open the account to them. The admin ungates them to hand them back to hand-set limits.
         return Decision(402, TICKET, _pay(PAUSED))
-    if cfg.tickets.enabled and model is not None and not is_count_tokens and not third_party:
+    if autostart and cfg.tickets.enabled and model is not None and not is_count_tokens and not third_party:
         # A free trial claimed and waiting starts with the first metered request (2026-11-14): not the model list,
         # which gclaude's setup asks for. With no room, a user still on hand-set limits (a sign-up credit) is served
         # by those meanwhile; a gated one has nothing else to serve them.
