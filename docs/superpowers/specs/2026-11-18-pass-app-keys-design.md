@@ -41,6 +41,27 @@ Needs Desktop 1.2581.0 or newer.
   Claude Desktop and for any Anthropic-compatible app (base URL + key). Admin: a user's pass keys on the user page,
   with create/revoke. English and Persian (Persian wording rules: loanwords, کلاد in UI).
 
+## 3a. After the builder check (2026-11-18)
+
+Decided by the user:
+- **Running pass only.** A pass key is served only while the user has a running pass (incl. a running free trial).
+  It never falls back to hand-set limits, sign-up credit or an admin's ungated account, and its requests never
+  auto-start a waiting free trial (`limits.evaluate` does both for Claude Code keys, limits.py:595-607). Refusal:
+  403 `permission_error`, `rejected_by='pass_key_no_pass'`, "This key works while you have a running pass."
+- **Own source "apps".** Pass-key traffic is a third source next to `cli` and `api` in Sessions/Requests
+  (`SOURCES`, the source toggle, `web.py` filters on `pass_key_id`). Prompts and reply contents follow the credit-key
+  rules (`contents.wanted` treats a pass key like an API key).
+- **Own pool.** Pass keys get their own in-flight pool (`pass_inflight`) and an rpm per account, like credit keys;
+  defaults are module constants (`PASS_KEY_MAX_INFLIGHT = 4`, `PASS_KEY_RPM = 60`; builder's call on the values).
+  Weekly points stay shared through the pass.
+
+Builder's calls (marked as such):
+- Every three-way key-scope check learns `pass`: `app.scope_allows`, the `is_api` uses in `app.py`,
+  `contents.wanted`, the dashboard sign-in refusal (`web.py` ~262, ~326), `_account_line`.
+- Extras refusal for pass keys uses app-neutral wording (no `/fast`, no `[1m]`).
+- A computer's key or session cannot create or revoke pass keys (same `not_a_computer` rule as credit keys).
+- The API tab shows when `[api]` is on **or** passes are on; with `[api]` off it shows only the pass card.
+
 ## 4. Non-goals
 
 - Changing credit API keys, Claude Code keys or computer keys.
