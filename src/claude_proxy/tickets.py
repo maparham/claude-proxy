@@ -1342,6 +1342,20 @@ def user_state(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
             "has_tickets": conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is not None}
 
 
+def counts(conn: sqlite3.Connection, user_id: int, now: float) -> dict:
+    """For the Users page: how many of the user's passes are `active` (running or queued, not cancelled), `used_up`
+    (ran out before their end) and `expired` (ran their course). Cancelled passes count in none."""
+    out = {"active": 0, "used_up": 0, "expired": 0}
+    for t in user_tickets(conn, user_id):
+        if t["cancelled_at"] is not None and t["cancelled_at"] < t["effective_end"]:
+            continue
+        if t["effective_end"] > now:
+            out["active"] += 1
+        else:
+            out["used_up" if t["used_up_at"] is not None else "expired"] += 1
+    return out
+
+
 def timeline(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> dict | None:
     """The dashboard's chart of the user's live tickets (running and queued) from now on, when there is more than one:
     `passes` in the order they start, and `segments`, the stretches with the same tickets, each with its `stack` of

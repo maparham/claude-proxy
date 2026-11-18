@@ -732,6 +732,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
                         "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
                         "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
+                        "passes": tickets.counts(conn, u["id"], now),
                         "ticket": (tickets.user_state(conn, u["id"], now) | {"paused": not cfg.tickets.enabled}
                                    if cfg.tickets.enabled or tickets.is_gated(conn, u["id"]) else None)})
         return {"users": out}

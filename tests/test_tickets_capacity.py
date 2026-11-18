@@ -441,6 +441,18 @@ def test_user_state_summarises_gating_and_live_tickets(db):
     assert s == {"gated": True, "current": None, "queued": None, "live": False, "has_tickets": True}
 
 
+def test_counts_splits_active_used_up_and_expired(db):
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    assert tickets.counts(conn, ids["alice"], NOW) == {"active": 0, "used_up": 0, "expired": 0}
+    a = grant(conn, cfg, ids, length="day")
+    b = grant(conn, cfg, ids, length="day", now=NOW + 10)                  # queued after a
+    conn.execute("UPDATE tickets SET used_up_at=? WHERE id=?", (NOW + 100, a["id"]))
+    assert tickets.counts(conn, ids["alice"], NOW + 200) == {"active": 1, "used_up": 1, "expired": 0}
+    assert tickets.counts(conn, ids["alice"], NOW + 30 * DAY) == {"active": 0, "used_up": 1, "expired": 1}
+    assert b["id"] != a["id"]
+
+
 def test_gateway_warns_when_tickets_are_off_but_users_are_still_gated(db, caplog):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
