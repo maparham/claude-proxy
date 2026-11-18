@@ -70,7 +70,8 @@
 - [ ] **Step 1: Write failing tests** (use `tests/tickets_helpers.py` `tcfg`/`seeded`/`live` for a running pass):
   - `test_no_pass_refused`: user with no ticket → `Decision.status == 403`, `kind == "pass_key_no_pass"`.
   - `test_hand_set_limits_not_used`: ungated user with a sign-up credit limit row and no pass → 403 `pass_key_no_pass`.
-  - `test_waiting_trial_not_started`: user with a claimed, not-started trial → 403, and the trial row's `starts_at` unchanged.
+  - `test_waiting_trial_not_started`: user with a waiting claim (`trial_claims` row, `ticket_id IS NULL AND started_at IS NULL`) → 403 `pass_key_no_pass`; afterwards the claim is still `ticket_id IS NULL AND started_at IS NULL` and the user has no `tickets` row.
+  - `test_limits_evaluate_autostart_false`: same waiting-claim user, `limits.evaluate(conn, cfg, uid, "claude-sonnet-5", "/v1/messages", autostart=False)` leaves the claim unstarted; with the default `autostart=True` it starts (proves the flag, not the precheck).
   - `test_running_pass_allowed_and_served`: running pass → `None`, `served["ticket_id"] == t["id"]`.
   - `test_pass_limits_apply`: running pass whose 5-hour share is used up (as `test_tickets_limits.py` sets it up) → 429 with the pass's `share_5h` kind.
   - `test_inflight_and_rpm`: `pass_inflight=4` → 429 `pass_key_inflight`; `inflight=cfg.limits.max_inflight, pass_inflight=0` → 429 `max_inflight`; 60 recent pass-key rows → 429 `pass_key_rpm`.
@@ -90,9 +91,9 @@
 
 **Interfaces:**
 - Consumes: Tasks 1–2.
-- Produces: `scope_allows("pass", ...)` identical to `"api"`. In the handler: `is_pass = key_scope == "pass"`; `base["pass_key_id"] = user.get("pass_key_id")`; a pass-key request holds a slot in the shared `inflight` registry **and** in `"pass_inflight"`, takes both before the gate and releases both on every exit path; scope-refusal message "Pass app keys reach Claude models only, through /v1/messages."; `refuse_extras(..., app=True)` for pass keys on `/v1/messages`; `counted = metered or is_api or is_pass`; gate `passkeys.evaluate(..., inflight=held_now, served=served)`; `/v1/models` 200 for a pass key returns Anthropic's list as-is (no route entries). No `[api]` check for pass keys. `contents.wanted(keep: bool, session_id, method, path)` — callers pass `is_api or is_pass`. The `record` writer stores `pass_key_id` (follow how `api_key_id` reaches the `requests` insert).
+- Produces: `scope_allows("pass", ...)` identical to `"api"`. In the handler: `is_pass = key_scope == "pass"`; `base["pass_key_id"] = user.get("pass_key_id")`; a pass-key request holds a slot in the shared `inflight` registry **and** in `"pass_inflight"`, takes both before the gate and releases both on every exit path; scope-refusal message "Pass app keys reach Claude models only, through /v1/messages."; `refuse_extras(..., app=True)` for pass keys on `/v1/messages`; slots: a pass-key request takes a `pass_inflight` slot whenever it is counted for rpm (`metered`, `count_tokens` and `/v1/models`), and a shared `inflight` slot only when `metered` (same as Claude Code, so Desktop's model list isn't refused by the shared cap); read `held_now = inflight.get(uid)` and `pass_held_now = pass_reg.get(uid)`, then acquire both synchronously **before** the gate's `await` (app.py:386-390); gate `passkeys.evaluate(..., inflight=held_now, pass_inflight=pass_held_now, served=served)`; a `pass_held` flag mirrors `held`: `pass_inflight` is released in the same `record()` done callback (after the row is written, never before, app.py:302-316) and at every other release point (app.py:397-400, 404-407, 543-547); `/v1/models` 200 for a pass key returns Anthropic's list as-is (no route entries). No `[api]` check for pass keys. `contents.wanted(keep: bool, session_id, method, path)` — callers pass `is_api or is_pass`. The `record` writer stores `pass_key_id` (follow how `api_key_id` reaches the `requests` insert).
 
-- [ ] **Step 1: Write failing tests** modelled on `tests/test_api_proxy.py` (`env` fixture with a running pass via `tickets_helpers`, `{"authorization": f"Bearer {raw}"}` to cover Desktop's Bearer scheme):
+- [ ] **Step 1: Write failing tests** modelled on `tests/test_api_proxy.py`. Build the `env` fixture the way `tests/test_pass_accounting.py:53` does (`env` and `grant` from `tests/test_tickets_web.py`, then a `report()` call so the 7-day snapshot is fresh; without it a gated request gets 503 `TICKET_NO_DATA`, limits.py:657). Use `{"authorization": f"Bearer {raw}"}` to cover Desktop's Bearer scheme):
   - `test_pass_scope` parametrized like `test_api_scope`, with `"pass"`.
   - `test_message_forwarded_and_counted`: 200; last `requests` row has `pass_key_id == kid`, `api_key_id is None`, `ticket_id == t["id"]`; the upstream body's system starts with `CLAUDE_CODE_IDENTITY`; no `api_ledger` row.
   - `test_no_pass_403`: pass cancelled → 403, row `rejected_by == "pass_key_no_pass"`, no upstream call.
@@ -101,7 +102,8 @@
   - `test_models_list_has_no_routes`: `GET /v1/models` → no routed model ids.
   - `test_contents_kept_without_session`: no session header → request contents stored (as `test_request_contents.py` checks for API keys).
   - `test_inflight_shared`: with the user's Claude Code requests at `cfg.limits.max_inflight` in flight, a pass-key request gets 429 `max_inflight`; with 4 pass-key requests in flight, a fifth gets 429 `pass_key_inflight` while a Claude Code request still passes; after requests finish, both registries are back to 0.
-  - `test_usage_queries_never_filter_pass_key`: `grep -rn "pass_key_id IS NULL" src/claude_proxy` matches only `web.py` `SOURCES` (assert in the test by reading the sources).
+  - `test_usage_queries_never_filter_pass_key`: the string `pass_key_id` does not occur at all in `limits.py`, `capacity.py`, `tickets.py`, `quota.py`, `trials.py`, `usage.py`, `estimates.py` (read the files in the test); it may occur only in `passkeys.py`, `db.py`, `app.py`, `web.py`.
+  - `test_slots_released_on_failure`: a stream cut short mid-reply and an upstream `httpx` error each leave `inflight` and `pass_inflight` for the user at 0 afterwards.
 - [ ] **Step 2:** run → FAIL.
 - [ ] **Step 3:** Implement.
 - [ ] **Step 4:** `uv run pytest -q` → PASS.
@@ -132,7 +134,7 @@
 ### Task 5: Dashboard UI and docs
 
 **Files:**
-- Modify: `src/claude_proxy/static/app.js` (`featureOn` :515, `renderApi`, `sourceSwitch` :553, `apiView`/`withSource` :132, `renderUser`), `src/claude_proxy/static/i18n.js`, `README.md`
+- Modify: `src/claude_proxy/static/app.js` (`featureOn` :515, `renderApi`, `sourceSwitch` :553, `apiView`/`withSource` :132, `renderUser`), `src/claude_proxy/static/i18n.js` (also make the `key_scope` error tooltip key-neutral, i18n.js:162, :194 and their Persian lines: it says "An OpenCode key" today), `README.md`
 - Test: `tests/test_i18n.py` (key parity already enforced); manual check per memory "Local dashboard check" (seeded dev gateway on :18081, Playwright).
 
 **Interfaces:**
