@@ -1,9 +1,12 @@
 """Pass app keys (2026-11-18 spec): storage and key lookup."""
 import pytest
 
+from claude_proxy import api_credit, capacity, limits, passkeys, tickets, trials
 from claude_proxy import db as dbm
-from claude_proxy import passkeys
+from claude_proxy.config import Route
 from claude_proxy.db import create_user, find_user_by_key
+from tests.test_tickets_limits import NOW as TNOW, fresh, grant_week, req
+from tests.tickets_helpers import live, seeded, user
 
 
 def test_create_and_find(db):
@@ -73,9 +76,6 @@ def test_usage_per_key_per_day(db):
 
 # ---------- the gate (Task 2) ----------
 
-from claude_proxy import api_credit, capacity, limits, tickets, trials
-from tests.test_tickets_limits import NOW as TNOW, fresh, grant_week, req
-from tests.tickets_helpers import live, seeded, user
 
 MSG = "/v1/messages"
 SONNET = "claude-sonnet-5"
@@ -215,3 +215,13 @@ def test_refuse_extras_app_wording():
     assert "pass app keys" in api_credit.refuse_extras({"speed": "fast"}, None, app=True).body["error"]["message"]
     assert "pass app keys" in api_credit.refuse_extras({}, "context-1m-2025", app=True).body["error"]["message"]
     assert "API keys" in api_credit.refuse_extras({"tools": [{"type": "web_search_20250305"}]}, None).body["error"]["message"]
+
+
+def test_routed_model_refused_even_with_cost_limit(env):
+    conn, cfg, ids, t = env
+    cfg.routes.append(Route(name="meta", base_url="http://m", api_key_env="M", models=["muse-*"]))
+    conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)",
+                 (ids["alice"], "cost_total", "*", "50", "usd"))
+    d = passkeys.evaluate(conn, cfg, ids["alice"], "muse-spark", MSG, now=TNOW)
+    assert d.status == 403 and d.kind == "pass_key_route"
+    assert d.body["error"]["message"] == "Pass app keys work with Claude models only."

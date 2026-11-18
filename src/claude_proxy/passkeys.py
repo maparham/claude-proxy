@@ -1,5 +1,6 @@
 """Pass app keys (2026-11-18 spec): keys a pass holder hands to any Anthropic-format app (Claude Desktop, say).
-Their requests are served and counted by the holder's running pass; this module only stores and lists the keys."""
+Their requests are served and counted by the holder's running pass. This module stores and lists the keys and holds the
+gate (evaluate) that decides whether a request on one is served."""
 from __future__ import annotations
 
 import datetime
@@ -14,6 +15,7 @@ MAX_KEYS = 20
 NO_PASS = "pass_key_no_pass"          # rejected_by: no running pass to serve the key
 REJECT_INFLIGHT = "pass_key_inflight"
 REJECT_RPM = "pass_key_rpm"
+REJECT_ROUTE = "pass_key_route"
 PASS_KEY_MAX_INFLIGHT = 4             # the apps' share of the user's in-flight cap
 PASS_KEY_RPM = 60
 
@@ -101,6 +103,9 @@ def evaluate(conn, cfg, user_id: int, model: str | None, path: str, inflight: in
     now = time.time() if now is None else now
     if not (cfg.tickets.enabled and tickets.is_gated(conn, user_id) and tickets.running(conn, user_id, now)):
         return _err(403, NO_PASS, "permission_error", "This key works while you have a running pass.")
+    if model is not None and cfg.route_for(model) is not None:
+        # limits.evaluate lets a gated user's routed model through on a hand-set cost limit: that would be hand-set limits.
+        return _err(403, REJECT_ROUTE, "permission_error", "Pass app keys work with Claude models only.")
     if path != COUNT_TOKENS_PATH and model is not None and pass_inflight >= PASS_KEY_MAX_INFLIGHT:
         return _err(429, REJECT_INFLIGHT, "rate_limit_error",
                     f"At most {PASS_KEY_MAX_INFLIGHT} requests from app keys may run at once; wait for one to finish.", 1)
