@@ -9,8 +9,9 @@ import zlib
 MAX_REPLY_BYTES = 8 * 1024 * 1024   # a reply is kept up to this; the rest is cut and the row says so
 
 
-def wanted(is_api: bool, session_id: str | None, method: str, path: str) -> bool:
-    return is_api and not session_id and method == "POST" and path == "/v1/messages"
+def wanted(keep: bool, session_id: str | None, method: str, path: str) -> bool:
+    """`keep`: the key is one whose requests are kept (an API key or a pass app key)."""
+    return keep and not session_id and method == "POST" and path == "/v1/messages"
 
 
 class Capture:

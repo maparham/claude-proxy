@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import api_credit, contents, geo, limits, mail, prompts, quota, titles
+from . import api_credit, contents, geo, limits, mail, passkeys, prompts, quota, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
@@ -47,8 +47,9 @@ def scope_allows(key_scope: str, method: str, path: str, route: Route | None, ad
     shared by every user, so only an admin's key reaches it."""
     if key_scope == "full":
         return admin or (method == "POST" and path in ROUTED_PATHS) or (method == "GET" and path == "/v1/models")
-    if key_scope == "api":
-        # Claude Code billed per token: messages and token counts on the subscription, and the model list. No routes.
+    if key_scope in ("api", "pass"):
+        # Claude Code billed per token, or an app served by the user's pass: messages and token counts on the
+        # subscription, and the model list. No routes.
         return (method == "POST" and path in ROUTED_PATHS and route is None) or (method == "GET" and path == "/v1/models")
     if method == "GET" and path == "/v1/models":
         return True
@@ -90,7 +91,8 @@ class Inflight:
 
 def inflight_of(gw: Gateway, attr: str = "inflight") -> Inflight:
     """The gateway's registry, made on first use so every Gateway (and every test's) has its own. API keys count in
-    their own registry ("api_inflight"): their cap is the account's API limit, not [limits] max_inflight."""
+    their own registry ("api_inflight"): their cap is the account's API limit, not [limits] max_inflight. Pass app keys
+    count in the shared one and also in "pass_inflight", the apps' share (passkeys.PASS_KEY_MAX_INFLIGHT)."""
     reg = getattr(gw, attr, None)
     if reg is None:
         reg = Inflight()
@@ -292,6 +294,7 @@ async def read_body(request: Request, cap: int) -> bytes | None:
 async def handle(gw: Gateway, request: Request, path: str) -> Response:
     cfg = gw.cfg
     inflight = inflight_of(gw)
+    pass_reg = inflight_of(gw, "pass_inflight")
     started = time.time()
     if not should_forward(path):
         return api_error(404, "not_found_error", f"Not found: {path}")
@@ -300,18 +303,20 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # trusts it only from 127.0.0.1. A proxy reaching the gateway from elsewhere (a Docker bridge) would be recorded instead.
     base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host[:64] if request.client else None}
     held = False   # this request is counted in `inflight` until it is recorded
+    pass_held = False   # likewise in `pass_reg` (a pass app key's request)
     prompt = None  # what the person typed in this request (prompts.py), kept with its row however it ends
 
     async def record(title: str | None = None, content: tuple | None = None, **kw) -> None:
         # The slot is given back once the row is written, never before: between the two the request would count
         # nowhere, and a burst could pass limits it should not. Shielded, so a client disconnect (which cancels the
         # relay) still records and charges the request and frees its slot.
-        nonlocal held
+        nonlocal held, pass_held
         fut = gw.db.run(_save, {**base, "ended_at": time.time(), **kw}, title, content, prompt)
-        if held:
+        regs = ([inflight] if held else []) + ([pass_reg] if pass_held else [])
+        if regs:
             uid = base["user_id"]
-            fut.add_done_callback(lambda _: inflight.release(uid))
-            held = False
+            fut.add_done_callback(lambda _: [r.release(uid) for r in regs])
+            held = pass_held = False
         if await asyncio.shield(fut):
             mail.spawn(geo.locate(gw, base["ip"]))
 
@@ -323,7 +328,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["user_id"] = user["id"]
     is_admin = user["role"] == "admin"   # an API key is never an admin's (db.find_user_by_key), so its replies are always scrubbed
     is_api = user["key_scope"] == "api"
+    is_pass = user["key_scope"] == "pass"   # a pass app key (passkeys.py): served and counted by the user's running pass
     base["api_key_id"] = user.get("api_key_id")
+    base["pass_key_id"] = user.get("pass_key_id")
     inflight = inflight_of(gw, "api_inflight" if is_api else "inflight")
     base["session_id"] = session_id(request.headers)
     base["client_version"] = (request.headers.get("user-agent") or "")[:128] or None
@@ -339,7 +346,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["model"] = model
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
-    client_body = body if contents.wanted(is_api, base["session_id"], request.method, path) else None
+    client_body = body if contents.wanted(is_api or is_pass, base["session_id"], request.method, path) else None
     if not wants_title and prompts.wanted(base["session_id"], request.method, path, request.headers, data):
         try:
             prompt = prompts.extract(data)
@@ -358,6 +365,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         # Before the model check and limits: this key never reaches Claude, whatever else is wrong with the request.
         await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
         msg = ("API keys reach Claude models only, through /v1/messages." if is_api else
+               "Pass app keys reach Claude models only, through /v1/messages." if is_pass else
                "The gateway forwards only /v1/messages, /v1/messages/count_tokens and /v1/models."
                if user["key_scope"] == "full" else
                f"This key is for third-party models only ({_route_patterns(cfg)}). Claude models need your Claude Code key.")
@@ -373,7 +381,8 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         # Model allow-lists, scoped limits and routing all need the model; never forward a body the gateway can't read.
         await record(status=400, stream=0, complete=1, error_type="gateway_bad_request", rejected_by="request")
         return api_error(400, "invalid_request_error", "The gateway could not read a string `model` from the JSON request body.")
-    extra = api_credit.refuse_extras(data, request.headers.get("anthropic-beta")) if is_api and path == "/v1/messages" else None
+    extra = (api_credit.refuse_extras(data, request.headers.get("anthropic-beta"), app=is_pass)
+             if (is_api or is_pass) and path == "/v1/messages" else None)
     if extra:
         await record(status=extra.status, stream=0, complete=1, error_type=extra.body["error"]["type"], rejected_by=extra.kind)
         return JSONResponse(status_code=extra.status, content=extra.body)
@@ -384,27 +393,42 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # An API key holds a slot for everything it forwards, token counts and the model list included: its rpm counts them.
     counted = metered or is_api
     held_now = inflight.get(user["id"]) if counted else 0
+    # A pass app key holds an app slot for everything it forwards (its rpm counts token counts and the model list too),
+    # and a shared slot only when metered, as Claude Code does: the apps share the user's cap with Claude Code.
+    pass_held_now = pass_reg.get(user["id"]) if is_pass else 0
+    # Taken before the check, which yields to the loop: a request arriving meanwhile counts this one.
     if counted:
-        # Taken before the check, which yields to the loop: a request arriving meanwhile counts this one.
         inflight.acquire(user["id"])
         held = True
+    if is_pass:
+        pass_reg.acquire(user["id"])
+        pass_held = True
+
+    def let_go() -> None:
+        nonlocal held, pass_held
+        if held:
+            inflight.release(user["id"])
+            held = False
+        if pass_held:
+            pass_reg.release(user["id"])
+            pass_held = False
+
     served: dict = {}   # the pass serving the request (limits.evaluate): its row counts toward that pass alone
     try:
         if is_api:
             decision = await gw.db.run(api_credit.evaluate, cfg, user["id"], model, path, inflight=held_now)
+        elif is_pass:
+            decision = await gw.db.run(passkeys.evaluate, cfg, user["id"], model, path, inflight=held_now,
+                                       pass_inflight=pass_held_now, served=served)
         else:
             decision = await gw.db.run(limits.evaluate, cfg, user["id"], model, path, inflight=held_now, served=served)
     except BaseException:
-        if held:
-            inflight.release(user["id"])
-            held = False
+        let_go()
         raise
     base.update(served)
     if decision:
-        # Refused: its slot goes back now, not after the reject row is written (rejected rows count toward nothing).
-        if held:
-            inflight.release(user["id"])
-            held = False
+        # Refused: its slots go back now, not after the reject row is written (rejected rows count toward nothing).
+        let_go()
         await record(status=decision.status, stream=0, complete=1, error_type=decision.body["error"]["type"], rejected_by=decision.kind)
         logger.info("limit reject user=%s kind=%s", user["name"], decision.kind)
         headers = usage_limit_headers(decision.retry_after, claim=LIMIT_CLAIMS.get(decision.kind)) if decision.status == 429 else (
@@ -495,7 +519,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:
             if is_api:
                 return await _models_for_api(gw, resp, resp_headers, record)
-            return await _models_with_routes(gw, resp, resp_headers, record)
+            return await _models_with_routes(gw, resp, resp_headers, record, routes=not is_pass)
 
         is_stream = "text/event-stream" in resp.headers.get("content-type", "")
 
@@ -542,9 +566,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     except BaseException:
         # Anything unexpected before the response is handed to the client: give the slot back, or the user would
         # hit max_inflight for as long as the process lives.
-        if held:
-            inflight.release(base["user_id"])
-            held = False
+        let_go()
         raise
 
 
@@ -567,16 +589,19 @@ async def _models_for_api(gw: Gateway, resp: httpx.Response, headers: dict, reco
     return Response(raw, status_code=200, headers=headers, media_type="application/json")
 
 
-async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, record) -> Response:
+async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, record, routes: bool = True) -> Response:
+    """Anthropic's list, with the routed models added unless `routes` is off (a pass app key reaches Claude models only)."""
     raw = await resp.aread()
     await resp.aclose()
-    try:
-        data = json.loads(raw)
-        ids = {m.get("id") for m in data.get("data", [])}
-        data["data"].extend(m for m in route_model_entries(gw.cfg) if m["id"] not in ids)
-        raw = json.dumps(data).encode()
-    except (ValueError, AttributeError, TypeError, KeyError):   # not the usual shape: pass it on as is
-        pass
+    entries = route_model_entries(gw.cfg) if routes else []
+    if entries:
+        try:
+            data = json.loads(raw)
+            ids = {m.get("id") for m in data.get("data", [])}
+            data["data"].extend(m for m in entries if m["id"] not in ids)
+            raw = json.dumps(data).encode()
+        except (ValueError, AttributeError, TypeError, KeyError):   # not the usual shape: pass it on as is
+            pass
     await record(status=200, stream=0, complete=1)
     headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
     return Response(raw, status_code=200, headers=headers, media_type="application/json")
