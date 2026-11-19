@@ -20,7 +20,7 @@ document.title = t("app.title");
 $("#lang-toggle").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
 
 function loadPrefs() {
-  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open", source: "cli" };
+  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open" };
   try { return { ...d, ...JSON.parse(localStorage.getItem("cp-prefs") || "{}") }; } catch { return d; }
 }
 function loadSlots() { try { return JSON.parse(localStorage.getItem("cp-colors") || "{}"); } catch { return {}; } }
@@ -127,17 +127,7 @@ const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
 const METRICS = Object.fromEntries(["weighted", "raw", "cost_usd", "requests"].map((k) => [k, t(`metric.${k}`)]));
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
-// The usage views count CLI requests or app keys' (Apps; old credit API keys' requests included), by the switch on top
-// of them; everything while passes are off. A source whose feature is off falls back to CLI.
-const BY_SOURCE = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|users)(\?|$)/;
-const sourcesOn = () => ["cli", ...(S.tickets?.enabled ? ["apps"] : [])];
-const source = () => (sourcesOn().includes(S.prefs.source) ? S.prefs.source : "cli");
-// Requests made with an app key rather than from Claude Code: listed one by one, with the key's name.
-const keyView = () => source() !== "cli";
-const withSource = (path) => (sourcesOn().length > 1 && BY_SOURCE.test(path) ? `${path}${path.includes("?") ? "&" : "?"}source=${source()}` : path);
-
 async function api(path, opts = {}) {
-  if (!opts.method || opts.method === "GET") path = withSource(path);
   const headers = { ...(opts.headers || {}) };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.method && opts.method !== "GET" && S.csrf) headers["x-csrf-token"] = S.csrf;
@@ -156,7 +146,7 @@ let pageStale = false;
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
   "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_share", "trial_share_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
@@ -551,19 +541,6 @@ function subTabs(main, view) {
   };
   show(panes.some((p) => p.dataset.sub === S.sub[view]) ? S.sub[view] : panes[0].dataset.sub);
 }
-// CLI | Apps on the usage views, first in the view's controls row; the views' calls carry it (withSource).
-const SOURCE_VIEWS = new Set(["overview", "usage", "users", "user", "models", "activity", "sessions", "errors"]);
-function sourceSwitch(main, view) {
-  if (sourcesOn().length < 2 || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
-  const box = document.createElement("span");
-  box.innerHTML = seg("source", sourcesOn().map((k) => [k, t(`source.${k}`), `source:${k}`]), source());
-  // No controls row and no lede (a new buyer's overview, with nothing used yet): no switch.
-  const row = main.querySelector(".controls"), lede = main.querySelector(".lede");
-  if (!row && !lede) return;
-  if (row) row.prepend(box.firstChild);
-  else { const div = Object.assign(document.createElement("div"), { className: "controls" }); div.append(box.firstChild); lede.after(div); }
-  wireSegs(main.querySelector('.seg[data-pref="source"]').parentElement, render);
-}
 async function render() {
   pageStale = false;
   renderTabs();
@@ -572,7 +549,7 @@ async function render() {
   const view = VIEWS[S.tab] && (!VIEWS[S.tab].admin || isAdmin()) && featureOn(VIEWS[S.tab]) ? VIEWS[S.tab] : VIEWS.overview;
   const main = $("#main");
   main.innerHTML = `<p class="muted">${t("app.loading")}</p>`;
-  try { await view.render(main); sourceSwitch(main, view); subTabs(main, view === VIEWS[S.tab] ? S.tab : "overview"); } catch (e) {
+  try { await view.render(main); subTabs(main, view === VIEWS[S.tab] ? S.tab : "overview"); } catch (e) {
     if (e.message !== "signed out") main.innerHTML = `<div class="banner critical"><span class="icon">!</span><span>${esc(e.message)}</span></div>`;
   }
   if (S.toPrices) { S.toPrices = false; scrollToPrices(); }
@@ -1712,6 +1689,7 @@ function grantDialog(users, pre = null) {
       <label class="check grant-now wide"><input type="checkbox" name="start_now"${!pre || pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
       <label class="check wide" id="grant-over5h" hidden><input type="checkbox" name="over_5h"> ${t("tk.over_5h")}</label>
+      <label class="check wide" id="grant-overend" hidden><input type="checkbox" name="over_end"> ${t("tk.over_end")}</label>
       <div id="grant-limits" class="wide"></div>
       ${pre ? "" : `<div class="terms wide"><ul class="muted"><li id="grant-terms-l1"></li><li>${t("ord.terms_l3")}</li></ul></div>`}
       <div class="error wide" id="grant-err"></div>
@@ -1729,7 +1707,7 @@ function grantDialog(users, pre = null) {
     // A day pass is one allowance whatever reset it crosses (2026-10-30): no parts to mention, as in the order dialog.
     if (!pre) $("#grant-terms-l1", d).innerHTML = t(f.length.value === "day" ? "ord.split_open" : "ord.terms_l1");
     try {
-      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, over_5h: f.over_5h.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
+      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, over_5h: f.over_5h.checked, over_end: f.over_end.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
     // From an order with a referral discount: the regular price struck, the final one, and the referral's share of it.
@@ -1740,8 +1718,13 @@ function grantDialog(users, pre = null) {
     // Short only of the current 5-hour window: the admin may grant anyway (off by default, cleared when no longer short).
     $("#grant-over5h", d).hidden = !p.short_5h;
     if (!p.short_5h) f.over_5h.checked = false;
-    const fit = p.over_5h ? `<li class="warning">${bdi(p.reason)}</li>`
-      : p.available ? `<li class="good">${t("tk.available")}</li>` : `<li class="critical">${bdi(p.reason)}</li>`;
+    // Outlasting the subscription's end: the admin may grant anyway too (the other checks still apply).
+    $("#grant-overend", d).hidden = !p.short_end;
+    if (!p.short_end) f.over_end.checked = false;
+    const endLi = p.short_end ? `<li class="${p.over_end ? "warning" : "critical"}">${bdi(p.end_warning)}</li>` : "";
+    const other = p.reason && p.reason !== p.end_warning;
+    const fit = endLi + (other ? (p.over_5h ? `<li class="warning">${bdi(p.reason)}</li>` : `<li class="critical">${bdi(p.reason)}</li>`)
+      : p.short_end ? "" : `<li class="good">${t("tk.available")}</li>`);
     const soldOut = p.sold_out_now && p.available ? `<li class="muted">${t("tk.sold_out_note", { tip: tipT(t("tk.sold_out_tip"), "sold_out_vs_queued") })}</li>` : "";
     const weeks = !p.week_split ? `<li class="muted">${t("tk.week_split_none")}</li>`
       : `<li class="muted">${plural("tk.week_split", p.week_split.length, { n: nf0.format(p.week_split.length), pieces: p.week_split.map(fmtShare).join(" + ") })}</li>`;
@@ -1754,7 +1737,7 @@ function grantDialog(users, pre = null) {
       p.limit_rows.map((r, i) => `<label class="check"><input type="checkbox" name="rm" value="${i}" checked> ${esc(limitLabel(r))} = <bdi>${esc(r.value)}</bdi> ${esc(labelOf("unitname.", r.unit))}</label>`).join("") : "";
     $("#grant-go", d).disabled = !p.available;
   };
-  ["user", "tier", "length", "currency", "start_now", "over_5h"].forEach((k) => (f[k].onchange = refresh));
+  ["user", "tier", "length", "currency", "start_now", "over_5h", "over_end"].forEach((k) => (f[k].onchange = refresh));
   refresh();
   f.onsubmit = async (e) => {
     e.preventDefault();
@@ -1763,7 +1746,7 @@ function grantDialog(users, pre = null) {
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, over_5h: f.over_5h.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate,
+        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, over_5h: f.over_5h.checked, over_end: f.over_end.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate,
         ...(pre ? { order_id: pre.order_id } : { terms_version: preview.terms_version }) } });
       d.close(); render();
     } catch (err) {
@@ -3056,41 +3039,25 @@ function heatmap(el, cells) {
 const SESS_PAGE = 50;
 const API_REQ_PAGE = 200;
 async function renderSessions(main) {
-  if (keyView()) return renderApiRequests(main);
   const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.sessQ || "")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
     <div class="controls">${searchBox("sess-q", S.sessQ, t(isAdmin() ? "sess.search_admin" : "sess.search"))}</div>
-    <div class="card table-wrap" id="sess-list"></div></section>`;
+    <div class="card table-wrap" id="sess-list"></div><div class="card table-wrap" id="apps-list" style="margin-top:16px" hidden></div></section>`;
   const fill = latest(async (fresh) => {
-    const d = await page(0);
+    // App keys' requests (Claude Desktop and the like send no session id) are listed one by one below the sessions.
+    const q = encodeURIComponent(S.sessQ || "");
+    const [d, apps] = await Promise.all([page(0), S.tickets?.enabled ? api(`/api/requests?source=apps&limit=${API_REQ_PAGE}&q=${q}`) : null]);
     if (!fresh()) return;
+    const box = $("#apps-list");
+    box.hidden = !apps?.requests.length;
+    box.innerHTML = box.hidden ? "" : `<h3>${t("sess.apps_title")}</h3><p class="sub">${plural("sess.apps_last_n", apps.requests.length, { n: nfFull.format(apps.requests.length) })} ${t("req.lede_content")}</p>${requestsTable(apps.requests, isAdmin())}`;
+    if (!box.hidden) { wireMore(box); wireContent(box); }
     const list = $("#sess-list");
     list.innerHTML = `${d.sessions.length ? sessionsTable(d.sessions, isAdmin()) : `<p class="muted">${t(S.sessQ ? "search.none" : "sess.none")}</p>`}
       ${d.more ? `<button class="btn small more-rows" id="sess-more">${t("tbl.show_more_page")}</button>` : ""}`;
     wireSessMore(list, page, d.sessions.length);
   });
   wireSearch($("#sess-q"), (v) => { S.sessQ = v; fill(); });
-  await fill();
-}
-// API keys are used by SDKs and curl, which send no session id, so the API view lists the requests themselves;
-// Claude Code run on an API key does send one, and its sessions come first. Apps (pass app keys) are listed the same way.
-async function renderApiRequests(main) {
-  const range = S.prefs.range === "1d" ? "1d" : "7d";
-  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_apps")} ${t("req.lede_content")}</p>
-    <div class="controls">${searchBox("api-q", S.apiQ, t(isAdmin() ? "sess.search_api_admin" : "sess.search_api"))}</div>
-    <div id="api-sess"></div><div class="card table-wrap" id="api-list"></div></section>`;
-  const fill = latest(async (fresh) => {
-    const q = encodeURIComponent(S.apiQ || "");
-    const [sess, d] = await Promise.all([api(`/api/sessions?range=${range}&limit=${SESS_PAGE}&q=${q}`), api(`/api/requests?limit=${API_REQ_PAGE}&q=${q}`)]);
-    if (!fresh()) return;
-    $("#api-sess").innerHTML = sess.sessions.length ? `<div class="card table-wrap" style="margin-bottom:16px">${sessionsTable(sess.sessions, isAdmin(), true)}</div>` : "";
-    const list = $("#api-list");
-    list.innerHTML = d.requests.length ? `<p class="sub">${plural("sess.apps_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
-      : `<p class="muted">${t(S.apiQ ? "search.none" : "sess.apps_none")}</p>`;
-    wireMore(main);
-    wireContent(list);
-  });
-  wireSearch($("#api-q"), (v) => { S.apiQ = v; fill(); });
   await fill();
 }
 // An API client's request and reply in full (contents.py): the conversation as read, then the raw JSON.
