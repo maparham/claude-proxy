@@ -816,7 +816,7 @@ REMOVABLE = "kind NOT IN ('share_5h', 'share_7d', 'cost_total')"
 
 
 def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, currency: str, now: float,
-            start_now: bool = False, order_id: int | None = None, over_5h: bool = False) -> dict:
+            start_now: bool = False, order_id: int | None = None, over_5h: bool = False, over_end: bool = False) -> dict:
     """Everything the grant form shows before the admin confirms. Raises TicketError for a bad tier, length or currency
     and when the currency has no rate; capacity trouble is reported in `available`, not raised. `start_now`: the
     ticket starts now beside the user's running tickets instead of after them (next_start). `order_id`: the order
@@ -825,7 +825,10 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     granted), so the preview and the grant agree. `usd` is then the discounted price, `list_usd` stays the regular one.
     `short_5h`: the only check that failed is Anthropic's current 5-hour window (FiveHourFull, checked last). `over_5h`:
     the admin grants anyway; the pass is `available` and `reason` stays as the warning. It then draws on the window's
-    free room first come, so running passes may hit Anthropic's limit before their own until the reset."""
+    free room first come, so running passes may hit Anthropic's limit before their own until the reset.
+    `short_end`: the pass would outlast the subscription's end (SubscriptionEnds); `end_warning` says so. `over_end`:
+    the admin grants anyway, the other checks still applying; buyers' orders and price lists keep the rule. Such a pass
+    cannot be upgraded later (upgrade_quote keeps the rule: an upgrade adds share past the end too)."""
     from . import capacity   # here, not at the top: capacity imports tickets
     now = _now(now)
     _check_tier_length(cfg, tier, length)
@@ -847,13 +850,23 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     share_5h = effective_share_5h(conn, cfg, tier)
     starts_at, replaces = next_start(conn, cfg, user["id"], now, start_now)
     ends_at = starts_at + LENGTHS[length] * DAY
+    end_warning = None
+    excl = [t["id"] for t in replaces]
+    ctx = capacity.context(conn, cfg, ACCOUNT_ID, now, excl)
     try:   # used-up tickets this one replaces end as it starts: their reserved points and 5-hour share go with them
-        capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=[t["id"] for t in replaces])
+        try:
+            capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=excl, ctx=ctx)
+        except SubscriptionEnds as e:   # the admin may grant past it: the other checks must still pass
+            end_warning = str(e)
+            capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=excl, ctx=ctx, sub_end=False)
         available, reason, short_5h = True, None, False
     except FiveHourFull as e:
         available, reason, short_5h = bool(over_5h), str(e), True
     except CapacityError as e:
         available, reason, short_5h = False, str(e), False
+    if end_warning is not None:   # `reason` keeps any other check's message; grant names the end when it alone refuses
+        available = available and bool(over_end)
+        reason = reason or end_warning
     rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
                                           (user["id"],))]
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None
@@ -863,8 +876,9 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
             "amount": round_local(p["usd"], rate["rate"], steps[currency], vat_percent(cfg)), "vat_percent": vat_percent(cfg),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
             "short_5h": short_5h, "over_5h": short_5h and bool(over_5h),
+            "short_end": end_warning is not None, "end_warning": end_warning, "over_end": end_warning is not None and bool(over_end),
             "replaces": [t["id"] for t in replaces], "start_now": bool(start_now),
-            "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available or short_5h,
+            "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available or short_5h or end_warning is not None,
             "week_split": week_split(conn, cfg, share, starts_at, ends_at, now),
             "terms_version": TERMS_VERSION,
             "limit_rows": rows,
@@ -876,7 +890,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, order_id: int | None = None,
           paid: bool = False, after=None, now: float | None = None, terms_version: str | None = None, start_now: bool = False,
-          over_5h: bool = False) -> dict:
+          over_5h: bool = False, over_end: bool = False) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
     capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
     `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different.
@@ -888,7 +902,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
     and rate are now, with no stale-rate confirmation. `after(ticket_id)`: called inside the transaction, last.
     `start_now`: start now beside the user's running tickets (preview); an order's own choice governs a grant from it.
     `over_5h`: grant even though Anthropic's current 5-hour window lacks the pass's 5-hour share (preview); the
-    weekly checks still refuse. Audited as over_5h."""
+    weekly checks still refuse. Audited as over_5h. `over_end`: grant even though the pass outlasts the subscription's
+    end (preview); audited as over_end."""
     now = _now(now)
     note = _note(note)
     if not cfg.tickets.enabled:
@@ -907,7 +922,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         # Unpaid: the order's referral discount is applied again to today's price, so expect_usd is the discounted one.
         # tickets.ref_off_usd keeps the referral part alone (preview's re-floored ref_off_usd unpaid, the order's own
         # paid), NULL without a referral: list_usd - usd would also count a sale price (ticket_discounts) in it.
-        p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id, over_5h=over_5h)
+        p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id, over_5h=over_5h,
+                    over_end=over_end)
         if order_id is not None:
             grant_terms = orow["terms_version"] if orow is not None else TERMS_VERSION
         else:
@@ -931,7 +947,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
             end_used_up(conn, get(conn, rid), now)
             db.audit(conn, actor, "ticket_used_up", user["name"], {"ticket_id": rid})
         if not p["available"]:   # judged by preview just now, inside this transaction (2026-11-04 spec, §2)
-            raise CapacityError(p["reason"])
+            raise CapacityError(p["end_warning"] if p["short_end"] and not p["over_end"] and (p["over_5h"] or p["reason"] == p["end_warning"])
+                                else p["reason"])
         cur = conn.execute(
             "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
             "discount_id, currency, rate, amount, granted_by, granted_at, note, ref_off_usd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
@@ -947,7 +964,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
                                                             "list_usd": p["list_usd"], "currency": currency, "amount": p["amount"],
                                                             "starts_at": p["starts_at"], "ends_at": p["ends_at"],
                                                             "terms_version": grant_terms, "start_now": bool(start_now),
-                                                            **({"over_5h": True} if p["over_5h"] else {})})
+                                                            **({"over_5h": True} if p["over_5h"] else {}),
+                                                            **({"over_end": True} if p["over_end"] else {})})
         if order_id is not None:
             from . import orders   # here, not at the top: orders imports tickets
             orders.close_for_grant(conn, order_id, user["id"], tid, now, actor=actor)

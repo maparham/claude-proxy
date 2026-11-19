@@ -93,3 +93,67 @@ def test_buyers_see_when_it_is_back_not_the_subscription(db):
         orders._check_on_sale(conn, cfg, "lite", "week", NOW, None, True)
     assert str(e.value) == "That pass is sold out; it is available again in 5 days and 3 hours."
     assert "subscription" not in str(e.value).lower()
+
+
+def test_the_admin_may_grant_past_the_end(db):
+    import json
+    from tests.tickets_helpers import user
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    _clear(conn)   # the end falls back to the weekly reset, NOW + 3d: a week pass outlasts it
+    alice = user(conn, ids["alice"])
+    p = tickets.preview(conn, cfg, alice, "lite", "week", "EUR", NOW)
+    assert (p["available"], p["short_end"], p["over_end"]) == (False, True, False) and "weekly reset" in p["end_warning"]
+    p = tickets.preview(conn, cfg, alice, "lite", "week", "EUR", NOW, over_end=True)
+    assert (p["available"], p["short_end"], p["over_end"]) == (True, True, True)
+    assert p["sold_out_now"]   # buyers still see it sold out: the override is the admin's alone
+    t = tickets.grant(conn, cfg, ids["admin"], alice, "lite", "week", "EUR", now=NOW, terms_version=tickets.TERMS_VERSION,
+                      over_end=True)
+    a = json.loads(conn.execute("SELECT detail_json FROM audit_log WHERE action='ticket_grant'").fetchone()[0])
+    assert a["ticket_id"] == t["id"] and a["over_end"] is True
+
+
+def test_over_end_does_not_lift_the_weekly_checks(db):
+    from tests.tickets_helpers import report, user
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    _clear(conn)
+    report(conn, ids, 99.0, NOW - 30)   # the week is nearly full too
+    p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "week", "EUR", NOW, over_end=True)
+    assert (p["available"], p["short_end"]) == (False, True) and "This week has" in p["reason"]
+
+
+def test_the_end_refusal_is_named(db):
+    from tests.tickets_helpers import user
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    _clear(conn)
+    with pytest.raises(tickets.CapacityError, match="weekly reset; no end date is set"):
+        tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=NOW,
+                      terms_version=tickets.TERMS_VERSION)
+
+
+@pytest.mark.parametrize("over_5h, over_end, ok, refusal", [
+    (False, False, False, "5-hour window"),
+    (True, False, False, "subscription ends"),
+    (False, True, False, "5-hour window"),
+    (True, True, True, None),
+])
+def test_both_overrides_when_both_are_short(db, over_5h, over_end, ok, refusal):
+    from tests.test_capacity_points import _five_hour_cfg, five_hour
+    from tests.tickets_helpers import user
+    conn, cfg, ids = seeded(db)
+    _five_hour_cfg(conn, cfg, ids)
+    five_hour(conn, 95.0)
+    tickets.set_subscription_end(conn, int(NOW + DAY / 2), ids["admin"], now=NOW)   # ends before a day pass would
+    alice = user(conn, ids["alice"])
+    p = tickets.preview(conn, cfg, alice, "lite", "day", "EUR", NOW, over_5h=over_5h, over_end=over_end)
+    assert (p["available"], p["short_5h"], p["short_end"]) == (ok, True, True)
+    assert "5-hour window" in p["reason"]   # the dialog keeps the 5-hour line; the end has its own (end_warning)
+    run = lambda: tickets.grant(conn, cfg, ids["admin"], alice, "lite", "day", "EUR", now=NOW,  # noqa: E731
+                                terms_version=tickets.TERMS_VERSION, over_5h=over_5h, over_end=over_end)
+    if ok:
+        run()
+    else:
+        with pytest.raises(tickets.CapacityError, match=refusal):
+            run()

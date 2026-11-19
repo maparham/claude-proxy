@@ -335,12 +335,14 @@ def check_sub_end(conn: sqlite3.Connection, week, ends_at: float, now: float) ->
 
 
 def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
-          ends_at: float, now: float, exclude=(), ctx: Context | None = None) -> None:
-    """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails."""
+          ends_at: float, now: float, exclude=(), ctx: Context | None = None, sub_end: bool = True) -> None:
+    """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails.
+    `sub_end=False`: skip check_sub_end (the admin grants past the subscription's end anyway; tickets.preview)."""
     ctx = ctx or context(conn, cfg, account_id, now, exclude)
     if not ctx.fresh:
         raise tickets.CapacityError(NO_REPORT)
-    check_sub_end(conn, ctx.week, ends_at, now)
+    if sub_end:
+        check_sub_end(conn, ctx.week, ends_at, now)
     ps = pieces(ctx.week, share, starts_at, ends_at)
     ws = ctx.week[0]
     need = ps.get(ws, 0.0) * ctx.scale / 100
