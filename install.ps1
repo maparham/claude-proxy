@@ -133,7 +133,10 @@ function Install-ClaudeGateway {
     try {
       if (Test-Path -LiteralPath $zip) { Copy-Item -LiteralPath $zip -Destination $archive }
       else { Invoke-WebRequest -UseBasicParsing -TimeoutSec 120 -Uri $zip -OutFile $archive }   # never hang gclaude's start
-      Expand-Archive -LiteralPath $archive -DestinationPath (Join-Path $tmp 'src')
+      # Not Expand-Archive: Windows PowerShell started from PowerShell 7 inherits its module path and loads its
+      # Archive module, which fails there ("Cannot find an overload for ExtractToDirectory"). .NET's own unzip is in both.
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      [IO.Compression.ZipFile]::ExtractToDirectory($archive, (Join-Path $tmp 'src'))
     } catch {
       throw "install.ps1: could not get $zip ($($_.Exception.Message))"
     }
