@@ -136,8 +136,10 @@ const source = () => (sourcesOn().includes(S.prefs.usageSource) ? S.prefs.usageS
 const withSource = (path) => (sourcesOn().length > 1 && BY_SOURCE.test(path) && !/[?&]source=/.test(path)
   ? `${path}${path.includes("?") ? "&" : "?"}source=${source()}` : path);
 
+// The usage views' reads go through usageApi; other views (tickets, orders, dialogs) read everything, whatever the switch.
+const usageApi = (path) => api(withSource(path));
+
 async function api(path, opts = {}) {
-  if (!opts.method || opts.method === "GET") path = withSource(path);
   const headers = { ...(opts.headers || {}) };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.method && opts.method !== "GET" && S.csrf) headers["x-csrf-token"] = S.csrf;
@@ -644,7 +646,7 @@ $("#util-pill").onclick = () => subscriptionDialog().catch(() => {});
 
 async function renderOverview(main) {
   const buyer = !isAdmin() && S.tickets?.enabled;
-  const [ov, me, keys, tk, mo, ref] = await Promise.all([api("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), buyer ? api("/api/me/tickets") : null,
+  const [ov, me, keys, tk, mo, ref] = await Promise.all([usageApi("/api/overview"), isAdmin() ? null : api("/api/me/status"), api("/api/keys"), buyer ? api("/api/me/tickets") : null,
     buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null,
     isAdmin() ? null : api("/api/referrals/me").catch(() => null)]);
   const order = mo && mo.order;
@@ -711,7 +713,7 @@ async function renderOverview(main) {
   if (trial) wireTrial(main, trial); else if (!isAdmin()) takeTrialParam();
   if (isAdmin()) $("#quota-bars").innerHTML = ov.quota.map(quotaBar).join("") || `<p class="muted">${t("ov.no_figures")}</p>`;
   if (isAdmin()) {
-    const s = await api(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
+    const s = await usageApi(`/api/series?range=7d&granularity=day&split=user&tz_offset=${tzOffset()}`);
     stackedTime($("#ov-users"), s.points, "weighted", "user", "day");
   }
   if (tk) startCountdowns(main);
@@ -1467,7 +1469,7 @@ async function renderUsage(main) {
   const days = { "1d": 1, "7d": 7, "30d": 30, "90d": 90, "365d": 365 }[p.range] || 7;
   const tooCoarse = (g) => days / { hour: 1 / 24, day: 1, week: 7 }[g] < 4;
   const gran = tooCoarse(p.granularity) ? "hour" : p.granularity;
-  const [d, ov] = await Promise.all([api(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`), isAdmin() ? null : api("/api/overview")]);
+  const [d, ov] = await Promise.all([usageApi(`/api/series?range=${p.range}&granularity=${gran}&split=${p.split}&tz_offset=${tzOffset()}`), isAdmin() ? null : usageApi("/api/overview")]);
   main.innerHTML = `<section class="view"><h2>${t("tab.usage")}</h2>
     <p class="lede">${t(isAdmin() ? "usage.lede_admin" : "usage.lede_user", { weighted: tipT(t("metric.weighted"), "weighted"), raw: tipT(t("metric.raw"), "raw"), ref: esc(refModel()) })}</p>
     <div class="controls">
@@ -1488,7 +1490,7 @@ async function renderUsage(main) {
 }
 
 async function renderUsers(main) {
-  const [{ users }, lim] = await Promise.all([api("/api/users"), api("/api/limits")]);
+  const [{ users }, lim] = await Promise.all([usageApi("/api/users"), api("/api/limits")]);
   S.kinds = lim.kinds;
   main.innerHTML = `<section class="view"><h2>${t("tab.users")}</h2>
     <p class="lede">${t("users.lede", { share: tipT(t("users.est_share"), "share") })}</p>
@@ -2795,7 +2797,7 @@ async function renderUser(main) {
   const period = ["24h", "7d", "30d", "90d", "365d"].includes(p.userPeriod) ? p.userPeriod : "7d";
   const range = period === "24h" ? "1d" : period, gran = range === "1d" ? "hour" : "day";
   const q = `user_id=${id}&tz_offset=${tzOffset()}`;
-  const [{ users }, lim] = await Promise.all([api("/api/users"), api("/api/limits")]);
+  const [{ users }, lim] = await Promise.all([usageApi("/api/users"), api("/api/limits")]);
   S.kinds = lim.kinds;
   const u = users.find((x) => x.id === id);
   if (!u) {
@@ -2803,9 +2805,9 @@ async function renderUser(main) {
     return;
   }
   const [ov, series, models, heat, sess, errs, reqs, keys, ips, pk] = await Promise.all([
-    api(`/api/overview?user_id=${id}`), api(`/api/series?range=${range}&granularity=${gran}&split=model&${q}`),
-    api(`/api/models?range=${range}&${q}`), api(`/api/heatmap?range=${range}&${q}`), api(`/api/sessions?range=${range}&${q}`),
-    api(`/api/errors?range=${range}&${q}`), api(`/api/requests?user_id=${id}&limit=100`), api(`/api/keys?user_id=${id}`), api(`/api/admin/users/${id}/ips`),
+    usageApi(`/api/overview?user_id=${id}`), usageApi(`/api/series?range=${range}&granularity=${gran}&split=model&${q}`),
+    usageApi(`/api/models?range=${range}&${q}`), usageApi(`/api/heatmap?range=${range}&${q}`), usageApi(`/api/sessions?range=${range}&${q}`),
+    usageApi(`/api/errors?range=${range}&${q}`), usageApi(`/api/requests?user_id=${id}&limit=100`), api(`/api/keys?user_id=${id}`), api(`/api/admin/users/${id}/ips`),
     S.tickets?.enabled ? api(`/api/admin/users/${id}/passkeys`) : null]);
   const tot = ov.totals[period];
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
@@ -2995,7 +2997,7 @@ async function renderQuota(main) {
 
 async function renderModels(main) {
   const p = S.prefs;
-  const d = await api(`/api/models?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
+  const d = await usageApi(`/api/models?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
   const mm = p.modelMetric;
   const provLabel = (k) => (!isAdmin() ? `${t("models.api_equiv", { p: k === "anthropic" ? "Claude" : bdi(k) })}${tipI("provider_sub")}`
     : k === "anthropic" ? `${t("models.claude_sub")}${tipI("provider_sub")}` : `${t("models.own_key", { p: bdi(k) })}${tipI("provider_own")}`);
@@ -3033,7 +3035,7 @@ async function renderModels(main) {
 
 async function renderActivity(main) {
   const p = S.prefs;
-  const d = await api(`/api/heatmap?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
+  const d = await usageApi(`/api/heatmap?range=${p.range === "1d" ? "7d" : p.range}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.activity")}</h2><p class="lede">${t("act.lede")}</p>
     <div class="controls">${seg("range", [["7d", t("range.7d")], ["30d", t("range.30d")], ["90d", t("range.90d")], ["365d", t("range.365d")]], p.range === "1d" ? "7d" : p.range)}</div>
     <div class="card heat-wrap"><div class="chart" id="heat"></div></div></section>`;
@@ -3063,7 +3065,7 @@ const SESS_PAGE = 50;
 const API_REQ_PAGE = 200;
 async function renderSessions(main) {
   if (source() === "apps") return renderApiRequests(main);
-  const page = (offset) => api(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.sessQ || "")}`);
+  const page = (offset) => usageApi(`/api/sessions?range=${S.prefs.range === "1d" ? "1d" : "7d"}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.sessQ || "")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(S.prefs.range === "1d" ? "sess.lede_1d" : "sess.lede_7d")}</p>
     <div class="controls">${searchBox("sess-q", S.sessQ, t(isAdmin() ? "sess.search_admin" : "sess.search"))}</div>
     <div class="card table-wrap" id="sess-list"></div><div class="card table-wrap" id="apps-list" style="margin-top:16px" hidden></div></section>`;
@@ -3084,19 +3086,22 @@ async function renderSessions(main) {
   wireSearch($("#sess-q"), (v) => { S.sessQ = v; fill(); });
   await fill();
 }
-// An API client's request and reply in full (contents.py): the conversation as read, then the raw JSON.
 // Apps send no session id, so the Apps view lists the requests themselves, with the key each used;
 // Claude Code run on an app key does send one, and its sessions come first.
 async function renderApiRequests(main) {
   const range = S.prefs.range === "1d" ? "1d" : "7d";
+  const page = (offset) => usageApi(`/api/sessions?range=${range}&limit=${SESS_PAGE}&offset=${offset}&q=${encodeURIComponent(S.apiQ || "")}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_apps")} ${t("req.lede_content")}</p>
     <div class="controls">${searchBox("api-q", S.apiQ, t(isAdmin() ? "sess.search_api_admin" : "sess.search_api"))}</div>
     <div id="api-sess"></div><div class="card table-wrap" id="api-list"></div></section>`;
   const fill = latest(async (fresh) => {
     const q = encodeURIComponent(S.apiQ || "");
-    const [sess, d] = await Promise.all([api(`/api/sessions?range=${range}&limit=${SESS_PAGE}&q=${q}`), api(`/api/requests?limit=${API_REQ_PAGE}&q=${q}`)]);
+    const [sess, d] = await Promise.all([page(0), usageApi(`/api/requests?limit=${API_REQ_PAGE}&q=${q}`)]);
     if (!fresh()) return;
-    $("#api-sess").innerHTML = sess.sessions.length ? `<div class="card table-wrap" style="margin-bottom:16px">${sessionsTable(sess.sessions, isAdmin(), true)}</div>` : "";
+    const box = $("#api-sess");
+    box.innerHTML = sess.sessions.length ? `<div class="card table-wrap" style="margin-bottom:16px">${sessionsTable(sess.sessions, isAdmin())}
+      ${sess.more ? `<button class="btn small more-rows" id="sess-more">${t("tbl.show_more_page")}</button>` : ""}</div>` : "";
+    wireSessMore(box, page, sess.sessions.length);
     const list = $("#api-list");
     list.innerHTML = d.requests.length ? `<p class="sub">${plural("sess.apps_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
       : `<p class="muted">${t(S.apiQ ? "search.none" : "sess.apps_none")}</p>`;
@@ -3106,6 +3111,7 @@ async function renderApiRequests(main) {
   wireSearch($("#api-q"), (v) => { S.apiQ = v; fill(); });
   await fill();
 }
+// An API client's request and reply in full (contents.py): the conversation as read, then the raw JSON.
 function wireContent(root) {
   root.querySelectorAll("[data-content]").forEach((b) => (b.onclick = async () => {
     b.disabled = true;
@@ -3203,7 +3209,7 @@ function sessionsTable(sessions, showUser, fold = false) {
 async function renderErrors(main) {
   const p = S.prefs;
   const range = ["90d", "365d"].includes(p.range) ? "30d" : p.range;
-  const d = await api(`/api/errors?range=${range}&tz_offset=${tzOffset()}`);
+  const d = await usageApi(`/api/errors?range=${range}&tz_offset=${tzOffset()}`);
   main.innerHTML = `<section class="view"><h2>${t("tab.errors")}</h2><p class="lede">${!isAdmin() ? t("errs.lede_user") : t("errs.lede_admin", { quota: tipT(t("errs.quota"), "err:upstream_quota"), throttle: tipT(t("errs.throttle"), "err:upstream_throttle"), one: tipT(t("errs.one"), "err:upstream_request_scoped") })}</p>
     <div class="controls">${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
