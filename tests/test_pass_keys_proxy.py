@@ -248,3 +248,13 @@ async def test_slots_released_on_failure(penv, anthropic):
     assert r.status_code == 502 and last(conn)["error_type"] == "gateway_upstream_unreachable"
     assert slots(gw, ids["alice"]) == (0, 0)
     assert inflight_of(gw, "pass_metered_inflight").get(ids["alice"]) == 0
+
+
+async def test_dashboard_says_whether_a_pass_runs(penv):
+    """has_pass drives the API tab: a running pass opens it on the app keys, none shows the "buy a pass" line."""
+    from claude_proxy.web import create_dashboard_app
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        assert (await c.get("/api/me/passkeys", headers=bearer(keys["alice"]))).json()["has_pass"] is True
+        tickets.cancel(conn, cfg, None, t["id"])
+        assert (await c.get("/api/me/passkeys", headers=bearer(keys["alice"]))).json()["has_pass"] is False

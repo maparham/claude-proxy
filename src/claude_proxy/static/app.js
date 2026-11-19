@@ -2298,8 +2298,13 @@ const badNum = (vals, errEl) => (vals.some(Number.isNaN) ? (errEl ? (errEl.textC
 async function renderApi(main) {
   // The zone name lets usage days follow clock changes; the offset is the fallback for a zone the server doesn't know.
   const tz = new URLSearchParams({ tz_offset_s: -new Date().getTimezoneOffset() * 60, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" });
-  const [me, pk] = await Promise.all([S.api?.enabled ? api(`/api/me/api?${tz}`) : null, S.tickets?.enabled ? api(`/api/me/passkeys?${tz}`) : null]);
-  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>${me ? apiCreditHtml(me) : ""}${pk ? passKeysCard(pk) : ""}</section>`;
+  const [got, pk] = await Promise.all([S.api?.enabled ? api(`/api/me/api?${tz}`) : null, S.tickets?.enabled ? api(`/api/me/passkeys?${tz}`) : null]);
+  // The credit part only for someone who has had credit (a grant, a key, a balance) or an admin: to a pass holder
+  // with none, "$0, requests are refused" reads as "the API doesn't work for you" (2026-11-19).
+  const me = got && (isAdmin() || !pk || got.grants.length || got.keys.length || got.balance !== 0) ? got : null;
+  // Both parts: open on the app keys while a pass runs, unless a sub-tab was picked (the address or a click).
+  if (me && pk?.has_pass && !S.sub.api) S.sub.api = "apps";
+  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>${me && pk ? `<p class="lede">${t("pk.vs_credit")}</p>` : ""}${me ? apiCreditHtml(me) : ""}${pk ? passKeysCard(pk) : ""}</section>`;
   if (me) wireApiCredit(main);
   if (pk) wirePassKeys(main);
   wireMore(main);
@@ -2356,7 +2361,7 @@ function passKeysCard(pk) {
   const keyName = Object.fromEntries(pk.keys.map((k) => [k.id, k.label]));
   const base = pk.base_url ? `<code dir="ltr" class="key">${esc(pk.base_url)}</code>` : `<p class="muted">${t("api.no_base_url")}</p>`;
   return `<div class="card" data-sub="apps" data-sub-label="${esc(t("pk.title"))}" style="margin-top:16px"><h3>${t("pk.title")}</h3>
-    <p class="sub">${t("pk.lede")}</p><p class="sub">${t("pk.note")}</p>
+    <p class="sub">${t("pk.lede")}</p><p class="sub">${t("pk.note")}</p>${pk.has_pass === false ? `<p class="foot critical">${t("pk.no_pass")}</p>` : ""}
     ${passKeyForm()}
     ${passKeysTable(pk.keys)}
     <h3 style="margin-top:16px">${t("pk.setup")}</h3>

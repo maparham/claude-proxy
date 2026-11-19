@@ -1124,7 +1124,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = principal(request)
         need_passes()
         tz_offset_s = max(-50400, min(50400, tz_offset_s))
-        return {"enabled": cfg.tickets.enabled, "keys": passkeys.keys(conn, user["id"]),
+        # has_pass: what passkeys.evaluate asks first, so the tab can say whether a key would be served now.
+        has_pass = tickets.is_gated(conn, user["id"]) and bool(tickets.running(conn, user["id"], time.time()))
+        return {"enabled": cfg.tickets.enabled, "has_pass": has_pass, "keys": passkeys.keys(conn, user["id"]),
                 "usage": passkeys.usage(conn, user["id"], time.time() - 30 * 86400, tz_offset_s, tz[:64] or None),
                 "base_url": cfg.listener.public_url}
 
