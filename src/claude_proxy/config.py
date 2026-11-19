@@ -106,7 +106,8 @@ class LimitsConfig:
 
 @dataclass
 class ApiConfig:
-    """API keys on prepaid credit (2026-10-21 spec). On while the [api] section exists, like [tickets]."""
+    """API keys on prepaid credit (2026-10-21 spec). No longer used: API keys are pass app keys since the 2026-11-19
+    spec. Still parsed so config files with an [api] section keep loading."""
     enabled: bool = False
     max_inflight: int = 4    # per account, unless the admin set its own on the API tab
     rpm: int = 60            # requests per minute per account, likewise
@@ -266,7 +267,7 @@ def _default_prices() -> dict[str, Price]:
         "claude-sonnet-5-5*": Price(2.0, 10.0, cache_read=0.10),
         "claude-sonnet-5*": Price(2.0, 10.0),
         "claude-sonnet-4*": Price(3.0, 15.0),
-        # Haiku 5.5 costs 5x this on prompts over 100K tokens. API-key charges apply it (api_credit.LONG_PROMPT);
+        # Haiku 5.5 costs 5x this on prompts over 100K tokens (api_credit.LONG_PROMPT);
         # these estimates have one price per model, so they undercount such prompts.
         "claude-haiku-5-5*": Price(0.10, 0.50, cache_read=0.01),
         "claude-haiku-4*": Price(1.0, 5.0),
@@ -537,7 +538,7 @@ class Config:
             if cfg.tickets.turnstile_site_key and not cfg.tickets.turnstile_secret():
                 logger.warning("[tickets] turnstile_site_key is set but TURNSTILE_SECRET is not in the environment; "
                                "visitors cannot order from the home page")
-        if "api" in data:
+        if "api" in data:   # no longer used (2026-11-19): parsed so existing config files still load
             a = dict(data["api"])
             if "enabled" in a:
                 raise ConfigError(f"{toml_path}: [api].enabled is not a setting: the API is on while the [api] section "

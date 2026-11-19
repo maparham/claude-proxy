@@ -660,6 +660,18 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for col in ("paid_at", "reverse_started_at", "reversed_at"):   # refunds within 15 minutes (2026-11-08)
         if col not in _columns(conn, "payments"):
             conn.execute(f"ALTER TABLE payments ADD COLUMN {col} INTEGER")
+    # One key type (2026-11-19): every live credit API key (sk-proxy-a-) becomes a pass app key with the same hash, so
+    # the raw key keeps working, now on the user's pass. The api_keys rows stay, revoked, for history.
+    live = conn.execute("SELECT id, user_id, key_hash, key_prefix, label, created_at, last_used_at FROM api_keys "
+                        "WHERE revoked_at IS NULL").fetchall()
+    if live:
+        now = int(time.time())
+        for a in live:
+            conn.execute("INSERT INTO pass_keys(user_id, key_hash, key_prefix, label, created_at, last_used_at) "
+                         "SELECT ?,?,?,?,?,? WHERE NOT EXISTS(SELECT 1 FROM pass_keys WHERE key_hash=?)",
+                         (a["user_id"], a["key_hash"], a["key_prefix"], a["label"], a["created_at"], a["last_used_at"], a["key_hash"]))
+        conn.execute(f"UPDATE api_keys SET revoked_at=? WHERE id IN ({','.join('?' * len(live))})", (now, *(a["id"] for a in live)))
+        audit(conn, None, "api_keys_to_pass_keys", "gateway", {"keys": len(live)})
 
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
@@ -694,7 +706,6 @@ def hash_key(raw: str) -> str:
 
 FULL_KEY_PREFIX = "sk-proxy-"
 ROUTES_KEY_PREFIX = "sk-proxy-r-"   # only for people to tell the keys apart; scope comes from the column that matched
-API_KEY_PREFIX = "sk-proxy-a-"      # an API key (2026-10-21): Claude Code billed per token against prepaid credit
 PASS_KEY_PREFIX = "sk-proxy-p-"     # a pass app key (2026-11-18): any Anthropic-format app, served while the user's pass runs
 
 
@@ -721,26 +732,19 @@ def create_user(conn: sqlite3.Connection, name: str, role: str = "user", passwor
 
 def find_user_by_key(conn: sqlite3.Connection, raw_key: str) -> dict | None:
     """The user a gateway key belongs to, with `key_scope`: "full" for their Claude Code key or a machine's key,
-    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows), "api" for an API key, "pass" for a pass app key."""
+    "routes" for their routes-only key, which may only reach third-party routes (app.scope_allows), "pass" for a pass app key
+    (old sk-proxy-a- API keys became pass app keys in _migrate)."""
     h = hash_key(raw_key)
     row = conn.execute("SELECT * FROM users WHERE key_hash=? OR routes_key_hash=?", (h, h)).fetchone()
     if row is not None:
         return {**dict(row), "key_scope": "full" if row["key_hash"] == h else "routes"}
-    a = conn.execute("SELECT id, user_id, last_used_at FROM api_keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
-    if a is not None:
-        row = conn.execute("SELECT * FROM users WHERE id=?", (a["user_id"],)).fetchone()
-        now = int(time.time())
-        if (a["last_used_at"] or 0) < now - 3600:
-            conn.execute("UPDATE api_keys SET last_used_at=? WHERE id=?", (now, a["id"]))
-        # Never admin powers, like a machine key: an API key is handed to tools and pasted into config files.
-        return {**dict(row), "key_scope": "api", "role": "user", "api_key_id": a["id"]}
     p = conn.execute("SELECT id, user_id, last_used_at FROM pass_keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()
     if p is not None:
         row = conn.execute("SELECT * FROM users WHERE id=?", (p["user_id"],)).fetchone()
         now = int(time.time())
         if (p["last_used_at"] or 0) < now - 3600:
             conn.execute("UPDATE pass_keys SET last_used_at=? WHERE id=?", (now, p["id"]))
-        # Never admin powers: like an API key it is pasted into other apps' settings.
+        # Never admin powers: it is pasted into other apps' settings.
         return {**dict(row), "key_scope": "pass", "role": "user", "pass_key_id": p["id"]}
 
     k = conn.execute("SELECT id, user_id, last_used_at FROM keys WHERE key_hash=? AND revoked_at IS NULL", (h,)).fetchone()

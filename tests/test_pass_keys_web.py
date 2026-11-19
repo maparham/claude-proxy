@@ -1,7 +1,7 @@
 """Pass app keys on the dashboard (2026-11-18 spec, section 3a)."""
 import time
 
-from claude_proxy import api_credit, passkeys
+from claude_proxy import passkeys
 from claude_proxy.db import add_machine_key
 from claude_proxy.web import create_dashboard_app
 from tests.conftest import asgi_client
@@ -9,7 +9,7 @@ from tests.test_web import admin_client, bearer, env  # noqa: F401  (fixture)
 
 OFF = "Passes are not enabled on this gateway."
 REFUSAL = "Pass app keys work only in apps (/v1/messages); sign in to the dashboard instead."
-MACHINE = "A computer's key cannot manage API or app keys. Sign in with your first key to manage them."
+MACHINE = "A computer's key cannot manage app keys. Sign in with your first key to manage them."
 
 
 def on(gw):
@@ -60,26 +60,35 @@ async def test_a_pass_key_cannot_use_the_dashboard(env):  # noqa: F811
         assert r.status_code == 403 and r.json()["error"] == REFUSAL
 
 
-async def test_sources_split_cli_api_and_apps(env):  # noqa: F811
+async def test_sources_split_cli_and_apps(env):  # noqa: F811
+    """Old credit API keys' requests (api_key_id) show under Apps with the old key's name (2026-11-19 spec)."""
     gw, conn, ids, keys = env
     on(gw)
-    akid, _ = api_credit.create_key(conn, ids["alice"], "ci-bot")
+    akid = conn.execute("INSERT INTO api_keys(user_id, key_hash, key_prefix, label, created_at, revoked_at) "
+                        "VALUES(?, 'h', 'sk-proxy-a-xy', 'ci-bot', 0, 1)", (ids["alice"],)).lastrowid
     pkid, _ = passkeys.create_key(conn, ids["alice"], "Desktop")
     now = time.time()
     for model, a, p in (("claude-api-m", akid, None), ("claude-app-m", None, pkid)):
         conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, status, api_key_id, pass_key_id) "
-                     "VALUES(?,?,?,?,?,?,?,?,?,?)", (ids["alice"], now - 60, now - 59, "POST", "/v1/messages", "anthropic", model, 200, a, p))
+                     "VALUES(?,?,?,?,?,?,?,?,?,?)", (ids["alice"], now - 60 + bool(p), now - 59, "POST", "/v1/messages", "anthropic", model, 200, a, p))
     async with admin_client(gw) as c:
         async def models(source, q=""):
             return [r["model"] for r in (await c.get(f"/api/requests?source={source}&q={q}")).json()["requests"]]
         assert "claude-app-m" not in await models("cli") and "claude-api-m" not in await models("cli")
-        assert await models("api") == ["claude-api-m"]
-        assert await models("apps") == ["claude-app-m"]
+        assert (await c.get("/api/requests?source=api")).status_code == 400
+        assert await models("apps") == ["claude-app-m", "claude-api-m"]
         assert len(await models("all")) == 5
         rows = (await c.get("/api/requests?source=apps")).json()["requests"]
-        assert rows[0]["key"] == "Desktop"
-        assert await models("apps", "Desk") == ["claude-app-m"] and await models("apps", "nobody") == []
-        assert (await c.get("/api/overview?source=apps")).json()["totals"]["24h"]["requests"] == 1
+        assert [r["key"] for r in rows] == ["Desktop", "ci-bot"]
+        assert await models("apps", "Desk") == ["claude-app-m"] and await models("apps", "ci-b") == ["claude-api-m"]
+        assert await models("apps", "nobody") == []
+        assert (await c.get("/api/overview?source=apps")).json()["totals"]["24h"]["requests"] == 2
+    # Another user's old API-key row stays out of alice's own view (the source is ANDed with her scope).
+    conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, status, api_key_id) "
+                 "VALUES(?,?,?,?,?,?,?,?,?)", (ids["admin"], now - 30, now - 29, "POST", "/v1/messages", "anthropic", "claude-other-m", 200, akid))
+    async with asgi_client(create_dashboard_app(gw)) as c:
+        r = await c.get("/api/requests?source=apps", headers=bearer(keys["alice"]))
+        assert [x["model"] for x in r.json()["requests"]] == ["claude-app-m", "claude-api-m"]
 
 
 async def test_admin_creates_and_revokes_for_another_user(env):  # noqa: F811

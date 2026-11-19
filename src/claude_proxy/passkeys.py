@@ -59,7 +59,7 @@ def revoke_key(conn, user_id: int, key_id: int, actor: int | None) -> bool:
 
 
 def usage(conn, user_id: int, since: float, tz_offset_s: int = 0, tz: str | None = None) -> list[dict]:
-    """Requests and tokens per local day and key, bucketed like api_credit.usage: a zone's own clock when `tz` is known,
+    """Requests and tokens per local day and key, bucketed by local day: a zone's own clock when `tz` is known,
     else the fixed `tz_offset_s`."""
     try:
         zone = zoneinfo.ZoneInfo(tz) if tz else None

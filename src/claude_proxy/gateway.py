@@ -43,8 +43,7 @@ class Gateway:
             if n:
                 logger.warning("tickets are off in the config but %d users are ticket-gated; their requests are refused "
                                "until each is ungated on the Users page", n)
-        if cfg.api.enabled:
-            api_credit.seed_rates(conn, cfg)
+        api_credit.seed_rates(conn, cfg)   # the Claude models an app key may use (2026-11-19 spec)
 
     def view(self, conn: sqlite3.Connection, http: httpx.AsyncClient) -> Gateway:
         """This gateway for an app served on another thread's event loop (the dashboard): its own connection and

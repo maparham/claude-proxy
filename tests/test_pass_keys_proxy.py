@@ -8,10 +8,11 @@ import httpx
 import pytest
 from fastapi.responses import JSONResponse, StreamingResponse
 
-from claude_proxy import contents, passkeys, tickets
+from claude_proxy import api_credit, contents, passkeys, tickets
+from claude_proxy import db as dbm
 from claude_proxy.app import create_app, inflight_of, scope_allows
 from claude_proxy.config import Route
-from claude_proxy.forwarder import CLAUDE_CODE_IDENTITY
+from claude_proxy.forwarder import CLAUDE_CODE_IDENTITY, with_claude_code_identity
 from tests.conftest import asgi_client, make_gateway, message_json, seed_oauth, sse_response
 from tests.test_tickets_limits import snap
 from tests.test_tickets_web import env, grant  # noqa: F401  (the fixture)
@@ -258,3 +259,108 @@ async def test_dashboard_says_whether_a_pass_runs(penv):
         assert (await c.get("/api/me/passkeys", headers=bearer(keys["alice"]))).json()["has_pass"] is True
         tickets.cancel(conn, cfg, None, t["id"])
         assert (await c.get("/api/me/passkeys", headers=bearer(keys["alice"]))).json()["has_pass"] is False
+
+
+# ---- moved from the credit API's tests (2026-11-19: API keys are pass app keys) ----
+
+CC = {"type": "text", "text": CLAUDE_CODE_IDENTITY}
+
+
+@pytest.mark.parametrize("extra,headers,needle", [
+    ({"tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 5}]}, {}, "Web search"),
+    ({"speed": "fast"}, {}, "Fast mode"),
+    ({}, {"anthropic-beta": "fast-mode-2026-02-01"}, "Fast mode"),
+    ({}, {"anthropic-beta": "oauth-2025-04-20, context-1m-2025-08-07"}, "1M-token context"),
+])
+async def test_extras_priced_above_tokens_are_refused(penv, anthropic, extra, headers, needle):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**MSG, **extra}, headers={**h, **headers})
+    assert r.status_code == 400 and needle in r.json()["error"]["message"]
+    assert anthropic.calls == [] and last(conn)["rejected_by"] == api_credit.REJECT_EXTRA
+
+
+async def test_ordinary_tools_and_betas_still_pass(penv, anthropic):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    anthropic.queue.append(lambda req: sse_response(model="claude-sonnet-5"))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json={**MSG, "speed": "standard", "tools": [{"name": "Read", "input_schema": {"type": "object"}}]},
+                         headers={**h, "anthropic-beta": "interleaved-thinking-2025-05-14"})
+    assert r.status_code == 200
+
+
+@pytest.mark.parametrize("system,expected", [
+    (None, [CC]),
+    ("Be terse.", [CC, {"type": "text", "text": "Be terse."}]),
+    ([{"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}],
+     [CC, {"type": "text", "text": "Be terse.", "cache_control": {"type": "ephemeral"}}]),
+])
+async def test_identity_line_prepended_for_non_claude_code_clients(penv, anthropic, system, expected):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    anthropic.queue.append(lambda req: sse_response(model="claude-sonnet-5", input_tokens=10, output_tokens=2))
+    body = {**MSG, **({"system": system} if system is not None else {})}
+    async with asgi_client(create_app(gw)) as c:
+        assert (await c.post("/v1/messages", json=body, headers=h)).status_code == 200
+    assert anthropic.calls[-1]["json"]["system"] == expected
+
+
+def test_claude_code_system_prompt_left_alone():
+    for system in (CC["text"], [CC, {"type": "text", "text": "x"}]):
+        data = {"system": system}
+        assert not with_claude_code_identity(data) and data["system"] == system
+
+
+def test_identity_line_sharing_a_block_still_gets_its_own():
+    # Anthropic refuses the line followed by more text in the same block, so it is added as a block of its own.
+    data = {"system": CC["text"] + " Be terse."}
+    assert with_claude_code_identity(data) and data["system"] == [CC, {"type": "text", "text": CC["text"] + " Be terse."}]
+
+
+async def test_request_scoped_429_is_not_called_a_usage_limit(penv, anthropic):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    anthropic.queue.append(lambda req: JSONResponse(status_code=429, content={"type": "error", "error": {"type": "rate_limit_error", "message": "Error"}}))
+    async with asgi_client(create_app(gw)) as c:
+        r = await c.post("/v1/messages", json=MSG, headers=h)
+    assert r.status_code == 429 and "not a usage limit" in r.json()["error"]["message"]
+    assert last(conn)["error_type"] == "upstream_request_scoped"
+
+
+# ---- old credit API keys (sk-proxy-a-) became pass app keys (2026-11-19 spec) ----
+
+def add_old_api_key(conn, uid, label="ci-bot", revoked=False):
+    raw = f"sk-proxy-a-{label}-{uid}-" + "x" * 20
+    conn.execute("INSERT INTO api_keys(user_id, key_hash, key_prefix, label, created_at, last_used_at, revoked_at) VALUES(?,?,?,?,?,?,?)",
+                 (uid, dbm.hash_key(raw), raw[:14], label, 1000, 2000, 3000 if revoked else None))
+    return raw
+
+
+def test_migration_turns_live_api_keys_into_pass_keys(db):
+    conn = db[1]
+    uid, _ = dbm.create_user(conn, "alice")
+    live, gone = add_old_api_key(conn, uid), add_old_api_key(conn, uid, "old", revoked=True)
+    dbm._migrate(conn)
+    [p] = conn.execute("SELECT * FROM pass_keys").fetchall()
+    assert (p["user_id"], p["key_hash"], p["key_prefix"], p["label"], p["created_at"], p["last_used_at"], p["revoked_at"]) == \
+        (uid, dbm.hash_key(live), live[:14], "ci-bot", 1000, 2000, None)
+    assert conn.execute("SELECT COUNT(*) FROM api_keys WHERE revoked_at IS NULL").fetchone()[0] == 0
+    u = dbm.find_user_by_key(conn, live)
+    assert (u["id"], u["key_scope"], u["pass_key_id"], u["role"]) == (uid, "pass", p["id"], "user") and "api_key_id" not in u
+    assert dbm.find_user_by_key(conn, gone) is None
+    dbm._migrate(conn)   # a second run (every start) changes nothing
+    assert conn.execute("SELECT COUNT(*) FROM pass_keys").fetchone()[0] == 1
+    assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='api_keys_to_pass_keys'").fetchone()[0] == 1
+
+
+async def test_an_old_api_key_needs_a_running_pass(penv, anthropic):
+    gw, conn, cfg, ids, keys, t, kid, h = penv
+    raw = add_old_api_key(conn, ids["alice"])
+    dbm._migrate(conn)
+    old = {"x-api-key": raw}
+    async with asgi_client(create_app(gw)) as c:
+        assert (await c.post("/v1/messages", json=MSG, headers=old)).status_code == 200
+        row = last(conn)
+        assert (row["pass_key_id"] not in (None, kid), row["api_key_id"], row["ticket_id"]) == (True, None, t["id"])
+        tickets.cancel(conn, cfg, ids["admin"], t["id"])
+        r = await c.post("/v1/messages", json=MSG, headers=old)
+    assert r.status_code == 403 and last(conn)["rejected_by"] == "pass_key_no_pass"
+    assert conn.execute("SELECT COUNT(*) FROM api_ledger").fetchone()[0] == 0

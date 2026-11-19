@@ -127,13 +127,12 @@ const fromLocal = (v) => (v ? Math.floor(new Date(v).getTime() / 1000) : null);
 const METRICS = Object.fromEntries(["weighted", "raw", "cost_usd", "requests"].map((k) => [k, t(`metric.${k}`)]));
 function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNum(v); }
 
-// The usage views count CLI requests, API-key ones or pass app keys' (Apps), by the switch on top of them; everything
-// while both API keys and passes are off. A source whose feature is off falls back to CLI.
+// The usage views count CLI requests or app keys' (Apps; old credit API keys' requests included), by the switch on top
+// of them; everything while passes are off. A source whose feature is off falls back to CLI.
 const BY_SOURCE = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|users)(\?|$)/;
-const sourcesOn = () => ["cli", ...(S.api?.enabled ? ["api"] : []), ...(S.tickets?.enabled ? ["apps"] : [])];
+const sourcesOn = () => ["cli", ...(S.tickets?.enabled ? ["apps"] : [])];
 const source = () => (sourcesOn().includes(S.prefs.source) ? S.prefs.source : "cli");
-const apiView = () => source() === "api";
-// Requests made with a key (API or app) rather than from Claude Code: listed one by one, with the key's name.
+// Requests made with an app key rather than from Claude Code: listed one by one, with the key's name.
 const keyView = () => source() !== "cli";
 const withSource = (path) => (sourcesOn().length > 1 && BY_SOURCE.test(path) ? `${path}${path.includes("?") ? "&" : "?"}source=${source()}` : path);
 
@@ -157,7 +156,7 @@ let pageStale = false;
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:api", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:cli", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
   "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_share", "trial_share_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
@@ -499,12 +498,11 @@ const VIEWS = {
   overview: { render: renderOverview },
   usage: { render: renderUsage },
   users: { render: renderUsers, admin: true },
-  apiadmin: { render: renderApiAdmin, admin: true, feature: "api" },
   tickets: { render: renderTickets, admin: true, feature: "tickets" },
   orders: { render: renderOrders, admin: true, feature: "tickets" },
   pricing: { render: renderPricing, admin: true, feature: "tickets" },
   referrals: { render: renderReferrals, admin: true, feature: "tickets" },
-  api: { render: renderApi, feature: "api_or_tickets" },
+  api: { render: renderApi, feature: "tickets" },
   authorize: { render: renderAuthorize, hidden: true },   // #authorize/<code>, opened by gclaude or claude-gateway on
   quota: { render: renderQuota, admin: true },
   accounts: { render: renderAccounts, admin: true },
@@ -516,9 +514,8 @@ const VIEWS = {
   user: { render: renderUser, admin: true, hidden: true, parent: "users" },   // #user/<id>, opened from Users & limits
 };
 const isAdmin = () => S.user && S.user.role === "admin";
-// A view's feature is "tickets" or "api": on when that config section is; "api_or_tickets" when either is (the API tab
-// holds the credit keys and the pass app keys).
-const featureOn = (v) => !v.feature || (v.feature === "api" ? S.api?.enabled : v.feature === "tickets" ? S.tickets?.enabled : S.api?.enabled || S.tickets?.enabled);
+// A view's feature is "tickets": on while the [tickets] section is.
+const featureOn = (v) => !v.feature || S.tickets?.enabled;
 
 function renderTabs() {
   const tabs = Object.entries(VIEWS).filter(([, v]) => !v.hidden && (!v.admin || isAdmin()) && featureOn(v));
@@ -532,7 +529,7 @@ $("#tabs").addEventListener("click", (e) => {
 });
 
 // A view's independent sections as a side panel of sub-tabs: each [data-sub] element is one, named by its
-// data-sub-label. The open one is kept per view in S.sub and in the address (#apiadmin/credit), so a reload keeps it.
+// data-sub-label. The open one is kept per view in S.sub and in the address (#referrals/history), so a reload keeps it.
 function subTabs(main, view) {
   const panes = [...main.querySelectorAll("[data-sub]")];
   if (panes.length < 2) return;
@@ -554,7 +551,7 @@ function subTabs(main, view) {
   };
   show(panes.some((p) => p.dataset.sub === S.sub[view]) ? S.sub[view] : panes[0].dataset.sub);
 }
-// CLI | API | Apps on the usage views, first in the view's controls row; the views' calls carry it (withSource).
+// CLI | Apps on the usage views, first in the view's controls row; the views' calls carry it (withSource).
 const SOURCE_VIEWS = new Set(["overview", "usage", "users", "user", "models", "activity", "sessions", "errors"]);
 function sourceSwitch(main, view) {
   if (sourcesOn().length < 2 || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
@@ -783,7 +780,7 @@ function usageTiles(ov, tot) {
       <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
       <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
       <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
-      <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : apiView() ? t("ov.api_charged") : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
+      <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${unpriced.length ? t("ov.unpriced", { models: bdi(unpriced.join(", ")) }) : isAdmin() ? t("ov.not_billed") : t("ov.list_prices")}</div></div>
       ${isAdmin() ? `<div class="card tile"><div class="label">${t("ov.active_users")}${tipI("active_users")}</div><div class="value">${nfFull.format(ov.active_users_24h)}</div><div class="foot">${t("ov.last_24h")}</div></div>` : ""}
       <div class="card tile"><div class="label">${t("ov.burn_rate")}${tipI("burn_rate")}</div><div class="value">${fmtNum(ov.burn_rate_weighted_per_min)}</div><div class="foot">${t("ov.burn_foot")}</div></div>
     </div>`;
@@ -2275,77 +2272,23 @@ async function renderReferrals(main) {
   wireMore(main);
 }
 
-// ---------- API keys on prepaid credit (design 2026-10-21) ----------
-
-const fmtSigned = (v) => (v < 0 ? `−${fmtUsd(-v)}` : fmtUsd(v));   // fmtUsd prints any negative as <$0.01
-
-const rateRow = (r, edit) => `<tr><td dir="ltr"><code>${esc(r.pattern)}</code>${r.long_prompt ? `<div class="muted" dir="auto">${t("api.long_prompt", { x: r.long_prompt.times, n: fmtNum(r.long_prompt.over) })}</div>` : ""}</td>${["input", "output", "cache_write_5m", "cache_write_1h", "cache_read"].map((f) =>
-  edit ? `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="${f}" data-pattern="${esc(r.pattern)}" data-init="${r[f]}" value="${r[f]}" required style="width:70px"></td>`
-    : `<td class="r num">${esc(String(r[f]))}</td>`).join("")}${edit ? `<td><button class="btn small danger" type="button" data-rdel="${esc(r.pattern)}">${t("api.delete")}</button></td>` : ""}</tr>`;
-const rateHead = (edit) => `<thead><tr><th>${t("api.model")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cw5")}</th><th class="r">${t("api.cw1")}</th><th class="r">${t("api.cr")}</th>${edit ? "<th></th>" : ""}</tr></thead>`;
-
-// The button stays disabled while the request runs: a double click must not grant credit or make a key twice.
+// The button stays disabled while the request runs: a double click must not make a key twice.
 async function apiPost(path, body, errEl, btn) {
   if (btn) btn.disabled = true;
   try { return await api(path, { method: "POST", body }); } catch (e) { errEl ? (errEl.textContent = e.message) : alertInline(e.message); return null; } finally { if (btn) btn.disabled = false; }
 }
 
 // A typo must be refused here: JSON sends NaN as null, which the server reads as "use the default".
-const numv = (v) => num(String(v ?? "").replace(/\u2212/g, "-"));   // the page prints negatives with U+2212
 const badNum = (vals, errEl) => (vals.some(Number.isNaN) ? (errEl ? (errEl.textContent = t("api.bad_number")) : alertInline(t("api.bad_number")), true) : false);
 
-// The API tab: the credit part while [api] is on, the pass app keys card while passes are on.
+// The "API & apps" tab: the pass app keys card, the only kind of API key (2026-11-19).
 async function renderApi(main) {
   // The zone name lets usage days follow clock changes; the offset is the fallback for a zone the server doesn't know.
   const tz = new URLSearchParams({ tz_offset_s: -new Date().getTimezoneOffset() * 60, tz: Intl.DateTimeFormat().resolvedOptions().timeZone || "" });
-  const [got, pk] = await Promise.all([S.api?.enabled ? api(`/api/me/api?${tz}`) : null, S.tickets?.enabled ? api(`/api/me/passkeys?${tz}`) : null]);
-  // The credit part only for someone who has had credit (a grant, a key, a balance) or an admin: to a pass holder
-  // with none, "$0, requests are refused" reads as "the API doesn't work for you" (2026-11-19).
-  const me = got && (isAdmin() || !pk || got.grants.length || got.keys.length || got.balance !== 0) ? got : null;
-  // Both parts: open on the app keys while a pass runs, unless a sub-tab was picked (the address or a click).
-  if (me && pk?.has_pass && !S.sub.api) S.sub.api = "apps";
-  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>${me && pk ? `<p class="lede">${t("pk.vs_credit")}</p>` : ""}${me ? apiCreditHtml(me) : ""}${pk ? passKeysCard(pk) : ""}</section>`;
-  if (me) wireApiCredit(main);
-  if (pk) wirePassKeys(main);
+  const pk = await api(`/api/me/passkeys?${tz}`);
+  main.innerHTML = `<section class="view"><h2>${t("tab.api")}</h2>${passKeysCard(pk)}</section>`;
+  wirePassKeys(main);
   wireMore(main);
-}
-function apiCreditHtml(me) {
-  const keyName = Object.fromEntries(me.keys.map((k) => [k.id, k.label]));
-  const env = me.base_url ? `ANTHROPIC_BASE_URL=${me.base_url}\nANTHROPIC_API_KEY=sk-proxy-a-…` : t("api.no_base_url");
-  return `
-    <p class="lede">${t("api.lede")}</p>
-    <div class="grid cols-2">
-      <div class="card tile"><div class="label">${t("api.balance")}</div><div class="value num ${me.balance <= 0 ? "critical" : ""}">${fmtSigned(me.balance)}</div>
-        <p class="foot">${me.balance <= 0 ? t("api.empty") : t("api.limits", { n: nfFull.format(me.limits.max_inflight), rpm: nfFull.format(me.limits.rpm) })}</p>
-        ${me.grants.length ? `<details><summary>${t("api.grants")}</summary><table class="data"><tbody>${me.grants.map((g) =>
-          `<tr><td>${fmtDate(g.at)}</td><td class="r num">${fmtSigned(g.usd)}</td><td>${bdi(g.note)}</td></tr>`).join("")}</tbody></table></details>` : ""}</div>
-      <div class="card"><h3>${t("api.setup")}</h3><p class="sub">${t("api.setup_sub")}</p><code dir="ltr" class="key" style="white-space:pre;overflow-x:auto">${esc(env)}</code></div>
-    </div>
-    <div class="card" data-sub="keys" data-sub-label="${esc(t("sub.keys"))}" style="margin-top:16px"><h3>${t("api.keys")}</h3>
-      <form id="f-akey" class="form-grid"><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
-        <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-err"></div>
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
-      ${me.keys.map((k) => `<tr><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
-        <td><button class="btn small danger" data-krevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="5" class="muted">${t("api.no_keys")}</td></tr>`}
-      </tbody></table></div></div>
-    <div class="card" data-sub="usage" data-sub-label="${esc(t("sub.usage"))}" style="margin-top:16px"><h3>${t("api.usage")}</h3>
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("api.day")}</th><th>${t("api.key_label")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("api.in")}</th><th class="r">${t("api.out")}</th><th class="r">${t("api.cost")}</th></tr></thead><tbody>
-      ${foldRows(me.usage.map((u) => `<tr><td>${new Date(u.day * 1000).toLocaleDateString(LOC)}</td><td>${keyName[u.api_key_id] != null ? bdi(keyName[u.api_key_id]) : `<span class="muted">${t("api.revoked_key")}</span>`}</td>
-        <td class="r num">${nfFull.format(u.requests)}</td><td class="r num">${fmtNum(u.input + u.cache_write + u.cache_read)}</td><td class="r num">${fmtNum(u.output)}</td><td class="r num">${fmtUsd(u.usd)}</td></tr>`)) || `<tr><td colspan="6" class="muted">${t("api.no_usage")}</td></tr>`}
-      </tbody></table>${moreButton(me.usage.length)}</div></div>
-    ${isAdmin() ? "" : `<div class="card" data-sub="rates" data-sub-label="${esc(t("sub.rates"))}" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
-      <div class="table-wrap"><table class="data">${rateHead(false)}<tbody>${me.rates.map((r) => rateRow(r, false)).join("")}</tbody></table></div></div>`}`;
-}
-function wireApiCredit(main) {
-  $("#f-akey").onsubmit = async (e) => {
-    e.preventDefault();
-    const r = await apiPost("/api/me/api/keys", { label: e.target.label.value }, $("#akey-err"), e.submitter);
-    if (r) { await render(); keyDialog(t("api.new_key"), r.key, t("api.key_how")); }
-  };
-  main.querySelectorAll("[data-krevoke]").forEach((b) => (b.onclick = async () => {
-    if (!confirm(t("api.revoke_confirm"))) return;
-    if (await apiPost(`/api/me/api/keys/${b.dataset.krevoke}/revoke`, {}, null, b)) render();
-  }));
 }
 
 // ---------- pass app keys (design 2026-11-18): any Anthropic-format app (Claude Desktop) on the running pass ----------
@@ -2388,88 +2331,6 @@ function wirePassKeys(main, user) {
     if (await apiPost(user ? `/api/admin/passkeys/${b.dataset.pkrevoke}/revoke` : `/api/me/passkeys/${b.dataset.pkrevoke}/revoke`, {}, null, b)) render();
   }));
 }
-
-// The admin's side of the API: rates, everyone's credit and limits, everyone's keys.
-async function renderApiAdmin(main) {
-  const adm = await api("/api/admin/api");
-  main.innerHTML = `<section class="view"><h2>${t("tab.apiadmin")}</h2>
-    <div class="card" data-sub="rates" data-sub-label="${esc(t("sub.rates"))}" style="margin-top:16px"><h3>${t("api.rates")}</h3><p class="sub">${t("api.rates_sub")}</p>
-      <form id="f-arates"><div class="table-wrap"><table class="data">${rateHead(true)}<tbody>${adm.rates.map((r) => rateRow(r, true)).join("")}</tbody></table></div>
-        <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div><div class="error" id="arates-err"></div></form>
-      <form id="f-arate-add" class="form-grid" style="margin-top:12px"><label>${t("api.model")}<input name="pattern" dir="ltr" required placeholder="claude-sonnet-5*"></label>
-        <label>${t("api.in")}<input name="input" inputmode="decimal" dir="ltr" required></label><label>${t("api.out")}<input name="output" inputmode="decimal" dir="ltr" required></label>
-        <button class="btn" type="submit">${t("api.add_rate")}</button></form><div class="error" id="arate-add-err"></div></div>
-    <div class="card" data-sub="credit" data-sub-label="${esc(t("sub.credit"))}" style="margin-top:16px"><h3>${t("api.accounts")}</h3>
-      <form id="f-acredit" class="form-grid"><label>${t("app.user")}<select name="user" required><option value=""></option>${adm.users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label><label>${t("api.amount")}<input name="usd" inputmode="decimal" dir="ltr" required></label>
-        <label>${t("tk.note")}<input name="note" maxlength="200" required></label><button class="btn primary" type="submit">${t("api.add_credit")}</button></form><div class="error" id="acredit-err"></div>
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th class="r">${t("api.balance")}</th><th class="r">${t("api.spent_30d")}</th><th class="r">${t("api.keys")}</th><th class="r">${t("api.max_inflight")}</th><th class="r">${t("api.rpm")}</th><th></th></tr></thead><tbody>
-      ${adm.accounts.map((a) => `<tr><td>${bdi(a.name)}</td><td class="r num">${fmtSigned(a.balance)}</td><td class="r num">${fmtUsd(a.spent_30d)}</td><td class="r num">${nfFull.format(a.keys)}</td>
-        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="max_inflight" data-user="${a.user_id}" value="${a.own_max_inflight ?? ""}" placeholder="${a.max_inflight}" style="width:60px"></td>
-        <td class="r"><input type="text" inputmode="numeric" dir="ltr" data-lim="rpm" data-user="${a.user_id}" value="${a.own_rpm ?? ""}" placeholder="${a.rpm}" style="width:60px"></td>
-        <td><button class="btn small" data-lsave="${a.user_id}">${t("app.save")}</button> <button class="btn small" data-acredit="${a.user_id}">${t("api.add_credit")}</button></td></tr>`).join("") || `<tr><td colspan="7" class="muted">${t("api.no_accounts")}</td></tr>`}
-      </tbody></table></div></div>
-    <div class="card" data-sub="keys" data-sub-label="${esc(t("sub.keys"))}" style="margin-top:16px"><h3>${t("api.all_keys")}</h3><p class="sub">${t("api.all_keys_sub")}</p>
-      <form id="f-akey-admin" class="form-grid"><label>${t("app.user")}<select name="user" required><option value=""></option>${adm.users.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label><label>${t("api.key_label")}<input name="label" maxlength="64" required placeholder="${esc(t("api.key_label_eg"))}"></label>
-        <button class="btn primary" type="submit">${t("api.create")}</button></form><div class="error" id="akey-admin-err"></div>
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("app.user")}</th><th>${t("api.key_label")}</th><th>${t("pc.key")}</th><th>${t("api.created")}</th><th>${t("pc.last_used")}</th><th></th></tr></thead><tbody>
-      ${adm.keys.map((k) => `<tr><td>${bdi(k.name)}</td><td>${bdi(k.label)}</td><td dir="ltr"><code>${esc(k.key_prefix)}…</code></td><td>${fmtDate(k.created_at)}</td><td>${fmtAgo(k.last_used_at)}</td>
-        <td><button class="btn small danger" data-akrevoke="${k.id}">${t("api.revoke")}</button></td></tr>`).join("") || `<tr><td colspan="6" class="muted">${t("api.no_all_keys")}</td></tr>`}
-      </tbody></table></div></div>  </section>`;
-
-  $("#f-arates").onsubmit = async (e) => {
-    e.preventDefault();
-    const changed = {};
-    const inputs = [...e.target.querySelectorAll("input[data-pattern]")];
-    if (badNum(inputs.map((i) => numv(i.value)), $("#arates-err"))) return;
-    inputs.forEach((i) => { if (numv(i.value) !== Number(i.dataset.init)) (changed[i.dataset.pattern] ||= {})[i.name] = numv(i.value); });
-    for (const [pattern, edits] of Object.entries(changed)) {
-      const r = adm.rates.find((x) => x.pattern === pattern);
-      if (!(await apiPost("/api/admin/api/rates", { ...r, ...edits, pattern }, $("#arates-err"), e.submitter))) return;
-    }
-    render();
-  };
-  main.querySelectorAll("[data-rdel]").forEach((b) => (b.onclick = async () => {
-    if (confirm(t("api.delete_confirm", { pattern: iso(b.dataset.rdel) })) && (await apiPost("/api/admin/api/rates/delete", { pattern: b.dataset.rdel }, null, b))) render();
-  }));
-  $("#f-arate-add").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = e.target;
-    const input = numv(f.input.value), output = numv(f.output.value);
-    if (badNum([input, output], $("#arate-add-err"))) return;
-    if (await apiPost("/api/admin/api/rates", { pattern: f.pattern.value.trim(), input, output }, $("#arate-add-err"), e.submitter)) render();
-  };
-  $("#f-acredit").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = e.target;
-    const usd = numv(f.usd.value);
-    if (badNum([usd], $("#acredit-err"))) return;
-    if (await apiPost("/api/admin/api/credit", { user: f.user.value, usd, note: f.note.value }, $("#acredit-err"), e.submitter)) render();
-  };
-  // A row's button picks that user in the form above, so only the amount is left to type.
-  main.querySelectorAll("[data-acredit]").forEach((b) => (b.onclick = () => {
-    const f = $("#f-acredit");
-    f.user.value = b.dataset.acredit;
-    f.scrollIntoView({ block: "center", behavior: "smooth" });
-    f.usd.focus({ preventScroll: true });
-  }));
-  main.querySelectorAll("[data-lsave]").forEach((b) => (b.onclick = async () => {
-    const v = (k) => { const i = main.querySelector(`input[data-lim="${k}"][data-user="${b.dataset.lsave}"]`); return i.value.trim() === "" ? null : numv(i.value); };
-    const max_inflight = v("max_inflight"), rpm = v("rpm");
-    if (badNum([max_inflight, rpm])) return;
-    // By id: target_user reads a name of digits as an id.
-    if (await apiPost("/api/admin/api/limits", { user: Number(b.dataset.lsave), max_inflight, rpm }, null, b)) render();
-  }));
-  $("#f-akey-admin").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = e.target;
-    const r = await apiPost("/api/admin/api/keys", { user: f.user.value, label: f.label.value }, $("#akey-admin-err"), e.submitter);
-    if (r) { await render(); keyDialog(t("api.new_key_for", { name: bdi(r.name) }), r.key, t("api.key_how_admin")); }
-  };
-  main.querySelectorAll("[data-akrevoke]").forEach((b) => (b.onclick = async () => {
-    const k = adm.keys.find((x) => x.id === Number(b.dataset.akrevoke));
-    if (!confirm(t("api.revoke_for_confirm", { name: iso(k.name), label: iso(k.label) }))) return;
-    if (await apiPost(`/api/admin/api/keys/${k.id}/revoke`, {}, null, b)) render();
-  }));}
 
 function openDialog(html) {
   const d = $("#dialog");
@@ -2956,7 +2817,7 @@ async function renderUser(main) {
         <div class="card tile"><div class="label">${t("metric.requests")}${tipI("requests")}</div><div class="value">${fmtNum(tot.requests)}</div><div class="foot">${tot.requests >= 1000 ? t("ov.n_forwarded", { n: esc(nfFull.format(tot.requests)) }) : t("ov.forwarded")}</div></div>
         <div class="card tile"><div class="label">${t("metric.weighted")}${tipI("weighted")}</div><div class="value">${fmtNum(tot.weighted)}</div><div class="foot">${t("ov.in_ref", { ref: esc(refModel()) })}</div></div>
         <div class="card tile"><div class="label">${t("metric.raw")}${tipI("raw")}</div><div class="value">${fmtNum(tot.raw)}</div><div class="foot">${t("ov.cache_reads", { n: fmtNum(tot.cache_read) })}</div></div>
-        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${t(apiView() ? "ov.api_charged" : "ov.not_billed")}</div></div>
+        <div class="card tile"><div class="label">${t("ov.cost")}${tipI("cost")}</div><div class="value">${fmtUsd(tot.cost_usd)}</div><div class="foot">${t("ov.not_billed")}</div></div>
         ${share("5h")}${share("7d")}
       </div>
       <div class="grid cols-2">
@@ -3214,8 +3075,8 @@ async function renderSessions(main) {
 // API keys are used by SDKs and curl, which send no session id, so the API view lists the requests themselves;
 // Claude Code run on an API key does send one, and its sessions come first. Apps (pass app keys) are listed the same way.
 async function renderApiRequests(main) {
-  const range = S.prefs.range === "1d" ? "1d" : "7d", apps = source() === "apps";
-  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t(apps ? "sess.lede_apps" : "sess.lede_api")} ${t("req.lede_content")}</p>
+  const range = S.prefs.range === "1d" ? "1d" : "7d";
+  main.innerHTML = `<section class="view"><h2>${t("tab.sessions")}</h2><p class="lede">${t("sess.lede_apps")} ${t("req.lede_content")}</p>
     <div class="controls">${searchBox("api-q", S.apiQ, t(isAdmin() ? "sess.search_api_admin" : "sess.search_api"))}</div>
     <div id="api-sess"></div><div class="card table-wrap" id="api-list"></div></section>`;
   const fill = latest(async (fresh) => {
@@ -3224,8 +3085,8 @@ async function renderApiRequests(main) {
     if (!fresh()) return;
     $("#api-sess").innerHTML = sess.sessions.length ? `<div class="card table-wrap" style="margin-bottom:16px">${sessionsTable(sess.sessions, isAdmin(), true)}</div>` : "";
     const list = $("#api-list");
-    list.innerHTML = d.requests.length ? `<p class="sub">${apps ? plural("sess.apps_last_n", d.requests.length, { n: nfFull.format(d.requests.length) }) : plural("sess.api_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
-      : `<p class="muted">${t(S.apiQ ? "search.none" : apps ? "sess.apps_none" : "sess.api_none")}</p>`;
+    list.innerHTML = d.requests.length ? `<p class="sub">${plural("sess.apps_last_n", d.requests.length, { n: nfFull.format(d.requests.length) })}</p>${requestsTable(d.requests, isAdmin())}`
+      : `<p class="muted">${t(S.apiQ ? "search.none" : "sess.apps_none")}</p>`;
     wireMore(main);
     wireContent(list);
   });
@@ -3425,7 +3286,6 @@ async function boot() {
     const s = await api("/api/session");
     S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows, windowsFile: s.install_windows_file };
     S.tickets = s.tickets || { enabled: false };
-    S.api = s.api || { enabled: false };
     if (s.settings) S.settings = { ...S.settings, ...s.settings };
     Object.assign(TIPS, isAdmin() ? ADMIN_TIPS : USER_TIPS);
     $("#cred-pill").hidden = !s.credential;

@@ -41,15 +41,14 @@ def route_model_entries(cfg: Config) -> list[dict]:
 def scope_allows(key_scope: str, method: str, path: str, route: Route | None, admin: bool = False) -> bool:
     """Whether a key of this scope may make this request (spec 2.3). A routes-only key (OpenCode) gets exactly two
     things: messages and token counts for a routed model, and the model list, which the gateway answers itself.
-    Everything else is refused, so it can never reach the subscription credential. An API key (2026-10-21 spec) gets
+    Everything else is refused, so it can never reach the subscription credential. A pass app key (2026-11-18 spec) gets
     messages and token counts for a Claude model, and the model list. A user's Claude Code key gets messages, token
     counts and the model list too: the rest of /v1/ (Files, Skills, MCP servers...) is the account's own storage,
     shared by every user, so only an admin's key reaches it."""
     if key_scope == "full":
         return admin or (method == "POST" and path in ROUTED_PATHS) or (method == "GET" and path == "/v1/models")
-    if key_scope in ("api", "pass"):
-        # Claude Code billed per token, or an app served by the user's pass: messages and token counts on the
-        # subscription, and the model list. No routes.
+    if key_scope == "pass":
+        # An app served by the user's pass: messages and token counts on the subscription, and the model list. No routes.
         return (method == "POST" and path in ROUTED_PATHS and route is None) or (method == "GET" and path == "/v1/models")
     if method == "GET" and path == "/v1/models":
         return True
@@ -90,8 +89,7 @@ class Inflight:
 
 
 def inflight_of(gw: Gateway, attr: str = "inflight") -> Inflight:
-    """The gateway's registry, made on first use so every Gateway (and every test's) has its own. API keys count in
-    their own registry ("api_inflight"): their cap is the account's API limit, not [limits] max_inflight. Pass app keys
+    """The gateway's registry, made on first use so every Gateway (and every test's) has its own. Pass app keys
     count in the shared one and also in "pass_inflight", the apps' share (passkeys.PASS_KEY_MAX_INFLIGHT)."""
     reg = getattr(gw, attr, None)
     if reg is None:
@@ -191,7 +189,7 @@ def _usage_fresh(conn) -> float | None:
 
 
 def _save(conn, row: dict, title: str | None, content: tuple | None = None, prompt: tuple | None = None) -> bool:
-    """One request's log row, its API charge, its session title, its content and the prompt typed in it, on a db worker
+    """One request's log row, its session title, its content and the prompt typed in it, on a db worker
     thread; and the address it came from, in the user's IP history (db.note_ip). True when that address is new for the user."""
     ip = row.get("ip")
     rid = None
@@ -199,10 +197,6 @@ def _save(conn, row: dict, title: str | None, content: tuple | None = None, prom
         rid = insert_request(conn, **row)
         if content:
             contents.save(conn, rid, *content)
-        if row.get("api_key_id") and "rejected_by" not in row:
-            # Priced by the model the gate approved; the reply's model id only if that one has no rate.
-            model_ = row.get("requested_model") if api_credit.rate_for(conn, row.get("requested_model")) else row.get("model")
-            api_credit.charge(conn, row["user_id"], row["api_key_id"], rid, model_, row)
     except Exception:
         logger.exception("could not record request")
     if prompt and row.get("user_id") and row.get("session_id"):
@@ -328,12 +322,9 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         await record(user_id=None, status=e.status, stream=0, complete=1, error_type=e.body["error"]["type"], rejected_by="auth")
         return JSONResponse(status_code=e.status, content=e.body)
     base["user_id"] = user["id"]
-    is_admin = user["role"] == "admin"   # an API key is never an admin's (db.find_user_by_key), so its replies are always scrubbed
-    is_api = user["key_scope"] == "api"
+    is_admin = user["role"] == "admin"   # a pass app key is never an admin's (db.find_user_by_key), so its replies are always scrubbed
     is_pass = user["key_scope"] == "pass"   # a pass app key (passkeys.py): served and counted by the user's running pass
-    base["api_key_id"] = user.get("api_key_id")
     base["pass_key_id"] = user.get("pass_key_id")
-    inflight = inflight_of(gw, "api_inflight" if is_api else "inflight")
     base["session_id"] = session_id(request.headers)
     base["client_version"] = (request.headers.get("user-agent") or "")[:128] or None
 
@@ -348,16 +339,13 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     base["model"] = model
     base["requested_model"] = model
     wants_title = bool(base["session_id"]) and path == "/v1/messages" and titles.is_title_request(data)
-    client_body = body if contents.wanted(is_api or is_pass, base["session_id"], request.method, path) else None
+    client_body = body if contents.wanted(is_pass, base["session_id"], request.method, path) else None
     if not wants_title and prompts.wanted(base["session_id"], request.method, path, request.headers, data):
         try:
             prompt = prompts.extract(data)
         except Exception:   # never affects forwarding
             logger.exception("could not read the request's prompt")
 
-    if is_api and not cfg.api.enabled:
-        await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
-        return api_error(403, "permission_error", "The API is not enabled on this gateway.")
     if path == BATCHES_PREFIX or path.startswith(BATCHES_PREFIX + "/"):
         await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="unmetered_path")
         return api_error(403, "permission_error", "The gateway cannot meter the Batches API (its models and usage are "
@@ -366,8 +354,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     if not scope_allows(user["key_scope"], request.method, path, route, is_admin):
         # Before the model check and limits: this key never reaches Claude, whatever else is wrong with the request.
         await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by="key_scope")
-        msg = ("API keys reach Claude models only, through /v1/messages." if is_api else
-               "Pass app keys reach Claude models only, through /v1/messages." if is_pass else
+        msg = ("Pass app keys reach Claude models only, through /v1/messages." if is_pass else
                "The gateway forwards only /v1/messages, /v1/messages/count_tokens and /v1/models."
                if user["key_scope"] == "full" else
                f"This key is for third-party models only ({_route_patterns(cfg)}). Claude models need your Claude Code key.")
@@ -384,7 +371,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         await record(status=400, stream=0, complete=1, error_type="gateway_bad_request", rejected_by="request")
         return api_error(400, "invalid_request_error", "The gateway could not read a string `model` from the JSON request body.")
     extra = (api_credit.refuse_extras(data, request.headers.get("anthropic-beta"), app=is_pass)
-             if (is_api or is_pass) and path == "/v1/messages" else None)
+             if is_pass and path == "/v1/messages" else None)
     if extra:
         await record(status=extra.status, stream=0, complete=1, error_type=extra.body["error"]["type"], rejected_by=extra.kind)
         return JSONResponse(status_code=extra.status, content=extra.body)
@@ -392,16 +379,14 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # What limits count: a forwarded request for a model (not count_tokens, not the model list). While one is being
     # served it is in `inflight`, so the next request sees it even though it is recorded only when it ends.
     metered = model is not None and path != COUNT_TOKENS_PATH
-    # An API key holds a slot for everything it forwards, token counts and the model list included: its rpm counts them.
-    counted = metered or is_api
-    held_now = inflight.get(user["id"]) if counted else 0
+    held_now = inflight.get(user["id"]) if metered else 0
     # A pass app key holds an app slot for everything it forwards (its rpm counts token counts and the model list too),
     # and a shared slot only when metered, as Claude Code does: the apps share the user's cap with Claude Code.
     pass_held_now = pass_reg.get(user["id"]) if is_pass else 0
     # The apps' cap (PASS_KEY_MAX_INFLIGHT) counts metered requests only: token counts and model lists must not use it up.
     pass_metered_now = pass_metered_reg.get(user["id"]) if is_pass else 0
     # Taken before the check, which yields to the loop: a request arriving meanwhile counts this one.
-    if counted:
+    if metered:
         inflight.acquire(user["id"])
         held = True
     if is_pass:
@@ -425,9 +410,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
 
     served: dict = {}   # the pass serving the request (limits.evaluate): its row counts toward that pass alone
     try:
-        if is_api:
-            decision = await gw.db.run(api_credit.evaluate, cfg, user["id"], model, path, inflight=held_now)
-        elif is_pass:
+        if is_pass:
             decision = await gw.db.run(passkeys.evaluate, cfg, user["id"], model, path, inflight=held_now,
                                        pass_inflight=pass_held_now,
                                        pass_metered_inflight=pass_metered_now, served=served)
@@ -457,7 +440,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                     del data[f]
                 body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
         elif request.method == "POST" and path == "/v1/messages":
-            # Requests from outside Claude Code (API keys, scripts) get the identity line the subscription requires;
+            # Requests from outside Claude Code (app keys, scripts) get the identity line the subscription requires;
             # Claude Code's get the gateway's device id in place of the user's machine. `|`, so both always run.
             if with_claude_code_identity(data) | with_gateway_device(data, gw.device_id):
                 body = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode()
@@ -528,8 +511,6 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
                 return api_error(429, "rate_limit_error", "Usage limit reached." + wait, headers=headers or None)
 
         if request.method == "GET" and path == "/v1/models" and status == 200 and route is None:
-            if is_api:
-                return await _models_for_api(gw, resp, resp_headers, record)
             return await _models_with_routes(gw, resp, resp_headers, record, routes=not is_pass, priced_only=is_pass)
 
         is_stream = "text/event-stream" in resp.headers.get("content-type", "")
@@ -581,29 +562,10 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         raise
 
 
-async def _models_for_api(gw: Gateway, resp: httpx.Response, headers: dict, record) -> Response:
-    """Anthropic's list cut to the models an API key may use: those with an API rate."""
-    raw = await resp.aread()
-    await resp.aclose()
-    try:
-        data = json.loads(raw)
-        rated = await gw.db.run(lambda conn: {m.get("id") for m in data["data"] if api_credit.rate_for(conn, m.get("id"))})
-        data["data"] = [m for m in data["data"] if m.get("id") in rated]
-        ids = [m["id"] for m in data["data"]]
-        data["first_id"], data["last_id"] = (ids[0], ids[-1]) if ids else (None, None)
-        raw = json.dumps(data).encode()
-    except (ValueError, AttributeError, TypeError, KeyError):
-        data = {"data": [], "has_more": False, "first_id": None, "last_id": None}   # unreadable: list nothing rather than everything
-        raw = json.dumps(data).encode()
-    await record(status=200, stream=0, complete=1)
-    headers = {k: v for k, v in headers.items() if k.lower() != "content-type"}
-    return Response(raw, status_code=200, headers=headers, media_type="application/json")
-
-
 async def _models_with_routes(gw: Gateway, resp: httpx.Response, headers: dict, record, routes: bool = True,
                               priced_only: bool = False) -> Response:
     """Anthropic's list, with the routed models added unless `routes` is off (a pass app key reaches Claude models only),
-    and cut to the models with a [pricing] entry when `priced_only` (the ones a pass can serve, as for an API key's rates)."""
+    and cut to the models with a [pricing] entry when `priced_only` (the ones a pass can serve)."""
     raw = await resp.aread()
     await resp.aclose()
     if priced_only:

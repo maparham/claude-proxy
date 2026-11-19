@@ -151,7 +151,7 @@ def _window_state(conn, cfg, user_id, row, now, inflight: int = 0) -> LimitState
     kind, scope, unit = row["kind"], row["scope"], row["unit"]
     limit = float(row["value"])
     # The rows a usage limit sees, for opening its window and for filling it alike: forwarded requests for a model.
-    # A model-less request (GET /v1/models) costs nothing and is neither. API-key requests are paid from API credit.
+    # A model-less request (GET /v1/models) costs nothing and is neither. The old credit API keys' requests (api_key_id, before 2026-11-19) were paid from API credit.
     where = ("user_id=? AND rejected_by IS NULL AND path!=? AND COALESCE(requested_model, model) IS NOT NULL "
              "AND api_key_id IS NULL")
     params = [user_id, COUNT_TOKENS_PATH]

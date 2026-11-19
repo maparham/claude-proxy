@@ -374,7 +374,7 @@ an email for each order and the buyer a confirmation that contains nothing they 
 ### Using a pass in other apps (Claude Desktop)
 
 A pass holder can use their pass in any app that speaks the Anthropic API format. They create a pass app key
-(`sk-proxy-p-…`, shown once; up to 20) on the dashboard's **API** tab, which also lists the keys and their usage per day;
+(`sk-proxy-p-…`, shown once; up to 20) on the dashboard's **API & apps** tab, which also lists the keys and their usage per day;
 an admin can make or revoke one on the user's page. To set up Claude Desktop (1.2581.0 or newer):
 
 1. Help → Troubleshooting → Enable Developer Mode.
@@ -386,37 +386,12 @@ that pass under every one of its limits (plus at most 4 requests at once and 60 
 reaches Claude models only. Web search, fast mode and the 1M-token context are refused. App traffic shows as **Apps** in
 the source switch on the usage views. Design: `docs/superpowers/specs/2026-11-18-pass-app-keys-design.md`.
 
-## API keys (pay per token)
+## API keys
 
-With an `[api]` section in the config, a user can run Claude Code (terminal or the VS Code extension) on an API key
-billed per token against a prepaid USD credit, like Anthropic's own API. Claude Code is the only supported client.
-The two settings are per-account defaults the admin can override on the **API** tab:
-
-```toml
-[api]
-max_inflight = 4   # concurrent requests per account
-rpm = 60           # requests per minute per account
-```
-
-The user creates a key on the **API** tab (shown once) and sets two variables where Claude Code runs (shell profile, or
-the environment settings of the Claude Code extension in VS Code):
-
-```
-export ANTHROPIC_BASE_URL=https://<your gateway>
-export ANTHROPIC_API_KEY=sk-proxy-a-…
-```
-
-The admin adds credit (positive, or negative to correct, each with a note) and edits the rates on the same tab. Rates
-are USD per million tokens per model glob, seeded once from the config's Claude list prices; the longest matching glob
-wins (unlike `[pricing.models]`, where the first match wins). A model with no rate is refused. Like Anthropic, a Claude Haiku
-5.5 request whose prompt (input, cache reads and cache writes) is over 100,000 tokens pays five times its rates. A request is refused while
-the balance is at or below zero; one already running is charged in full, so a balance can go slightly negative.
-Features Anthropic prices above plain tokens are refused on API keys: web search (Claude Code's WebSearch tool), fast
-mode (`/fast`) and the 1M-token context (`[1m]` models).
-
-On a machine set up with gclaude or `claude-gateway on`, the gateway key in `x-gateway-key` or `ANTHROPIC_AUTH_TOKEN`
-wins over `ANTHROPIC_API_KEY`, so that traffic is billed to the pass, not the credit; unset those to use the API key.
-Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
+The only API key is the pass app key above: requests made with it count against the pass, the way Claude Code's do.
+There is no separate per-token credit. The earlier credit API keys (`sk-proxy-a-…`) became pass app keys when the
+gateway was upgraded: they keep working, now on their owner's pass, under the same rules. An `[api]` section left in
+an old config is still accepted but no longer used. Design: `docs/superpowers/specs/2026-11-19-one-key-type-pass.md`.
 
 ## Operations
 
@@ -429,7 +404,7 @@ Design: `docs/superpowers/specs/2026-10-21-api-credit-design.md`.
   (only the typed text: no tool results, files or images), which only the admin can read, from the
   Sessions tab. Responses are never stored. It also keeps the short title Claude Code generates for
   each session, or the start of the first prompt when there is none (gclaude turns that request off),
-  so sessions show by name; the admin and the session's owner can see it. Requests sent with an API key
+  so sessions show by name; the admin and the session's owner can see it. Requests sent with an app key
   by SDKs or curl (no session id) are kept in full, request and reply, for the key's owner and the
   admin to open in the Requests tab. Requests, quota reports, session titles, prompts and request contents
   older than `retention_days` (default 180) are deleted; prompts and contents go then even with `keep_usage`.

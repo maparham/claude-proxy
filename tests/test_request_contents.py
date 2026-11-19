@@ -4,7 +4,7 @@ import time
 import pytest
 from fastapi.responses import JSONResponse
 
-from claude_proxy import api_credit, contents, db
+from claude_proxy import contents, db, passkeys
 from claude_proxy.app import create_app
 from claude_proxy.db import create_user, revoke
 from claude_proxy.forwarder import SESSION_HEADERS
@@ -15,17 +15,15 @@ MSG = {"model": "claude-sonnet-5", "max_tokens": 64, "system": "Be brief.", "mes
 
 
 @pytest.fixture
-def env(cfg, db, anthropic):
+def env(cfg, db, anthropic, monkeypatch):
     conn = db[1]
-    cfg.api.enabled = True
+    monkeypatch.setattr(passkeys, "evaluate", lambda *a, **k: None)   # served as if alice held a running pass
     uid, full = create_user(conn, "alice")
     _, bob = create_user(conn, "bob")
     _, admin = create_user(conn, "admin", role="admin")
     seed_oauth(conn)
     gw = make_gateway(cfg, conn, anthropic)
-    api_credit.set_rate(conn, "claude-sonnet-5*", 3, 15)
-    api_credit.grant(conn, uid, 10, "x", None)
-    _, raw = api_credit.create_key(conn, uid, "laptop")
+    _, raw = passkeys.create_key(conn, uid, "laptop")
     return gw, conn, uid, {"x-api-key": raw}, {"alice": full, "bob": bob, "admin": admin}
 
 
@@ -66,7 +64,7 @@ async def test_claude_code_traffic_is_never_kept(env, anthropic):
     anthropic.queue.extend([lambda req: JSONResponse(message_json()), lambda req: JSONResponse(message_json())])
     async with asgi_client(create_app(gw)) as c:
         await c.post("/v1/messages", json=MSG, headers=bearer(keys["alice"]))                 # Claude Code's own key
-        await c.post("/v1/messages", json=MSG, headers={**h, SESSION_HEADERS[0]: "s-1"})   # Claude Code on an API key
+        await c.post("/v1/messages", json=MSG, headers={**h, SESSION_HEADERS[0]: "s-1"})   # Claude Code on an app key
     assert conn.execute("SELECT COUNT(*) FROM requests WHERE rejected_by IS NULL").fetchone()[0] == 2
     assert conn.execute("SELECT COUNT(*) FROM request_contents").fetchone()[0] == 0
 

@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import api_credit, passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
+from . import passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -84,8 +84,9 @@ COOKIE = "cp_session"
 RANGES = {"1d": 86400, "7d": 7 * 86400, "30d": 30 * 86400, "90d": 90 * 86400, "365d": 365 * 86400}
 GRANULARITY = {"hour": 3600, "day": 86400, "week": 7 * 86400}
 PASS_KEY_REFUSAL = "Pass app keys work only in apps (/v1/messages); sign in to the dashboard instead."
-SOURCES = {"all": "1=1", "cli": "api_key_id IS NULL AND pass_key_id IS NULL", "api": "api_key_id IS NOT NULL",
-           "apps": "pass_key_id IS NOT NULL"}
+# "apps": pass app keys, and the credit API keys they replaced (2026-11-19 spec), whose old rows keep api_key_id.
+SOURCES = {"all": "1=1", "cli": "api_key_id IS NULL AND pass_key_id IS NULL",
+           "apps": "(pass_key_id IS NOT NULL OR api_key_id IS NOT NULL)"}
 BUCKETS = ("5h", "7d")
 IS_ERROR = "(rejected_by IS NOT NULL OR status >= 400 OR error_type IS NOT NULL)"
 ERROR_KIND = ("CASE WHEN rejected_by = 'auth' THEN 'gateway_auth' WHEN rejected_by = 'request' THEN 'gateway_bad_request' "
@@ -261,8 +262,6 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 user = authenticate(conn, request.headers)
             except AuthError as e:
                 fail(e.status, e.body["error"]["message"])
-            if user["key_scope"] == "api":
-                fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
             if user["key_scope"] == "pass":
                 fail(403, PASS_KEY_REFUSAL)
             # A routes-only key (OpenCode) may read its own status and nothing else, and never acts as an admin.
@@ -327,9 +326,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         except AuthError:
             limiter.failed(ip)
             fail(401, "Unknown, disabled or revoked key.")
-        if user["key_scope"] == "api":   # a valid key, so not counted as a failed attempt
-            fail(403, "API keys work only with Claude Code (/v1/messages); sign in to the dashboard instead.")
-        if user["key_scope"] == "pass":
+        if user["key_scope"] == "pass":   # a valid key, so not counted as a failed attempt
             fail(403, PASS_KEY_REFUSAL)
         if user["key_scope"] != "full":   # a valid key, so not counted as a failed attempt
             fail(403, "This key only works for third-party models; sign in with your Claude Code key.")
@@ -437,7 +434,6 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
                 out["account"][b] = {k: att[k] for k in ("utilization_pct", "resets_at", "stale")}
         out["tickets"] = {"enabled": cfg.tickets.enabled}
-        out["api"] = {"enabled": cfg.api.enabled}
         if is_admin(user) and cfg.tickets.enabled:
             out["tickets"] |= {"tiers": tickets.effective_tiers(conn, cfg),
                                "currencies": list(tickets.currencies(cfg)), "lengths": LENGTHS,
@@ -471,9 +467,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return "user_id=?", (user_id,)
 
     def by_source(source: str) -> str:
-        """Requests sent from Claude Code with a gateway key ("cli"), with a pay-per-token API key ("api"), from an app with a pass app key ("apps"), or all."""
+        """Requests sent from Claude Code with a gateway key ("cli"), from an app with an app key ("apps"), or all."""
         if source not in SOURCES:
-            fail(400, "source must be all, cli, api or apps")
+            fail(400, "source must be all, cli or apps")
         return SOURCES[source]
 
     def quota_view(now: float) -> list[dict]:
@@ -670,7 +666,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         where, params = scope_where(user, user_id)
         src = by_source(source)
         match, mparams = "", ()
-        if q := q.strip():   # a user's name, an API key's label or prefix, or a model
+        if q := q.strip():   # a user's name, an app key's label or prefix, or a model
             ids = named(names(), q)
             match = (f"AND (model LIKE ? ESCAPE '\\' OR user_id IN ({','.join('?' * len(ids)) or 'NULL'}) OR api_key_id IN "
                      f"(SELECT id FROM api_keys WHERE label LIKE ? ESCAPE '\\' OR key_prefix LIKE ? ESCAPE '\\') OR pass_key_id IN "
@@ -1063,53 +1059,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(404, f"No user {ref!r}.")
         return u
 
-    # ---------- API keys on prepaid credit (2026-10-21 spec) ----------
-
-    def need_api():
-        if not cfg.api.enabled:
-            fail(404, "The API is not enabled on this gateway.")
+    # ---------- pass app keys (2026-11-18 spec) ----------
 
     def not_a_computer(user):
-        # A leaked laptop key must not mint API keys that outlive the laptop's removal, nor revoke the owner's others.
+        # A leaked laptop key must not mint app keys that outlive the laptop's removal, nor revoke the owner's others.
         if user.get("machine_key_id") or user.get("session_key_id"):
-            fail(403, "A computer's key cannot manage API or app keys. Sign in with your first key to manage them.")
-
-    def credit_call(fn, *args):
-        try:
-            return fn(*args)
-        except api_credit.CreditError as e:
-            fail(400, str(e))
-
-    @app.get("/api/me/api")
-    async def me_api(request: Request, tz_offset_s: int = 0, tz: str = ""):
-        user = principal(request)
-        need_api()
-        uid = user["id"]
-        tz_offset_s = max(-50400, min(50400, tz_offset_s))
-        return {"balance": api_credit.balance(conn, uid), "keys": api_credit.keys(conn, uid),
-                "usage": api_credit.usage(conn, uid, time.time() - 30 * 86400, tz_offset_s, tz[:64] or None),
-                "grants": api_credit.grants(conn, uid), "rates": api_credit.rates(conn),
-                "limits": api_credit.account_limits(conn, cfg, uid), "base_url": cfg.listener.public_url}
-
-    @app.post("/api/me/api/keys")
-    async def me_api_key_add(request: Request):
-        user = principal(request, write=True)
-        need_api()
-        not_a_computer(user)
-        body = await _json(request)
-        kid, raw = credit_call(api_credit.create_key, conn, user["id"], str(body.get("label", "")))
-        return {"ok": True, "id": kid, "key": raw}
-
-    @app.post("/api/me/api/keys/{kid}/revoke")
-    async def me_api_key_revoke(request: Request, kid: int):
-        user = principal(request, write=True)
-        need_api()
-        not_a_computer(user)
-        if not api_credit.revoke_key(conn, user["id"], kid, user["id"]):
-            fail(404, "No such API key.")
-        return {"ok": True}
-
-    # ---------- pass app keys (2026-11-18 spec) ----------
+            fail(403, "A computer's key cannot manage app keys. Sign in with your first key to manage them.")
 
     def need_passes():
         if not cfg.tickets.enabled:
@@ -1174,71 +1129,6 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if owner is None or not passkeys.revoke_key(conn, owner, kid, actor["id"]):
             fail(404, "No such app key.")
         return {"ok": True}
-
-    @app.get("/api/admin/api")
-    async def admin_api(request: Request):
-        admin(request)
-        need_api()
-        return {"rates": api_credit.rates(conn), "accounts": api_credit.accounts(conn, cfg), "keys": api_credit.all_keys(conn),
-                "users": [{"id": r["id"], "name": r["name"]} for r in conn.execute("SELECT id, name FROM users ORDER BY name")]}
-
-    @app.post("/api/admin/api/keys")
-    async def admin_api_key_add(request: Request):
-        # For a user who can't make their own, e.g. one without a dashboard sign-in. Shown once, to the admin.
-        actor = admin(request, write=True)
-        need_api()
-        body = await _json(request)
-        u = target_user(body.get("user"))
-        kid, raw = credit_call(api_credit.create_key, conn, u["id"], str(body.get("label", "")), actor["id"])
-        return {"ok": True, "id": kid, "key": raw, "name": u["name"]}
-
-    @app.post("/api/admin/api/keys/{kid}/revoke")
-    async def admin_api_key_revoke(request: Request, kid: int):
-        actor = admin(request, write=True)
-        need_api()
-        owner = api_credit.key_owner(conn, kid)
-        if owner is None or not api_credit.revoke_key(conn, owner, kid, actor["id"]):
-            fail(404, "No such API key.")
-        return {"ok": True}
-
-    @app.post("/api/admin/api/rates")
-    async def admin_api_rate(request: Request):
-        actor = admin(request, write=True)
-        need_api()
-        body = await _json(request)
-        opt = lambda k: None if body.get(k) in (None, "") else _number(body[k], "A cache price")  # noqa: E731
-        rate = credit_call(api_credit.set_rate, conn, str(body.get("pattern", "")), _number(body.get("input"), "The input price"),
-                           _number(body.get("output"), "The output price"), opt("cache_write_5m"), opt("cache_write_1h"),
-                           opt("cache_read"), actor["id"])
-        return {"ok": True, "rate": rate}
-
-    @app.post("/api/admin/api/rates/delete")
-    async def admin_api_rate_delete(request: Request):
-        actor = admin(request, write=True)
-        need_api()
-        body = await _json(request)
-        if not api_credit.delete_rate(conn, str(body.get("pattern", "")), actor["id"]):
-            fail(404, "No such rate.")
-        return {"ok": True}
-
-    @app.post("/api/admin/api/credit")
-    async def admin_api_credit(request: Request):
-        actor = admin(request, write=True)
-        need_api()
-        body = await _json(request)
-        u = target_user(body.get("user"))
-        bal = credit_call(api_credit.grant, conn, u["id"], _number(body.get("usd"), "The amount"), str(body.get("note", "")), actor["id"])
-        return {"ok": True, "balance": bal}
-
-    @app.post("/api/admin/api/limits")
-    async def admin_api_limits(request: Request):
-        actor = admin(request, write=True)
-        need_api()
-        body = await _json(request)
-        u = target_user(body.get("user"))
-        val = lambda k: None if body.get(k) in (None, "") else _number(body[k], "A limit", whole=True)  # noqa: E731
-        credit_call(api_credit.set_account_limits, conn, u["id"], val("max_inflight"), val("rpm"), actor["id"])
-        return {"ok": True, "limits": api_credit.account_limits(conn, cfg, u["id"])}
 
     @app.post("/api/admin/users")
     async def create_user(request: Request):
