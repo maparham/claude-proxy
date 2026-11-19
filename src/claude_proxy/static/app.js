@@ -20,8 +20,9 @@ document.title = t("app.title");
 $("#lang-toggle").onclick = () => setLang(LANG === "fa" ? "en" : "fa");
 
 function loadPrefs() {
-  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open", source: "all" };
-  try { return { ...d, ...JSON.parse(localStorage.getItem("cp-prefs") || "{}") }; } catch { return d; }
+  const d = { range: "7d", granularity: "day", split: "user", metric: "weighted", period: "24h", userPeriod: "7d", bucket: "5h", modelMetric: "cost_usd", orderStatus: "open", usageSource: "all" };
+  // "source" was saved as "cli" (the old default) by any switch click before the All option: left unread, so All is the default.
+  try { const { source, ...p } = JSON.parse(localStorage.getItem("cp-prefs") || "{}"); return { ...d, ...p }; } catch { return d; }
 }
 function loadSlots() { try { return JSON.parse(localStorage.getItem("cp-colors") || "{}"); } catch { return {}; } }
 function savePrefs() { try { localStorage.setItem("cp-prefs", JSON.stringify(S.prefs)); } catch { /* private mode */ } }
@@ -131,7 +132,7 @@ function fmtMetric(metric, v) { return metric === "cost_usd" ? fmtUsd(v) : fmtNu
 // by the switch on top of them. With app keys off there is only Claude Code, and no switch.
 const BY_SOURCE = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|users)(\?|$)/;
 const sourcesOn = () => (S.tickets?.enabled ? ["all", "cli", "apps"] : ["all"]);
-const source = () => (sourcesOn().includes(S.prefs.source) ? S.prefs.source : "all");
+const source = () => (sourcesOn().includes(S.prefs.usageSource) ? S.prefs.usageSource : "all");
 const withSource = (path) => (sourcesOn().length > 1 && BY_SOURCE.test(path) && !/[?&]source=/.test(path)
   ? `${path}${path.includes("?") ? "&" : "?"}source=${source()}` : path);
 
@@ -555,13 +556,13 @@ const SOURCE_VIEWS = new Set(["overview", "usage", "users", "user", "models", "a
 function sourceSwitch(main, view) {
   if (sourcesOn().length < 2 || !SOURCE_VIEWS.has(Object.keys(VIEWS).find((k) => VIEWS[k] === view))) return;
   const box = document.createElement("span");
-  box.innerHTML = seg("source", sourcesOn().map((k) => [k, t(`source.${k}`), `source:${k}`]), source());
+  box.innerHTML = seg("usageSource", sourcesOn().map((k) => [k, t(`source.${k}`), `source:${k}`]), source());
   // No controls row and no lede (a new buyer's overview, with nothing used yet): no switch.
   const row = main.querySelector(".controls"), lede = main.querySelector(".lede");
   if (!row && !lede) return;
+  wireSegs(box, render);   // just this switch: the view has wired the row's others
   if (row) row.prepend(box.firstChild);
   else { const div = Object.assign(document.createElement("div"), { className: "controls" }); div.append(box.firstChild); lede.after(div); }
-  wireSegs(main.querySelector('.seg[data-pref="source"]').parentElement, render);
 }
 async function render() {
   pageStale = false;
