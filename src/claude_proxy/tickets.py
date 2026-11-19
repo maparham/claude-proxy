@@ -160,7 +160,7 @@ def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float | None
     d = "rtl" if lang == "fa" else "ltr"
     terms, rich = terms_text(conn, cfg, lang, length, starts_at), terms_html(conn, cfg, lang, length, starts_at)
     inner = html.escape(body).replace(html.escape(terms), rich, 1)
-    inner = re.sub(r"https?://[^\s<]+/blog/[a-z0-9-]+", lambda m: f'<a href="{m[0]}">{m[0]}</a>', inner)   # orders.setup_guide's link
+    inner = re.sub(r"https?://[^\s<\"]+/blog/install-claude-code-windows-mac(?![\w-])", lambda m: f'<a href="{m[0]}">{m[0]}</a>', inner)   # orders.setup_guide's link
     return f'<div dir="{d}" style="text-align:{"right" if d == "rtl" else "left"};white-space:pre-wrap">{inner}</div>\n'
 
 

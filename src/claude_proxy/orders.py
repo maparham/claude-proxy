@@ -485,7 +485,7 @@ def setup_guide(cfg: Config, order: dict) -> str:
     if not url:
         return ""
     if order.get("lang") == "fa":
-        return f"\nراهنمای نصب gclaude روی Windows، مک و لینوکس و راه‌اندازی Claude Desktop با کلید اپ:\n{url}\n"
+        return f"\nراهنمای نصب gclaude روی ویندوز، مک و لینوکس و راه‌اندازی Claude Desktop با کلید اپ:\n{url}\n"
     return f"\nHow to install gclaude on Windows, Mac or Linux, and set up Claude Desktop with an app key (guide in Persian):\n{url}\n"
 
 
