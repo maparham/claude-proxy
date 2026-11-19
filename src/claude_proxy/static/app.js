@@ -3315,7 +3315,7 @@ function route() {
   if (pm) { S.tab = "overview"; S.paymentId = +pm[1]; history.replaceState(null, "", "#overview"); return true; }
   const pl = /^paylink\/([A-Za-z0-9_-]{1,64})$/.exec(h);
   if (pl) { S.tab = "overview"; S.payLink = pl[1]; forgetPayLink(); history.replaceState(null, "", "#overview"); return true; }
-  const sm = /^([a-z]+)\/([a-z]+)$/.exec(h);   // a sub-tab: #apiadmin/credit
+  const sm = /^([a-z]+)\/([a-z]+)$/.exec(h);   // a sub-tab: #referrals/history
   if (sm && VIEWS[sm[1]] && !VIEWS[sm[1]].hidden) { S.tab = sm[1]; S.sub[sm[1]] = sm[2]; return true; }
   if (VIEWS[h] && !VIEWS[h].hidden) { S.tab = h; return true; }
   return false;
