@@ -467,26 +467,25 @@ def _buyer_mail_fa(conn: sqlite3.Connection, cfg: Config, order: dict) -> tuple[
     return f"سفارش شما: {label}، {'ارتقا' if up else f'۱ {length}'}", "\n".join(lines) + "\n"
 
 
-def windows_setup(cfg: Config, order: dict) -> str:
-    """How to set up a Windows computer with the double-click installer (the dashboard's /install.cmd), as a block for
+SETUP_POST = "install-claude-code-windows-mac"   # the blog post on installing gclaude and setting up Claude Desktop
+
+
+def setup_url(cfg: Config) -> str | None:
+    """The setup guide's address: the blog lives on the home host ([listener] home_url), else on the dashboard's."""
+    base = cfg.listener.home_url or cfg.listener.dashboard_url
+    return f"{base.rstrip('/')}/blog/{SETUP_POST}" if base else None
+
+
+def setup_guide(cfg: Config, order: dict) -> str:
+    """The link to the setup guide (gclaude on Windows, Mac and Linux; Claude Desktop with an app key), as a block for
     the end of every pass mail: the buyer may pay on one device and install on another. Nothing on a gateway without
-    the URLs the installer needs."""
-    if not (cfg.listener.public_url and cfg.listener.dashboard_url):
+    a home or dashboard URL. The guide is a Persian blog post, so the English line says so."""
+    url = setup_url(cfg)
+    if not url:
         return ""
-    url = f"{cfg.listener.dashboard_url.rstrip('/')}/install.cmd"
     if order.get("lang") == "fa":
-        return ("\nنصب روی Windows:\n"
-                f"۱. فایل نصب را دانلود کنید: {url}\n"
-                "۲. فایل دانلودشده (claude-gateway-setup.cmd) را باز کنید. اگر Windows پیام «Windows protected your PC» نشان داد، "
-                "روی «More info» و بعد «Run anyway» بزنید.\n"
-                "۳. صفحه‌ای در مرورگر باز می‌شود: وارد شوید و تأیید را بزنید.\n"
-                "۴. وقتی کار پنجره تمام شد، یک پنجره تازه PowerShell باز کنید و gclaude را بنویسید.\n")
-    return ("\nSet up on Windows:\n"
-            f"1. Download the installer: {url}\n"
-            "2. Open the downloaded file (claude-gateway-setup.cmd). If Windows says \"Windows protected your PC\", "
-            "click \"More info\", then \"Run anyway\".\n"
-            "3. A page opens in your browser: sign in and click Authorize.\n"
-            "4. When the window is done, open a new PowerShell window and type gclaude.\n")
+        return f"\nراهنمای نصب gclaude روی Windows، مک و لینوکس و راه‌اندازی Claude Desktop با کلید اپ:\n{url}\n"
+    return f"\nHow to install gclaude on Windows, Mac or Linux, and set up Claude Desktop with an app key (guide in Persian):\n{url}\n"
 
 
 def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket: dict) -> tuple[str, str]:
@@ -500,11 +499,11 @@ def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket
     if order.get("lang") == "fa":
         what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
-        return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n{ref_discount_line_fa(order, ticket)}\n{terms}{windows_setup(cfg, order)}"
+        return f"بسته شما فعال شد: {what}", f"سفارش شما انجام شد.\n\nبسته: {what}، {span}.\n{ref_discount_line_fa(order, ticket)}\n{terms}{setup_guide(cfg, order)}"
     what = f"{_label(cfg, order)}, {order['length']}{_days(order['length'])}"
     span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
     return (f"Your pass is granted: {_label(cfg, order)} {order['length']}",
-            f"Your order is done.\n\nPass: {what}, {span}.\n{ref_discount_line_en(order, ticket)}\n{terms}{windows_setup(cfg, order)}")
+            f"Your order is done.\n\nPass: {what}, {span}.\n{ref_discount_line_en(order, ticket)}\n{terms}{setup_guide(cfg, order)}")
 
 
 def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -> tuple[str, str]:
@@ -515,10 +514,10 @@ def upgraded_mail_text(cfg: Config, order: dict, ticket: dict, paid: str = "") -
         label = fa_label(cfg, order["tier"])
         return (f"بسته شما ارتقا یافت: {label}",
                 f"{paid}سفارش شما انجام شد.\n\nبسته شما از حالا تا {tickets.terms_date(end, 'fa')} با سطح {label} کار می‌کند.\n"
-                f"{windows_setup(cfg, order)}")
+                f"{setup_guide(cfg, order)}")
     label = _label(cfg, order)
     return (f"Your pass is upgraded: {label}",
-            f"{paid}Your order is done.\n\nYour pass now runs at {label} until {tickets._date(end)}.\n{windows_setup(cfg, order)}")
+            f"{paid}Your order is done.\n\nYour pass now runs at {label} until {tickets._date(end)}.\n{setup_guide(cfg, order)}")
 
 
 def closed_mail_text(cfg: Config, order: dict) -> tuple[str, str]:
@@ -582,6 +581,29 @@ async def send_granted(conn: sqlite3.Connection, cfg: Config, order_id: int) -> 
         await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), o["email"], subject, body, rich)
     except Exception as e:
         logger.warning("order #%d: granted mail to %s failed: %s", order_id, o["email"], e)
+
+
+def welcome_mail_text(cfg: Config, lang: str) -> tuple[str, str]:
+    """(subject, body) for a new account made by signing up: where to get a pass, and the setup guide."""
+    dash = (cfg.listener.dashboard_url or cfg.listener.home_url or "").rstrip("/")
+    guide = setup_guide(cfg, {"lang": lang})
+    if lang == "fa":
+        return "حساب شما ساخته شد", ("حساب شما ساخته شد.\n\n"
+                                       f"برای کار با کلاد، یک بسته بگیرید{f': {dash}' if dash else '.'}\n{guide}")
+    return "Your account is ready", ("Your account is ready.\n\n"
+                                     f"To use Claude, get a pass{f' on the dashboard: {dash}' if dash else '.'}\n{guide}")
+
+
+async def send_welcome(conn: sqlite3.Connection, cfg: Config, to: str, lang: str | None) -> None:
+    """After a sign-up's response: the welcome mail, in the sign-in page's language. No [email] or no address: nothing.
+    A failure is logged and never touches the account."""
+    if cfg.email is None or not EMAIL.match(to or ""):
+        return
+    subject, body = welcome_mail_text(cfg, "fa" if lang == "fa" else "en")
+    try:
+        await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), to, subject, body)
+    except Exception as e:
+        logger.warning("welcome mail to %s failed: %s", to, e)
 
 
 async def dispatch(conn: sqlite3.Connection, cfg: Config, order_id: int) -> None:

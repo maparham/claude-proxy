@@ -2733,7 +2733,7 @@ async function clerkExchange() {
   if (S.exchanging) return;
   S.exchanging = true;
   try {
-    const ok = await login("/api/login/clerk", { token: await window.Clerk.session.getToken() });
+    const ok = await login("/api/login/clerk", { token: await window.Clerk.session.getToken(), lang: LANG });
     if (!ok) { const msg = $("#login-error").textContent; await window.Clerk.signOut(); $("#login-error").textContent = msg; mountClerk(); }   // refused: let them try another account
   } finally { S.exchanging = false; }
 }

@@ -1,13 +1,13 @@
 <!--
-title: نصب Claude Code روی ویندوز، مک و لینوکس از ایران
-description: نصب کلاد (Claude Code) در ترمینال و VS Code روی Windows، macOS و Linux با یک دستور، بدون فیلترشکن و بدون اکانت Anthropic؛ قدم به قدم.
+title: نصب Claude Code روی ویندوز، مک و لینوکس و راه‌اندازی Claude Desktop از ایران
+description: نصب کلاد (Claude Code) در ترمینال و VS Code روی Windows، macOS و Linux با یک دستور، و وصل کردن Claude Desktop با کلید اپ؛ بدون فیلترشکن و بدون اکانت Anthropic، قدم به قدم.
 date: 2026-11-06
 icon: terminal
 badge: code
 tag: آموزش نصب
 color: s7
 -->
-<p>Claude Code نسخه ترمینالی کلاد (Claude، کلود یا کلاود) است که روی کامپیوتر خودتان اجرا می‌شود. نصب معمولی آن به اکانت Anthropic و اشتراک Claude Pro نیاز دارد که از ایران در دسترس نیست. با بسته‌های راهکار هوش برتر همه این کارها با یک دستور انجام می‌شود.</p>
+<p>Claude Code نسخه ترمینالی کلاد (Claude، کلود یا کلاود) است که روی کامپیوتر خودتان اجرا می‌شود. نصب معمولی آن به اکانت Anthropic و اشتراک Claude Pro نیاز دارد که از ایران در دسترس نیست. با بسته‌های راهکار هوش برتر همه این کارها با یک دستور انجام می‌شود، و همان بسته را در Claude Desktop هم می‌توانید به کار ببرید.</p>
 
 <h2>پیش از شروع</h2>
 <ul>
@@ -20,7 +20,12 @@ color: s7
 <pre><code>curl -fsSL https://dash.rahkar.pro/install | sh</code></pre>
 
 <h2>نصب روی ویندوز</h2>
-<p>این دستور را در PowerShell اجرا کنید:</p>
+<p>ساده‌ترین راه، فایل نصب است:</p>
+<ol>
+  <li>فایل نصب را دانلود کنید: <a href="https://dash.rahkar.pro/install.cmd">https://dash.rahkar.pro/install.cmd</a></li>
+  <li>فایل دانلودشده (<code>claude-gateway-setup.cmd</code>) را باز کنید. اگر Windows پیام «Windows protected your PC» نشان داد، روی «More info» و بعد «Run anyway» بزنید.</li>
+</ol>
+<p>یا این دستور را در PowerShell اجرا کنید:</p>
 <pre><code>irm https://dash.rahkar.pro/install.ps1 | iex</code></pre>
 
 <h2>وصل کردن کامپیوتر</h2>
@@ -32,6 +37,28 @@ color: s7
 
 <h2>اجرای کلاد</h2>
 <p>به پوشه پروژه بروید و <code>gclaude</code> (جی کلاد) را اجرا کنید. حالا کلاد با مدل‌های Opus و Sonnet آماده کار است. در VS Code هم همین دستور را در ترمینال خود VS Code اجرا کنید.</p>
+
+<h2>استفاده در Claude Desktop با کلید اپ</h2>
+<p>Claude Desktop و اپ‌های دیگری که با قالب API شرکت Anthropic کار می‌کنند، به جای نصب بالا با یک کلید اپ به بسته شما وصل می‌شوند.</p>
+<h3>ساختن کلید اپ</h3>
+<ol>
+  <li>وارد <a href="https://dash.rahkar.pro/dashboard">داشبورد</a> شوید و به زبانه «API و اپ‌ها» بروید.</li>
+  <li>روی «کلید اپ جدید» بزنید و یک نام برایش بگذارید، مثلا «لپ‌تاپ».</li>
+  <li>کلید (که با <code>sk-proxy-p-</code> شروع می‌شود) فقط یک بار نشان داده می‌شود؛ همان موقع آن را کپی کنید و جایی امن نگه دارید.</li>
+</ol>
+<h3>تنظیم Claude Desktop</h3>
+<p>به Claude Desktop نسخه 1.2581.0 یا جدیدتر نیاز دارید.</p>
+<ol>
+  <li>از منو <bdi>Help → Troubleshooting → Enable Developer Mode</bdi> را بزنید.</li>
+  <li>بعد <bdi>Developer → Configure Third-Party Inference → Gateway</bdi> را باز کنید.</li>
+  <li>در <bdi>Base URL</bdi> آدرس <code>https://claude.rahkar.pro</code> و در <bdi>API key</bdi> کلید اپ خود را بگذارید.</li>
+</ol>
+<p>اپ‌های دیگر هم همین آدرس پایه و کلید را می‌گیرند.</p>
+<ul>
+  <li>کلید فقط تا وقتی بسته فعال دارید کار می‌کند و مصرفش از همان بسته کم می‌شود.</li>
+  <li>تا ۲۰ کلید می‌توانید بسازید؛ مصرف هر کلید را در همان زبانه ببینید و کلیدی را که دیگر لازم ندارید باطل کنید.</li>
+  <li>جستجوی وب، fast mode و context یک میلیون توکنی با کلید اپ کار نمی‌کند.</li>
+</ul>
 
 <h2>چند نکته</h2>
 <ul>

@@ -193,7 +193,7 @@ async def test_claim_mails_the_user(env, sent):
     [(to, subject, body)] = sent
     assert to == "alice@example.com" and "free trial" in subject.lower()
     assert "1 hour" in body and "Lite" in body and "https://dash.example.com" in body and "10%" in body
-    assert "Start now" in body and "https://dash.example.com/install.cmd" in body
+    assert "Start now" in body and "https://dash.example.com/blog/install-claude-code-windows-mac" in body
 
 
 async def test_claim_mail_in_persian(env, sent):

@@ -362,16 +362,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         except httpx.HTTPError:
             fail(503, "Could not reach Clerk to check the sign-in; try again.")
         if user is None:
-            user = clerk_account(claims["sub"], email, request.cookies.get("ref"))
+            user = clerk_account(claims["sub"], email, request.cookies.get("ref"), body.get("lang"))
         if user["revoked_at"] is not None or not user["enabled"]:
             fail(403, "This account is disabled. Ask the gateway admin.")
         db.audit(conn, user["id"], "login", user["name"], {"via": "clerk"})
         return start_session(user, ip)
 
-    def clerk_account(clerk_id: str, email: str, ref: str | None = None):
+    def clerk_account(clerk_id: str, email: str, ref: str | None = None, lang: str | None = None):
         """The gateway user for a first Clerk sign-in: an account named by (or holding) that email, else a new one.
         `ref`: the `ref` cookie, attached as the new account's referrer (referrals design); linking an existing
-        account below never attaches one - the referrer is fixed only when the account is created."""
+        account below never attaches one - the referrer is fixed only when the account is created. A new account
+        gets the welcome mail in `lang`, the sign-in page's language."""
         # Admins keep signing in with their password; only a user account can be taken over by an email.
         user = conn.execute("SELECT * FROM users WHERE role='user' AND (lower(email)=? OR lower(name)=?) ORDER BY id LIMIT 1",
                             (email, email)).fetchone()
@@ -408,6 +409,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             if isinstance(e, sqlite3.IntegrityError):   # the same person signing in twice at once
                 fail(409, "That account was just created; sign in again.")
             raise
+        mail.spawn(orders.send_welcome(conn, cfg, email, lang))
         return conn.execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
 
     @app.post("/api/logout")

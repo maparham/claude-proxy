@@ -286,7 +286,7 @@ async def test_refund_within_15_minutes(env, monkeypatch):
         assert (await c.get("/api/admin/orders?status=all")).json()["orders"][0]["payment"]["refund"] == "done"
 
 
-async def test_every_pass_mail_has_the_windows_installer(env, monkeypatch):
+async def test_every_pass_mail_links_the_setup_guide(env, monkeypatch):
     gw, conn, cfg, ids, keys, zp = env
     from claude_proxy import mail, web
     from claude_proxy.config import EmailConfig
@@ -301,9 +301,10 @@ async def test_every_pass_mail_has_the_windows_installer(env, monkeypatch):
         await c.get(f"/pay/callback?Authority={auth}&Status=OK", follow_redirects=False)   # no browser named: a phone, say
         await asyncio.gather(*list(web._mail_tasks))
     (_, admin, _), (_, body, html) = sent
-    url = "https://dash.rahkar.pro/install.cmd"
+    url = "https://rahkar.pro/blog/install-claude-code-windows-mac"
     assert url not in admin
-    assert "Set up on Windows:" in body and url in body and f'<a href="{url}">{url}</a>' in html
+    assert "install gclaude on Windows, Mac or Linux" in body and url in body and f'<a href="{url}">{url}</a>' in html
+    assert "install.cmd" not in body
 
 
 async def test_install_cmd_runs_the_powershell_install(env):
@@ -320,10 +321,10 @@ async def test_install_cmd_runs_the_powershell_install(env):
         assert (await c.get("/install.cmd")).status_code == 503
 
 
-def test_the_upgrade_mail_has_the_windows_installer_too(env):
+def test_the_upgrade_mail_links_the_setup_guide_too(env):
     gw, conn, cfg, ids, keys, zp = env
     from claude_proxy import orders
     cfg.listener.public_url = "https://gw.rahkar.pro"
     for lang in ("en", "fa"):
         _, body = orders.upgraded_mail_text(cfg, {"tier": "lite", "lang": lang}, {"ends_at": time.time() + 86400})
-        assert "https://dash.rahkar.pro/install.cmd" in body
+        assert "https://rahkar.pro/blog/install-claude-code-windows-mac" in body

@@ -1,4 +1,5 @@
 """Sign-up with Clerk, browser authorization for `claude-gateway on`, and machine keys."""
+import asyncio
 import base64
 import io
 import json
@@ -166,6 +167,26 @@ async def test_sign_up_creates_an_account_with_no_credit(env):
     async with app(gw) as c:   # the next sign-in finds the same account by its Clerk id
         assert (await signed_in(c))["id"] == user["id"]
     assert conn.execute("SELECT COUNT(*) FROM users").fetchone()[0] == 2
+
+
+@pytest.mark.parametrize("lang, subject, words", [("en", "Your account is ready", "get a pass on the dashboard"),
+                                                  ("fa", "حساب شما ساخته شد", "یک بسته بگیرید")])
+async def test_sign_up_sends_the_welcome_mail_with_the_setup_guide(env, monkeypatch, lang, subject, words):
+    gw, conn, _ = env
+    from claude_proxy import mail, web
+    from claude_proxy.config import EmailConfig
+    gw.cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda email, to, subj, body, html=None: sent.append((to, subj, body)))
+    async with app(gw) as c:
+        r = await c.post("/api/login/clerk", json={"token": jwt(claims("user_1")), "lang": lang})
+        assert r.status_code == 200, r.text
+        await asyncio.gather(*list(web._mail_tasks))
+        assert (await c.post("/api/login/clerk", json={"token": jwt(claims("user_1"))})).status_code == 200
+        await asyncio.gather(*list(web._mail_tasks))
+    [(to, subj, body)] = sent   # the second sign-in sends nothing
+    assert to == "new@example.com" and subj == subject and words in body and DASH in body
+    assert f"{DASH}/blog/install-claude-code-windows-mac" in body
 
 
 async def test_sign_in_links_an_existing_account_named_by_email(env):

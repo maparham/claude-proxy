@@ -340,11 +340,11 @@ def _length(minutes: int, lang: str) -> str:
 
 def claim_mail_text(conn: sqlite3.Connection, cfg: Config, claim: dict, lang: str) -> tuple[str, str]:
     """(subject, body) for the user once a trial is claimed or granted to them: its length and tier, how it starts,
-    the date it must start by, the discount on a first purchase after it, and the Windows setup every pass mail has."""
+    the date it must start by, the discount on a first purchase after it, and the setup guide link every pass mail has."""
     from . import orders   # here, not at the top: orders imports referrals, which imports tickets, as this module does
     s = settings(conn, cfg)
     dash = cfg.listener.dashboard_url.rstrip("/")
-    setup = orders.windows_setup(cfg, {"lang": lang})
+    setup = orders.setup_guide(cfg, {"lang": lang})
     if lang == "fa":
         tier = orders.fa_label(cfg, s.tier)
         lines = [f"آزمایش رایگان شما آماده است: {_length(s.duration_min, 'fa')} با بسته {tier}، بدون پرداخت.", "",
