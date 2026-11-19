@@ -259,12 +259,23 @@ def cancel_claim(conn: sqlite3.Connection, actor: int, claim_id: int, now: float
 
 # ---------- starting ----------
 
+def _in_the_way(conn, cfg, user_id: int, now: float) -> tuple[bool, list[dict]]:
+    """Whether a running pass holds a waiting claim back, and the running passes the trial replaces instead: used-up
+    ones (limits.used_up) end as it starts, as a granted pass replaces them (tickets.next_start)."""
+    from . import limits   # here, not at the top: limits imports this module
+    run = tickets.running(conn, user_id, now)
+    if run and limits.used_up(conn, cfg, user_id, now, run):
+        return False, run
+    return bool(run), []
+
+
 def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict | None:
     """`auto`: a request's start, which finds the claim gone or a pass running under the lock (another request of the
     user's started it meanwhile) and returns None rather than refuse."""
     from . import capacity   # here, not at the top: capacity imports tickets
     c = open_claim(conn, user_id, now)
-    if auto and (c is None or tickets.running(conn, user_id, now)):
+    held, replaces = _in_the_way(conn, cfg, user_id, now)
+    if auto and (c is None or held):
         return None
     if c is None:
         raise TrialError(409, "You have no free trial waiting to start.")
@@ -274,9 +285,12 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
         raise TrialError(409, "This account is disabled.")
     end = now + s.duration_min * 60
     try:
-        capacity.check(conn, cfg, tickets.ACCOUNT_ID, s.share_pct, s.share_5h_pct, now, end, now)
+        capacity.check(conn, cfg, tickets.ACCOUNT_ID, s.share_pct, s.share_5h_pct, now, end, now, exclude=[t["id"] for t in replaces])
     except tickets.CapacityError as e:
         raise TrialError(409, NO_ROOM) from e
+    for t in replaces:   # the user's passes are used up: they end now and the trial starts in their place
+        tickets.end_used_up(conn, t, now)
+        db.audit(conn, None, "ticket_used_up", user["name"], {"ticket_id": t["id"]})
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is None
     tid = conn.execute(
         "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, "
@@ -312,10 +326,11 @@ NO_ROOM_RETRY_S = 60
 
 
 def autostart(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> str | None:
-    """On a metered request: a waiting claim starts when the user has no pass running. None: nothing to do or started;
+    """On a metered request: a waiting claim starts when the user has no pass running, or only used-up ones, which
+    it replaces. None: nothing to do or started;
     else the refusal (no room now), remembered for NO_ROOM_RETRY_S so a full gateway isn't rechecked on every request.
     One indexed query when there is no claim, as for nearly every request."""
-    if open_claim(conn, user_id, now) is None or tickets.running(conn, user_id, now):
+    if open_claim(conn, user_id, now) is None or _in_the_way(conn, cfg, user_id, now)[0]:
         return None
     if _NO_ROOM.get(user_id, 0) > time.monotonic():
         return NO_ROOM

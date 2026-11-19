@@ -372,3 +372,35 @@ def test_a_pinned_pass_that_is_used_up_for_good_never_holds(env, monkeypatch):
     monkeypatch.setattr(limits, "pass_states", states)
     assert limits.gone(t2, states(conn, cfg, t2, NOW), NOW)
     assert limits.serving(conn, cfg, ids["alice"], NOW - 50)[0]["id"] == t["id"]
+
+
+def test_a_trial_starts_in_place_of_a_used_up_pass(env):
+    from claude_proxy import trials
+    conn, cfg, ids, t = env
+    alice = user(conn, ids["alice"])
+    trials.admin_grant(conn, cfg, ids["admin"], alice, NOW - 250, confirm=True)
+    assert trials.autostart(conn, cfg, alice["id"], NOW - 240) is None            # the pass still has use left:
+    assert trials.open_claim(conn, alice["id"], NOW - 240) is not None            # the claim waits
+    use_up(conn, ids)
+    assert check(conn, cfg, alice["id"], now=NOW - 100) is None                   # the next request starts the trial
+    old, new = tickets.get(conn, t["id"]), tickets.covering(conn, alice["id"], NOW - 50)
+    assert (old["used_up_at"], old["effective_end"]) == (NOW - 100, NOW - 100)
+    assert new["trial"] == 1 and new["starts_at"] == NOW - 100
+    assert trials.open_claim(conn, alice["id"], NOW - 50) is None
+
+
+def test_a_second_trial_after_a_used_up_trial(env):
+    from claude_proxy import trials
+    conn, cfg, ids, t = env
+    alice = user(conn, ids["alice"])
+    tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW - 290)
+    trials.admin_grant(conn, cfg, ids["admin"], alice, NOW - 280, confirm=True)
+    first = trials.start(conn, cfg, alice["id"], NOW - 270)
+    req(conn, alice["id"], NOW - 200, i=20000, ticket=first["id"])   # far past the trial's share
+    assert limits.used_up(conn, cfg, alice["id"], NOW - 100)
+    with pytest.raises(trials.TrialError, match="confirm to grant anyway"):
+        trials.admin_grant(conn, cfg, ids["admin"], alice, NOW - 100)
+    trials.admin_grant(conn, cfg, ids["admin"], alice, NOW - 100, confirm=True)
+    second = trials.start(conn, cfg, alice["id"], NOW - 90)                       # the user's own start
+    assert second["trial"] == 1 and second["id"] != first["id"]
+    assert tickets.get(conn, first["id"])["used_up_at"] == NOW - 90

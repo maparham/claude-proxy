@@ -625,7 +625,7 @@ async function renderOverview(main) {
     buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null,
     isAdmin() ? null : api("/api/referrals/me").catch(() => null)]);
   const order = mo && mo.order;
-  const trial = buyer && tk && !tk.current && !tk.queued ? await api("/api/me/trial").catch(() => null) : null;
+  const trial = buyer && tk && (!tk.current || tk.replaces) && !tk.queued ? await api("/api/me/trial").catch(() => null) : null;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
   const tot = ov.totals[S.prefs.period] || ov.totals["24h"];
