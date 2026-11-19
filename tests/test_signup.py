@@ -176,6 +176,7 @@ async def test_sign_up_sends_the_welcome_mail_with_the_setup_guide(env, monkeypa
     from claude_proxy import mail, web
     from claude_proxy.config import EmailConfig
     gw.cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    gw.cfg.tickets.enabled = True
     sent = []
     monkeypatch.setattr(mail, "send", lambda email, to, subj, body, html=None: sent.append((to, subj, body)))
     async with app(gw) as c:
@@ -185,8 +186,22 @@ async def test_sign_up_sends_the_welcome_mail_with_the_setup_guide(env, monkeypa
         assert (await c.post("/api/login/clerk", json={"token": jwt(claims("user_1"))})).status_code == 200
         await asyncio.gather(*list(web._mail_tasks))
     [(to, subj, body)] = sent   # the second sign-in sends nothing
-    assert to == "new@example.com" and subj == subject and words in body and DASH in body
+    assert to == "new@example.com" and subj == subject and words in body and f"{DASH}/dashboard" in body
     assert f"{DASH}/blog/install-claude-code-windows-mac" in body
+
+
+async def test_no_welcome_mail_with_passes_off(env, monkeypatch):
+    gw, conn, _ = env
+    from claude_proxy import mail, web
+    from claude_proxy.config import EmailConfig
+    gw.cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
+    gw.cfg.tickets.enabled = False
+    sent = []
+    monkeypatch.setattr(mail, "send", lambda *a, **k: sent.append(a))
+    async with app(gw) as c:
+        await signed_in(c)
+        await asyncio.gather(*list(web._mail_tasks))
+    assert sent == []
 
 
 async def test_sign_in_links_an_existing_account_named_by_email(env):

@@ -292,7 +292,6 @@ async def test_every_pass_mail_links_the_setup_guide(env, monkeypatch):
     from claude_proxy.config import EmailConfig
     import asyncio
     cfg.email = EmailConfig("smtp.example.com", "gw@example.com", "admin@example.com")
-    cfg.listener.public_url = "https://gw.rahkar.pro"
     sent = []
     monkeypatch.setattr(mail, "send", lambda email, to, subject, body, html=None: sent.append((to, body, html)))
     async with client(gw) as c:
@@ -324,7 +323,9 @@ async def test_install_cmd_runs_the_powershell_install(env):
 def test_the_upgrade_mail_links_the_setup_guide_too(env):
     gw, conn, cfg, ids, keys, zp = env
     from claude_proxy import orders
-    cfg.listener.public_url = "https://gw.rahkar.pro"
     for lang in ("en", "fa"):
         _, body = orders.upgraded_mail_text(cfg, {"tier": "lite", "lang": lang}, {"ends_at": time.time() + 86400})
         assert "https://rahkar.pro/blog/install-claude-code-windows-mac" in body
+    cfg.listener.home_url = cfg.listener.dashboard_url = ""   # nowhere to link: no guide line, no "None/blog"
+    _, body = orders.upgraded_mail_text(cfg, {"tier": "lite", "lang": "en"}, {"ends_at": time.time() + 86400})
+    assert "/blog/" not in body and "guide" not in body

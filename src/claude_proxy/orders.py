@@ -471,9 +471,10 @@ SETUP_POST = "install-claude-code-windows-mac"   # the blog post on installing g
 
 
 def setup_url(cfg: Config) -> str | None:
-    """The setup guide's address: the blog lives on the home host ([listener] home_url), else on the dashboard's."""
+    """The setup guide's address: the blog lives on the home host ([listener] home_url), else on the dashboard's. None
+    with passes off, where the blog is not served."""
     base = cfg.listener.home_url or cfg.listener.dashboard_url
-    return f"{base.rstrip('/')}/blog/{SETUP_POST}" if base else None
+    return f"{base.rstrip('/')}/blog/{SETUP_POST}" if base and cfg.tickets.enabled else None
 
 
 def setup_guide(cfg: Config, order: dict) -> str:
@@ -585,7 +586,7 @@ async def send_granted(conn: sqlite3.Connection, cfg: Config, order_id: int) -> 
 
 def welcome_mail_text(cfg: Config, lang: str) -> tuple[str, str]:
     """(subject, body) for a new account made by signing up: where to get a pass, and the setup guide."""
-    dash = (cfg.listener.dashboard_url or cfg.listener.home_url or "").rstrip("/")
+    dash = f"{cfg.listener.dashboard_url.rstrip('/')}/dashboard" if cfg.listener.dashboard_url else ""
     guide = setup_guide(cfg, {"lang": lang})
     if lang == "fa":
         return "حساب شما ساخته شد", ("حساب شما ساخته شد.\n\n"
@@ -596,8 +597,8 @@ def welcome_mail_text(cfg: Config, lang: str) -> tuple[str, str]:
 
 async def send_welcome(conn: sqlite3.Connection, cfg: Config, to: str, lang: str | None) -> None:
     """After a sign-up's response: the welcome mail, in the sign-in page's language. No [email] or no address: nothing.
-    A failure is logged and never touches the account."""
-    if cfg.email is None or not EMAIL.match(to or ""):
+    A failure is logged and never touches the account. With passes off there is no pass to get: nothing."""
+    if cfg.email is None or not cfg.tickets.enabled or not EMAIL.match(to or ""):
         return
     subject, body = welcome_mail_text(cfg, "fa" if lang == "fa" else "en")
     try:
