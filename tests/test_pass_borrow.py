@@ -216,6 +216,18 @@ def test_split_bar_parts_still_add_up_after_the_rate_changed(env, monkeypatch):
     assert sum(w["share"] for w in weeks["weeks"]) == pytest.approx(1)
 
 
+def test_a_past_part_that_borrowed_counts_whole_after_the_rate_rose(env, monkeypatch):
+    # The same tokens are fewer points at today's doubled rate, but the part spent its own piece and what it took.
+    from claude_proxy import quota
+    conn, cfg, ids, t = env
+    borrowed(conn, cfg, ids, t)
+    after = RESET7 + 600
+    at(conn, after - 60, 0, resets=RESET7 + 7 * DAY)
+    monkeypatch.setattr(quota, "observed_rate", lambda *a, **k: 2000.0)
+    weeks = limits.ticket_weeks(conn, cfg, ids["alice"], after, week(conn, cfg, ids["alice"], now=after))
+    assert weeks["ticket_pct"] == pytest.approx(100 * 0.4 / (OWN + NEXT))
+
+
 def test_a_pass_that_never_borrowed_gets_its_whole_next_part(env):
     conn, cfg, ids, t = env
     use(conn, ids["alice"], t, 50, 1.05)
@@ -416,7 +428,7 @@ def test_a_day_pass_that_borrowed_all_its_next_part_is_used_up_not_back_at_the_r
     tokens = int((OWN + NEXT) * 1000) + 10                # then past both its parts
     use(conn, ids["alice"], t, tokens, 1.1 + tokens / 1000, when=AT - 50)
     assert check(conn, cfg, ids["alice"]).kind == "share_7d"
-    assert limits.pass_weeks(conn, cfg, t, AT)["ticket_pct"] >= 100
+    assert limits.pass_weeks(conn, cfg, t, AT)["ticket_pct"] == 100   # never over: it took past its next part
     assert limits.used_up(conn, cfg, ids["alice"], AT)    # the reset frees nothing: its next part is spent
     view = next(limits.user_view(s) for s in limits.states(conn, cfg, ids["alice"], now=AT) if s.kind == "share_7d")
     assert view["used_up"] and view["reset_in"] is None   # not "back in" at the reset

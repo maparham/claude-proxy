@@ -418,12 +418,15 @@ def pass_weeks(conn, cfg: Config, t: dict, now: float, current: LimitState | Non
         meter = current.limit if state == "current" and current is not None and current.limit else own + took
         weeks.append({"pct": 100.0 * used / meter if meter else 100.0, "state": state, "limit": limit, "debt": debt, "took": took})
         # A part counts toward the whole at most its own piece: one that went over (a past week remeasured at today's
-        # rate, say) would otherwise read the pass as used up while a later part still has room.
-        used_all, limit_all = used_all + min(used, own + took), limit_all + limit
+        # rate, say) would otherwise read the pass as used up while a later part still has room. A past part that
+        # borrowed spent its own piece first, so it counts all of it and what it took, whatever today's rate makes of it.
+        spent = own + took if state == "past" and took > 0 else min(used, own + took)
+        used_all, limit_all = used_all + spent, limit_all + limit
         start = end
     for w in weeks:   # each part as it is spent: its own piece, less what the week before took from it, plus what it took
         w["share"] = max(0.0, w.pop("limit") - w.pop("debt") + w.pop("took")) / limit_all if limit_all else 0.0
-    return {"weeks": weeks, "ticket_pct": 100.0 * used_all / limit_all if limit_all else 100.0, "ends_in": max(0, int(t_end - now)),
+    # At most 100: a day pass's last request can take past what its next part holds.
+    return {"weeks": weeks, "ticket_pct": min(100.0, 100.0 * used_all / limit_all) if limit_all else 100.0, "ends_in": max(0, int(t_end - now)),
             "length": t["length"]}
 
 
