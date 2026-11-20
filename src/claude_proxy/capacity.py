@@ -44,9 +44,13 @@ def _weighted_since(conn, cfg, user_id, since, now, ticket_id: int | None = None
 
 def _pass_cap(conn, t, start, end, now) -> float:
     """The weekly points one pass gives between `start` and `end` (both inside one Anthropic week), before capacity
-    scaling: its share × the days of the span it covers ÷ 7, plus its active bonus pieces."""
+    scaling: its share × the days of the span it covers ÷ 7, plus its active bonus pieces. A span already over
+    (`end` <= now) counts every bonus that ran in it: those pieces were there to use while it ran."""
     cap = t["share_pct"] * max(0.0, min(end, t["effective_end"]) - max(start, t["starts_at"])) / DAY / 7
-    for b in tickets.active_bonuses(conn, t["id"], now):
+    bonuses = tickets.active_bonuses(conn, t["id"], now) if end > now else [dict(r) for r in conn.execute(
+        "SELECT * FROM ticket_bonuses WHERE ticket_id=? AND cancelled_at IS NULL AND share_pct>0 AND starts_at<? AND ends_at>?",
+        (t["id"], end, start))]
+    for b in bonuses:
         cap += b["share_pct"] * max(0.0, min(end, b["ends_at"]) - max(start, b["starts_at"])) / DAY / 7
     return cap
 
@@ -187,11 +191,11 @@ def _bonuses(conn, ids) -> dict[int, list]:
 
 
 def _own(conn, cfg, p, bonuses, week, scale, now) -> float:
-    """A pass's points of the current week: its piece over the week (overlapping share bonuses counted) scaled to the
-    gateway's capacity, less what it borrowed from this week in the last."""
+    """A pass's points of the current week: its piece over the week (share bonuses not yet over counted: an ended
+    one's piece is gone, as _pass_cap has it) scaled to the gateway's capacity, less what it borrowed from this week in the last."""
     span = lambda s, e: max(0.0, min(week[1], e) - max(week[0], s)) / DAY / 7   # noqa: E731
     part = p["share_pct"] * span(p["starts_at"], p["effective_end"])
-    part += sum(b["share_pct"] * span(b["starts_at"], b["ends_at"]) for b in bonuses)
+    part += sum(b["share_pct"] * span(b["starts_at"], b["ends_at"]) for b in bonuses if b["ends_at"] > now)
     return part * scale / 100 - _debt(conn, cfg, p, week[0], scale, now)
 
 

@@ -475,8 +475,19 @@ def test_an_ended_part_counts_its_whole_piece_toward_the_whole(env):
     req(conn, ids["alice"], NOW - 100, i=10)          # barely any use in the first part
     fresh(conn, NOW - 50, util5=1, util7=1)
     later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)
-    assert later["weeks"][0]["pct"] < 5
+    assert later["weeks"][0]["pct"] == 100   # what it left is gone: drawn full on the split bar
     assert later["ticket_pct"] == pytest.approx(100 * later["weeks"][0]["share"])
+
+
+def test_an_ended_part_keeps_the_bonus_that_ran_in_it(env):
+    """A bonus over in its part still made that part bigger while it ran: the part's piece and share keep it."""
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 100, i=1000)
+    fresh(conn, NOW - 50, util5=1, util7=1)
+    before = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)["weeks"][0]["share"]
+    conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?)",
+                 (t["id"], 7, NOW, NOW + DAY, NOW))
+    assert limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)["weeks"][0]["share"] > before + 0.01
 
 
 def test_status_line_in_a_pass_s_last_part_gives_only_the_whole_use():
@@ -497,7 +508,7 @@ def test_a_part_that_went_over_counts_only_its_piece_toward_the_whole(env):
     req(conn, ids["alice"], NOW - 100, i=10_000_000)   # far beyond the first part's piece
     fresh(conn, NOW - 50, util5=10, util7=10)
     later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)
-    assert [w["state"] for w in later["weeks"]] == ["past", "current"] and later["weeks"][0]["pct"] > 100
+    assert [w["state"] for w in later["weeks"]] == ["past", "current"] and later["weeks"][0]["pct"] == 100   # ended: spent
     assert later["ticket_pct"] == pytest.approx(100 * later["weeks"][0]["share"])   # the first piece, all of it, no more
 
 

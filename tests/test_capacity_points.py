@@ -583,3 +583,15 @@ def test_a_card_sold_out_on_the_week_has_no_return_time(db):
     cfg.tickets.max_sold_pct = 0.5   # under a day pass's 5/7 piece
     lite = next(t for t in tickets.price_table(conn, cfg, NOW, "EUR")["tiers"] if t["tier"] == "lite")["lengths"]["day"]
     assert (lite["sold_out"], lite["available_at"]) == (True, None)
+
+
+def test_an_ended_bonus_reserves_nothing(acct):
+    """A bonus's piece is gone when it ends (_pass_cap counts only running ones), so the week holds none of it back."""
+    conn, cfg, ids = acct
+    live(conn, NOW - 1200, 1)
+    t = grant(conn, cfg, ids, tier="standard", length="week", now=NOW - 1200)
+    att = {"utilization_pct": 1.0, "stale": False, "resets_at": W[1], "ticket_shares": {}, "unattributed": 0.0}
+    without = capacity.reserved(conn, cfg, 1, W, att, None, 100.0, NOW)
+    conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?)",
+                 (t["id"], 7, NOW - 1100, NOW - 100, NOW - 1100))
+    assert capacity.reserved(conn, cfg, 1, W, att, None, 100.0, NOW) == pytest.approx(without)
