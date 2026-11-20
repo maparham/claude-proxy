@@ -468,6 +468,16 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
     assert "First part ended · " in limits_line(conn, cfg, ids, later)
 
 
+def test_a_part_that_went_over_counts_only_its_piece_toward_the_whole(env):
+    """A first part spent past its piece does not read the pass as used up while the second part still has room."""
+    conn, cfg, ids, t = env
+    req(conn, ids["alice"], NOW - 100, i=10_000_000)   # far beyond the first part's piece
+    fresh(conn, NOW - 50, util5=10, util7=10)
+    later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)
+    assert [w["state"] for w in later["weeks"]] == ["past", "current"] and later["weeks"][0]["pct"] > 100
+    assert later["ticket_pct"] == pytest.approx(100 * later["weeks"][0]["share"])   # the first piece, all of it, no more
+
+
 def test_status_line_gives_a_day_pass_across_the_reset_only_its_whole_use():
     """A day pass that crosses Anthropic's weekly reset is one allowance on the line; a week pass is in parts."""
     from claude_proxy.web import _ticket_weeks_text
