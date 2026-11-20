@@ -796,7 +796,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if user.get("machine_key_id"):   # gclaude's statusline says which version this computer runs
             db.set_client_version(conn, user["machine_key_id"], request.headers.get("x-gclaude-version", ""))
         now = time.time()
-        states = limits.states(conn, cfg, user["id"], now=now)
+        picked = limits.pick(conn, cfg, user["id"], now)   # once: the line's limits, its pass's name and its weeks
+        states = limits.states(conn, cfg, user["id"], now=now, picked=picked)
         account = None
         if is_admin(user):
             account = {}
@@ -807,8 +808,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if format == "account":   # gclaude's /account (statusline.sh --warn)
             return PlainTextResponse(_account_line(conn, user) + "\n")
         weekly = next((s for s in states if s.kind == "share_7d" and s.tier is not None), None)
-        weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly) if weekly is not None and account is None else None
-        line = _status_line(user, states, account, weeks, _ticket_name(conn, cfg, user["id"], now))
+        weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly, picked) if weekly is not None and account is None else None
+        line = _status_line(user, states, account, weeks, _ticket_name(conn, cfg, picked[0]))
         if account is None and (note := _account_blocked(conn, now)):
             # Their own figures can show room left while every request gets the 429; say why up front, after the name.
             n = len(user["name"])
@@ -2345,10 +2346,9 @@ def _ticket_weeks_text(weeks: dict, est: str) -> str:
     return " · ".join(parts + [ticket])
 
 
-def _ticket_name(conn, cfg, user_id: int, now: float) -> str | None:
-    """`Lite week pass`: the serving pass's tier as it runs now (an upgrade's) and its length, or `Lite free trial`;
-    None without one. The pass limits.pick chooses, as the line's figures (ticket_weeks) are: not the oldest running one."""
-    t = limits.pick(conn, cfg, user_id, now)[0]
+def _ticket_name(conn, cfg, t: dict | None) -> str | None:
+    """`Lite week pass`: pass `t`'s tier as it runs now (an upgrade's) and its length, or `Lite free trial`; None without
+    one. `t` is limits.pick's, as the line's figures (ticket_weeks) are: not the oldest running pass."""
     if t is None:
         return None
     tier = tickets.tier_now(conn, t)

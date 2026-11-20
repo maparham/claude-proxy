@@ -370,12 +370,13 @@ def pick(conn, cfg: Config, user_id: int, now: float, run: list[dict] | None = N
     return (best[1], best[2], False) if best else (None, [], False)
 
 
-def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None) -> dict | None:
+def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitState | None = None, picked=None) -> dict | None:
     """For the statusline: the serving pass's use of each Anthropic week it spans and of the whole pass, e.g.
     {"weeks": [{"pct": 57.0, "state": "current", "share": 0.43}, {"pct": 0.0, "state": "future", "share": 0.57}],
     "ticket_pct": 30.0, "ends_in": 3600, "length": "week"} (seconds until the pass ends; share: the piece's part of the pass). Each week's piece is measured as share_7d measures the current one (`current`,
-    that state, is reused for it), at today's rate and capacity. None without a pass, a known week or a rate."""
-    t = pick(conn, cfg, user_id, now)[0]   # the serving pass, or the stopped one that frees up soonest
+    that state, is reused for it), at today's rate and capacity. None without a pass, a known week or a rate.
+    `picked`: pick's answer when the caller has it already."""
+    t = (picked or pick(conn, cfg, user_id, now))[0]   # the serving pass, or the stopped one that frees up soonest
     return pass_weeks(conn, cfg, t, now, current) if t is not None else None
 
 
@@ -473,7 +474,9 @@ def _pay(message: str) -> dict:
     return {"type": "error", "error": {"type": "billing_error", "message": message}}
 
 
-def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | None = None) -> list[LimitState]:
+def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | None = None, picked=None) -> list[LimitState]:
+    """The user's limits now. `picked`: pick's answer at `now` when the caller has it already (the statusline names that
+    pass and measures its weeks too), so the passes are not walked again."""
     now = time.time() if now is None else now
     gated = _gated(conn, cfg, user_id)
     out = []
@@ -489,7 +492,7 @@ def states(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | Non
         else:
             out.append(LimitState(row["kind"], row["scope"], row["value"], row["unit"]))
     if gated:
-        out.extend(ticket_states(conn, cfg, user_id, now))
+        out.extend(picked[1] if picked is not None else ticket_states(conn, cfg, user_id, now))
     return out
 
 
