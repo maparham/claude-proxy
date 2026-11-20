@@ -650,7 +650,9 @@ async function renderOverview(main) {
     buyer ? api("/api/me/orders").catch((e) => { if (e.message === "signed out") throw e; return null; }) : null,
     isAdmin() ? null : api("/api/referrals/me").catch(() => null)]);
   const order = mo && mo.order;
-  const trial = buyer && tk && (!tk.current || tk.replaces) && !tk.queued ? await api("/api/me/trial").catch(() => null) : null;
+  // A pass running (not used up) or queued holds a waiting claim back: the card then shows only that claim, never the offer.
+  const held = !!tk && ((tk.current && !tk.replaces) || !!tk.queued);
+  const trial = buyer && tk ? await api("/api/me/trial").catch(() => null) : null;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
   const tot = ov.totals[S.prefs.period] || ov.totals["24h"];
@@ -698,7 +700,7 @@ async function renderOverview(main) {
         </div>` : ""}
         ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order)}
       </div>`}
-      ${trialCard(trial)}
+      ${trialCard(trial, held)}
       ${tk && !tk.current ? priceListCard(tk, order) : ""}
       ${tk ? pastCard(tk) : ""}
       ${isAdmin() ? "" : inviteCard(ref)}
@@ -725,12 +727,13 @@ async function renderOverview(main) {
 }
 // ---------- the free trial (2026-11-14) ----------
 
-// Offered to a user with no pass who never had one: a claim button, then Start now while the claim waits.
-function trialCard(tr) {
-  if (!tr || !(tr.can_claim || tr.claim)) return "";
+// Offered to a user with no pass who never had one: a claim button, then Start now while the claim waits. `held`: a pass
+// of theirs is running or queued, so no offer, but a waiting claim (an admin's grant) still shows, starting after it.
+function trialCard(tr, held) {
+  if (!tr || !(tr.claim || (tr.can_claim && !held))) return "";
   const vars = { len: trialLen(tr.duration_min), tier: tierName(tr.tier, tr.label || tr.tier) };
   return `<div class="card trial-card" id="trial-card"><h3>${t("trial.title")}</h3>
-    ${tr.claim ? `<p class="sub">${t("trial.waiting", { ...vars, date: fmtDate(tr.claim.expires_at) })}</p>
+    ${tr.claim ? `<p class="sub">${t(held ? "trial.waiting_held" : "trial.waiting", { ...vars, date: fmtDate(tr.claim.expires_at) })}</p>
       <p><button class="btn primary" id="trial-start">${t("trial.start_btn")}</button></p>`
     : `<p class="sub">${t("trial.offer", vars)}</p>${tr.turnstile_site_key ? `<div id="trial-ts"></div>` : ""}
       <p><button class="btn primary" id="trial-claim"${tr.turnstile_site_key ? " disabled" : ""}>${t("trial.claim_btn")}</button></p>`}
