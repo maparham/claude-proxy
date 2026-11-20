@@ -2329,15 +2329,16 @@ def _days_hours_minutes(s: int) -> str:
 def _ticket_weeks_text(weeks: dict, est: str) -> str:
     """`57% of first part · 0% of second part · 30% used (expires in 3d:5h:12m)`, one part per Anthropic week it spans
     (parts, never weeks: the holder bought a length, 2026-10-30); a part that is over reads `First part ended`, since
-    gclaude warns on the highest percentage on the line and a used-up past part would read as a limit reached. A ticket within one week, or a day pass across a reset: the ticket's part only."""
+    gclaude warns on the highest percentage on the line and a used-up past part would read as a limit reached. A ticket within one week, a day pass across a reset, or a pass in its last part: the ticket's part only."""
     ticket = f"{min(weeks['ticket_pct'], 100):.0f}%{est} used (expires in {_days_hours_minutes(weeks['ends_in'])})"
     if len(weeks["weeks"]) == 1:
         return ticket
     nth = tickets.TERMS["en"]["nth"]
     name = lambda i: nth[i] if i < len(nth) else f"{i + 1}th"   # noqa: E731  (a month spans at most 5 weeks)
-    if weeks.get("length") == "day":   # it borrows its next part as it needs it (2026-10-30): one allowance,
+    last = weeks["weeks"][-1]["state"] == "current"   # in its last part, only the whole is shown (the parts before are over)
+    if weeks.get("length") == "day" or last:   # a day pass borrows its next part as it needs it (2026-10-30): one allowance,
         stopped = any(w["state"] == "current" and w["pct"] >= 100 for w in weeks["weeks"])   # unless there is no room to
-        return f"used up for now (100%) · {ticket}" if stopped else ticket                    # borrow: then gclaude warns
+        return f"used up for now (100%) · {ticket}" if stopped else ticket                    # borrow, or the last part is spent: then gclaude warns
     parts = [f"{name(i)} part ended" if w["state"] == "past" else f"{min(w['pct'], 100):.0f}%{est} of {name(i).lower()} part"
              for i, w in enumerate(weeks["weeks"])]
     return " · ".join(parts + [ticket])
