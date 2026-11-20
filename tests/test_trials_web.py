@@ -285,3 +285,23 @@ def test_pass_list_rows_split_the_period_and_show_the_duration(tmp_path):
     assert "trial.short" not in trial and "S:3600" in trial and "<div" not in trial.split('<div class="row-actions"')[0]
     assert "L:week" in paid and "<td class=\"nowrap\">D0</td>" in paid and "D604800" in paid and "$10" in paid
     assert "[waiting]" in waiting and "S:3600" in waiting and 'data-cact="5"' in waiting and "D99" in waiting
+
+
+async def test_statusline_names_the_pass_it_measures(env):
+    """With a week pass and a started trial the user switched to, the line's pass name is the trial's, as its figures
+    are: not the oldest running pass's ("Lite week pass ... expires in 59m" read as the week pass running out)."""
+    gw, conn, cfg, ids, keys = env
+    from tests.test_tickets_web import grant
+    now = time.time()
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
+                 (now - 30, "header", "5h", 0, now + 3600))
+    h = bearer(keys["alice"])
+    async with admin_client(gw) as c:
+        assert (await grant(c, {"user": "alice", "tier": "lite", "length": "week", "currency": "USD"})).status_code == 200
+    trials.admin_grant(conn, cfg, ids["admin"], conn.execute("SELECT * FROM users WHERE id=?", (ids["alice"],)).fetchone(), now, confirm=True)
+    async with client(gw) as c:
+        assert (await c.post("/api/me/trial/start", headers=h, json={})).status_code == 200
+        trial = conn.execute("SELECT id FROM tickets WHERE trial=1").fetchone()[0]
+        conn.execute("UPDATE users SET pass_pin=? WHERE id=?", (trial, ids["alice"]))
+        line = (await c.get("/api/me/status", headers=h)).json()["line"]
+    assert line.startswith("alice · Lite free trial · ") and "expires in 0h:59m" in line, line

@@ -2346,8 +2346,9 @@ def _ticket_weeks_text(weeks: dict, est: str) -> str:
 
 
 def _ticket_name(conn, cfg, user_id: int, now: float) -> str | None:
-    """`Lite week ticket`: the covering ticket's tier as it runs now (an upgrade's) and its length; None without one."""
-    t = tickets.covering(conn, user_id, now)
+    """`Lite week pass`: the serving pass's tier as it runs now (an upgrade's) and its length, or `Lite free trial`;
+    None without one. The pass limits.pick chooses, as the line's figures (ticket_weeks) are: not the oldest running one."""
+    t = limits.pick(conn, cfg, user_id, now)[0]
     if t is None:
         return None
     tier = tickets.tier_now(conn, t)
