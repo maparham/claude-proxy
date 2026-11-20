@@ -652,6 +652,7 @@ async function renderOverview(main) {
   const order = mo && mo.order;
   // A pass running (not used up) or queued holds a waiting claim back: the card then shows only that claim, never the offer.
   const held = !!tk && ((tk.current && !tk.replaces) || !!tk.queued);
+  const inGrid = held && tk.gated && !(me && me.paused);   // where userLimitsCard draws the user's passes
   const trial = buyer && tk ? await api("/api/me/trial").catch(() => null) : null;
   if (ov.credential) credentialPill(ov.credential);
   if (tk && typeof tk.now === "number") S.tkSkew = tk.now - Date.now() / 1000;
@@ -698,9 +699,9 @@ async function renderOverview(main) {
           <div id="quota-bars"></div>
           ${ex && ex.pct_per_hour > 0 ? `<p class="sub" style="margin-top:12px">${t("ov.rising", { v: nfFix(1).format(ex.pct_per_hour) })}${ex.eta_s ? t("ov.fills_in", { d: fmtDur(ex.eta_s) }) + (ex.before_reset ? t("ov.before_reset") : t("ov.after_reset")) : ""}.${tipI("exhaustion")}</p>` : ""}
         </div>` : ""}
-        ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order)}
+        ${isAdmin() ? usersCard() : userLimitsCard(me, tk, order, inGrid ? trialPassCard(trial) : "")}
       </div>`}
-      ${trialCard(trial, held)}
+      ${inGrid ? "" : held ? trialPassCard(trial).replace("pass-card queued", "card") : trialCard(trial)}
       ${tk && !tk.current ? priceListCard(tk, order) : ""}
       ${tk ? pastCard(tk) : ""}
       ${isAdmin() ? "" : inviteCard(ref)}
@@ -727,17 +728,25 @@ async function renderOverview(main) {
 }
 // ---------- the free trial (2026-11-14) ----------
 
-// Offered to a user with no pass who never had one: a claim button, then Start now while the claim waits. `held`: a pass
-// of theirs is running or queued, so no offer, but a waiting claim (an admin's grant) still shows, starting after it.
-function trialCard(tr, held) {
-  if (!tr || !(tr.claim || (tr.can_claim && !held))) return "";
+// Offered to a user with no pass who never had one: a claim button, then Start now while the claim waits.
+function trialCard(tr) {
+  if (!tr || !(tr.can_claim || tr.claim)) return "";
   const vars = { len: trialLen(tr.duration_min), tier: tierName(tr.tier, tr.label || tr.tier) };
   return `<div class="card trial-card" id="trial-card"><h3>${t("trial.title")}</h3>
-    ${tr.claim ? `<p class="sub">${t(held ? "trial.waiting_held" : "trial.waiting", { ...vars, date: fmtDate(tr.claim.expires_at) })}</p>
+    ${tr.claim ? `<p class="sub">${t("trial.waiting", { ...vars, date: fmtDate(tr.claim.expires_at) })}</p>
       <p><button class="btn primary" id="trial-start">${t("trial.start_btn")}</button></p>`
     : `<p class="sub">${t("trial.offer", vars)}</p>${tr.turnstile_site_key ? `<div id="trial-ts"></div>` : ""}
       <p><button class="btn primary" id="trial-claim"${tr.turnstile_site_key ? " disabled" : ""}>${t("trial.claim_btn")}</button></p>`}
     <div class="error" id="trial-err"></div></div>`;
+}
+// A waiting claim beside a running or queued pass (an admin's grant): a card among the user's other passes, starting
+// once those end or are used up, or on Start now. Its ids are the trial card's, so wireTrial wires it the same.
+function trialPassCard(tr) {
+  if (!tr || !tr.claim) return "";
+  return `<div class="pass-card queued" id="trial-card"><div class="pass-card-head"><b>${t("trial.title")} · ${tierName(tr.tier, tr.label || tr.tier)} (${trialLen(tr.duration_min)})</b>
+      <span class="badge state-queued">${t("state.waiting")}</span></div>
+    <div class="muted">${t("trial.waiting_held", { date: fmtShort(tr.claim.expires_at) })}</div>
+    <button class="btn small" id="trial-start">${t("pass.start_now")}</button><div class="error" id="trial-err"></div></div>`;
 }
 function wireTrial(root, tr) {
   const card = $("#trial-card", root);
@@ -900,7 +909,7 @@ function passTokens(x) {
 // Weighted over raw, in a table cell.
 const tokensCell = (x) => (x && x.tokens ? `<td class="r"><div>${fmtNum(x.tokens.weighted)}</div><div class="muted">${t("pass.tokens_raw", { v: fmtNum(x.tokens.raw) })}</div></td>` : `<td class="r muted">—</td>`);
 // The passes other than the one in use, as cards. `i` stays each pass's place in the server's list, which pinning names.
-function passList(c, no) {
+function passList(c, no, extra = "") {
   const pct = (v) => (v == null ? "–" : `${nf0.format(Math.round(Math.min(100, v)))}${PCT}`);   // the request past a limit is still served: never above 100
   // Every pass says where it stands: in use, usable in a while (queued), used up, back in a while (at a limit, requests go on to the next
   // meanwhile), or ready behind the one in use.
@@ -917,8 +926,8 @@ function passList(c, no) {
   const oneWeek = (p) => c.week_known && p.effective_end <= c.week_end;
   const others = c.passes.map((p, i) => ({ ...p, i })).filter((p) => !p.serving && !p.held).sort((a, b) => no[a.i] - no[b.i]);
   const bought = (p) => (p.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(p.bought_at) })}</div>` : "");
-  if (!others.length) return "";
-  return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
+  if (!others.length && !extra) return "";
+  return `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${extra}${others.map((p) => `<div class="pass-card${p.queued ? " queued" : ""}${p.used_up ? " spent" : ""}" data-pass="${p.i}">
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${passLen(p)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && !p.used_up && p.pct_5h >= 100, wait(p.reset_5h))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && !p.used_up && p.pct_7d >= 100, wait(p.reset_7d))}${passTokens(p)}`}
@@ -926,7 +935,10 @@ function passList(c, no) {
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${passLen(p)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}</div>`;
 }
-function userLimitsCard(me, tk, order) {
+// Cards under a single pass (or a queued one) in the grid passList draws for several: a waiting free trial's.
+const othersGrid = (cards) => (cards ? `<h4 class="pass-others">${t("pass.others")}</h4><div class="pass-cards">${cards}</div>` : "");
+// `trial`: a waiting free trial's card (trialPassCard), shown with the user's other passes.
+function userLimitsCard(me, tk, order, trial = "") {
   if (me.paused) return `<div class="card"><h3>${t("ov.your_limits")}</h3><div class="ticket">${t("ov.paused")}</div></div>`;
   const c = tk && tk.current;
   // A ticket over before the weekly reset (a day ticket, say) has nothing weekly about it for its holder: no refill
@@ -972,14 +984,14 @@ function userLimitsCard(me, tk, order) {
       ${split}${limitsCompact(me.limits, noWeek)}${passTokens(inUse)}${inUse.bought_at ? `<div class="pass-bought">${t("pass.bought", { date: fmtShort(inUse.bought_at) })}</div>` : ""}</div>` : "";
   const ticket = !tk || !tk.gated ? "" : multi ? `<div class="ticket">
       <div class="ticket-head"><div class="muted">${t("pass.list", { btn: `<span class="btn small btn-ref">${t("pass.pin")}</span>` })}</div><div class="row-actions">${renew}</div></div>
-      ${hero}${passList(c, no)}${extras}</div>`
+      ${hero}${passList(c, no, trial)}${extras}</div>`
     : c ? `<div class="ticket">
       <div class="ticket-head"><div>${c.trial ? `<b>${t("trial.title")}</b> <span class="muted">${tierName(c.tier, c.label)}</span>` : t("ov.ticket_line", { label: tierName(c.tier, c.label) })}${c.upgraded_from ? ` <span class="muted">${t("up.from", { label: tierName(c.upgraded_from.tier, c.upgraded_from.label) })}</span>` : ""}</div><div class="row-actions">${renew}</div></div>
       <div class="muted">${short ? t("ov.ends_in", { d: fromNow(c.effective_end) }) : t("ov.ends", { date: fmtDate(c.effective_end) })}${c.bonus_days ? ` <span class="badge">${plural("ov.bonus_days", c.bonus_days, { n: nf0.format(c.bonus_days) })}</span>` : ""}${nextPart ? ` · ${t("ov.part_starts_in", { part: nextPart.name, d: fromNow(nextPart.at) })}`
         : noWeek ? "" : ` · ${c.week_known ? t("ov.week_ends", { date: fmtDate(c.week_end) }) : t("ov.week_unknown")}`}</div>
       ${split}${passTokens(c)}${extras}
-      ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}</div>`
-    : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>`
+      ${tk.queued ? `<div class="muted">${t("ov.next", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}</div>` : ""}${othersGrid(trial)}</div>`
+    : tk.queued ? `<div class="ticket">${t("ov.next_starts", { label: tierName(tk.queued.tier, tk.queued.label), date: fmtDate(tk.queued.starts_at) })}${othersGrid(trial)}</div>`
     : `<div class="ticket">${t("ov.ticket_ended")} ${t("ov.buy_below")}</div>`;
   return `<div class="card"><h3>${multi ? t("ov.your_passes") : c ? t("ov.your_ticket") : t("ov.your_limits")}</h3>
     <p class="sub">${c ? (nextPart ? t("ov.ticket_sub_parts", { part: nextPart.name, prev: nextPart.prev, d: fromNow(nextPart.at) }) : t(noWeek ? "ov.ticket_sub_one" : "ov.ticket_sub")) : t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>
