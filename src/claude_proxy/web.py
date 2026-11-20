@@ -2335,10 +2335,11 @@ def _ticket_weeks_text(weeks: dict, est: str) -> str:
         return ticket
     nth = tickets.TERMS["en"]["nth"]
     name = lambda i: nth[i] if i < len(nth) else f"{i + 1}th"   # noqa: E731  (a month spans at most 5 weeks)
-    last = weeks["weeks"][-1]["state"] == "current"   # in its last part, only the whole is shown (the parts before are over)
-    if weeks.get("length") == "day" or last:   # a day pass borrows its next part as it needs it (2026-10-30): one allowance,
+    if weeks["weeks"][-1]["state"] == "current":   # in its last part, the whole only: the parts before count as spent,
+        return ticket                              # so it reads 100% as the pass stops
+    if weeks.get("length") == "day":   # it borrows its next part as it needs it (2026-10-30): one allowance,
         stopped = any(w["state"] == "current" and w["pct"] >= 100 for w in weeks["weeks"])   # unless there is no room to
-        return f"used up for now (100%) · {ticket}" if stopped else ticket                    # borrow, or the last part is spent: then gclaude warns
+        return f"used up for now (100%) · {ticket}" if stopped else ticket                    # borrow: then gclaude warns
     parts = [f"{name(i)} part ended" if w["state"] == "past" else f"{min(w['pct'], 100):.0f}%{est} of {name(i).lower()} part"
              for i, w in enumerate(weeks["weeks"])]
     return " · ".join(parts + [ticket])

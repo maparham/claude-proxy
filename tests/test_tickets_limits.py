@@ -468,14 +468,24 @@ def test_status_line_shows_each_week_of_a_ticket_and_the_whole(env):
     assert "part" not in limits_line(conn, cfg, ids, later)   # in its last part: the whole pass's use only
 
 
+def test_an_ended_part_counts_its_whole_piece_toward_the_whole(env):
+    """What a part left unspent is gone at its end: it counts as used, so the whole reads what is really left."""
+    conn, cfg, ids, t = env
+    req(conn, ids["admin"], NOW - 110, i=100_000)     # the account's point is 100k tokens
+    req(conn, ids["alice"], NOW - 100, i=10)          # barely any use in the first part
+    fresh(conn, NOW - 50, util5=1, util7=1)
+    later = limits.ticket_weeks(conn, cfg, ids["alice"], NOW + 4 * DAY)
+    assert later["weeks"][0]["pct"] < 5
+    assert later["ticket_pct"] == pytest.approx(100 * later["weeks"][0]["share"])
+
+
 def test_status_line_in_a_pass_s_last_part_gives_only_the_whole_use():
-    """Once the earlier parts are over, the line reads the whole pass's use; a spent last part still says it is used up."""
+    """Once the earlier parts are over, the line reads the whole pass's use (pass_weeks counts them as spent, so it
+    reaches 100% as the last part does)."""
     from claude_proxy.web import _ticket_weeks_text
     weeks = {"weeks": [{"pct": 100.0, "state": "past"}, {"pct": 77.0, "state": "current"}], "ticket_pct": 98.8,
              "ends_in": 2 * 3600, "length": "week"}
     assert _ticket_weeks_text(weeks, "") == "99% used (expires in 2h:0m)"
-    weeks["weeks"][1]["pct"], weeks["ticket_pct"] = 100.0, 60.0   # the first part left use unspent; the last is spent
-    assert _ticket_weeks_text(weeks, "") == "used up for now (100%) · 60% used (expires in 2h:0m)"
     three = {"weeks": [{"pct": 90.0, "state": "past"}, {"pct": 20.0, "state": "current"}, {"pct": 0.0, "state": "future"}],
              "ticket_pct": 40.0, "ends_in": 9 * DAY, "length": "month"}
     assert _ticket_weeks_text(three, "").startswith("First part ended · 20% of second part · 0% of third part · ")

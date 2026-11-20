@@ -417,10 +417,10 @@ def pass_weeks(conn, cfg: Config, t: dict, now: float, current: LimitState | Non
             took = max(0.0, used - own)
         meter = current.limit if state == "current" and current is not None and current.limit else own + took
         weeks.append({"pct": 100.0 * used / meter if meter else 100.0, "state": state, "limit": limit, "debt": debt, "took": took})
-        # A part counts toward the whole at most its own piece: one that went over (a past week remeasured at today's
-        # rate, say) would otherwise read the pass as used up while a later part still has room. A past part that
-        # borrowed spent its own piece first, so it counts all of it and what it took, whatever today's rate makes of it.
-        spent = own + took if state == "past" and took > 0 else min(used, own + took)
+        # An ended part counts its whole piece (and what it took): what it left unspent is gone, so the whole reaches
+        # 100% exactly when the pass can serve no more, whatever today's rate makes of the past. A part still running
+        # counts at most its piece.
+        spent = own + took if state == "past" else min(used, own + took)
         used_all, limit_all = used_all + spent, limit_all + limit
         start = end
     for w in weeks:   # each part as it is spent: its own piece, less what the week before took from it, plus what it took
