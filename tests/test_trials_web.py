@@ -137,14 +137,16 @@ var fmtShare = (v) => `${+v}%`, nfFull = new Intl.NumberFormat("en-US");
 def test_trial_card_offers_then_waits(tmp_path):
     from tests.test_tickets_web import _app_fn
     out = _app_fn(tmp_path, ["trialCard"], UI_STUBS + """var out = [
-      trialCard({ can_claim: true, claim: null, duration_min: 60, tier: "lite", label: "Lite" }),
-      trialCard({ can_claim: false, claim: { expires_at: 99 }, duration_min: 90, tier: "lite", label: "Lite" }),
-      trialCard({ can_claim: false, claim: null, duration_min: 60, tier: "lite" }),
-      trialCard({ can_claim: true, claim: null, duration_min: 60, tier: "lite", turnstile_site_key: "0x" })];""")
+      trialCard({ can_claim: true, claim: null, duration_min: 60, tier: "lite", label: "Lite" }, true),
+      trialCard({ can_claim: false, claim: { expires_at: 99 }, duration_min: 90, tier: "lite", label: "Lite" }, false),
+      trialCard({ can_claim: false, claim: null, duration_min: 60, tier: "lite" }, true),
+      trialCard({ can_claim: true, claim: null, duration_min: 60, tier: "lite", turnstile_site_key: "0x" }, true),
+      trialCard({ can_claim: true, claim: null, duration_min: 60, tier: "lite" }, false)];""")
     assert "1 hour on a Lite pass" in out[0] and 'id="trial-claim"' in out[0] and "trial-ts" not in out[0]
     assert "90 minutes" in out[1] and "D99" in out[1] and 'id="trial-start"' in out[1]
     assert out[2] == ""
     assert 'id="trial-ts"' in out[3] and 'id="trial-claim" disabled' in out[3]
+    assert out[4] == ""   # no offer beside a pass, only a waiting claim
 
 
 def test_trial_settings_card_shows_tier_defaults_empty(tmp_path):
