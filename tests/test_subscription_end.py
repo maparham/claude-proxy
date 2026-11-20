@@ -157,3 +157,17 @@ def test_both_overrides_when_both_are_short(db, over_5h, over_end, ok, refusal):
     else:
         with pytest.raises(tickets.CapacityError, match=refusal):
             run()
+
+
+async def test_admin_checks_the_plan_now(env):  # noqa: F811
+    gw, conn, cfg, ids, keys = env
+    sent = [{"organization": {"organization_type": "claude_pro", "rate_limit_tier": "default_claude_ai"}}, None]
+
+    async def fetch_profile():
+        return sent.pop(0)
+    gw.poller.backend.fetch_profile = fetch_profile
+    async with admin_client(gw) as c:
+        r = await c.post("/api/admin/subscription/refresh")
+        assert r.status_code == 200 and r.json()["profile"]["profile"]["organization"]["organization_type"] == "claude_pro"
+        assert gw.poller.next_plan_check > time.time()   # the hourly check starts over from this one
+        assert (await c.post("/api/admin/subscription/refresh")).status_code == 502   # Anthropic sent nothing

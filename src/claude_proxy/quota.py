@@ -458,7 +458,6 @@ class Poller:
     async def tick(self, now: float | None = None) -> None:
         now = time.time() if now is None else now
         if now >= self.next_plan_check:
-            self.next_plan_check = now + PLAN_CHECK_S
             await self.check_plan(now)
         newest = await self._run(lambda c: c.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0])
         if newest is not None and now - newest < self.qc.poll_idle_s:
@@ -480,22 +479,25 @@ class Poller:
         if status == 200 and body:
             await self._run(record, parse_poll(body), now=now)
 
-    async def check_plan(self, now: float) -> None:
-        """Record the subscription's plan from its profile; a change restarts the observed rate (plan_changes)."""
+    async def check_plan(self, now: float) -> bool:
+        """Record the subscription's plan from its profile; a change restarts the observed rate (plan_changes). False
+        when Anthropic sent no profile. Also the admin's "check now" (web), which pushes the next hourly check back."""
+        self.next_plan_check = now + PLAN_CHECK_S
         fetch = getattr(self.backend, "fetch_profile", None)
         try:
             profile = (await fetch()) if fetch else None
         except Exception:   # e.g. RefreshUnavailable: the request path reports it
             profile = None
         if not isinstance(profile, dict):
-            return
+            return False
         await self._run(record_profile, profile, now)
         org = profile.get("organization")
         if not isinstance(org, dict) or not (org.get("organization_type") or org.get("rate_limit_tier")):
-            return
+            return True
         if await self._run(record_plan, org.get("organization_type"), org.get("rate_limit_tier"), now):
             logger.warning("subscription plan changed to %s; the observed rate restarts", org.get("rate_limit_tier"))
             clear_rate_cache()
+        return True
 
     async def run(self, interval_s: float = 60.0) -> None:
         while True:

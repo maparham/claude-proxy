@@ -631,9 +631,16 @@ async function subscriptionDialog() {
       ${live ? "" : `<p class="error">${t(r.ends_at_set ? "sub.end_expired" : "sub.end_unset", { date: r.weekly_reset ? fmtDate(r.weekly_reset) : "—" })}</p>`}
       <div class="error" id="sub-end-err"></div></form>`;
   const d = openDialog(`<h3>${t("sub.title")}</h3>${util}${end}
-    ${r.profile ? `<p class="sub" style="margin-top:12px">${t("sub.checked", { date: fmtDate(r.profile.observed_at) })}</p>
+    <p class="sub" style="margin-top:12px">${r.profile ? t("sub.checked", { date: fmtDate(r.profile.observed_at) }) : ""}
+      <button class="btn" id="sub-refresh" type="button">${t("sub.refresh")}</button></p><div class="error" id="sub-refresh-err"></div>
+    ${r.profile ? `
       <dl class="kv" dir="ltr">${rows.join("")}</dl>` : `<p class="sub">${t("sub.none")}</p>`}
     <p><button class="btn primary" data-close>${t("app.done")}</button></p>`);
+  $("#sub-refresh", d).onclick = async (e) => {
+    e.target.disabled = true;
+    try { await api("/api/admin/subscription/refresh", { method: "POST" }); } catch (x) { $("#sub-refresh-err", d).textContent = x.message; e.target.disabled = false; return; }
+    subscriptionDialog().catch(() => {});
+  };
   $("#sub-end", d).onsubmit = async (e) => {
     e.preventDefault();
     const ts = Math.floor(new Date(e.target.ends_at.value).getTime() / 1000);

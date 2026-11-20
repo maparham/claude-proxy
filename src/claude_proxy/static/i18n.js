@@ -851,6 +851,7 @@ const I18N = {
     "sub.open": "Click for the subscription's details.",
     "sub.none": "Anthropic has not sent the subscription's details yet. The gateway asks for them every hour.",
     "sub.checked": "As Anthropic reported it {date}.",
+    "sub.refresh": "Check now",
     "sub.end": "Subscription ends",
     "sub.end_save": "Save",
     "sub.end_edit": "Change",
@@ -2114,6 +2115,7 @@ const I18N = {
     "sub.open": "برای جزئیات اشتراک کلیک کنید.",
     "sub.none": "Anthropic هنوز جزئیات اشتراک را نفرستاده است. سرویس هر ساعت آن را می‌پرسد.",
     "sub.checked": "طبق گزارش Anthropic در {date}.",
+    "sub.refresh": "بررسی دوباره",
     "sub.end": "پایان اشتراک",
     "sub.end_save": "ذخیره",
     "sub.end_edit": "تغییر",
@@ -2656,6 +2658,7 @@ function setLang(lang) {
 // messages built from values, whose groups fill {1}, {2} of the Persian.
 const ERR_FA = {
   "Paste the code the sign-in page showed.": "کدی را که صفحه ورود نشان داد بچسبانید.",
+  "Anthropic did not send the subscription's details; try again shortly.": "Anthropic جزئیات اشتراک را نفرستاد؛ کمی بعد دوباره امتحان کنید.",
   "This subscription was just linked under another account.": "این اشتراک همین الان با نام دیگری لینک شد.",
   "A computer's key can only remove that computer. Sign in with your first key to manage the others.": "کلید یک کامپیوتر فقط همان کامپیوتر را می‌تواند حذف کند. برای مدیریت بقیه با کلید اصلی‌تان وارد شوید.",
   "A revoked user cannot be re-enabled; delete them and add them again for a new key.": "کاربر ابطال‌شده دوباره فعال نمی‌شود؛ برای کلید تازه او را حذف و دوباره اضافه کنید.",

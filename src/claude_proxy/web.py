@@ -1621,6 +1621,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"profile": quota.latest_profile(conn), "ends_at_set": tickets.subscription_end_set(conn),
                 "ends_at": tickets.subscription_end(conn, week, now), "weekly_reset": week[1] if week else None}
 
+    @app.post("/api/admin/subscription/refresh")
+    async def refresh_subscription(request: Request):
+        # Ask Anthropic for the plan now rather than at the next hourly check: a plan just bought or changed.
+        admin(request, write=True)
+        if not await gw.poller.check_plan(time.time()):
+            fail(502, "Anthropic did not send the subscription's details; try again shortly.")
+        return {"ok": True, "profile": quota.latest_profile(conn)}
+
     @app.post("/api/admin/subscription/end")
     async def set_subscription_end(request: Request):
         # The subscription's end: no pass is sold, granted or offered to run past it (capacity.check_sub_end).
