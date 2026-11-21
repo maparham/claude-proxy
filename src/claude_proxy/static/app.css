@@ -118,17 +118,15 @@ table.data td.r, table.data th.r { text-align: end; font-variant-numeric: tabula
 .th-sort .arrow { display: inline-block; min-width: 1em; margin-inline-start: 2px; }
 select.small { padding-block: 3px; padding-inline: 8px 4px; font-size: 12px; border-radius: 6px; color: var(--ink-2); }
 .past-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 4px; justify-content: flex-end; }
-.sess-title { max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sess-id { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.sess-title { display: inline-block; vertical-align: bottom; max-width: 32ch; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sess-id { margin-inline-start: 6px; color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
 table.data tr:hover td { background: var(--wash); }
 table.data tr.clickable { cursor: pointer; }
 .user-link { color: inherit; text-decoration: none; }
 .user-link:hover { text-decoration: underline; }
 table.data td.nowrap, bdi.nowrap, #tip .tip-line { white-space: nowrap; }
-/* Requests and sessions tables: one line a row; the session's title and id sit side by side. */
+/* Requests and sessions tables: one line a row. */
 table.data.one-line td { white-space: nowrap; }
-table.data.one-line .sess-title { display: inline-block; vertical-align: bottom; }
-table.data.one-line .sess-id { display: inline; margin-inline-start: 6px; }
 .heat-wrap { overflow-x: auto; }
 .heat-wrap > .chart { min-width: 560px; }
 .crumb { margin: 0 0 8px; font-size: 13px; }

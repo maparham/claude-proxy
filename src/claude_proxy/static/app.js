@@ -183,7 +183,9 @@ const ADMIN_TIPS = { ...TIPS };
 const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
 
 // The rejecting check (e.g. pass_key_no_pass) goes in the ? tooltip, not the cell, so the cell stays one short line.
-const errorKind = (k, rejectedBy) => tipH(esc(ERROR_LABELS[k] || k), [TIPS[`err:${k}`], rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? `<p class="tm"><code>${esc(rejectedBy)}</code></p>` : ""].filter(Boolean).join(""));
+const errorKind = (k, rejectedBy) => (rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request"
+  ? tipH(esc(ERROR_LABELS[k] || k), `${TIPS[`err:${k}`] || ""}<p class="tm"><code>${esc(rejectedBy)}</code></p>`)
+  : tipT(esc(ERROR_LABELS[k] || k), `err:${k}`));
 
 // "claude-sonnet-5" -> "Sonnet 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as is.
 function modelName(id) {
@@ -204,6 +206,8 @@ const tipI = (key, label = t("app.what_is_this")) => (TIPS[key]
 // Tooltips always sit on the ? icon: a term with a tip is the term followed by its icon.
 const tipT = (html, key) => `${html}${tipI(key)}`;
 const tipAttr = (html) => (html ? ` data-tip-html="${esc(html)}"` : "");
+// Short text carrying a one-line tooltip (a country code with its place, points with their cost); focusable for keyboards.
+const tipLine = (html, tip) => `<span tabindex="0"${tipAttr(`<span class="tip-line">${esc(tip)}</span>`)}>${html}</span>`;
 const tipH = (html, tip) => (tip ? `${html}<span class="tip-i" tabindex="0" role="button" aria-label="${esc(t("app.what_is_this"))}"${tipAttr(tip)}>?</span>` : html);
 
 // One shared #tip. It is a manual popover so it enters the top layer above the modal dialog.
@@ -1551,7 +1555,7 @@ function wireUserActions(root, users) {
 
 function userRow(u) {
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
-  const cell = (k) => `<td class="r"><span${tipAttr(`<span class="tip-line">${esc(t("models.m_cost"))}: ${esc(fmtUsd(u.usage[k].cost_usd))}</span>`)}>${fmtNum(u.usage[k].weighted)}</span></td>`;
+  const cell = (k) => `<td class="r">${tipLine(fmtNum(u.usage[k].weighted), `${t("models.m_cost")}: ${fmtUsd(u.usage[k].cost_usd)}`)}</td>`;
   const share = (b) => (u.share[b] == null ? "—" : nfFix(1).format(u.share[b]));
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}
@@ -1560,7 +1564,7 @@ function userRow(u) {
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td class="r nowrap">${u.passes.active + u.passes.used_up + u.passes.expired ? `${fmtNum(u.passes.active)} / ${fmtNum(u.passes.used_up)} / ${fmtNum(u.passes.expired)}` : "—"}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
-    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? ` · <bdi title="${esc(u.last_ip)}">${esc(shortIp(u.last_ip))}</bdi>${u.last_place && u.last_place.country ? ` <span${tipAttr(`<span class="tip-line">${esc(fmtPlace(u.last_place))}</span>`)}>${esc(u.last_place.country)}</span>` : ""}` : ""}</td>
+    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? ` · <bdi title="${esc(u.last_ip)}">${esc(shortIp(u.last_ip))}</bdi>${u.last_place && u.last_place.country ? ` ${tipLine(esc(u.last_place.country), fmtPlace(u.last_place))}` : ""}` : ""}</td>
     <td>${userActions(u)}</td></tr>`;
 }
 // One "⋯" button per user opening a menu of every action (an auto popover: outside clicks and Escape close it).
@@ -3188,7 +3192,7 @@ function wireSessMore(list, page, offset) {
     else more.remove();
   };
 }
-const sessionCell = (title, id) => (title ? `<div class="sess-title" title="${esc(title)}">${bdi(title)}</div><div class="sess-id">${esc(id.slice(0, 8))}</div>`
+const sessionCell = (title, id) => (title ? `<span class="sess-title" title="${esc(title)}">${bdi(title)}</span><span class="sess-id">${esc(id.slice(0, 8))}</span>`
   : id ? `<span class="muted">${esc(id.slice(0, 8))}</span>` : `<span class="muted">—</span>`);
 // Long tables open on their first FOLD rows; each "Show more" click reveals FOLD_STEP more.
 const FOLD = 10, FOLD_STEP = 25;
@@ -3215,14 +3219,14 @@ function latest(fn) {
   return (...args) => { const mine = ++n; return fn(() => mine === n, ...args); };
 }
 const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key), showContent = requests.some((r) => r.has_content), showIp = isAdmin()) => `<table class="data one-line"><thead><tr><th>${t("errs.when")}</th>${showUser ? `<th>${t("app.user")}</th>` : ""}${showKey ? `<th>${t("sess.key")}</th>` : ""}<th>${t("errs.model")}</th><th>${t("sess.session")}</th>${showIp ? `<th>${t("user.ip")}</th>` : ""}<th class="r">${t("user.input")}</th><th class="r">${t("user.output")}</th><th class="r">${t("user.cache_read")}</th><th class="r">${t("user.cache_write")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.took")}</th><th>${t("user.result")}</th>${showContent ? `<th>${t("req.content")}${tipI("req_content")}</th>` : ""}</tr></thead><tbody>
-        ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}${showKey ? `<td>${r.key ? bdi(r.key) : `<span class="muted">—</span>`}</td>` : ""}<td>${r.model ? bdi(modelName(r.model)) : "—"}</td><td>${sessionCell(r.title, r.session_id)}</td>${showIp ? `<td>${r.ip ? `<bdi>${esc(r.ip)}</bdi>${r.country ? ` <span class="muted"${tipAttr(`<span class="tip-line">${esc(fmtPlace(r))}</span>`)}>${esc(r.country)}</span>` : ""}` : `<span class="muted">—</span>`}</td>` : ""}
+        ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}${showKey ? `<td>${r.key ? bdi(r.key) : `<span class="muted">—</span>`}</td>` : ""}<td>${r.model ? bdi(modelName(r.model)) : "—"}</td><td>${sessionCell(r.title, r.session_id)}</td>${showIp ? `<td>${r.ip ? `<bdi title="${esc(r.ip)}">${esc(shortIp(r.ip))}</bdi>${r.country ? ` <span class="muted">${tipLine(esc(r.country), fmtPlace(r))}</span>` : ""}` : `<span class="muted">—</span>`}</td>` : ""}
           <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
           <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td>${showContent ? `<td>${r.has_content ? `<button class="btn small" data-content="${r.id}">${t("req.view")}</button>` : ""}</td>` : ""}</tr>`))}
         </tbody></table>${moreButton(requests.length)}`;
 // The admin's rows carry how many prompts the session holds (prompts.py); the button opens them.
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
-        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.map(modelName).join(", "))}</td>${isAdmin() ? `<td>${s.prompts ? `<button class="btn small" data-prompts="${esc(s.session_id)}" data-user="${esc(s.user_id)}" data-title="${esc(s.title || s.session_id.slice(0, 8))}">${nfFull.format(s.prompts)}</button>` : ""}</td>` : ""}</tr>`;
+        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi([...new Set(s.models.map(modelName))].join(", "))}</td>${isAdmin() ? `<td>${s.prompts ? `<button class="btn small" data-prompts="${esc(s.session_id)}" data-user="${esc(s.user_id)}" data-title="${esc(s.title || s.session_id.slice(0, 8))}">${nfFull.format(s.prompts)}</button>` : ""}</td>` : ""}</tr>`;
 document.addEventListener("click", async (e) => {
   const b = e.target.closest?.("[data-prompts]");
   if (!b) return;
