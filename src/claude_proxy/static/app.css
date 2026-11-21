@@ -125,7 +125,7 @@ table.data tr.clickable { cursor: pointer; }
 .user-link { color: inherit; text-decoration: none; }
 .user-link:hover { text-decoration: underline; }
 table.data td.nowrap, bdi.nowrap, #tip .tip-line { white-space: nowrap; }
-/* Requests table: one line a row; the session's title and id sit side by side. */
+/* Requests and sessions tables: one line a row; the session's title and id sit side by side. */
 table.data.one-line td { white-space: nowrap; }
 table.data.one-line .sess-title { display: inline-block; vertical-align: bottom; }
 table.data.one-line .sess-id { display: inline; margin-inline-start: 6px; }

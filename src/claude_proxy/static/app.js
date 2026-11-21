@@ -1551,7 +1551,7 @@ function wireUserActions(root, users) {
 
 function userRow(u) {
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
-  const cell = (k) => `<td class="r"><div>${fmtNum(u.usage[k].weighted)}</div><div class="muted">${fmtUsd(u.usage[k].cost_usd)}</div></td>`;
+  const cell = (k) => `<td class="r"><span${tipAttr(`<span class="tip-line">${esc(t("models.m_cost"))}: ${esc(fmtUsd(u.usage[k].cost_usd))}</span>`)}>${fmtNum(u.usage[k].weighted)}</span></td>`;
   const share = (b) => (u.share[b] == null ? "—" : nfFix(1).format(u.share[b]));
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}
@@ -1560,7 +1560,7 @@ function userRow(u) {
     <td class="r">${share("5h")} / ${share("7d")}</td>
     <td class="r nowrap">${u.passes.active + u.passes.used_up + u.passes.expired ? `${fmtNum(u.passes.active)} / ${fmtNum(u.passes.used_up)} / ${fmtNum(u.passes.expired)}` : "—"}</td>
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
-    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? `<div style="font-size:12px"><bdi title="${esc(u.last_ip)}">${esc(shortIp(u.last_ip))}</bdi>${u.last_place ? `<br>${esc(fmtPlace(u.last_place))}` : ""}</div>` : ""}</td>
+    <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? ` · <bdi title="${esc(u.last_ip)}">${esc(shortIp(u.last_ip))}</bdi>${u.last_place && u.last_place.country ? ` <span${tipAttr(`<span class="tip-line">${esc(fmtPlace(u.last_place))}</span>`)}>${esc(u.last_place.country)}</span>` : ""}` : ""}</td>
     <td>${userActions(u)}</td></tr>`;
 }
 // One "⋯" button per user opening a menu of every action (an auto popover: outside clicks and Escape close it).
@@ -2876,7 +2876,7 @@ async function renderUser(main) {
       <div class="grid cols-2" style="margin-top:16px">
         <div class="card"><h3>${t("tab.activity")}</h3><p class="sub">${t("user.activity_sub", { span })}</p><div class="heat-wrap"><div class="chart" id="u-heat"></div></div></div>
         <div class="card table-wrap"><h3>${t("user.recent_errors")}</h3><p class="sub">${t("user.span_dot", { span })}</p>${errs.recent.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th><th>${t("errs.kind")}</th><th>${t("errs.model")}</th><th class="r">${t("errs.status")}</th></tr></thead><tbody>
-          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
+          ${errs.recent.slice(0, 10).map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td><td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${r.model ? bdi(modelName(r.model)) : "—"}</td><td class="r">${esc(r.status ?? "")}</td></tr>`).join("")}
           </tbody></table>` : `<p class="muted">${t("errs.none")}</p>`}</div>
       </div>
       <details class="card table-wrap fold" style="margin-top:16px"><summary><h3>${t("sess.sessions")} <span class="badge">${nfFull.format(sess.sessions.length)}${sess.more ? "+" : ""}</span></h3></summary><p class="sub">${t("user.span_recent", { span })}</p>${sess.sessions.length ? sessionsTable(sess.sessions, false, true) : `<p class="muted">${t("user.no_sessions")}</p>`}</details>
@@ -3239,7 +3239,7 @@ document.addEventListener("click", async (e) => {
 });
 function sessionsTable(sessions, showUser, fold = false) {
   const rows = sessions.map((s) => sessionRow(s, showUser));
-  return `<table class="data"><thead><tr><th>${t("sess.session")}${tipI("session")}</th>${showUser ? `<th>${t("app.user")}${tipI("sess_user")}</th>` : ""}<th>${t("sess.started")}${tipI("sess_started")}</th><th class="r">${t("sess.duration")}${tipI("sess_duration")}</th><th class="r">${t("metric.requests")}${tipI("sess_requests")}</th><th class="r">${t("models.m_weighted")}${tipI("sess_weighted")}</th><th class="r">${t("models.m_cost")}${tipI("sess_cost")}</th><th>${t("sess.models")}${tipI("sess_models")}</th>${isAdmin() ? `<th>${t("sess.prompts")}${tipI("sess_prompts")}</th>` : ""}</tr></thead><tbody>
+  return `<table class="data one-line"><thead><tr><th>${t("sess.session")}${tipI("session")}</th>${showUser ? `<th>${t("app.user")}${tipI("sess_user")}</th>` : ""}<th>${t("sess.started")}${tipI("sess_started")}</th><th class="r">${t("sess.duration")}${tipI("sess_duration")}</th><th class="r">${t("metric.requests")}${tipI("sess_requests")}</th><th class="r">${t("models.m_weighted")}${tipI("sess_weighted")}</th><th class="r">${t("models.m_cost")}${tipI("sess_cost")}</th><th>${t("sess.models")}${tipI("sess_models")}</th>${isAdmin() ? `<th>${t("sess.prompts")}${tipI("sess_prompts")}</th>` : ""}</tr></thead><tbody>
       ${fold ? foldRows(rows) : rows.join("")}
     </tbody></table>${fold ? moreButton(rows.length) : ""}`;
 }
@@ -3252,7 +3252,7 @@ async function renderErrors(main) {
     <div class="controls">${seg("range", [["1d", t("range.1d")], ["7d", t("range.7d")], ["30d", t("range.30d")]], range)}</div>
     <div class="card"><div class="chart" id="err-chart"></div></div>
     <div class="card table-wrap" style="margin-top:16px"><h3>${t("errs.recent")}</h3>${d.recent.length ? `<table class="data"><thead><tr><th>${t("errs.when")}</th>${isAdmin() ? `<th>${t("app.user")}</th>` : ""}<th>${t("errs.kind")}</th><th>${t("errs.model")}</th><th class="r">${t("errs.status")}</th></tr></thead><tbody>
-      ${foldRows(d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${bdi(r.model ?? "—")}</td><td class="r">${esc(r.status ?? "")}</td></tr>`))}
+      ${foldRows(d.recent.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${isAdmin() ? `<td>${bdi(r.user ?? "—")}</td>` : ""}<td>${errorKind(r.k, r.rejected_by)}</td><td class="muted">${r.model ? bdi(modelName(r.model)) : "—"}</td><td class="r">${esc(r.status ?? "")}</td></tr>`))}
     </tbody></table>${moreButton(d.recent.length)}` : `<p class="muted">${t("errs.none")}</p>`}</div></section>`;
   wireSegs(main, render);
   wireMore(main);
