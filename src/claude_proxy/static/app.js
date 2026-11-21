@@ -182,7 +182,8 @@ const USER_TIPS = Object.fromEntries(["weighted", "cost", "burn_rate", "split:pr
 const ADMIN_TIPS = { ...TIPS };
 const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
 
-const errorKind = (k, rejectedBy) => `${tipT(esc(ERROR_LABELS[k] || k), `err:${k}`)}${rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? ` <span class="muted">(${esc(rejectedBy)})</span>` : ""}`;
+// The rejecting check (e.g. pass_key_no_pass) goes in the ? tooltip, not the cell, so the cell stays one short line.
+const errorKind = (k, rejectedBy) => tipH(esc(ERROR_LABELS[k] || k), [TIPS[`err:${k}`], rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? `<p class="tm"><code>${esc(rejectedBy)}</code></p>` : ""].filter(Boolean).join(""));
 
 // "claude-sonnet-5" -> "Sonnet 5", "claude-haiku-4-5-20251001" -> "Haiku 4.5"; anything else as is.
 function modelName(id) {
