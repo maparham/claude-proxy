@@ -204,7 +204,7 @@ async def test_claim_mail_in_persian(env, sent):
         assert (await c.post("/api/me/trial/claim", headers=bearer(keys["alice"]), json={"lang": "fa"})).status_code == 200
     await flush()
     [(_, subject, body)] = sent
-    assert "آزمایش رایگان" in subject and "کلاد" in body and "۱ ساعت" in body and "Claude Code" not in body
+    assert subject == "۱ ساعت کلاد رایگان" and "کلاد" in body and "۱ ساعت" in body and "Claude Code" not in body
 
 
 async def test_admin_grant_mails_in_the_last_order_language(env, sent):
@@ -216,7 +216,7 @@ async def test_admin_grant_mails_in_the_last_order_language(env, sent):
         assert (await c.post(f"/api/admin/users/{ids['alice']}/trial", json={"confirm": True})).status_code == 200
     await flush()
     [(to, subject, _)] = sent
-    assert to == "alice@example.com" and "آزمایش رایگان" in subject
+    assert to == "alice@example.com" and "کلاد رایگان" in subject
 
 
 async def test_admin_grant_mails_in_english_without_orders(env, sent):

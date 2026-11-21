@@ -367,7 +367,7 @@ def claim_mail_text(conn: sqlite3.Connection, cfg: Config, claim: dict, lang: st
                  f"تا {tickets.terms_date(claim['expires_at'], 'fa')} شروعش کنید، وگرنه از دست می‌رود."]
         if s.follow_pct > 0:
             lines.append(f"پس از آن، تا {tickets.fa_num(s.follow_days)} روز {tickets.fa_num(f'{s.follow_pct:g}')}٪ تخفیف روی اولین خرید خود دارید.")
-        return "آزمایش رایگان شما آماده است", "\n".join(lines) + "\n" + setup
+        return f"{_length(s.duration_min, 'fa')} کلاد رایگان", "\n".join(lines) + "\n" + setup
     tier = tier_label(cfg, s.tier)
     lines = [f"Your free trial is ready: {_length(s.duration_min, 'en')} on a {tier} pass, no payment.", "",
              "It starts with your first request in Claude Code" + (f", or when you press Start now on the dashboard ({dash})." if dash else "."),
