@@ -1613,9 +1613,14 @@ async function renderTickets(main) {
   // The week's 100 points, piece by piece; each piece and its legend chip carry the same tip, on hover or tap.
   const pieces = [["used", w.used], ["reserved", w.reserved], ["margin", w.margin], ["free", w.free], ["headroom", 100 - w.max_sold_pct]];
   const seg = ([k, v]) => `<span class="seg-${k}" style="width:${Math.max(0, Math.min(100, v))}%" data-tip="seg_${k}" tabindex="0" role="button" aria-label="${esc(t(`tk.seg_${k}`, { v: pts(v) }))}"></span>`;
+  // The reserved piece, split pass by pass (scaled so the slices fill exactly its width); one piece without a split.
+  const rby = cap.reserved_by || [], rsum = rby.reduce((a, r) => a + r.pts, 0);
+  const rname = (r) => `${bdi(r.user)} · ${tierName(r.tier, r.tier_label)} ${passLen(r)}`;
+  const rseg = (r, i) => `<span class="seg-reserved${i % 2 ? " alt" : ""}" style="width:${Math.max(0, Math.min(100, (r.pts * w.reserved) / rsum))}%" data-tip="seg_reserved" data-rpass="${i}" tabindex="0" role="button" aria-label="${esc(`${r.user} ${pts(r.pts)}`)}"></span>`;
+  const segs = (p) => (p[0] === "reserved" && rby.length && rsum > 0 ? rby.map(rseg).join("") : seg(p));
   const chip = ([k, v]) => `<span><i class="seg-${k}"></i>${t(`tk.seg_${k}`, { v: pts(v) })}${tipI(`seg_${k}`)}</span>`;
   const weekMeter = w.fresh
-    ? `<div class="meter stack week">${pieces.filter(([, v]) => v > 0).map(seg).join("")}</div>
+    ? `<div class="meter stack week">${pieces.filter(([, v]) => v > 0).map(segs).join("")}</div>
        <div class="legend week-legend">${pieces.map(chip).join("")}</div>`
     : `<div class="meter"></div><p class="sub">${t("tk.no_report")}</p>`;
   main.innerHTML = `<section class="view"><h2>${t("tab.tickets")}</h2>
@@ -1643,6 +1648,15 @@ async function renderTickets(main) {
     const line = (name, v) => `<div class="limit-row"><span>${name}</span><span class="num">${pts(v)}</span></div>`;
     const who = `<p class="tm">${t("tk.used_by")}</p>${line(t("tk.used_by_passes"), by.passes)}${by.users.map((u) => line(bdi(u.name), u.pts)).join("")}${line(t("tk.used_by_outside"), by.outside)}`;
     main.querySelectorAll('[data-tip="seg_used"]').forEach((el) => { el.dataset.tipHtml = `${TIPS.seg_used}${who}`; });
+  }
+  // Which passes hold the reserved points: a slice's tip names its own pass, the legend chip's lists them all.
+  if (rby.length) {
+    const line = (r) => `<div class="limit-row"><span>${rname(r)}</span><span class="num">${pts(r.pts)}</span></div>`;
+    const all = `<p class="tm">${t("tk.reserved_by")}</p>${rby.map(line).join("")}`;
+    main.querySelectorAll('[data-tip="seg_reserved"]').forEach((el) => {
+      const r = rby[el.dataset.rpass];
+      el.dataset.tipHtml = r ? `<p class="tm">${t("tk.reserved_pass")}</p>${line(r)}` : `${TIPS.seg_reserved}${all}`;
+    });
   }
   const fill = () => {
     const q = (S.ticketQ || "").trim().toLowerCase();

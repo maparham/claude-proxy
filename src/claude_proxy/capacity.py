@@ -435,6 +435,7 @@ def summary(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) 
     points = {now, *tickets._starts_within(conn, account_id, now, now + 30 * DAY)}
     hand = sum(float(r["value"]) for r in conn.execute("SELECT user_id, value FROM limits WHERE kind='share_7d'")
                if not limits._gated(conn, cfg, r["user_id"]))
+    wu = week_use(conn, cfg, account_id, now)
     return {
         "week": {"start": ws, "end": ctx.week[1] if ctx.week else None, "fresh": ctx.fresh, "used": ctx.used,
                  "reserved": ctx.reserved, "margin": cfg.tickets.sell_margin_pct,
@@ -447,5 +448,25 @@ def summary(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) 
                       "peak_30d": max(tickets.sold_at(conn, account_id, p) for p in points),
                       "max_sold_5h_pct": cfg.tickets.max_sold_5h_pct},
         "hand_set_7d_pct": hand,
-        "used_by": week_use(conn, cfg, account_id, now)["by"],
+        "used_by": wu["by"],
+        "reserved_by": _reserved_by(conn, cfg, wu["passes"]),
     }
+
+
+def _reserved_by(conn, cfg, passes: dict) -> list[dict]:
+    """The week's reserved points pass by pass (the Capacity bar's reserved piece split up), most first: each pass's
+    holder, tier as it runs now, length, and points it may still draw. Passes reserving under 0.05 points are left out."""
+    ids = [tid for tid, v in passes.items() if v["reserved"] >= 0.05]
+    if not ids:
+        return []
+    rows = {r["id"]: dict(r) for r in conn.execute(
+        f"SELECT t.*, u.name AS user_name FROM tickets t LEFT JOIN users u ON u.id=t.user_id "
+        f"WHERE t.id IN ({','.join('?' * len(ids))})", ids)}
+    out = []
+    for tid in ids:
+        t = rows[tid]
+        tier = tickets.tier_now(conn, t)
+        out.append({"id": tid, "user": t["user_name"] or "?", "tier": tier,
+                    "tier_label": cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier,
+                    "length": t["length"], "trial": bool(t.get("trial")), "pts": passes[tid]["reserved"]})
+    return sorted(out, key=lambda r: -r["pts"])

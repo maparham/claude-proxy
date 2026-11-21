@@ -398,6 +398,10 @@ def test_summary_reports_the_week_in_points(acct):                      # spec t
     assert s["peak_week"] == {"start": W[1], "sold": pytest.approx(20 * 4 / 7)}
     assert s["five_hour"] == {"now": 20, "peak_30d": 20, "max_sold_5h_pct": 100}
     assert s["hand_set_7d_pct"] == 93
+    # the reserved piece pass by pass: only the running lite week pass holds points back (the ended day pass none)
+    (r,) = s["reserved_by"]
+    assert (r["tier"], r["tier_label"], r["length"], r["trial"]) == ("lite", cfg.tickets.tiers["lite"].label, "week", False)
+    assert r["pts"] == pytest.approx(w["reserved"])
 
 
 def test_summary_without_a_report_is_not_fresh_and_frees_nothing(db):
