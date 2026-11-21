@@ -67,6 +67,7 @@ def fa_text() -> dict[str, str]:
 
 
 _I18N_EL = re.compile(r'(<(\w+)\b[^>]*\bdata-i18n="([^"]+)"[^>]*>)(.*?)(</\2>)', re.S)
+_DATED_MODEL = re.compile(r"-\d{8}$")   # a model id's release date suffix
 _FAQ_KEYS = ("vpn", "models", "tiers", "used", "setup")
 
 
@@ -538,7 +539,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         where, params = scope_where(user, user_id)
         where = f"{where} AND {by_source(source)}"
         since = time.time() - RANGES.get(range, RANGES["30d"])
-        by_model = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="model")
+        # One row a model: a dated id (claude-haiku-4-5-20251001) joins its undated alias, each priced as logged.
+        by_model: dict = {}
+        for m, t in usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="model").items():
+            by_model.setdefault(_DATED_MODEL.sub("", m) if m else m, usage.Totals()).add(t)
         by_provider = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="provider")
         cache = usage.series(conn, cfg.pricing, since, 86400, None, where, params, tz_offset_s=tz_offset)
         return {

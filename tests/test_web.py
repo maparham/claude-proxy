@@ -422,3 +422,15 @@ async def test_dashboard_csp_allows_google_fonts(env):
 def test_charts_name_deleted_users_requests():
     from claude_proxy.web import who
     assert (who({1: "ann"}, 1), who({}, 2), who({}, None)) == ("ann", "#2", "(deleted users)")
+
+
+async def test_models_merges_dated_ids_with_their_alias(env):
+    gw, conn, *_ = env
+    now = time.time()
+    for model in ("claude-haiku-4-5", "claude-haiku-4-5-20251001"):
+        conn.execute("INSERT INTO requests(user_id, started_at, ended_at, method, path, provider, model, status, input_tokens, output_tokens) "
+                     "VALUES(NULL,?,?,?,?,?,?,?,?,?)", (now - 100, now - 99, "POST", "/v1/messages", "anthropic", model, 200, 100, 10))
+    async with admin_client(gw) as c:
+        r = await c.get("/api/models")
+    haiku = [m for m in r.json()["models"] if (m["model"] or "").startswith("claude-haiku")]
+    assert [(m["model"], m["requests"], m["input"]) for m in haiku] == [("claude-haiku-4-5", 2, 200)]
