@@ -432,5 +432,7 @@ async def test_models_merges_dated_ids_with_their_alias(env):
                      "VALUES(NULL,?,?,?,?,?,?,?,?,?)", (now - 100, now - 99, "POST", "/v1/messages", "anthropic", model, 200, 100, 10))
     async with admin_client(gw) as c:
         r = await c.get("/api/models")
+        series = (await c.get("/api/series?range=1d&granularity=hour&split=model")).json()["points"]
     haiku = [m for m in r.json()["models"] if (m["model"] or "").startswith("claude-haiku")]
     assert [(m["model"], m["requests"], m["input"]) for m in haiku] == [("claude-haiku-4-5", 2, 200)]
+    assert {(p["key"], p["requests"]) for p in series if (p["key"] or "").startswith("claude-haiku")} == {("claude-haiku-4-5", 2)}

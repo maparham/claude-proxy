@@ -8,6 +8,7 @@ present. Rows with no breakdown are priced as 5-minute writes.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
 from dataclasses import dataclass, field
 
@@ -18,6 +19,12 @@ CW1 = "(CASE WHEN cache_creation_5m + cache_creation_1h > 0 THEN cache_creation_
 
 # Only requests that reached an upstream count toward usage (spec 8: rejections never count).
 FORWARDED = "rejected_by IS NULL"
+_DATED_MODEL = re.compile(r"-\d{8}$")   # a model id's release date suffix
+
+
+def model_key(model: str | None) -> str | None:
+    """One key a model: a dated id (claude-haiku-4-5-20251001) joins its undated alias."""
+    return _DATED_MODEL.sub("", model) if model else model
 
 
 def raw_tokens_sql() -> str:
@@ -105,7 +112,7 @@ def grouped(conn: sqlite3.Connection, pricing: Pricing, where: str = "1=1", para
     out: dict = {}
     for r in conn.execute(sql, params):
         t = price_totals(pricing, r["model"], Totals(r["n"], r["i"], r["o"], r["c5"], r["c1"], r["cr"]))
-        out.setdefault(r["g"], Totals()).add(t)
+        out.setdefault(model_key(r["g"]) if group == "model" else r["g"], Totals()).add(t)
     return out
 
 
@@ -127,5 +134,5 @@ def series(conn: sqlite3.Connection, pricing: Pricing, since: float, bucket_s: i
     acc: dict[tuple, Totals] = {}
     for r in conn.execute(sql, (since, *params)):
         t = price_totals(pricing, r["model"], Totals(r["n"], r["i"], r["o"], r["c5"], r["c1"], r["cr"]))
-        acc.setdefault((r["t"], r["s"]), Totals()).add(t)
+        acc.setdefault((r["t"], model_key(r["s"]) if split == "model" else r["s"]), Totals()).add(t)
     return [{"t": k[0], "key": k[1], **v.to_dict()} for k, v in sorted(acc.items(), key=lambda kv: (kv[0][0], str(kv[0][1])))]
