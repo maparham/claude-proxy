@@ -2868,7 +2868,7 @@ async function renderUser(main) {
       <div class="grid cols-2">
         <div class="card"><h3>${t("users.limits")}${tipI("limits_col")}</h3><p class="sub">${t("ov.limits_sub", { served: tipT(t("ov.served"), "served") })}</p>${limitsBlock(u.limits)}</div>
         <div class="card table-wrap"><h3>${t("sess.models")}</h3><p class="sub">${t("user.span_largest", { span })}</p>${models.models.length ? `<table class="data"><thead><tr><th>${t("errs.model")}</th><th class="r">${t("metric.requests")}</th><th class="r">${t("models.m_weighted")}</th><th class="r">${t("models.m_cost")}</th><th class="r">${t("user.cache_hits")}${tipI("cache_ratio")}</th></tr></thead><tbody>
-          ${models.models.map((m) => `<tr><td>${bdi(m.model || seriesLabel(NO_MODEL))}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
+          ${models.models.map((m) => `<tr><td>${bdi(m.model ? modelName(m.model) : seriesLabel(NO_MODEL))}</td><td class="r">${fmtNum(m.requests)}</td><td class="r">${fmtNum(m.weighted)}</td><td class="r">${fmtUsd(m.cost_usd)}</td><td class="r">${m.cache_hit_ratio == null ? "—" : fmtPct(m.cache_hit_ratio * 100)}</td></tr>`).join("")}
           </tbody></table>` : none}</div>
       </div>
       <div class="card" style="margin-top:16px"><h3>${t(`user.weighted_per_${gran}`)}${tipI("weighted")}</h3><p class="sub">${t("user.span_dot", { span })}</p><div class="chart" id="u-usage"></div></div>
@@ -3221,7 +3221,7 @@ const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key)
         </tbody></table>${moreButton(requests.length)}`;
 // The admin's rows carry how many prompts the session holds (prompts.py); the button opens them.
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
-        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.join(", "))}</td>${isAdmin() ? `<td>${s.prompts ? `<button class="btn small" data-prompts="${esc(s.session_id)}" data-user="${esc(s.user_id)}" data-title="${esc(s.title || s.session_id.slice(0, 8))}">${nfFull.format(s.prompts)}</button>` : ""}</td>` : ""}</tr>`;
+        <td class="r">${nfFull.format(s.requests)}</td><td class="r">${fmtNum(s.weighted)}</td><td class="r">${fmtUsd(s.cost_usd)}</td><td class="muted">${bdi(s.models.map(modelName).join(", "))}</td>${isAdmin() ? `<td>${s.prompts ? `<button class="btn small" data-prompts="${esc(s.session_id)}" data-user="${esc(s.user_id)}" data-title="${esc(s.title || s.session_id.slice(0, 8))}">${nfFull.format(s.prompts)}</button>` : ""}</td>` : ""}</tr>`;
 document.addEventListener("click", async (e) => {
   const b = e.target.closest?.("[data-prompts]");
   if (!b) return;
