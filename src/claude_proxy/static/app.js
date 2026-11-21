@@ -183,6 +183,8 @@ const ADMIN_TIPS = { ...TIPS };
 const USER_LIMIT_KINDS = ["5h_limit", "weekly_limit"];   // share limits, as a non-admin's own allowance
 
 // The rejecting check (e.g. pass_key_no_pass) goes in the ? tooltip, not the cell, so the cell stays one short line.
+// The same for a cell that shows only the status code (403): the error's name, its tip and the rejecting check in the tooltip.
+const errorCode = (k, rejectedBy, status) => `<span tabindex="0"${tipAttr(`<span class="th">${esc(ERROR_LABELS[k] || k)}</span>${TIPS[`err:${k}`] ? `<p>${TIPS[`err:${k}`]}</p>` : ""}${rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request" ? `<p class="tm"><code>${esc(rejectedBy)}</code></p>` : ""}`)}>${esc(status ?? ERROR_LABELS[k] ?? k)}</span>`;
 const errorKind = (k, rejectedBy) => (rejectedBy && rejectedBy !== "auth" && rejectedBy !== "request"
   ? tipH(esc(ERROR_LABELS[k] || k), `${TIPS[`err:${k}`] || ""}<p class="tm"><code>${esc(rejectedBy)}</code></p>`)
   : tipT(esc(ERROR_LABELS[k] || k), `err:${k}`));
@@ -3222,7 +3224,7 @@ const requestsTable = (requests, showUser, showKey = requests.some((r) => r.key)
         ${foldRows(requests.map((r) => `<tr><td class="nowrap">${fmtTime(r.started_at)}</td>${showUser ? `<td>${bdi(r.user ?? "—")}</td>` : ""}${showKey ? `<td>${r.key ? bdi(r.key) : `<span class="muted">—</span>`}</td>` : ""}<td>${r.model ? bdi(modelName(r.model)) : "—"}</td><td>${sessionCell(r.title, r.session_id)}</td>${showIp ? `<td>${r.ip ? `<bdi title="${esc(r.ip)}">${esc(shortIp(r.ip))}</bdi>${r.country ? ` <span class="muted">${tipLine(esc(r.country), fmtPlace(r))}</span>` : ""}` : `<span class="muted">—</span>`}</td>` : ""}
           <td class="r">${fmtNum(r.input)}</td><td class="r">${fmtNum(r.output)}</td><td class="r">${fmtNum(r.cache_read)}</td><td class="r">${fmtNum(r.cache_write)}</td>
           <td class="r">${fmtNum(r.weighted)}</td><td class="r">${fmtUsd(r.cost_usd)}</td><td class="r">${fmtDur(r.duration_s)}</td>
-          <td>${r.kind ? `${errorKind(r.kind, r.rejected_by)}${r.status ? ` <span class="muted">${esc(r.status)}</span>` : ""}` : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td>${showContent ? `<td>${r.has_content ? `<button class="btn small" data-content="${r.id}">${t("req.view")}</button>` : ""}</td>` : ""}</tr>`))}
+          <td>${r.kind ? errorCode(r.kind, r.rejected_by, r.status) : `<span class="muted">${esc(r.status ?? "—")}</span>`}</td>${showContent ? `<td>${r.has_content ? `<button class="btn small" data-content="${r.id}">${t("req.view")}</button>` : ""}</td>` : ""}</tr>`))}
         </tbody></table>${moreButton(requests.length)}`;
 // The admin's rows carry how many prompts the session holds (prompts.py); the button opens them.
 const sessionRow = (s, showUser) => `<tr><td>${sessionCell(s.title, s.session_id)}</td>${showUser ? `<td>${bdi(s.user)}</td>` : ""}<td class="nowrap">${fmtTime(s.first)}</td><td class="r">${fmtDur(s.duration_s)}</td>
