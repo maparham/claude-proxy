@@ -495,10 +495,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(404, "No such user.")
         return "user_id=?", (user_id,)
 
-    def account_where(user, account: str | None) -> tuple[str, tuple]:
+    def account_where(user, account: str | None, user_id: int | None = None) -> tuple[str, tuple]:
         """An admin's token views show one subscription account (view_account's); a request refused before it was
-        routed names none (account NULL), so it shows under every account. A user's own views are never split."""
-        if user["role"] != "admin":
+        routed names none (account NULL), so it shows under every account. A user's own views are never split, and
+        neither is the admin's page of one user (users are global) unless it names an account."""
+        if user["role"] != "admin" or (user_id is not None and account is None):
             return "1=1", ()
         acct = view_account(account)
         if acct is None:
@@ -508,7 +509,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     def token_where(user, user_id: int | None, account: str | None) -> tuple[str, tuple]:
         """scope_where and account_where together, for queries on the requests table alone."""
         where, params = scope_where(user, user_id)
-        aw, ap = account_where(user, account)
+        aw, ap = account_where(user, account, user_id)
         return f"{where} AND {aw}", (*params, *ap)
 
     def by_source(source: str) -> str:
@@ -618,7 +619,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         user = principal(request)
         limit, offset = min(max(limit, 1), 200), max(offset, 0)
         where, params = scope_where(user, user_id)
-        aw, ap = account_where(user, account)   # on the requests queries only: session_titles has no account
+        aw, ap = account_where(user, account, user_id)   # on the requests queries only: session_titles has no account
         src = f"{by_source(source)} AND {aw}"
         since = time.time() - RANGES.get(range, RANGES["7d"])
         match, mparams = "", ()
@@ -719,7 +720,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                               q: str = "", account: str | None = None):
         user = principal(request)
         where, params = scope_where(user, user_id)
-        aw, ap = account_where(user, account)   # on the requests query only: session_titles has no account
+        aw, ap = account_where(user, account, user_id)   # on the requests query only: session_titles has no account
         src = f"{by_source(source)} AND {aw}"
         match, mparams = "", ()
         if q := q.strip():   # a user's name, an app key's label or prefix, or a model

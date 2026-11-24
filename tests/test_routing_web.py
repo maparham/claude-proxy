@@ -61,6 +61,15 @@ async def test_views_filter_by_account(env):
                      "/api/errors"):
             r = await c.get(f"{path}?account=zz")
             assert r.status_code == 404 and r.json()["error"] == "No subscription account 'zz'.", path
+    # The admin's page of one user: every account's requests unless it names one.
+    async with admin_client(gw) as c:
+        uid = ids["alice"]
+        assert {r["id"] for r in (await c.get(f"/api/requests?user_id={uid}")).json()["requests"]} == {on_a, on_b, refused}
+        assert (await c.get(f"/api/overview?user_id={uid}")).json()["totals"]["24h"]["input"] == 107
+        r = await c.get(f"/api/models?user_id={uid}")
+        assert [m["input"] for m in r.json()["models"]] == [107]
+        assert {r["id"] for r in (await c.get(f"/api/requests?user_id={uid}&account={B}")).json()["requests"]} == {on_b, refused}
+        assert (await c.get(f"/api/overview?user_id={uid}&account={A}")).json()["totals"]["24h"]["input"] == 100
     # A user's own views: always all of theirs, whatever account is asked for, and no account named.
     async with asgi_client(create_dashboard_app(gw)) as c:
         alice = bearer(env[4])
