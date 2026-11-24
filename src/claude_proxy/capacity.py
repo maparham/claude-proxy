@@ -339,9 +339,11 @@ def check_sub_end(conn: sqlite3.Connection, week, ends_at: float, now: float) ->
 
 
 def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
-          ends_at: float, now: float, exclude=(), ctx: Context | None = None, sub_end: bool = True) -> None:
+          ends_at: float, now: float, exclude=(), ctx: Context | None = None, sub_end: bool = True,
+          room: bool = True) -> None:
     """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails.
-    `sub_end=False`: skip check_sub_end (the admin grants past the subscription's end anyway; tickets.preview)."""
+    `sub_end=False`: skip check_sub_end (the admin grants past the subscription's end anyway; tickets.preview).
+    `room=False`: skip this week's room (WeekFull; the admin oversells anyway, tickets.preview)."""
     ctx = ctx or context(conn, cfg, account_id, now, exclude)
     if not ctx.fresh:
         raise tickets.CapacityError(NO_REPORT)
@@ -350,8 +352,8 @@ def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, 
     ps = pieces(ctx.week, share, starts_at, ends_at)
     ws = ctx.week[0]
     need = ps.get(ws, 0.0) * ctx.scale / 100
-    if need > 1e-12 and need > ctx.room + 1e-9:
-        raise tickets.CapacityError(_no_room(ctx.room, need))
+    if room and need > 1e-12 and need > ctx.room + 1e-9:
+        raise tickets.WeekFull(_no_room(ctx.room, need))
     for w, p in sorted(ps.items()):
         if w > ws and ctx.sold.get(w, 0.0) + p > cfg.tickets.max_sold_pct + 1e-9:
             raise tickets.CapacityError(_week_full(w, ctx.sold.get(w, 0.0) + p, cfg.tickets.max_sold_pct))

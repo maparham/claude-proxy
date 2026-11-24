@@ -10,7 +10,7 @@ from tests.tickets_helpers import DAY, NOW, RESET7, live, seeded
 
 
 def _clear(conn):
-    conn.execute("DELETE FROM settings WHERE key=?", (tickets.SUB_END_KEY,))
+    conn.execute("DELETE FROM settings WHERE key=?", (tickets.SUB_END_KEY.format("default"),))
 
 
 def on_sale(conn, cfg):
@@ -37,34 +37,34 @@ def test_unset_end_falls_back_to_the_weekly_reset(db):
 def test_set_end_limits_each_length(db, days, expect):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
-    tickets.set_subscription_end(conn, int(NOW + days * DAY), ids["admin"], now=NOW)
+    tickets.set_subscription_end(conn, int(NOW + days * DAY), ids["admin"], "default", now=NOW)
     assert on_sale(conn, cfg) == expect
 
 
 def test_a_pass_ending_exactly_at_the_end_fits(db):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
-    tickets.set_subscription_end(conn, NOW + 7 * DAY, ids["admin"], now=NOW)
+    tickets.set_subscription_end(conn, NOW + 7 * DAY, ids["admin"], "default", now=NOW)
     assert on_sale(conn, cfg)["week"]
 
 
 def test_a_past_end_falls_back_to_the_weekly_reset(db):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
-    conn.execute("UPDATE settings SET value=? WHERE key=?", (str(NOW - DAY), tickets.SUB_END_KEY))
-    assert tickets.subscription_end(conn, (RESET7 - 7 * DAY, RESET7), NOW) == RESET7
+    conn.execute("UPDATE settings SET value=? WHERE key=?", (str(NOW - DAY), tickets.SUB_END_KEY.format("default")))
+    assert tickets.subscription_end(conn, (RESET7 - 7 * DAY, RESET7), NOW, "default") == RESET7
     assert on_sale(conn, cfg) == {"day": True, "week": False, "month": False}
     from claude_proxy import capacity
     with pytest.raises(tickets.CapacityError, match="has passed"):
-        capacity.check_sub_end(conn, (RESET7 - 7 * DAY, RESET7), NOW + 7 * DAY, NOW)
+        capacity.check_sub_end(conn, (RESET7 - 7 * DAY, RESET7), NOW + 7 * DAY, NOW, "default")
 
 
 def test_setting_refuses_a_past_end_and_clears(db):
     conn, cfg, ids = seeded(db)
     with pytest.raises(tickets.TicketError):
-        tickets.set_subscription_end(conn, NOW - 1, ids["admin"], now=NOW)
-    tickets.set_subscription_end(conn, None, ids["admin"], now=NOW)
-    assert tickets.subscription_end_set(conn) is None
+        tickets.set_subscription_end(conn, NOW - 1, ids["admin"], "default", now=NOW)
+    tickets.set_subscription_end(conn, None, ids["admin"], "default", now=NOW)
+    assert tickets.subscription_end_set(conn, "default") is None
     assert conn.execute("SELECT action FROM audit_log ORDER BY id DESC LIMIT 1").fetchone()[0] == "subscription_end_set"
 
 
@@ -85,7 +85,7 @@ def test_buyers_see_when_it_is_back_not_the_subscription(db):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
     end = int(NOW + 5 * DAY + 3 * 3600)
-    tickets.set_subscription_end(conn, end, ids["admin"], now=NOW)
+    tickets.set_subscription_end(conn, end, ids["admin"], "default", now=NOW)
     lite = next(x for x in tickets.price_table(conn, cfg, NOW, "EUR")["tiers"] if x["tier"] == "lite")["lengths"]
     assert (lite["week"]["sold_out"], lite["week"]["available_at"]) == (True, end)
     assert (lite["day"]["sold_out"], lite["day"]["available_at"]) == (False, None)
@@ -120,7 +120,33 @@ def test_over_end_does_not_lift_the_weekly_checks(db):
     _clear(conn)
     report(conn, ids, 99.0, NOW - 30)   # the week is nearly full too
     p = tickets.preview(conn, cfg, user(conn, ids["alice"]), "lite", "week", "EUR", NOW, over_end=True)
-    assert (p["available"], p["short_end"]) == (False, True) and "This week has" in p["reason"]
+    assert (p["available"], p["short_end"], p["short_week"]) == (False, True, True) and "This week has" in p["reason"]
+
+
+@pytest.mark.parametrize("over_end, over_week, ok, refusal", [
+    (False, False, False, "This week has"),   # this week's room is named first, as the checks run
+    (True, False, False, "This week has"),
+    (False, True, False, "weekly reset"),
+    (True, True, True, None),
+])
+def test_over_week_oversells_this_week(db, over_end, over_week, ok, refusal):
+    from tests.tickets_helpers import report, user
+    conn, cfg, ids = seeded(db)
+    live(conn, NOW)
+    _clear(conn)
+    report(conn, ids, 99.0, NOW - 30)   # this week's room is short, and a week pass outlasts the weekly reset
+    alice = user(conn, ids["alice"])
+    p = tickets.preview(conn, cfg, alice, "lite", "week", "EUR", NOW, over_end=over_end, over_week=over_week)
+    assert (p["available"], p["short_week"], p["over_week"]) == (ok, True, over_week)
+    run = lambda: tickets.grant(conn, cfg, ids["admin"], alice, "lite", "week", "EUR", now=NOW,  # noqa: E731
+                                terms_version=tickets.TERMS_VERSION, over_end=over_end, over_week=over_week)
+    if ok:
+        run()
+        detail = conn.execute("SELECT detail_json FROM audit_log WHERE action='ticket_grant'").fetchone()["detail_json"]
+        assert '"over_week": true' in detail
+    else:
+        with pytest.raises(tickets.CapacityError, match=refusal):
+            run()
 
 
 def test_the_end_refusal_is_named(db):
@@ -145,7 +171,7 @@ def test_both_overrides_when_both_are_short(db, over_5h, over_end, ok, refusal):
     conn, cfg, ids = seeded(db)
     _five_hour_cfg(conn, cfg, ids)
     five_hour(conn, 95.0)
-    tickets.set_subscription_end(conn, int(NOW + DAY / 2), ids["admin"], now=NOW)   # ends before a day pass would
+    tickets.set_subscription_end(conn, int(NOW + DAY / 2), ids["admin"], "default", now=NOW)   # ends before a day pass would
     alice = user(conn, ids["alice"])
     p = tickets.preview(conn, cfg, alice, "lite", "day", "EUR", NOW, over_5h=over_5h, over_end=over_end)
     assert (p["available"], p["short_5h"], p["short_end"]) == (ok, True, True)

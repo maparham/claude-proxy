@@ -551,7 +551,7 @@ label.check { display: flex; gap: 8px; align-items: center; font-size: 13px; }
 .grant-now { border: 1px solid var(--good); border-radius: 8px; padding: 10px 12px; font-weight: 600; color: var(--ink); background: var(--wash); }
 .grant-now input { width: 18px; height: 18px; accent-color: var(--good); }
 #grant-over5h { border: 1px solid var(--warning); border-radius: 8px; padding: 10px 12px; color: var(--ink); }
-#grant-over5h[hidden], #grant-overend[hidden] { display: none; }
+#grant-over5h[hidden], #grant-overend[hidden], #grant-overweek[hidden] { display: none; }
 #grant-over5h input { width: 18px; height: 18px; accent-color: var(--warning); }
 .grant-sum li.warning { color: var(--ink); }
 .grant-sum li.warning::marker { color: var(--warning); }
