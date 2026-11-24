@@ -205,7 +205,7 @@ def test_a_slice_handed_over_mid_week_draws_at_most_its_share_from_one_week(db):
     conn, cfg, ids = seeded(db)
     cfg.tickets.max_sold_pct = 7
     cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
-    tickets.set_share(conn, cfg, "lite", 7, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", 0.07, ids["admin"])
     fresh(conn, NOW - 600)
     bob, _ = create_user(conn, "bob")
     mid = WEEK_START + 4 * DAY
@@ -224,7 +224,7 @@ def test_consecutive_day_tickets_each_allow_share_over_7(db):
     conn, cfg, ids = seeded(db)
     cfg.tickets.max_sold_pct = 7
     cfg.tickets.sell_margin_pct = 0   # the margin would otherwise eat the whole tiny ceiling
-    tickets.set_share(conn, cfg, "lite", 7, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", 0.07, ids["admin"])
     fresh(conn, NOW - 600)
     bob, _ = create_user(conn, "bob")
     for day in range(7):
@@ -636,18 +636,18 @@ def test_a_young_account_with_fresh_snapshots_does_not_lock_out_its_first_ticket
     assert (st.current, st.skipped, st.no_live_data) == (0, None, False)
 
 
-def test_set_share_5h_changes_only_the_5h_share(db):
+def test_set_size_5h_changes_only_the_5h_share(db):
     conn, cfg, ids = seeded(db)
-    assert tickets.effective_share(conn, cfg, "lite") == 5
-    assert tickets.effective_share_5h(conn, cfg, "lite") == 5
-    tickets.set_share_5h(conn, cfg, "lite", 8, ids["admin"])
-    assert tickets.effective_share_5h(conn, cfg, "lite") == 8
-    assert tickets.effective_share(conn, cfg, "lite") == 5
+    assert tickets.effective_share(conn, cfg, "lite", "default") == 5
+    assert tickets.effective_share_5h(conn, cfg, "lite", "default") == 5
+    tickets.set_size_5h(conn, cfg, "lite", 0.08, ids["admin"])
+    assert tickets.effective_share_5h(conn, cfg, "lite", "default") == 8
+    assert tickets.effective_share(conn, cfg, "lite", "default") == 5
 
 
 def test_granted_ticket_stores_split_shares_for_5h_and_7d(db):
     conn, cfg, ids = seeded(db)
-    tickets.set_share_5h(conn, cfg, "lite", 9, ids["admin"])
+    tickets.set_size_5h(conn, cfg, "lite", 0.09, ids["admin"])
     fresh(conn, NOW - 600)
     t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
     row = conn.execute("SELECT share_pct, share_5h_pct FROM tickets WHERE id=?", (t["id"],)).fetchone()
@@ -659,21 +659,21 @@ def test_granted_ticket_stores_split_shares_for_5h_and_7d(db):
 
 def test_null_share_5h_pct_falls_back_to_share_pct(db):
     conn, cfg, ids = seeded(db)
-    tickets.set_share_5h(conn, cfg, "lite", 9, ids["admin"])
+    tickets.set_size_5h(conn, cfg, "lite", 0.09, ids["admin"])
     fresh(conn, NOW - 600)
     t = grant_week(conn, cfg, ids, ids["alice"], now=NOW - 300)
     conn.execute("UPDATE tickets SET share_5h_pct=NULL WHERE id=?", (t["id"],))
     assert by_kind(conn, cfg, ids["alice"])["share_5h"].limit == 5
 
 
-def test_set_share_5h_rejects_bad_values(db):
+def test_set_size_5h_rejects_bad_values(db):
     conn, cfg, ids = seeded(db)
     with pytest.raises(tickets.TicketError):
-        tickets.set_share_5h(conn, cfg, "lite", 0, ids["admin"])
+        tickets.set_size_5h(conn, cfg, "lite", 0, ids["admin"])
     with pytest.raises(tickets.TicketError):
-        tickets.set_share_5h(conn, cfg, "lite", 101, ids["admin"])
+        tickets.set_size_5h(conn, cfg, "lite", 1001, ids["admin"])
     with pytest.raises(tickets.TicketError):
-        tickets.set_share_5h(conn, cfg, "nope", 5, ids["admin"])
+        tickets.set_size_5h(conn, cfg, "nope", 0.05, ids["admin"])
 
 
 def test_order_split_gives_each_week_its_fraction_of_the_ticket(db):
@@ -730,26 +730,12 @@ def test_jalali_dates():
     assert tickets.jalali(2025, 3, 20) == (1403, 12, 30) and tickets.jalali(2025, 3, 21) == (1404, 1, 1)
 
 
-def test_set_compare_sets_and_clears_the_plan_comparison(db):
+def test_effective_tiers_are_sizes(db):
     conn, cfg, ids = seeded(db)
-    assert (tickets.effective_tiers(conn, cfg)["lite"]["compare"], tickets.effective_tiers(conn, cfg)["lite"]["compare_ratio"]) == ("", 0)
-    assert tickets.set_compare(conn, cfg, "lite", " Claude Pro ", 10, ids["admin"]) == {"compare": "Claude Pro", "compare_ratio": 10}
-    eff = tickets.effective_tiers(conn, cfg)["lite"]
-    assert (eff["compare"], eff["compare_ratio"], eff["share_pct"]) == ("Claude Pro", 10, 5)   # the share is untouched
-    tickets.set_share(conn, cfg, "lite", 6, ids["admin"])
-    assert tickets.compare_plan(conn, "lite") == ("Claude Pro", 10)   # and a share change keeps the comparison
-    assert tickets.set_compare(conn, cfg, "lite", "", None, ids["admin"]) == {"compare": "", "compare_ratio": 0}
-    assert tickets.compare_plan(conn, "lite") is None
-    assert [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE action='compare_set'")] == ["compare_set", "compare_set"]
-
-
-def test_set_compare_rejects_bad_values(db):
-    conn, cfg, ids = seeded(db)
-    for plan, ratio in (("Claude Pro", 0), ("Claude Pro", None), ("Claude Pro", float("nan")), ("x" * 41, 2), (5, 2)):
-        with pytest.raises(tickets.TicketError):
-            tickets.set_compare(conn, cfg, "lite", plan, ratio, ids["admin"])
-    with pytest.raises(tickets.TicketError):
-        tickets.set_compare(conn, cfg, "nope", "Claude Pro", 2, ids["admin"])
+    assert tickets.effective_tiers(conn, cfg)["lite"] == {"label": "Lite", "size": 0.05, "size_5h": 0.05}
+    tickets.set_size(conn, cfg, "lite", 0.06, ids["admin"])
+    assert tickets.effective_tiers(conn, cfg)["lite"]["size"] == 0.06
+    assert [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE action='size_set'")] == ["size_set"]
 
 
 def week_snap(conn, t, k):

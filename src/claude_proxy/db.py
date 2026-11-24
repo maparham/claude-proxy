@@ -3,13 +3,17 @@ from __future__ import annotations
 import hashlib
 import os
 import json
+import logging
 import re
 import secrets
 import sqlite3
 import time
 from pathlib import Path
 
+from . import plans
 from .plans import DEFAULT_FACTORS, detect
+
+logger = logging.getLogger("claude_proxy")
 
 # Named so the migration that rebuilds old single-grant tables reuses it verbatim.
 CREDENTIALS_DDL = """CREATE TABLE IF NOT EXISTS credentials (
@@ -203,12 +207,14 @@ SCHEMA = [
     )""",
     """CREATE TABLE IF NOT EXISTS ticket_tier_shares (
         tier TEXT PRIMARY KEY,
-        share_pct REAL NOT NULL,             -- weekly share; also what capacity counts
+        share_pct REAL NOT NULL,             -- unread since sizes (2026-11-24); new rows write 0
         updated_at INTEGER NOT NULL,
         updated_by INTEGER,
-        share_5h_pct REAL,                   -- 5-hour share; NULL: the config's, else share_pct
-        compare TEXT,                        -- plan the pages compare a ticket with, e.g. "Claude Pro"; NULL: none
-        compare_ratio REAL                   -- that plan's weekly usage the shared account equals; set with compare
+        share_5h_pct REAL,                   -- unread since sizes
+        compare TEXT,                        -- unread since sizes: the pages compare with Claude Pro by size
+        compare_ratio REAL,                  -- unread since sizes
+        size REAL,                           -- weekly size in Claude Pro weeks; NULL: the config's
+        size_5h REAL                         -- 5-hour size; NULL: the config's, else size
     )""",
     """CREATE TABLE IF NOT EXISTS ticket_discounts (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -739,6 +745,47 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("DROP TABLE usage_estimates_old")
     conn.execute("UPDATE OR IGNORE settings SET key='subscription_ends_at:default' WHERE key='subscription_ends_at'")
     conn.execute("DELETE FROM settings WHERE key='subscription_ends_at'")
+    # Pass sizes in Claude Pro weeks (multi-subscription task 4): today's shares were of the default account, so with its
+    # plan's factors each tier, the trial and the referral cost keep exactly what they hold there now.
+    if "size" not in _columns(conn, "ticket_tier_shares"):
+        for col in ("size", "size_5h"):
+            conn.execute(f"ALTER TABLE ticket_tier_shares ADD COLUMN {col} REAL")
+        p = plans.plan(conn, "default")
+        if p is None:
+            logger.warning("migration: the default account's plan is unknown, so the pass sizes could not be worked out "
+                           "from today's shares; the config's sizes apply until they are set on the Pricing tab")
+        else:
+            f = plans.factors(conn)[p]
+            conn.execute("UPDATE ticket_tier_shares SET size=share_pct * ? / 100, size_5h=share_5h_pct * ? / 100",
+                         (f["7d"], f["5h"]))
+        _migrate_trial_sizes(conn, plans.factors(conn)[p] if p else None)
+        _migrate_referral_cost(conn, plans.factors(conn)[p]["7d"] if p else None)
+
+
+def _migrate_trial_sizes(conn: sqlite3.Connection, f: dict | None) -> None:
+    """The trial's share overrides become sizes with the default account's factors; with its plan unknown they are
+    dropped, so the trial takes its tier's sizes."""
+    row = conn.execute("SELECT value FROM settings WHERE key='trial'").fetchone()
+    if not row:
+        return
+    s = json.loads(row[0])
+    for old, new, b in (("share_pct", "size", "7d"), ("share_5h_pct", "size_5h", "5h")):
+        v = s.pop(old, None)
+        if v is not None and f is not None:
+            s[new] = v * f[b] / 100
+    conn.execute("UPDATE settings SET value=? WHERE key='trial'", (json.dumps(s),))
+
+
+def _migrate_referral_cost(conn: sqlite3.Connection, f7: float | None) -> None:
+    """account_cost_usd was the default account's cost per 30 days; it is now one Claude Pro's worth of usage per 30
+    days, so the floor a pass is sold above stays where it was. Unchanged when the default account's plan is unknown."""
+    row = conn.execute("SELECT value FROM settings WHERE key='referrals'").fetchone()
+    if not row or f7 is None:
+        return
+    s = json.loads(row[0])
+    if isinstance(s.get("account_cost_usd"), (int, float)):
+        s["account_cost_usd"] = s["account_cost_usd"] / f7
+        conn.execute("UPDATE settings SET value=? WHERE key='referrals'", (json.dumps(s),))
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)

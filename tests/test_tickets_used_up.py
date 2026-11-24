@@ -156,7 +156,7 @@ def test_timeline_stacks_overlapping_tickets_relative_to_the_tallest(env):
     assert [(s["from"], s["to"], [b["i"] for b in s["stack"]]) for s in tl["segments"]] == [
         (NOW, t["ends_at"], [0, 1]), (t["ends_at"], t2["ends_at"], [1]), (t2["ends_at"], t3["ends_at"], [2])]
     assert [b["w"] for b in tl["segments"][0]["stack"]] == pytest.approx([5 / 30, 25 / 30])
-    assert tl["plan"] is None and tl["segments"][0]["plan_x"] is None   # no compare plan set
+    assert tl["plan"] == "Claude Pro" and tl["segments"][0]["plan_x"] == 0.3   # Lite 0.05 + Standard 0.25 Pro weeks
 
 
 def test_cancelling_a_pass_beside_another_keeps_the_queue_behind_the_other(db):

@@ -83,6 +83,8 @@ function fmtUsd(v) { return v == null ? "—" : v === 0 ? `$${nf0.format(0)}` : 
 const fmtPrice = (v) => `$${Number.isInteger(v) ? nf0.format(v) : nf2.format(v)}`;   // a USD price: whole dollars bare, otherwise cents
 const PCT = LANG === "fa" ? "\u066A" : "%";   // the Persian percent sign in Persian
 const fmtShare = (v) => `${new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 }).format(+v)}${PCT}`;   // 6.1000000000000005 reads 6.1%
+// A pass size in Claude Pro weeks: "0.25× Claude Pro".
+const fmtSize = (v) => (v == null ? "—" : t("pr.size_x", { n: new Intl.NumberFormat(LOC, { maximumFractionDigits: 3 }).format(+v), plan: planName("Claude Pro") }));
 function fmtPct(v, d = 0) { return v == null ? "—" : `${nfFix(d).format(v)}${PCT}`; }
 function fmtDur(s) {
   if (s == null) return "—";
@@ -158,8 +160,8 @@ let pageStale = false;
 // ---------- tooltips ----------
 
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
-const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:all", "source:cli", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_share", "pr_per_day", "pr_share_5h", "pr_compare", "pr_ratio", "pr_recommended",
-  "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_share", "trial_share_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
+const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:all", "source:cli", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_size", "pr_size_5h", "pr_recommended",
+  "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_size", "trial_size_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
   "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
@@ -1721,7 +1723,7 @@ function ticketRow(tk) {
 function claimRow(c) {
   const none = `<td class="r muted">—</td>`;
   return `<tr><td><b>${bdi(c.user_name)}</b></td>
-    <td class="nowrap">${tierName(c.tier, c.label || c.tier)} <span class="muted">${fmtShare(c.share_pct)}</span></td>
+    <td class="nowrap">${tierName(c.tier, c.label || c.tier)} <span class="muted">${c.share_pct == null ? "—" : fmtShare(c.share_pct)}</span></td>
     <td class="nowrap muted">${t("tk.trial_start_by", { date: fmtDate(c.expires_at) })}</td><td class="muted">—</td><td class="nowrap">${fmtDurLong(c.duration_min * 60)}</td>${none}
     <td class="nowrap">${stateBadge("waiting")}</td>${none}${none}<td class="muted">—</td><td class="muted nowrap">${c.granted_by_name ? t("tk.trial_granted_by", { name: bdi(c.granted_by_name) }) : t("tk.trial_self")}</td>
     <td class="nowrap"><div class="row-actions" style="flex-wrap:nowrap"><button class="btn small danger" data-cact="${c.id}">${t("app.cancel_ticket")}</button></div></td></tr>`;
@@ -1750,7 +1752,7 @@ function grantDialog(users, pre = null) {
   const d = openDialog(`<h3>${pre ? t("tk.grant_for_order", { id: esc(pre.order_id) }) : t("tk.grant")}</h3>
     <form id="f-grant" class="form-grid">
       <label>${t("app.user")}<select name="user" required${pre ? " disabled" : ""}>${pickable.map((u) => `<option value="${u.id}">${esc(u.name)}</option>`).join("")}</select></label>
-      <label>${t("price.tier")}<select name="tier">${Object.entries(T.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))} · ${fmtShare(x.share_pct)}</option>`).join("")}</select></label>
+      <label>${t("price.tier")}<select name="tier">${Object.entries(T.tiers).map(([k, x]) => `<option value="${esc(k)}">${esc(tierNameText(k, x.label))} · ${esc(fmtSize(x.size))}</option>`).join("")}</select></label>
       <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
       <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label class="wide">${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
@@ -2053,7 +2055,7 @@ async function renderPricing(main) {
       <div class="card"><h3>${t("pr.regular")}</h3><p class="sub">${t("pr.regular_sub")}${p.vat_percent ? ` ${t("pr.vat", { pct: fmtNum(p.vat_percent) })}` : ""}</p>
         <form id="f-prices">
         <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}</th>${Object.keys(p.lengths).map((l) => `<th class="r">${lengthName(l)}</th>`).join("")}</tr></thead><tbody>
-        ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${fmtShare(x.share_pct)}</span></td>${Object.keys(p.lengths).map((l) =>
+        ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b> <span class="muted">${esc(fmtSize(x.size))}</span></td>${Object.keys(p.lengths).map((l) =>
           `<td class="r"><input type="text" inputmode="decimal" dir="ltr" name="usd" data-tier="${esc(k)}" data-length="${esc(l)}" data-init="${price(k, l)}" step="0.01" min="0.01" value="${price(k, l)}" placeholder="${esc(t("pr.off_sale"))}" style="width:80px"></td>`).join("")}</tr>`).join("")}
         </tbody></table></div>
         <label style="display:block;margin-top:8px">${t("pr.recommended")}${tipI("pr_recommended")}
@@ -2063,18 +2065,15 @@ async function renderPricing(main) {
         <div class="error" id="prices-err"></div>
         </form></div>
     </div>
-    <div class="card" style="margin-top:16px"><h3>${t("pr.shares")}</h3>
-      <form id="f-shares">
-      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}${tipI("pr_tier")}</th><th class="r">${t("pr.share_pct")}${tipI("pr_share")}</th><th class="r">${t("pr.per_day")}${tipI("pr_per_day")}</th><th class="r">${t("pr.share_5h")}${tipI("pr_share_5h")}</th><th>${t("pr.compare")}${tipI("pr_compare")}</th><th class="r">${t("pr.compare_ratio")}${tipI("pr_ratio")}</th></tr></thead><tbody>
+    <div class="card" style="margin-top:16px"><h3>${t("pr.sizes")}</h3><p class="sub">${t("pr.sizes_sub")}</p>
+      <form id="f-sizes">
+      <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}${tipI("pr_tier")}</th><th class="r">${t("pr.size")}${tipI("pr_size")}</th><th class="r">${t("pr.size_5h")}${tipI("pr_size_5h")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
-        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share" data-tier="${esc(k)}" data-init="${x.share_pct}" value="${x.share_pct}" required style="width:80px"> <span class="muted">%</span></td>
-        <td class="r muted" data-perday="${esc(k)}">${fmtShare(x.share_pct / 7)}</td>
-        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="share5h" data-tier="${esc(k)}" data-init="${x.share_5h_pct}" value="${x.share_5h_pct}" required style="width:80px"> <span class="muted">%</span></td>
-        <td><input type="text" dir="auto" name="compare" data-tier="${esc(k)}" data-init="${esc(x.compare)}" value="${esc(x.compare)}" maxlength="40" placeholder="${esc(t("pr.compare_none"))}" aria-label="${esc(t("pr.compare"))}" style="width:130px"></td>
-        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="ratio" data-tier="${esc(k)}" data-init="${x.compare_ratio || ""}" value="${x.compare_ratio || ""}" aria-label="${esc(t("pr.compare_ratio"))}" style="width:60px"> <span class="muted">×</span></td></tr>`).join("")}
+        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="size" data-tier="${esc(k)}" data-init="${x.size ?? ""}" value="${x.size ?? ""}" required style="width:80px"> <span class="muted">× ${esc(planName("Claude Pro"))}</span></td>
+        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="size_5h" data-tier="${esc(k)}" data-init="${x.size_5h ?? ""}" value="${x.size_5h ?? ""}" required style="width:80px"> <span class="muted">× ${esc(planName("Claude Pro"))}</span></td></tr>`).join("")}
       </tbody></table></div>
       <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
-      <div class="error" id="shares-err"></div>
+      <div class="error" id="sizes-err"></div>
       </form></div>
     <div class="card" style="margin-top:16px"><h3>${t("pr.discounts")}</h3><p class="sub">${t("pr.discounts_sub")}</p>
       <form id="f-disc" class="form-grid">
@@ -2127,36 +2126,19 @@ async function renderPricing(main) {
     await saveChanged(e.target, "usd", (input) => ({ tier: input.dataset.tier, length: input.dataset.length, usd: usdOf(input) }), "/api/admin/prices", $("#prices-err"), changedPrice);
     if (recChanged && !pricesChanged) render();
   };
-  const sharesForm = $("#f-shares");
-  if (sharesForm) {
-    sharesForm.querySelectorAll('input[name="share"]').forEach((input) => {
-      input.addEventListener("input", () => {
-        const n = num(input.value);
-        const cell = sharesForm.querySelector(`[data-perday="${input.dataset.tier}"]`);
-        if (cell) cell.textContent = Number.isFinite(n) ? fmtShare(n / 7) : "—";
-      });
-    });
-    // Weekly shares first, then 5-hour ones; saveChanged re-renders only once nothing failed, so run them in turn.
-    sharesForm.onsubmit = async (e) => {
+  const sizesForm = $("#f-sizes");
+  if (sizesForm) {
+    // Weekly sizes first, then 5-hour ones, one per call like a price; re-render only once nothing failed.
+    sizesForm.onsubmit = async (e) => {
       e.preventDefault();
-      const err = $("#shares-err");
-      const changed = [...e.target.querySelectorAll('input[name="share"], input[name="share5h"]')].filter(inputChanged);
+      const err = $("#sizes-err");
+      const changed = [...e.target.querySelectorAll('input[name="size"], input[name="size_5h"]')].filter(inputChanged);
       err.textContent = "";
       for (const input of changed) {
-        const body = input.name === "share" ? { tier: input.dataset.tier, share_pct: num(input.value) } : { tier: input.dataset.tier, share_5h_pct: num(input.value) };
-        try { await api("/api/admin/shares", { method: "POST", body }); } catch (x) { err.textContent = x.message; return; }
+        const body = { tier: input.dataset.tier, [input.name]: num(input.value) };
+        try { await api("/api/admin/sizes", { method: "POST", body }); } catch (x) { err.textContent = x.message; return; }
       }
-      // The plan comparison goes as a pair per tier: a name with its ratio, or an empty name to hide the line.
-      const compares = [...e.target.querySelectorAll('input[name="compare"]')].filter((plan) => {
-        const ratio = e.target.querySelector(`input[name="ratio"][data-tier="${plan.dataset.tier}"]`);
-        return plan.value.trim() !== plan.dataset.init || (plan.value.trim() !== "" && inputChanged(ratio));
-      });
-      for (const plan of compares) {
-        const ratio = e.target.querySelector(`input[name="ratio"][data-tier="${plan.dataset.tier}"]`);
-        const body = { tier: plan.dataset.tier, compare: plan.value.trim(), compare_ratio: num(ratio.value) };
-        try { await api("/api/admin/shares", { method: "POST", body }); } catch (x) { err.textContent = x.message; return; }
-      }
-      if (changed.length || compares.length) render();
+      if (changed.length) render();
     };
   }
   $("#f-disc").onsubmit = (e) => { e.preventDefault(); const f = e.target; const pct = f.pct.value.trim(); post("/api/admin/discounts", { tier: f.tier.value, length: f.length.value, ...(pct ? { pct: num(pct) } : { usd: num(f.usd.value) }), starts_at: fromLocal(f.starts_at.value), ends_at: fromLocal(f.ends_at.value) }, $("#disc-err")); };
@@ -2171,8 +2153,8 @@ function trialSettingsCard(v, tiers) {
   // A field with its label above it, and the unit after the box: the Discounts form's layout.
   const field = (label, tip, input, unit = "") => `<label><span>${t(label)}${tipI(tip)}</span><span class="unit-in">${input}${unit ? `<span class="muted">${t(unit)}</span>` : ""}</span></label>`;
   const box = (name, val, mode = "numeric") => `<input type="text" inputmode="${mode}" dir="ltr" name="${name}" data-init="${val}" value="${val}">`;
-  // Empty: the tier's own share, which the placeholder shows.
-  const share = (name, val, dflt) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-init="${dflt ? "" : val}" value="${dflt ? "" : val}" placeholder="${esc(t("trial.tier_value", { tier: tierLabel(s.tier), v: fmtShare(val) }))}">`;
+  // Empty: the tier's own size, which the placeholder shows.
+  const size = (name, val, dflt) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-init="${dflt ? "" : val}" value="${dflt ? "" : val}" placeholder="${esc(t("trial.tier_value", { tier: tierLabel(s.tier), v: fmtSize(val) }))}">`;
   return `<div class="card trial-settings" style="margin-top:16px"><h3>${t("trial.title")}</h3>
     <p class="sub">${t("trial.admin_sub", { today: nfFull.format(v.today), cap: nfFull.format(s.daily_cap), claimed: nfFull.format(v.claimed), started: nfFull.format(v.started), lapsed: nfFull.format(v.lapsed), bought: nfFull.format(v.bought) })}</p>
     <form id="f-trial">
@@ -2183,8 +2165,8 @@ function trialSettingsCard(v, tiers) {
         ${field("trial.s_cap", "trial_cap", box("daily_cap", s.daily_cap))}
         ${field("trial.s_tier", "trial_tier", `<select name="tier" data-init="${d.tier ? "" : esc(s.tier)}"><option value=""${d.tier ? " selected" : ""}>${esc(t("trial.tier_auto", { tier: d.tier ? tierLabel(s.tier) : "" }).trim())}</option>
           ${Object.entries(tiers).map(([k, x]) => `<option value="${esc(k)}"${!d.tier && s.tier === k ? " selected" : ""}>${esc(tierNameText(k, x.label))}</option>`).join("")}</select>`)}
-        ${field("trial.s_share", "trial_share", share("share_pct", s.share_pct, d.share_pct), "trial.u_pct")}
-        ${field("trial.s_share_5h", "trial_share_5h", share("share_5h_pct", s.share_5h_pct, d.share_5h_pct), "trial.u_pct")}
+        ${field("trial.s_size", "trial_size", size("size", s.size, d.size), "trial.u_pro")}
+        ${field("trial.s_size_5h", "trial_size_5h", size("size_5h", s.size_5h, d.size_5h), "trial.u_pro")}
         ${field("trial.s_follow_pct", "trial_follow_pct", box("follow_pct", s.follow_pct, "decimal"), "trial.u_pct")}
         ${field("trial.s_follow_days", "trial_follow_days", box("follow_days", s.follow_days), "trial.u_days")}
       </div>
@@ -2207,7 +2189,7 @@ function wireTrialSettings() {
     const pct = num(f.follow_pct.value);
     if (badNum([pct], err)) return;
     if (pct !== Number(f.follow_pct.dataset.init)) body.follow_pct = pct;
-    for (const name of ["share_pct", "share_5h_pct"]) {   // empty: back to the tier's own
+    for (const name of ["size", "size_5h"]) {   // empty: back to the tier's own
       const v = f[name].value.trim();
       if (v === f[name].dataset.init) continue;
       if (v === "") { body[name] = null; continue; }

@@ -7,6 +7,8 @@ import re
 import tomllib
 from dataclasses import dataclass, field, fields, replace
 
+from .plans import DEFAULT_FACTORS
+
 logger = logging.getLogger("claude_proxy")
 
 def _env(name: str, default: str) -> str:
@@ -119,21 +121,22 @@ ESTIMATE_DAYS = 30   # how far back the daily usage estimates read; retention mu
 
 @dataclass
 class Tier:
-    """A size of slice sold as tickets: its share of the account and its default USD prices per length.
+    """A size of slice sold as tickets: its size in Claude Pro weeks and its default USD prices per length.
 
-    `share_pct` is the weekly share (and what capacity counts); `share_5h_pct` caps Anthropic's 5-hour window,
-    None meaning the same as `share_pct`."""
+    `size` is the weekly size: a full Claude Pro week is 1, and on an account whose plan factor is f a pass takes
+    size × 100 / f percent of the week (plans.shares). `size_5h` sizes Anthropic's 5-hour window the same way, None
+    meaning the same as `size`. The database's sizes (Pricing tab) govern; these only seed a tier that has none."""
     label: str
-    share_pct: float
+    size: float
     default_usd: dict[str, float] = field(default_factory=dict)
-    share_5h_pct: float | None = None
+    size_5h: float | None = None
 
     def __post_init__(self):
-        if isinstance(self.share_pct, bool) or not isinstance(self.share_pct, (int, float)) or not 0 < self.share_pct <= 100:
-            raise TypeError("share_pct must be a number above 0 and at most 100")
-        if self.share_5h_pct is not None and (isinstance(self.share_5h_pct, bool) or not isinstance(self.share_5h_pct, (int, float))
-                                              or not 0 < self.share_5h_pct <= 100):
-            raise TypeError("share_5h_pct must be a number above 0 and at most 100")
+        if isinstance(self.size, bool) or not isinstance(self.size, (int, float)) or not 0 < self.size <= 1000:
+            raise TypeError("size must be a number of Claude Pro weeks above 0 and at most 1000")
+        if self.size_5h is not None and (isinstance(self.size_5h, bool) or not isinstance(self.size_5h, (int, float))
+                                         or not 0 < self.size_5h <= 1000):
+            raise TypeError("size_5h must be a number of Claude Pro weeks above 0 and at most 1000")
         if set(self.default_usd) != set(LENGTHS):
             raise TypeError(f"default_usd needs exactly the keys {', '.join(LENGTHS)}")
         for k, v in self.default_usd.items():
@@ -152,8 +155,8 @@ class Currency:
 
 def _default_tiers() -> dict[str, Tier]:
     return {
-        "lite": Tier("Lite", 5, {"day": 3, "week": 8, "month": 20}),
-        "standard": Tier("Standard", 25, {"day": 12, "week": 35, "month": 100}),
+        "lite": Tier("Lite", 0.05, {"day": 3, "week": 8, "month": 20}),   # 5% of a Claude Pro account
+        "standard": Tier("Standard", 0.25, {"day": 12, "week": 35, "month": 100}),
     }
 
 
@@ -389,6 +392,10 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
                 for k in ("compare", "compare_ratio"):   # the shared plan can change any time, so the admin keeps these current
                     if k in tiers[tier_id]:
                         raise ConfigError(f"{toml_path}: [tickets.tiers.{tier_id}].{k} is set on the dashboard's Pricing tab now; remove it")
+                for k, new in (("share_pct", "size"), ("share_5h_pct", "size_5h")):   # passes are sized in Pro weeks now
+                    if k in tiers[tier_id]:
+                        raise ConfigError(f"{toml_path}: [tickets.tiers.{tier_id}].{k} is now `{new}`, in Claude Pro weeks "
+                                          "(share × plan factor ÷ 100)")
             t.tiers = {k: Tier(**v) for k, v in tiers.items()}
         t.currencies = {k.upper(): Currency(**v) for k, v in data.pop("currencies", {}).items()}
     except (TypeError, AttributeError) as e:   # AttributeError: a key that should be a table, e.g. `currencies = 5`
@@ -419,14 +426,17 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
         raise ConfigError(f"{toml_path}: [tickets].turnstile_site_key must be a string")
     if not t.tiers:
         raise ConfigError(f"{toml_path}: [tickets] needs at least one tier")
+    # A tier too big for a plan is simply never placed on such accounts; only one that fits no plan at all (not even
+    # the largest, under the built-in factors) could never be sold, and nothing else would say why.
+    f7, f5 = (max(f[b] for f in DEFAULT_FACTORS.values()) for b in ("7d", "5h"))
     for tid, tier in t.tiers.items():
-        if tier.share_pct > t.max_sold_pct:   # it could never be sold, and nothing else would say why
-            raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] share_pct {tier.share_pct:g} is above "
-                              f"[tickets].max_sold_pct {t.max_sold_pct:g}, so it could never be sold")
-        s5 = tier.share_5h_pct if tier.share_5h_pct is not None else tier.share_pct
-        if s5 > t.max_sold_5h_pct:
-            raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] 5-hour share {s5:g} is above "
-                              f"[tickets].max_sold_5h_pct {t.max_sold_5h_pct:g}, so it could never be sold")
+        if tier.size * 100 / f7 > t.max_sold_pct:
+            raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] size {tier.size:g} fits no plan: it is "
+                              f"{tier.size * 100 / f7:g}% of the largest, above [tickets].max_sold_pct {t.max_sold_pct:g}")
+        s5 = tier.size_5h if tier.size_5h is not None else tier.size
+        if s5 * 100 / f5 > t.max_sold_5h_pct:
+            raise ConfigError(f"{toml_path}: [tickets.tiers.{tid}] 5-hour size {s5:g} fits no plan: it is "
+                              f"{s5 * 100 / f5:g}% of the largest, above [tickets].max_sold_5h_pct {t.max_sold_5h_pct:g}")
     return t
 
 

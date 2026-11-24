@@ -14,7 +14,7 @@ import time
 from decimal import ROUND_HALF_UP, Decimal
 from zoneinfo import ZoneInfo
 
-from . import db, quota
+from . import db, plans, quota
 from .config import LENGTHS, Config
 from .forwarder import COUNT_TOKENS_PATH
 
@@ -474,118 +474,112 @@ def seed_prices(conn: sqlite3.Connection, cfg: Config, now: float | None = None)
     return n
 
 
-def seed_shares(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> int:
-    """Insert each tier's config share_pct that has no DB row yet. Returns the rows added. The 5-hour share is left NULL,
-    so the config's keeps applying until the dashboard sets one."""
+def seed_sizes(conn: sqlite3.Connection, cfg: Config, now: float | None = None) -> int:
+    """Insert each tier's config size that has no DB row yet. Returns the rows added. The 5-hour size is left NULL,
+    so the config's keeps applying until the dashboard sets one. share_pct is a legacy NOT NULL column, never read."""
     now = int(time.time() if now is None else now)
     n = 0
     for tier, t in cfg.tickets.tiers.items():
-        n += conn.execute("INSERT OR IGNORE INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by) VALUES(?,?,?,NULL)",
-                          (tier, float(t.share_pct), now)).rowcount
+        n += conn.execute("INSERT OR IGNORE INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, size) VALUES(?,0,?,NULL,?)",
+                          (tier, now, float(t.size))).rowcount
     return n
 
 
-def tier_shares(conn: sqlite3.Connection) -> dict[str, dict]:
-    """DB share overrides by tier: {tier: {share_pct, updated_at, updated_by}}."""
-    return {r["tier"]: dict(r) for r in conn.execute("SELECT * FROM ticket_tier_shares")}
+def _size_row(conn: sqlite3.Connection, tier: str):
+    return conn.execute("SELECT size, size_5h FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
 
 
-def effective_share(conn: sqlite3.Connection, cfg: Config, tier: str) -> float:
-    """The share new tickets of this tier are sold with: the dashboard value when set, else the config."""
-    row = conn.execute("SELECT share_pct FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
-    if row is not None:
-        return float(row[0])
-    return float(cfg.tickets.tiers[tier].share_pct)
-
-
-def effective_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str) -> float:
-    """The 5-hour share new tickets of this tier are sold with: the dashboard value, else the config's, else the weekly share."""
-    row = conn.execute("SELECT share_5h_pct FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
+def tier_size(conn: sqlite3.Connection, cfg: Config, tier: str) -> float | None:
+    """The tier's weekly size in Claude Pro weeks: the dashboard's, else the config's."""
+    row = _size_row(conn, tier)
     if row is not None and row[0] is not None:
         return float(row[0])
-    t = cfg.tickets.tiers[tier]
-    return float(t.share_5h_pct) if t.share_5h_pct is not None else effective_share(conn, cfg, tier)
+    t = cfg.tickets.tiers.get(tier)
+    return float(t.size) if t is not None else None
 
 
-def compare_plan(conn: sqlite3.Connection, tier: str) -> tuple[str, float] | None:
-    """(plan, ratio) the pages compare this tier with, as the dashboard set it; None when unset. Nothing about the shared
-    plan's size is assumed: it can change any time, so the admin keeps this current."""
-    row = conn.execute("SELECT compare, compare_ratio FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
-    return (row[0], float(row[1])) if row is not None and row[0] and row[1] else None
+def tier_size_5h(conn: sqlite3.Connection, cfg: Config, tier: str) -> float | None:
+    """The tier's 5-hour size in Claude Pro weeks: the dashboard's, else the config's, else the weekly size."""
+    row = _size_row(conn, tier)
+    if row is not None and row[1] is not None:
+        return float(row[1])
+    t = cfg.tickets.tiers.get(tier)
+    return float(t.size_5h) if t is not None and t.size_5h is not None else tier_size(conn, cfg, tier)
+
+
+def effective_share(conn: sqlite3.Connection, cfg: Config, tier: str, account: str) -> float | None:
+    """The weekly share new tickets of this tier are sold with on `account`; None when the size is unset or the
+    account has no plan."""
+    size = tier_size(conn, cfg, tier)
+    sh = plans.shares(conn, account, size, tier_size_5h(conn, cfg, tier)) if size is not None else None
+    return sh[0] if sh else None
+
+
+def effective_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, account: str) -> float | None:
+    """The 5-hour share new tickets of this tier are sold with on `account`; None as effective_share."""
+    size = tier_size(conn, cfg, tier)
+    sh = plans.shares(conn, account, size, tier_size_5h(conn, cfg, tier)) if size is not None else None
+    return sh[1] if sh else None
+
+
+PLAN_UNKNOWN = "This subscription's plan is unknown; pick it on the Subscriptions page."
+
+
+def _sell_shares(conn: sqlite3.Connection, cfg: Config, tier: str, account: str) -> tuple[float, float]:
+    """(weekly, 5-hour) shares of a new ticket of this tier on `account`; CapacityError when its plan is unknown."""
+    share, share_5h = effective_share(conn, cfg, tier, account), effective_share_5h(conn, cfg, tier, account)
+    if share is None or share_5h is None:
+        raise CapacityError(PLAN_UNKNOWN)
+    return share, share_5h
 
 
 def effective_tiers(conn: sqlite3.Connection, cfg: Config) -> dict[str, dict]:
-    """{tier: {label, share_pct, share_5h_pct, compare, compare_ratio}} with dashboard shares applied, for new grants and display.
-    compare is "" and compare_ratio 0 while the dashboard has set no plan comparison."""
-    out = {}
-    for tid, t in cfg.tickets.tiers.items():
-        plan, ratio = compare_plan(conn, tid) or ("", 0)
-        out[tid] = {"label": t.label, "share_pct": effective_share(conn, cfg, tid), "share_5h_pct": effective_share_5h(conn, cfg, tid),
-                    "compare": plan, "compare_ratio": ratio}
-    return out
+    """{tier: {label, size, size_5h}} with dashboard sizes applied, in Claude Pro weeks, for new grants and display."""
+    return {tid: {"label": t.label, "size": tier_size(conn, cfg, tid), "size_5h": tier_size_5h(conn, cfg, tid)}
+            for tid, t in cfg.tickets.tiers.items()}
 
 
-def set_share(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor: int | None, now: float | None = None) -> float:
-    """Change a tier's share for future tickets. Existing tickets keep the share they were sold with."""
+def _check_size(cfg: Config, tier: str, size, what: str) -> float:
     if tier not in cfg.tickets.tiers:
         raise TicketError(f"Unknown tier {tier!r}.")
-    if isinstance(share_pct, bool) or not isinstance(share_pct, (int, float)) or not math.isfinite(share_pct):
-        raise TicketError("The share must be a number.")
-    share_pct = float(share_pct)
-    if not 0 < share_pct <= 100:
-        raise TicketError("The share must be above 0 and at most 100.")
-    if share_pct > cfg.tickets.max_sold_pct + 1e-9:
-        raise TicketError(f"The share must be at most {cfg.tickets.max_sold_pct:g}% (max_sold_pct), or the tier could never be sold.")
+    if isinstance(size, bool) or not isinstance(size, (int, float)) or not math.isfinite(size):
+        raise TicketError(f"The {what} must be a number.")
+    size = float(size)
+    if not 0 < size <= 1000:
+        raise TicketError(f"The {what} must be above 0 and at most 1000 Claude Pro weeks.")
+    return size
+
+
+def set_size(conn: sqlite3.Connection, cfg: Config, tier: str, size, actor: int | None, now: float | None = None) -> float:
+    """Change a tier's weekly size, in Claude Pro weeks, for future tickets. Existing tickets keep the share they were
+    sold with. Refused when it fits no plan: over max_sold_pct even on the largest, it could never be sold."""
+    size = _check_size(cfg, tier, size, "size")
+    f7 = max(f["7d"] for f in plans.factors(conn).values())
+    if size * 100 / f7 > cfg.tickets.max_sold_pct + 1e-9:
+        raise TicketError(f"The size must be at most {cfg.tickets.max_sold_pct * f7 / 100:g} Claude Pro weeks "
+                          "(max_sold_pct of the largest plan), or the tier could never be sold.")
     now = _now(now)
-    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by) VALUES(?,?,?,?) "
-                 "ON CONFLICT(tier) DO UPDATE SET share_pct=excluded.share_pct, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-                 (tier, share_pct, now, actor))
-    db.audit(conn, actor, "share_set", tier, {"share_pct": share_pct})
-    return share_pct
+    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, size) VALUES(?,0,?,?,?) "
+                 "ON CONFLICT(tier) DO UPDATE SET size=excluded.size, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                 (tier, now, actor, size))
+    db.audit(conn, actor, "size_set", tier, {"size": size})
+    return size
 
 
-def set_share_5h(conn: sqlite3.Connection, cfg: Config, tier: str, share_pct, actor: int | None, now: float | None = None) -> float:
-    """Change a tier's 5-hour share for future tickets. Refused above max_sold_5h_pct (2026-11-04 spec, §7): passes
-    running at once may hold at most that much 5-hour share, so a larger one could never be sold."""
-    if tier not in cfg.tickets.tiers:
-        raise TicketError(f"Unknown tier {tier!r}.")
-    if isinstance(share_pct, bool) or not isinstance(share_pct, (int, float)) or not math.isfinite(share_pct):
-        raise TicketError("The 5-hour share must be a number.")
-    share_pct = float(share_pct)
-    if not 0 < share_pct <= 100:
-        raise TicketError("The 5-hour share must be above 0 and at most 100.")
-    if share_pct > cfg.tickets.max_sold_5h_pct + 1e-9:
-        raise TicketError(f"The 5-hour share must be at most {cfg.tickets.max_sold_5h_pct:g}% (max_sold_5h_pct), "
-                          "or the tier could never be sold.")
+def set_size_5h(conn: sqlite3.Connection, cfg: Config, tier: str, size, actor: int | None, now: float | None = None) -> float:
+    """Change a tier's 5-hour size for future tickets. Refused when it fits no plan: over max_sold_5h_pct even on the
+    largest, passes running at once could never hold it."""
+    size = _check_size(cfg, tier, size, "5-hour size")
+    f5 = max(f["5h"] for f in plans.factors(conn).values())
+    if size * 100 / f5 > cfg.tickets.max_sold_5h_pct + 1e-9:
+        raise TicketError(f"The 5-hour size must be at most {cfg.tickets.max_sold_5h_pct * f5 / 100:g} Claude Pro weeks "
+                          "(max_sold_5h_pct of the largest plan), or the tier could never be sold.")
     now = _now(now)
-    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, share_5h_pct) VALUES(?,?,?,?,?) "
-                 "ON CONFLICT(tier) DO UPDATE SET share_5h_pct=excluded.share_5h_pct, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-                 (tier, effective_share(conn, cfg, tier), now, actor, share_pct))
-    db.audit(conn, actor, "share_5h_set", tier, {"share_5h_pct": share_pct})
-    return share_pct
-
-
-def set_compare(conn: sqlite3.Connection, cfg: Config, tier: str, plan, ratio, actor: int | None, now: float | None = None) -> dict:
-    """Set the plan the pages compare this tier with and how many of that plan's weekly usage the shared account equals
-    ("share × ratio % of <plan>'s usage"). An empty plan clears the comparison; display only, no limit changes."""
-    if tier not in cfg.tickets.tiers:
-        raise TicketError(f"Unknown tier {tier!r}.")
-    plan = plan.strip() if isinstance(plan, str) else plan
-    if plan in ("", None):
-        plan, ratio = None, None
-    else:
-        if not isinstance(plan, str) or len(plan) > 40:
-            raise TicketError("The comparison plan must be a name of at most 40 characters.")
-        if isinstance(ratio, bool) or not isinstance(ratio, (int, float)) or not math.isfinite(ratio) or ratio <= 0:
-            raise TicketError("The actual/base ratio must be a number above 0.")
-        ratio = float(ratio)
-    now = _now(now)
-    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, compare, compare_ratio) VALUES(?,?,?,?,?,?) "
-                 "ON CONFLICT(tier) DO UPDATE SET compare=excluded.compare, compare_ratio=excluded.compare_ratio, "
-                 "updated_at=excluded.updated_at, updated_by=excluded.updated_by",
-                 (tier, effective_share(conn, cfg, tier), now, actor, plan, ratio))
-    db.audit(conn, actor, "compare_set", tier, {"compare": plan, "compare_ratio": ratio})
-    return {"compare": plan or "", "compare_ratio": ratio or 0}
+    conn.execute("INSERT INTO ticket_tier_shares(tier, share_pct, updated_at, updated_by, size, size_5h) VALUES(?,0,?,?,?,?) "
+                 "ON CONFLICT(tier) DO UPDATE SET size_5h=excluded.size_5h, updated_at=excluded.updated_at, updated_by=excluded.updated_by",
+                 (tier, now, actor, tier_size(conn, cfg, tier), size))
+    db.audit(conn, actor, "size_5h_set", tier, {"size_5h": size})
+    return size
 
 
 RECOMMENDED_KEY = "pricing_recommended"
@@ -863,8 +857,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
         before = p["usd"]
         p["usd"], p["ref_pct_applied"] = referrals.apply_pct(conn, cfg, tier, length, before, ref["ref_pct"])
         p["ref_off_usd"] = round(before - p["usd"], 2)
-    share = effective_share(conn, cfg, tier)
-    share_5h = effective_share_5h(conn, cfg, tier)
+    share, share_5h = _sell_shares(conn, cfg, tier, SELL_ACCOUNT)
     starts_at, replaces = next_start(conn, cfg, user["id"], now, start_now)
     ends_at = starts_at + LENGTHS[length] * DAY
     end_warning = None
@@ -1041,7 +1034,7 @@ def _misfit(conn, cfg, tier, length, now, starts_at=None, exclude=None, ctx=None
     now = _now(now)
     start = now if starts_at is None else int(starts_at)
     try:
-        capacity.check(conn, cfg, SELL_ACCOUNT, effective_share(conn, cfg, tier), effective_share_5h(conn, cfg, tier), start,
+        capacity.check(conn, cfg, SELL_ACCOUNT, *_sell_shares(conn, cfg, tier, SELL_ACCOUNT), start,
                        start + LENGTHS[length] * DAY, now, exclude or (), ctx)
     except CapacityError as e:
         return e
@@ -1308,7 +1301,8 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     has = ticket["share_pct"] + sum(u["share_pct"] for u in ups)
     has_5h = (ticket["share_5h_pct"] if ticket["share_5h_pct"] is not None else ticket["share_pct"]) + sum(
         u["share_5h_pct"] if u["share_5h_pct"] is not None else u["share_pct"] for u in ups)
-    share, share_5h = effective_share(conn, cfg, tier) - has, effective_share_5h(conn, cfg, tier) - has_5h
+    new, new_5h = _sell_shares(conn, cfg, tier, ticket["account"])   # on the pass's own account
+    share, share_5h = new - has, new_5h - has_5h
     # Prorated over the pass's whole span, its bonus days included: they run at the new tier too, and the quote never
     # comes to more than the full price difference.
     whole = ticket["effective_end"] - ticket["starts_at"]
@@ -1419,18 +1413,18 @@ def timeline(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) ->
     """The dashboard's chart of the user's live tickets (running and queued) from now on, when there is more than one:
     `passes` in the order they start, and `segments`, the stretches with the same tickets, each with its `stack` of
     tickets (`i`, the pass's index) and `w`, its weekly share (upgrades included) over the tallest stack's, so no
-    percent reaches the user. `plan_x`: a stack's total in multiples of the compare plan, when every tier names the
-    same one, as the price list names it."""
+    percent reaches the user. `plan_x`: a stack's total in Claude Pro weeks (its passes' sizes), when every pass's
+    account has a known plan, as the price list compares with Claude Pro."""
     now = _now(now)
     live = [dict(r) for r in conn.execute(f"SELECT {TICKET_COLS} FROM tickets t WHERE t.user_id=? AND t.cancelled_at IS NULL "
                                           f"AND {db.TICKET_EFFECTIVE_END}>? ORDER BY t.starts_at, t.id", (user_id, now))]
     if len(live) < 2:
         return None
-    eff = effective_tiers(conn, cfg)
     tiers = [tier_now(conn, t) for t in live]
     share = [t["share_pct"] + sum(u["share_pct"] for u in _upgrades(conn, t["id"]) if u["ends_at"] > now) for t in live]
-    plans = {eff[x]["compare"] if x in eff else "" for x in tiers}
-    plan = next(iter(plans)) if len(plans) == 1 else ""
+    # Each pass's share in Claude Pro weeks by its own account's plan; None while that plan is unknown.
+    pro = [plans.pro_weeks(conn, t["account"], x) for t, x in zip(live, share)]
+    plan = "Claude Pro" if all(x is not None for x in pro) else ""
     points = sorted({now, *(max(now, t["starts_at"]) for t in live), *(t["effective_end"] for t in live)})
     segments = [{"from": a, "to": b, "on": [i for i, t in enumerate(live) if t["starts_at"] <= a and t["effective_end"] >= b]}
                 for a, b in zip(points, points[1:])]
@@ -1438,7 +1432,7 @@ def timeline(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) ->
     for s in segments:
         on = s.pop("on")
         s["stack"] = [{"i": i, "w": share[i] / top} for i in on]
-        s["plan_x"] = round(sum(share[i] * eff[tiers[i]]["compare_ratio"] for i in on) / 100, 1) if plan and on else None
+        s["plan_x"] = round(sum(pro[i] for i in on), 2) if plan and on else None
     label = lambda x: cfg.tickets.tiers[x].label if x in cfg.tickets.tiers else x  # noqa: E731
     return {"start": now, "end": points[-1], "plan": plan or None, "segments": segments,
             "passes": [{"tier": x, "label": label(x), "length": t["length"], "starts_at": t["starts_at"], "ends_at": t["effective_end"]}
@@ -1450,7 +1444,7 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
     """What /pricing and a user's price list show: per tier and length the regular and charged price, the local
     amounts and a sold-out flag (with `sold_out_later` for a later `starts_at`), and how a ticket starting at `starts_at` (default now) splits across Anthropic's
     weeks, and the {tier, length} the page recommends (None when unset or off sale). A length without a price is None. Nothing about who holds what, and no subscription share: `compare_pct` is the tier's weekly share as a
-    percent of its compare plan's weekly usage (share × compare_ratio), None without one. Falls back to USD without a rate.
+    percent of Claude Pro's weekly usage (its size × 100), None while the size is unset. Falls back to USD without a rate.
     `exclude`: a buyer's used-up tickets, which a pass bought now replaces (next_start), left out of `sold_out`."""
     now = _now(now)
     from . import capacity   # here, not at the top: capacity imports tickets
@@ -1481,8 +1475,8 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                "unavailable": not ctx_now.fresh,
                                # a buyer's list: whether one starting at `starts_at` (after their passes) fits too
                                **({"sold_out_later": sold_out(conn, cfg, tid, length, now, starts_at, None, ctx_later)} if later else {})}
-        compare_pct = round(eff[tid]["share_pct"] * eff[tid]["compare_ratio"]) if eff[tid]["compare"] else None
-        tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
+        compare_pct = round(eff[tid]["size"] * 100) if eff[tid]["size"] is not None else None
+        tiers.append({"tier": tid, "label": t.label, "compare": "Claude Pro", "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers, "vat_percent": vat,
             "recommended": rec if (rec := recommended(conn, cfg)) and next(x for x in tiers if x["tier"] == rec["tier"])["lengths"][rec["length"]] else None,
             "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now, account=SELL_ACCOUNT)}

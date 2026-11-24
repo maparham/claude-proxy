@@ -602,7 +602,7 @@ def test_fractional_shares_against_the_ceiling(db, share, fits):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
     cfg.tickets.max_sold_5h_pct = 80
-    tickets.set_share(conn, cfg, "lite", share, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", share / 100, ids["admin"])
     for n in range(3):
         add_user(conn, ids, f"u{n}")
         if n < fits:

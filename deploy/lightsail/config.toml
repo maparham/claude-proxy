@@ -62,14 +62,18 @@ borrow_margin_pct = 0
 # To bring them back, uncomment (Turnstile widget "Claude Gateway orders"; the secret is TURNSTILE_SECRET in gateway.env).
 # turnstile_site_key = "0x4AAAAAAFNrHze8wsEPTc8r"
 
+# Tier sizes are in Claude Pro weeks. The database's sizes (migrated from the live shares, edited on the Pricing tab)
+# govern; these only seed a tier that has none. FILL IN: they are today's shares (Lite 5%, Standard 25%) on the live
+# account, so multiply 0.05 and 0.25 by the factor of the live account's plan (Pro 1, Max 5x 5, Max 20x 20). As
+# written they assume Pro.
 [tickets.tiers.lite]
 label = "Lite"
-share_pct = 5
+size = 0.05   # FILL IN: 0.05 × the live plan's factor
 default_usd = { day = 3, week = 8, month = 20 }
 
 [tickets.tiers.standard]
 label = "Standard"
-share_pct = 25
+size = 0.25   # FILL IN: 0.25 × the live plan's factor
 default_usd = { day = 12, week = 35, month = 100 }
 
 # The first currency is the one the home page shows.

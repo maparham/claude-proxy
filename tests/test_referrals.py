@@ -19,8 +19,8 @@ def env(tmp_path):
     conn.execute("INSERT INTO settings(key, value) VALUES('subscription_ends_at:default', '4102444800')")   # as conftest's db
     conn, cfg, ids = seeded((None, conn))
     cfg.zarinpal = ZarinpalConfig(vat_percent=10)
-    tickets.set_share(conn, cfg, "lite", 20, ids["admin"])
-    tickets.set_share(conn, cfg, "standard", 40, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", 0.2, ids["admin"])
+    tickets.set_size(conn, cfg, "standard", 0.4, ids["admin"])
     tickets.set_price(conn, cfg, "standard", "week", 15.0, ids["admin"])
     live(conn, NOW)
     yield conn, cfg, ids
@@ -439,7 +439,7 @@ def test_share_raised_before_grant_refloors(env_on):
     bob = ids["bob"]
     o = signed_in(conn, cfg, bob, tier="standard")       # $15 less 10% = $13.50
     assert o["quoted_usd"] == 13.5
-    tickets.set_share(conn, cfg, "standard", 60, ids["admin"])   # cost now 100 * 60% * 7 / 30 = $14
+    tickets.set_size(conn, cfg, "standard", 0.6, ids["admin"])   # cost now 100 * 60% * 7 / 30 = $14
     pv = tickets.preview(conn, cfg, user(conn, bob), "standard", "week", "EUR", NOW, order_id=o["id"])
     assert pv["usd"] >= referrals.pass_cost(conn, cfg, "standard", 7) and pv["usd"] == 14.0
     assert 0 < pv["ref_pct_applied"] < 10 and pv["ref_off_usd"] == 1.0
@@ -628,7 +628,7 @@ def test_unit_floored_to_zero_at_manual_grant_is_not_used(env_on, grant_at, expi
     u = add_unit(conn, alice, expires_at=expires_at)
     o = signed_in(conn, cfg, alice)
     assert o["quoted_usd"] == 7.2 and unit_state(conn, u) == "held"
-    tickets.set_share(conn, cfg, "lite", 40, ids["admin"])   # cost now 100 * 40% * 7 / 30 = $9.33, above $8
+    tickets.set_size(conn, cfg, "lite", 0.4, ids["admin"])   # cost now 100 * 40% * 7 / 30 = $9.33, above $8
     pv = tickets.preview(conn, cfg, user(conn, alice), "lite", "week", "EUR", grant_at, order_id=o["id"])
     assert (pv["usd"], pv["ref_pct_applied"]) == (8.0, 0.0)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, alice), "lite", "week", "EUR", expect_usd=8.0,
@@ -643,7 +643,7 @@ def test_unit_floored_to_zero_paid_grant_still_used(env_on):
     alice = ids["alice"]
     u = add_unit(conn, alice)
     o = signed_in(conn, cfg, alice, currency="IRT")
-    tickets.set_share(conn, cfg, "lite", 40, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", 0.4, ids["admin"])
     r = payments._fulfil(conn, cfg, add_payment(conn, o), "201", None, NOW)
     assert r["status"] == "paid" and unit_state(conn, u) == "used"
 

@@ -25,22 +25,23 @@ def test_new_settings_are_validated(tmp_path, key, value, ok):
             Config.load(str(p))
 
 
-def test_a_tier_5h_share_over_the_5h_ceiling_is_refused(tmp_path):
+def test_a_tier_5h_size_fitting_no_plan_is_refused(tmp_path):
+    # Max 20x holds 20 Pro weeks: a 5-hour size of 8 is 40% there, over a 30% ceiling on every plan.
     p = tmp_path / "c.toml"
-    p.write_text("[tickets]\nmax_sold_5h_pct = 30\n[tickets.tiers.big]\nlabel = \"Big\"\nshare_pct = 20\nshare_5h_pct = 40\ndefault_usd = { day = 3, week = 8, month = 20 }\n")
+    p.write_text("[tickets]\nmax_sold_5h_pct = 30\n[tickets.tiers.big]\nlabel = \"Big\"\nsize = 4\nsize_5h = 8\ndefault_usd = { day = 3, week = 8, month = 20 }\n")
     with pytest.raises(ConfigError, match="max_sold_5h_pct"):
         Config.load(str(p))
-    p.write_text("[tickets]\nmax_sold_5h_pct = 30\n[tickets.tiers.big]\nlabel = \"Big\"\nshare_pct = 40\ndefault_usd = { day = 3, week = 8, month = 20 }\n")
-    with pytest.raises(ConfigError, match="max_sold_5h_pct"):   # no 5-hour share: the weekly one counts
+    p.write_text("[tickets]\nmax_sold_5h_pct = 30\n[tickets.tiers.big]\nlabel = \"Big\"\nsize = 8\ndefault_usd = { day = 3, week = 8, month = 20 }\n")
+    with pytest.raises(ConfigError, match="max_sold_5h_pct"):   # no 5-hour size: the weekly one counts
         Config.load(str(p))
 
 
-def test_set_share_5h_refuses_a_share_over_the_5h_ceiling(db):
+def test_set_size_5h_refuses_a_size_fitting_no_plan(db):
     conn, cfg, ids = seeded(db)
-    cfg.tickets.max_sold_5h_pct = 50
-    assert tickets.set_share_5h(conn, cfg, "lite", 50, ids["admin"]) == 50
+    cfg.tickets.max_sold_5h_pct = 50   # 10 Pro weeks on Max 20x, the largest plan
+    assert tickets.set_size_5h(conn, cfg, "lite", 10, ids["admin"]) == 10
     with pytest.raises(tickets.TicketError, match="max_sold_5h_pct"):
-        tickets.set_share_5h(conn, cfg, "lite", 51, ids["admin"])
+        tickets.set_size_5h(conn, cfg, "lite", 10.2, ids["admin"])
 
 
 from claude_proxy import capacity
@@ -70,7 +71,7 @@ def test_fresh_needs_a_young_snapshot_with_a_future_reset():
 def test_the_5h_sum_reads_5h_shares_and_its_own_ceiling(db):
     conn, cfg, ids = seeded(db)
     live(conn, NOW)
-    tickets.set_share_5h(conn, cfg, "lite", 30, ids["admin"])
+    tickets.set_size_5h(conn, cfg, "lite", 0.3, ids["admin"])
     from tests.test_tickets_capacity import grant
     t = grant(conn, cfg, ids, tier="lite", length="day")          # weekly 5, 5-hour 30
     assert tickets.sold_at(conn, "default", NOW) == 30
@@ -108,8 +109,8 @@ def acct(db):
     week began. The snapshot is 4 days old at NOW: a test that acts at NOW first calls report() or live() for then."""
     conn, cfg, ids = seeded(db)
     cfg.tickets.max_sold_pct = 100
-    tickets.set_share(conn, cfg, "lite", 20, ids["admin"])
-    tickets.set_share(conn, cfg, "standard", 40, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", 0.2, ids["admin"])
+    tickets.set_size(conn, cfg, "standard", 0.4, ids["admin"])
     report(conn, ids, 1, t=WEEK_START + 60)
     return conn, cfg, ids
 
@@ -499,7 +500,7 @@ def five_hour(conn, util, t=NOW - 30, resets=NOW + 2 * 3600):
 
 def _five_hour_cfg(conn, cfg, ids):
     cfg.tickets.sell_margin_pct = 0
-    tickets.set_share_5h(conn, cfg, "lite", 10, ids["admin"])
+    tickets.set_size_5h(conn, cfg, "lite", 0.1, ids["admin"])
     live(conn, NOW)
 
 

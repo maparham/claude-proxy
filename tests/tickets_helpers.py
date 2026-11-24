@@ -1,5 +1,5 @@
 """Shared fixtures for the paid-tickets tests."""
-from claude_proxy import tickets
+from claude_proxy import plans, tickets
 from claude_proxy.config import Config, Currency
 from claude_proxy.db import create_user
 
@@ -15,12 +15,21 @@ def tcfg() -> Config:
     return cfg
 
 
+def link(conn, account="default", plan="pro"):
+    """A linked subscription account on `plan` (the admin's pick), so passes can be sized on it."""
+    from tests.conftest import seed_oauth
+    seed_oauth(conn, account=account)
+    plans.set_override(conn, account, plan, None)
+
+
 def seeded(db):
-    """(conn, cfg, ids): prices seeded from the default tiers, an admin and alice created, EUR at 0.92."""
+    """(conn, cfg, ids): the default account linked on Claude Pro (so the default tiers' sizes are today's shares),
+    prices and sizes seeded from the default tiers, an admin and alice created, EUR at 0.92."""
     conn = db[1]
     cfg = tcfg()
+    link(conn)
     tickets.seed_prices(conn, cfg, now=NOW - DAY)
-    tickets.seed_shares(conn, cfg, now=NOW - DAY)
+    tickets.seed_sizes(conn, cfg, now=NOW - DAY)
     admin, _ = create_user(conn, "admin", role="admin")
     alice, _ = create_user(conn, "alice")
     tickets.set_rate(conn, cfg, "EUR", 0.92, admin, now=NOW - 3600)

@@ -54,18 +54,18 @@ async def test_stale_rate_is_flagged(env):
         assert (await c.get("/api/admin/rates")).json()["rates"][0]["stale"] is True
 
 
-async def test_shares_endpoint_sets_and_clears_the_plan_comparison(env):
+async def test_sizes_endpoint_sets_weekly_and_5h_sizes(env):
     gw, conn, cfg, ids, keys = env
     async with admin_client(gw) as c:
-        r = await c.post("/api/admin/shares", json={"tier": "lite", "compare": "Claude Pro", "compare_ratio": "10"})
-        assert r.status_code == 200 and r.json() == {"ok": True, "tier": "lite", "compare": "Claude Pro", "compare_ratio": 10}
-        assert last_audit(conn) == ("compare_set", "lite")
-        lite = (await c.get("/api/admin/prices")).json()["tiers"]["lite"]
-        assert (lite["compare"], lite["compare_ratio"], lite["share_pct"]) == ("Claude Pro", 10, 5)
-        assert (await c.post("/api/admin/shares", json={"tier": "lite", "compare": "Claude Pro"})).status_code == 400   # needs its ratio
-        assert (await c.post("/api/admin/shares", json={"tier": "lite", "compare": "Claude Pro", "compare_ratio": 0})).status_code == 400
-        assert (await c.post("/api/admin/shares", json={"tier": "lite", "compare": ""})).json()["compare"] == ""
-        assert (await c.get("/api/admin/prices")).json()["tiers"]["lite"]["compare"] == ""
+        r = await c.post("/api/admin/sizes", json={"tier": "lite", "size": 0.1})
+        assert r.status_code == 200 and r.json() == {"ok": True, "tier": "lite", "size": 0.1}
+        assert last_audit(conn) == ("size_set", "lite")
+        r = await c.post("/api/admin/sizes", json={"tier": "lite", "size_5h": 0.2})
+        assert r.status_code == 200 and r.json() == {"ok": True, "tier": "lite", "size_5h": 0.2}
+        assert last_audit(conn) == ("size_5h_set", "lite")
+        assert (await c.get("/api/admin/prices")).json()["tiers"]["lite"] == {"label": "Lite", "size": 0.1, "size_5h": 0.2}
+        assert (await c.post("/api/admin/sizes", json={"tier": "lite", "size": 0})).status_code == 400
+        assert (await c.post("/api/admin/sizes", json={"tier": "lite", "size": "x"})).status_code == 400
 
 
 async def test_recommended_plan_is_set_shown_and_cleared(env):
@@ -107,7 +107,7 @@ async def test_prices_grid_and_discounts(env):
     now = int(time.time())
     async with admin_client(gw) as c:
         p = (await c.get("/api/admin/prices")).json()
-        assert p["tiers"]["lite"] == {"label": "Lite", "share_pct": 5, "share_5h_pct": 5, "compare": "", "compare_ratio": 0} and p["lengths"] == {"day": 1, "week": 7, "month": 30}
+        assert p["tiers"]["lite"] == {"label": "Lite", "size": 0.05, "size_5h": 0.05} and p["lengths"] == {"day": 1, "week": 7, "month": 30}
         assert {(x["tier"], x["length"]): x["usd"] for x in p["prices"]}[("standard", "month")] == 100
         assert (await c.post("/api/admin/prices", json={"tier": "lite", "length": "week", "usd": 9})).status_code == 200
         assert last_audit(conn) == ("price_set", "lite:week")
@@ -141,7 +141,7 @@ async def test_session_carries_the_ticket_settings_for_admins_only(env):
     async with admin_client(gw) as c:
         t = (await c.get("/api/session")).json()["tickets"]
     assert t["enabled"] and t["max_sold_pct"] == 80 and t["currencies"] == ["USD", "EUR"] and t["lengths"] == {"day": 1, "week": 7, "month": 30}
-    assert t["tiers"]["standard"] == {"label": "Standard", "share_pct": 25, "share_5h_pct": 25, "compare": "", "compare_ratio": 0} and t["how_to_buy"].startswith("Send")
+    assert t["tiers"]["standard"] == {"label": "Standard", "size": 0.25, "size_5h": 0.25} and t["how_to_buy"].startswith("Send")
     async with asgi_client(create_dashboard_app(gw)) as c:
         assert (await c.get("/api/session", headers=bearer(keys["alice"]))).json()["tickets"] == {"enabled": True}
 
@@ -224,7 +224,6 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
     tickets.create_discount(conn, cfg, "lite", "month", 15, now - 10, now + DAY, ids["admin"], now=now)
-    tickets.set_compare(conn, cfg, "lite", "Claude Pro", 6, ids["admin"], now=now)
     cfg.tickets.max_sold_pct = 25
     # A running ticket, inserted directly: tickets.grant needs a fresh usage report (2026-11-04 spec), which this test
     # has none of on purpose (so week_split below stays position-independent); the page must still not leak its buyer.
@@ -237,13 +236,13 @@ async def test_pricing_api_is_public_and_says_only_prices_and_sold_out(env):
         p = r.json()
     assert p["currency"] == "EUR" and p["rate_set_at"] is not None and p["how_to_buy"].startswith("Send")
     lite = next(t for t in p["tiers"] if t["tier"] == "lite")
-    assert (lite["compare"], lite["compare_pct"]) == ("Claude Pro", 30) and lite["lengths"]["month"] == {
+    assert (lite["compare"], lite["compare_pct"]) == ("Claude Pro", 5) and lite["lengths"]["month"] == {
         "days": 30, "list_usd": 20, "usd": 15, "discount_ends_at": now + DAY, "amount": 14.0, "list_amount": 18.5,
         "usd_total": 15.0, "list_usd_total": 20.0, "sold_out": False, "available_at": None, "unavailable": True}   # no fresh report: nothing sells
     assert lite["lengths"]["week"]["sold_out"] is False and lite["lengths"]["week"]["unavailable"] is True \
         and lite["lengths"]["week"]["discount_ends_at"] is None
     standard = next(t for t in p["tiers"] if t["tier"] == "standard")
-    assert (standard["compare"], standard["compare_pct"]) == ("", None)   # no comparison set: the line is hidden
+    assert (standard["compare"], standard["compare_pct"]) == ("Claude Pro", 25)   # its size, 0.25 Claude Pro weeks
     assert p["week_split"] is None   # no quota data: the terms keep their general line
     text = r.text
     for leaked in ("utilization", "alice", "sold_now", "shares", "share_pct", "share_5h_pct", "compare_ratio"):

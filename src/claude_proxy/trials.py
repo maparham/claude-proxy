@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import math
 import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import db, tickets
+from . import db, plans, tickets
 from .config import Config
 
 SETTINGS_KEY = "trial"
@@ -33,9 +34,9 @@ class Settings:
     enabled: bool = False
     duration_min: int = 60
     valid_hours: int = 24
-    tier: str | None = None           # None: the tier with the smallest share
-    share_pct: float | None = None    # None: the tier's weekly share
-    share_5h_pct: float | None = None  # None: the tier's 5-hour share
+    tier: str | None = None           # None: the tier with the smallest size
+    size: float | None = None         # in Claude Pro weeks; None: the tier's weekly size
+    size_5h: float | None = None      # None: the tier's 5-hour size
     daily_cap: int = 5
     follow_pct: float = 10.0
     follow_days: int = 7
@@ -53,7 +54,7 @@ def _stored(conn) -> Settings:
 
 def default_tier(cfg: Config, conn) -> str | None:
     tiers = list(cfg.tickets.tiers)
-    return min(tiers, key=lambda t: tickets.effective_share(conn, cfg, t)) if tiers else None
+    return min(tiers, key=lambda t: tickets.tier_size(conn, cfg, t)) if tiers else None
 
 
 def tier_label(cfg: Config, tier: str | None) -> str | None:
@@ -61,12 +62,17 @@ def tier_label(cfg: Config, tier: str | None) -> str | None:
 
 
 def settings(conn: sqlite3.Connection, cfg: Config) -> Settings:
-    """The admin's settings with the tier and shares filled in from the tier when left unset (or the tier is gone)."""
+    """The admin's settings with the tier and sizes filled in from the tier when left unset (or the tier is gone)."""
     s = _stored(conn)
     tier = s.tier if s.tier in cfg.tickets.tiers else default_tier(cfg, conn)
-    share = s.share_pct if s.share_pct is not None else (tickets.effective_share(conn, cfg, tier) if tier else None)
-    share_5h = s.share_5h_pct if s.share_5h_pct is not None else (tickets.effective_share_5h(conn, cfg, tier) if tier else None)
-    return dataclasses.replace(s, tier=tier, share_pct=share, share_5h_pct=share_5h)
+    size = s.size if s.size is not None else (tickets.tier_size(conn, cfg, tier) if tier else None)
+    size_5h = s.size_5h if s.size_5h is not None else (tickets.tier_size_5h(conn, cfg, tier) if tier else None)
+    return dataclasses.replace(s, tier=tier, size=size, size_5h=size_5h)
+
+
+def shares(conn: sqlite3.Connection, s: Settings, account: str) -> tuple[float, float] | None:
+    """The trial's (weekly, 5-hour) shares on `account`; None when a size or the account's plan is unknown."""
+    return plans.shares(conn, account, s.size, s.size_5h) if s.size is not None else None
 
 
 def _validate(cfg: Config, key: str, value):
@@ -80,7 +86,7 @@ def _validate(cfg: Config, key: str, value):
         if value is not None and value not in cfg.tickets.tiers:
             raise TrialError(400, f"Unknown tier {value!r}.")
         return value
-    if value is None and key in ("share_pct", "share_5h_pct"):
+    if value is None and key in ("size", "size_5h"):
         return None   # back to the tier's own
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise TrialError(400, f"{key} must be a number.")
@@ -89,9 +95,9 @@ def _validate(cfg: Config, key: str, value):
         if value != int(value) or not lo <= value <= hi:
             raise TrialError(400, f"{key} must be a whole number from {lo} to {hi}.")
         return int(value)
-    if key in ("share_pct", "share_5h_pct"):
-        if not 0 < value <= 100:
-            raise TrialError(400, f"{key} must be above 0 and at most 100.")
+    if key in ("size", "size_5h"):
+        if not math.isfinite(value) or not 0 < value <= 1000:
+            raise TrialError(400, f"{key} must be above 0 and at most 1000 Claude Pro weeks.")
         return float(value)
     if key == "follow_pct":
         if not 0 <= value <= 90:
@@ -230,7 +236,8 @@ def waiting_claims(conn: sqlite3.Connection, cfg: Config, now: float, user_id: i
     rows = conn.execute("SELECT c.id, c.user_id, c.email, c.claimed_at, c.expires_at, c.granted_by, u.name AS user_name FROM trial_claims c "
                         "LEFT JOIN users u ON u.id=c.user_id WHERE c.user_id IS NOT NULL AND c.ticket_id IS NULL AND c.cancelled_at IS NULL AND c.expires_at>? "
                         f"{where} ORDER BY c.id DESC", params).fetchall()
-    return [dict(r) | {"user_name": r["user_name"] or r["email"], "tier": s.tier, "label": tier_label(cfg, s.tier), "share_pct": s.share_pct,
+    sh = shares(conn, s, tickets.SELL_ACCOUNT)
+    return [dict(r) | {"user_name": r["user_name"] or r["email"], "tier": s.tier, "label": tier_label(cfg, s.tier), "share_pct": sh[0] if sh else None,
                        "duration_min": s.duration_min} for r in rows]
 
 
@@ -284,8 +291,11 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
     if user["revoked_at"] is not None or not user["enabled"]:
         raise TrialError(409, "This account is disabled.")
     end = now + s.duration_min * 60
+    sh = shares(conn, s, tickets.SELL_ACCOUNT)
     try:
-        capacity.check(conn, cfg, tickets.SELL_ACCOUNT, s.share_pct, s.share_5h_pct, now, end, now, exclude=[t["id"] for t in replaces])
+        if sh is None:
+            raise tickets.CapacityError(tickets.PLAN_UNKNOWN)
+        capacity.check(conn, cfg, tickets.SELL_ACCOUNT, *sh, now, end, now, exclude=[t["id"] for t in replaces])
     except tickets.CapacityError as e:
         raise TrialError(409, NO_ROOM) from e
     for t in replaces:   # the user's passes are used up: they end now and the trial starts in their place
@@ -295,7 +305,7 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
     tid = conn.execute(
         "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, "
         "usd, currency, rate, amount, granted_by, granted_at, note, trial) VALUES(?,?,?,?,?,?,'day',0,?,?,0,0,'USD',1,0,?,?,?,1)",
-        (user_id, user["name"], tickets.SELL_ACCOUNT, s.tier, s.share_pct, s.share_5h_pct, now, end, c["granted_by"], now,
+        (user_id, user["name"], tickets.SELL_ACCOUNT, s.tier, *sh, now, end, c["granted_by"], now,
          "Free trial")).lastrowid
     conn.execute("UPDATE trial_claims SET ticket_id=?, started_at=? WHERE id=?", (tid, now, c["id"]))
     if first and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user_id,)).rowcount:
@@ -304,7 +314,7 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
     if s.follow_pct > 0:
         unit = conn.execute("INSERT INTO referral_units(user_id, pct, earned_at, expires_at, state, updated_at, source) VALUES(?,?,?,?,'saved',?,'trial')",
                             (user_id, s.follow_pct, now, end + s.follow_days * DAY, now)).lastrowid
-    db.audit(conn, None, "trial_start", user["name"], {"claim_id": c["id"], "ticket_id": tid, "ends_at": end, "share_pct": s.share_pct,
+    db.audit(conn, None, "trial_start", user["name"], {"claim_id": c["id"], "ticket_id": tid, "ends_at": end, "share_pct": sh[0],
                                                        **({"unit_id": unit} if unit else {})})
     return tickets.get(conn, tid)
 
@@ -424,7 +434,7 @@ def admin_view(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:
                           (int(now),)).fetchone()
     bought = conn.execute("SELECT COUNT(DISTINCT c.user_id) FROM trial_claims c JOIN tickets t ON t.user_id=c.user_id "
                           "WHERE c.ticket_id IS NOT NULL AND t.trial=0 AND t.granted_at>=c.started_at").fetchone()[0]
-    return {"settings": dataclasses.asdict(s), "tier_default": {"share_pct": stored.share_pct is None, "share_5h_pct": stored.share_5h_pct is None,
+    return {"settings": dataclasses.asdict(s), "tier_default": {"size": stored.size is None, "size_5h": stored.size_5h is None,
                                                                 "tier": stored.tier is None},
             "today": claims_today(conn, now), "claimed": counts["claimed"], "started": counts["started"],
             "lapsed": counts["lapsed"] or 0, "bought": bought}

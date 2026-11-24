@@ -1419,8 +1419,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def prices(request: Request):
         admin(request)
         need_tickets()
-        return {"tiers": tickets.effective_tiers(conn, cfg),
-                "shares": tickets.tier_shares(conn), "recommended": tickets.recommended(conn, cfg),
+        return {"tiers": tickets.effective_tiers(conn, cfg), "recommended": tickets.recommended(conn, cfg),
                 "lengths": LENGTHS, "prices": tickets.prices(conn), "discounts": tickets.discounts(conn, time.time(), include_ended=True),
                 "vat_percent": cfg.zarinpal.vat_percent if cfg.zarinpal else 0}
 
@@ -1442,21 +1441,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         tier, length = body.get("tier") or "", str(body.get("length") or "")
         return {"ok": True, "recommended": ticket_call(tickets.set_recommended, conn, cfg, str(tier), length, actor["id"])}
 
-    @app.post("/api/admin/shares")
-    async def set_share(request: Request):
+    @app.post("/api/admin/sizes")
+    async def set_size(request: Request):
         actor = admin(request, write=True)
         need_tickets()
         body = await _json(request)
         tier = str(body.get("tier", ""))
-        if "compare" in body:   # the plan comparison: name and ratio together; an empty name clears it
-            plan = body.get("compare")
-            ratio = _number(body.get("compare_ratio"), "The actual/base ratio") if isinstance(plan, str) and plan.strip() else None
-            return {"ok": True, "tier": tier, **ticket_call(tickets.set_compare, conn, cfg, tier, plan, ratio, actor["id"])}
-        if "share_5h_pct" in body:   # one share per call, like a price: the form posts each changed cell
-            share = ticket_call(tickets.set_share_5h, conn, cfg, tier, _number(body.get("share_5h_pct"), "The 5-hour share"), actor["id"])
-            return {"ok": True, "tier": tier, "share_5h_pct": share}
-        share = ticket_call(tickets.set_share, conn, cfg, tier, _number(body.get("share_pct"), "The share"), actor["id"])
-        return {"ok": True, "tier": tier, "share_pct": share, "per_day": share / 7}
+        if "size_5h" in body:   # one size per call, like a price: the form posts each changed cell
+            size = ticket_call(tickets.set_size_5h, conn, cfg, tier, _number(body.get("size_5h"), "The 5-hour size"), actor["id"])
+            return {"ok": True, "tier": tier, "size_5h": size}
+        size = ticket_call(tickets.set_size, conn, cfg, tier, _number(body.get("size"), "The size"), actor["id"])
+        return {"ok": True, "tier": tier, "size": size}
 
     @app.post("/api/admin/discounts")
     async def create_discount(request: Request):

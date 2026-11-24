@@ -103,7 +103,7 @@ def settings(conn: sqlite3.Connection) -> Settings:
 
 def set_settings(conn: sqlite3.Connection, actor: int | None, changes: dict) -> Settings:
     """Validate every change before writing any of them, store the merged settings, and audit the changed keys
-    (like the prices table, tickets.set_share)."""
+    (like the prices table, tickets.set_size)."""
     current = settings(conn)
     validated = {key: _validate(key, value) for key, value in changes.items()}
     merged = dataclasses.replace(current, **validated)
@@ -114,11 +114,11 @@ def set_settings(conn: sqlite3.Connection, actor: int | None, changes: dict) -> 
 
 
 def pass_cost(conn: sqlite3.Connection, cfg: Config, tier: str, days: int) -> float:
-    """What a pass of this tier and length costs the gateway on the Anthropic account: the account's cost per 30
-    days, times the tier's current share (tickets.effective_share, so a later share change keeps the floor right),
-    times the days it covers."""
+    """What a pass of this tier and length costs the gateway: one Claude Pro's worth of usage per 30 days
+    (account_cost_usd), times the tier's current size in Claude Pro weeks (so a later size change keeps the floor
+    right), times the days it covers. A tier with no size has no floor."""
     cfg_settings = settings(conn)
-    return cfg_settings.account_cost_usd * tickets.effective_share(conn, cfg, tier) / 100 * days / 30
+    return cfg_settings.account_cost_usd * (tickets.tier_size(conn, cfg, tier) or 0) * days / 30
 
 
 def apply_pct(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, usd: float, pct: float) -> tuple[float, float]:

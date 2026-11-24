@@ -27,19 +27,19 @@ def test_defaults_follow_the_smallest_tier(env):
     s = trials.settings(conn, cfg)
     assert (s.duration_min, s.valid_hours, s.daily_cap, s.follow_pct, s.follow_days) == (60, 24, 5, 10, 7)
     assert s.tier == "lite"
-    assert s.share_pct == tickets.effective_share(conn, cfg, "lite")
-    assert s.share_5h_pct == tickets.effective_share_5h(conn, cfg, "lite")
+    assert s.size == tickets.tier_size(conn, cfg, "lite")
+    assert s.size_5h == tickets.tier_size_5h(conn, cfg, "lite")
 
 
 def test_settings_validate(env):
     conn, cfg, ids = env
-    for bad in ({"duration_min": 0}, {"valid_hours": 1.5}, {"share_pct": 120}, {"follow_pct": 95}, {"tier": "gold"}, {"nope": 1},
+    for bad in ({"duration_min": 0}, {"valid_hours": 1.5}, {"size": 1200}, {"follow_pct": 95}, {"tier": "gold"}, {"nope": 1},
                 {"enabled": "yes"}):
         with pytest.raises(trials.TrialError):
             trials.set_settings(conn, cfg, ids["admin"], bad)
-    s = trials.set_settings(conn, cfg, ids["admin"], {"duration_min": 90, "share_pct": 2.5})
-    assert (s.duration_min, s.share_pct) == (90, 2.5)
-    assert trials.set_settings(conn, cfg, ids["admin"], {"share_pct": None}).share_pct == tickets.effective_share(conn, cfg, "lite")
+    s = trials.set_settings(conn, cfg, ids["admin"], {"duration_min": 90, "size": 0.025})
+    assert (s.duration_min, s.size) == (90, 0.025)
+    assert trials.set_settings(conn, cfg, ids["admin"], {"size": None}).size == tickets.tier_size(conn, cfg, "lite")
 
 
 def test_claim_once(env):
@@ -94,7 +94,7 @@ def test_start_makes_a_trial_pass(env):
     t = trials.start(conn, cfg, alice["id"], NOW + 600)
     assert (t["trial"], t["tier"], t["usd"], t["days"]) == (1, "lite", 0, 0)
     assert (t["starts_at"], t["ends_at"]) == (NOW + 600, NOW + 600 + 3600)
-    assert t["share_pct"] == tickets.effective_share(conn, cfg, "lite")
+    assert t["share_pct"] == tickets.effective_share(conn, cfg, "lite", "default")
     assert conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (alice["id"],)).fetchone() is None
     unit = conn.execute("SELECT pct, expires_at, state FROM referral_units WHERE user_id=?", (alice["id"],)).fetchone()
     assert tuple(unit) == (10, NOW + 600 + 3600 + 7 * DAY, "saved")

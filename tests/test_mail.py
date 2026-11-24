@@ -76,7 +76,7 @@ def test_granted_mail_shows_nothing_once_the_cost_floor_zeroes_it(env_on):
     conn, cfg, ids = env_on
     o = signed_in(conn, cfg, ids["bob"])
     assert o["ref_off_usd"] == 0.8
-    tickets.set_share(conn, cfg, "lite", 40, ids["admin"])   # cost now $9.33, above the $7.20 the 10% discount asks for
+    tickets.set_size(conn, cfg, "lite", 0.4, ids["admin"])   # cost now $9.33, above the $7.20 the 10% discount asks for
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["bob"]), o["tier"], o["length"], o["currency"],
                       order_id=o["id"], expect_usd=8.0, now=NOW)
     assert t["usd"] == 8.0

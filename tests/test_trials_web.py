@@ -130,7 +130,7 @@ UI_STUBS = """
 var esc = (v) => String(v ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
 var tierName = (id, label) => label, tierNameText = (id, label) => label;
 var fmtDate = (s) => `D${s}`, tipI = (k) => `[?${k}]`, PCT = "%";
-var fmtShare = (v) => `${+v}%`, nfFull = new Intl.NumberFormat("en-US");
+var fmtShare = (v) => `${+v}%`, fmtSize = (v) => `${+v}× Claude Pro`, nfFull = new Intl.NumberFormat("en-US");
 """
 
 
@@ -151,14 +151,14 @@ def test_trial_card_offers_then_waits(tmp_path):
 
 def test_trial_settings_card_shows_tier_defaults_empty(tmp_path):
     from tests.test_tickets_web import _app_fn
-    view = ('{ settings: { enabled: true, duration_min: 60, valid_hours: 24, tier: "lite", share_pct: 5, share_5h_pct: 5, daily_cap: 5, '
-            'follow_pct: 10, follow_days: 7 }, tier_default: { tier: true, share_pct: true, share_5h_pct: false }, today: 2, claimed: 9, '
+    view = ('{ settings: { enabled: true, duration_min: 60, valid_hours: 24, tier: "lite", size: 0.05, size_5h: 0.05, daily_cap: 5, '
+            'follow_pct: 10, follow_days: 7 }, tier_default: { tier: true, size: true, size_5h: false }, today: 2, claimed: 9, '
             'started: 7, lapsed: 1, bought: 3 }')
     out = _app_fn(tmp_path, ["trialSettingsCard", "refSettingsRow", "refWholeInput", "refPctInput"],
                   UI_STUBS + f'var out = trialSettingsCard({view}, {{ lite: {{ label: "Lite" }}, standard: {{ label: "Standard" }} }});')
     assert "2 of 5" in out and "9 claimed" in out
-    assert 'name="share_pct" data-init="" value=""' in out          # the tier's own: left empty
-    assert 'name="share_5h_pct" data-init="5" value="5"' in out      # set by the admin
+    assert 'name="size" data-init="" value=""' in out               # the tier's own: left empty
+    assert 'name="size_5h" data-init="0.05" value="0.05"' in out     # set by the admin
     assert '<option value="" selected>' in out                       # tier: the default
 
 

@@ -22,8 +22,8 @@ def env(db, cfg):
     cfg.tickets = tc.tickets
     cfg.zarinpal = ZarinpalConfig(vat_percent=10)
     conn.execute("UPDATE users SET password_hash=? WHERE id=?", (PasswordHasher().hash(PW), ids["admin"]))
-    tickets.set_share(conn, cfg, "lite", 20, ids["admin"])
-    tickets.set_share(conn, cfg, "standard", 40, ids["admin"])
+    tickets.set_size(conn, cfg, "lite", 0.2, ids["admin"])
+    tickets.set_size(conn, cfg, "standard", 0.4, ids["admin"])
     live(conn, NOW)
     referrals.set_settings(conn, ids["admin"], {"enabled": True})
     referrals.code_for(conn, ids["alice"])   # alice's link exists before bob ever uses it, as it would for real
