@@ -198,7 +198,7 @@ async def test_admin_checks_the_plan_now(env):  # noqa: F811
         return sent.pop(0)
     gw.pollers["default"].backend.fetch_profile = fetch_profile
     async with admin_client(gw) as c:
-        r = await c.post("/api/admin/subscription/refresh")
+        r = await c.post("/api/admin/accounts/default/refresh")
         assert r.status_code == 200 and r.json()["profile"]["profile"]["organization"]["organization_type"] == "claude_pro"
         assert gw.pollers["default"].next_plan_check > time.time()   # the hourly check starts over from this one
-        assert (await c.post("/api/admin/subscription/refresh")).status_code == 502   # Anthropic sent nothing
+        assert (await c.post("/api/admin/accounts/default/refresh")).status_code == 502   # Anthropic sent nothing

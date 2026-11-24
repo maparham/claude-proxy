@@ -647,7 +647,7 @@ async function subscriptionDialog() {
     <p><button class="btn primary" data-close>${t("app.done")}</button></p>`);
   $("#sub-refresh", d).onclick = async (e) => {
     e.target.disabled = true;
-    try { await api("/api/admin/subscription/refresh", { method: "POST" }); } catch (x) { $("#sub-refresh-err", d).textContent = x.message; e.target.disabled = false; return; }
+    try { await api(`/api/admin/accounts/${encodeURIComponent(r.account)}/refresh`, { method: "POST" }); } catch (x) { $("#sub-refresh-err", d).textContent = x.message; e.target.disabled = false; return; }
     subscriptionDialog().catch(() => {});
   };
   $("#sub-end", d).onsubmit = async (e) => {
@@ -1560,7 +1560,7 @@ function wireUserActions(root, users) {
 function userRow(u) {
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
   const cell = (k) => `<td class="r">${tipLine(fmtNum(u.usage[k].weighted), `${t("models.m_cost")}: ${fmtUsd(u.usage[k].cost_usd)}`)}</td>`;
-  const share = (b) => (u.share[b] == null ? "—" : nfFix(1).format(u.share[b]));
+  const share = (b) => (u.share[b] == null ? "—" : nfFix(2).format(u.share[b]));
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}${tipH("", `<span class="tip-line">${t("sess.key")}: <code>${esc(u.prefix)}…</code></span>${u.routes_prefix ? `<span class="tip-line">OpenCode: <code>${esc(u.routes_prefix)}…</code></span>` : ""}`)}</td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
@@ -2842,7 +2842,7 @@ async function renderUser(main) {
   const tot = ov.totals[period];
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
   const share = (b) => `<div class="card tile"><div class="label">${t("user.est_share", { bucket: t(`quota.bucket_${b}`) })}${tipI("share")}</div>
-    <div class="value">${u.share[b] == null ? "—" : nfFix(1).format(u.share[b])}</div><div class="foot">${u.share[b] == null ? t("user.no_report") : t("user.points_of", { bucket: t(`quota.bucket_${b}`) })}</div></div>`;
+    <div class="value">${u.share[b] == null ? "—" : nfFix(2).format(u.share[b])}</div><div class="foot">${u.share[b] == null ? t("user.no_report") : t("user.points_of", { bucket: t(`quota.bucket_${b}`) })}</div></div>`;
   const span = t(`user.span_${period}`);
   const none = `<p class="muted">${t("models.none")}</p>`;
   main.innerHTML = `

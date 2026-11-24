@@ -636,7 +636,7 @@ const I18N = {
     "user.gone": "There is no user with this id; they may have been deleted.",
     "user.est_share": "Est. share, {bucket}",
     "user.no_report": "no fresh report from Anthropic",
-    "user.points_of": "points of the account's {bucket} bucket",
+    "user.points_of": "Claude Pro weeks of the {bucket} bucket, all accounts",
     "user.span_24h": "last 24 hours",
     "user.span_7d": "last 7 days",
     "user.span_30d": "last 30 days",
@@ -1896,7 +1896,7 @@ const I18N = {
     "user.gone": "کاربری با این شناسه نیست؛ شاید حذف شده باشد.",
     "user.est_share": "سهم تخمینی، {bucket}",
     "user.no_report": "گزارش تازه‌ای از Anthropic نیست",
-    "user.points_of": "واحد درصد از سهمیه {bucket} حساب",
+    "user.points_of": "هفته کلاود پرو از سهمیه {bucket}، در همه حساب‌ها",
     "user.span_24h": "۲۴ ساعت گذشته",
     "user.span_7d": "۷ روز گذشته",
     "user.span_30d": "۳۰ روز گذشته",
@@ -2649,6 +2649,10 @@ function setLang(lang) {
 // Server messages (web.py's fail()) are English; the known ones read in Persian. Exact texts first, then the
 // messages built from values, whose groups fill {1}, {2} of the Persian.
 const ERR_FA = {
+  "Pick the subscription account to move the pass to.": "اشتراکی را که بسته به آن منتقل شود انتخاب کنید.",
+  "Pick a linked subscription account.": "یکی از اشتراک‌های لینک‌شده را انتخاب کنید.",
+  "Pick the plan: pro, max_5x or max_20x, or null for the one Anthropic reports.": "پلن را انتخاب کنید: pro، max_5x یا max_20x، یا خالی برای پلنی که Anthropic گزارش می‌دهد.",
+  "a factor must be a number above 0 and at most 1000": "ضریب باید عددی بالاتر از ۰ و حداکثر ۱۰۰۰ باشد.",
   "Paste the code the sign-in page showed.": "کدی را که صفحه ورود نشان داد بچسبانید.",
   "Anthropic did not send the subscription's details; try again shortly.": "Anthropic جزئیات اشتراک را نفرستاد؛ کمی بعد دوباره امتحان کنید.",
   "This subscription was just linked under another account.": "این اشتراک همین الان با نام دیگری لینک شد.",
@@ -2768,6 +2772,7 @@ const ERR_PATTERNS = [
   [/^Refusing to remove '(.+?)': (\d+) users are assigned to it/, "{1} حذف نمی‌شود: {2} کاربر به آن اختصاص دارند؛ اول اشتراک دیگری به آن‌ها بدهید."],
   [/^Refusing to remove '(.+?)': it is the last linked/, "{1} حذف نمی‌شود: آخرین اشتراک لینک‌شده است."],
   [/^No subscription account '(.+?)'\.$/, "اشتراکی با نام {1} نیست."],
+  [/^unknown plan '(.+?)'$/, "پلن ناشناخته: {1}"],
   [/^account '(.*?)' must match/, "نام {1} مجاز نیست: فقط حروف کوچک انگلیسی، عدد، - و _، تا ۳۲ نویسه."],
   [/^A note is at most (.+?) characters\.$/, "یادداشت حداکثر {1} نویسه است."],
   [/^A name is at most (.+?) characters\.$/, "نام حداکثر {1} نویسه است."],

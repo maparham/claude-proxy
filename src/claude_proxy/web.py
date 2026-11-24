@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, placement, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
+from . import passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, placement, plans, prompts, quota, referrals, refunds, routing, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -427,8 +427,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                "install": install_command(), "install_windows": install_command(windows=True), "install_windows_file": install_file()}
         if is_admin(user):
             acct = view_account(account)
-            be = credential(acct)
-            out["credential"] = {"healthy": be.healthy, "detail": be.detail}
+            # The header's account picker: every linked account, its plan and whether it serves and sells.
+            linked = list_accounts(conn)
+            states = {r["account"]: credential(r["account"]) for r in linked}
+            out["accounts"] = [{"account": r["account"], "label": r["label"] or r["account"], "plan": plans.plan(conn, r["account"]),
+                                "healthy": states[r["account"]].healthy, "sells": plans.sells(conn, r["account"])} for r in linked]
+            # The credential pill: healthy only when every account is (as /health), each account's detail beside it.
+            out["credential"] = {"healthy": gw.healthy(),
+                                 "detail": "\n".join(f"{a}: {st.detail}" for a, st in states.items()) if states else credential(None).detail,
+                                 "accounts": {a: {"healthy": st.healthy, "detail": st.detail} for a, st in states.items()}}
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
             # The header's utilization pill, on every tab: what Anthropic last reported for the account.
             now = time.time()
@@ -488,6 +495,22 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(404, "No such user.")
         return "user_id=?", (user_id,)
 
+    def account_where(user, account: str | None) -> tuple[str, tuple]:
+        """An admin's token views show one subscription account (view_account's); a request refused before it was
+        routed names none (account NULL), so it shows under every account. A user's own views are never split."""
+        if user["role"] != "admin":
+            return "1=1", ()
+        acct = view_account(account)
+        if acct is None:
+            return "1=1", ()
+        return "(requests.account=? OR requests.account IS NULL)", (acct,)
+
+    def token_where(user, user_id: int | None, account: str | None) -> tuple[str, tuple]:
+        """scope_where and account_where together, for queries on the requests table alone."""
+        where, params = scope_where(user, user_id)
+        aw, ap = account_where(user, account)
+        return f"{where} AND {aw}", (*params, *ap)
+
     def by_source(source: str) -> str:
         """Requests sent from Claude Code with a gateway key ("cli"), from an app with an app key ("apps"), or all."""
         if source not in SOURCES:
@@ -514,7 +537,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     async def overview(request: Request, user_id: int | None = None, source: str = "all", account: str | None = None):
         user = principal(request)
         now = time.time()
-        where, params = scope_where(user, user_id)
+        where, params = token_where(user, user_id, account)
         where = f"{where} AND {by_source(source)}"
         totals = {k: usage.total(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, now - s)).to_dict()
                   for k, s in (("24h", 86400), ("7d", 7 * 86400), ("30d", 30 * 86400))}
@@ -541,11 +564,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/series")
     async def series(request: Request, range: str = "7d", granularity: str = "day", split: str = "user",
-                     tz_offset: int = 0, provider: str | None = None, user_id: int | None = None, source: str = "all"):
+                     tz_offset: int = 0, provider: str | None = None, user_id: int | None = None, source: str = "all",
+                     account: str | None = None):
         user = principal(request)
         if range not in RANGES or granularity not in GRANULARITY or split not in ("user", "model", "provider", "none"):
             fail(400, "bad range, granularity or split")
-        where, params = scope_where(user, user_id)
+        where, params = token_where(user, user_id, account)
         where = f"{where} AND {by_source(source)}"
         if provider:
             where, params = f"{where} AND provider=?", (*params, provider)
@@ -558,9 +582,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"range": range, "granularity": granularity, "split": split, "points": pts}
 
     @app.get("/api/models")
-    async def models(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None, source: str = "all"):
+    async def models(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None, source: str = "all",
+                     account: str | None = None):
         user = principal(request)
-        where, params = scope_where(user, user_id)
+        where, params = token_where(user, user_id, account)
         where = f"{where} AND {by_source(source)}"
         since = time.time() - RANGES.get(range, RANGES["30d"])
         by_model = usage.grouped(conn, cfg.pricing, f"{where} AND started_at>=?", (*params, since), group="model")
@@ -574,9 +599,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         }
 
     @app.get("/api/heatmap")
-    async def heatmap(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None, source: str = "all"):
+    async def heatmap(request: Request, range: str = "30d", tz_offset: int = 0, user_id: int | None = None, source: str = "all",
+                      account: str | None = None):
         user = principal(request)
-        where, params = scope_where(user, user_id)
+        where, params = token_where(user, user_id, account)
         where = f"{where} AND {by_source(source)}"
         off = int(tz_offset)
         rows = conn.execute(
@@ -588,11 +614,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/sessions")
     async def sessions(request: Request, range: str = "7d", user_id: int | None = None, offset: int = 0, limit: int = 200,
-                       q: str = "", source: str = "all"):
+                       q: str = "", source: str = "all", account: str | None = None):
         user = principal(request)
         limit, offset = min(max(limit, 1), 200), max(offset, 0)
         where, params = scope_where(user, user_id)
-        src = by_source(source)
+        aw, ap = account_where(user, account)   # on the requests queries only: session_titles has no account
+        src = f"{by_source(source)} AND {aw}"
         since = time.time() - RANGES.get(range, RANGES["7d"])
         match, mparams = "", ()
         if q := q.strip():   # a title, a session id prefix, or a user's name; for the admin, the text of a prompt too
@@ -607,10 +634,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             f"SELECT session_id, user_id, MIN(started_at) AS first, MAX(COALESCE(ended_at, started_at)) AS last, "
             f"COUNT(*) AS n, GROUP_CONCAT(DISTINCT model) AS models FROM requests WHERE session_id IS NOT NULL "
             f"AND rejected_by IS NULL AND {where} AND {src} AND started_at>=? {match}GROUP BY user_id, session_id ORDER BY last DESC LIMIT ? OFFSET ?",
-            (*params, since, *mparams, limit + 1, offset)).fetchall()
+            (*params, *ap, since, *mparams, limit + 1, offset)).fetchall()
         more, meta = len(meta) > limit, meta[:limit]   # one extra row says whether another page exists
         # Session ids come from clients, so two users' sessions may share one; each stays its own row.
-        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND {src} AND started_at>=?", (*params, since),
+        tot = usage.grouped(conn, cfg.pricing, f"session_id IS NOT NULL AND {where} AND {src} AND started_at>=?", (*params, *ap, since),
                             group="user_id || '|' || session_id")
         n = names()
         ids = [r["session_id"] for r in meta]
@@ -637,9 +664,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/errors")
     async def errors(request: Request, range: str = "7d", tz_offset: int = 0, user_id: int | None = None,
-                     source: str = "all"):
+                     source: str = "all", account: str | None = None):
         user = principal(request)
-        where, params = scope_where(user, user_id)
+        where, params = token_where(user, user_id, account)
         where = f"{where} AND {by_source(source)}"
         since = time.time() - RANGES.get(range, RANGES["7d"])
         b = 3600 if range in ("1d", "7d") else 86400
@@ -689,10 +716,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
 
     @app.get("/api/requests")
     async def recent_requests(request: Request, user_id: int | None = None, limit: int = 100, source: str = "all",
-                              q: str = ""):
+                              q: str = "", account: str | None = None):
         user = principal(request)
         where, params = scope_where(user, user_id)
-        src = by_source(source)
+        aw, ap = account_where(user, account)   # on the requests query only: session_titles has no account
+        src = f"{by_source(source)} AND {aw}"
         match, mparams = "", ()
         if q := q.strip():   # a user's name, an app key's label or prefix, or a model
             ids = named(names(), q)
@@ -704,10 +732,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         geo_cols, geo_join = ("requests.ip, g.city, g.region, g.country, ", "LEFT JOIN ip_geo g ON g.ip=requests.ip ") \
             if is_admin(user) else ("", "")
         rows = conn.execute(
-            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, pass_key_id, {geo_cols}"
+            f"SELECT id, user_id, started_at, ended_at, provider, model, status, stream, session_id, rejected_by, api_key_id, pass_key_id, "
+            f"requests.account, {geo_cols}"
             f"CASE WHEN {IS_ERROR} THEN {ERROR_KIND} END AS kind, EXISTS(SELECT 1 FROM request_contents rc WHERE rc.request_id=requests.id) "
             f"AS has_content FROM requests {geo_join}WHERE {where} AND {src} {match}"
-            f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, *mparams, min(max(limit, 1), 500))).fetchall()
+            f"ORDER BY started_at DESC, id DESC LIMIT ?", (*params, *ap, *mparams, min(max(limit, 1), 500))).fetchall()
         kids = {r["api_key_id"] for r in rows if r["api_key_id"]}
         key_names = {k["id"]: k["label"] or f"{k['key_prefix']}…" for k in conn.execute(
             f"SELECT id, label, key_prefix FROM api_keys WHERE id IN ({','.join('?' * len(kids))})", tuple(kids))} if kids else {}
@@ -733,7 +762,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "session_id": r["session_id"], "key": key_names.get(r["api_key_id"] or -(r["pass_key_id"] or 0)),
                         "title": titled.get((r["user_id"], r["session_id"])), "has_content": bool(r["has_content"]),
                         **{k: t[k] for k in ("input", "output", "cache_read", "cache_write", "raw", "weighted", "cost_usd")},
-                        **({k: r[k] for k in ("ip", "city", "region", "country")} if is_admin(user) else {})})
+                        **({k: r[k] for k in ("ip", "city", "region", "country", "account")} if is_admin(user) else {})})
         return {"requests": out}
 
     @app.get("/api/requests/{request_id}/content")
@@ -748,16 +777,25 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return content
 
     @app.get("/api/users")
-    async def users(request: Request, source: str = "all", account: str | None = None):
+    async def users(request: Request, source: str = "all"):
         admin(request)
         now = time.time()
         periods = {"24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
         src = by_source(source)
         tot = {k: usage.grouped(conn, cfg.pricing, f"started_at>=? AND {src}", (now - s,), group="user_id") for k, s in periods.items()}
-        # Each user's share of one account's buckets (until the Users table counts in Pro weeks across accounts).
-        acct = view_account(account)
-        atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct)
-                if acct is not None else {"stale": True, "shares": {}} for b in BUCKETS}
+        # Each user's share of every account's buckets, in Claude Pro weeks so accounts of different plans add up: one
+        # point of a Max 20x is 20 times one of a Pro. An account with stale figures or no plan adds nothing; with
+        # every account stale the share is unknown (None).
+        share: dict[str, dict | None] = {b: None for b in BUCKETS}
+        for a in (r["account"] for r in list_accounts(conn)):
+            for b in BUCKETS:
+                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=a)
+                if att["stale"]:
+                    continue
+                into = share[b] = share[b] or {}
+                for uid, pts in att["shares"].items():
+                    if (w := plans.pro_weeks(conn, a, pts, b)) is not None:
+                        into[uid] = into.get(uid, 0.0) + w
         out = []
         # Shown under the last request, so the address of the latest request (SQLite's bare column goes with the MAX).
         last_ips = {r[0]: {"ip": r[1], "city": r[2], "country": r[3]} for r in conn.execute(
@@ -769,7 +807,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "created_at": u["created_at"], "last_seen": last, "last_ip": last_ips.get(u["id"], {}).get("ip"),
                         "last_place": {k: v for k, v in last_ips.get(u["id"], {}).items() if k != "ip"} or None,
                         "usage": {k: tot[k].get(u["id"], usage.Totals()).to_dict() for k in periods},
-                        "share": {b: (None if atts[b]["stale"] else atts[b]["shares"].get(u["id"], 0.0)) for b in BUCKETS},
+                        "account": u["account"],
+                        "share": {b: (None if share[b] is None else share[b].get(u["id"], 0.0)) for b in BUCKETS},
                         "limits": [s.to_dict() for s in limits.states(conn, cfg, u["id"], now=now)],
                         "passes": tickets.counts(conn, u["id"], now),
                         "ticket": (tickets.user_state(conn, u["id"], now) | {"paused": not cfg.tickets.enabled}
@@ -808,7 +847,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 "actions": actions}
 
     @app.get("/api/me/status")
-    async def me_status(request: Request, format: str = "json", account: str | None = None):
+    async def me_status(request: Request, format: str = "json"):
         user = principal(request, routes_ok=True)
         if format == "models":
             # gclaude's launcher, at every start: the 1M forms of the newest models it makes the /model defaults.
@@ -829,9 +868,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         now = time.time()
         picked = limits.pick(conn, cfg, user["id"], now)   # once: the line's limits, its pass's name and its weeks
         states = limits.states(conn, cfg, user["id"], now=now, picked=picked)
-        slug, account = account, None
+        # The account the user's next request goes to (routing.account_for). Only an admin is told its figures, and
+        # even then not its name: the block is the same whichever account it is.
+        acct, account = routing.account_for(conn, user["id"], now), None
         if is_admin(user):
-            acct = view_account(slug)
             account = {}
             for b in BUCKETS:
                 att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct) \
@@ -843,9 +883,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         weekly = next((s for s in states if s.kind == "share_7d" and s.tier is not None), None)
         weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly, picked) if weekly is not None and account is None else None
         line = _status_line(user, states, account, weeks, _ticket_name(conn, cfg, picked[0]))
-        # The account the user's next request goes to: the serving (or stopped) pass's, else the one assigned to them.
-        mine = picked[0]["account"] if picked[0] is not None else user.get("account")
-        if account is None and mine is not None and (note := _account_blocked(conn, now, mine)):
+        if account is None and acct is not None and (note := _account_blocked(conn, now, acct)):
             # Their own figures can show room left while every request gets the 429; say why up front, after the name.
             n = len(user["name"])
             line = f"{line[:n]} · {note}{line[n:]}"
@@ -1249,6 +1287,18 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         t = trials.start(conn, cfg, user["id"], time.time())
         return {"ok": True, "starts_at": t["starts_at"], "ends_at": t["ends_at"]}
 
+    @app.put("/api/admin/users/{uid}/account")
+    async def user_account(request: Request, uid: int):
+        # The subscription the user's requests go to while no pass of theirs runs (their passes keep their own).
+        actor = admin(request, write=True)
+        u = target_user(uid)
+        account = (await _json(request)).get("account")
+        if not isinstance(account, str) or account not in {r["account"] for r in list_accounts(conn)}:
+            fail(400, f"No subscription account '{account}'." if account else "Pick a linked subscription account.")
+        conn.execute("UPDATE users SET account=? WHERE id=?", (account, u["id"]))
+        db.audit(conn, actor["id"], "user_account_set", u["name"], {"account": account, "from": u["account"]})
+        return {"ok": True, "account": account}
+
     @app.post("/api/admin/users/{uid}/{action}")
     async def user_action(request: Request, uid: int, action: str):
         actor = admin(request, write=True)
@@ -1358,13 +1408,63 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     @app.get("/api/admin/accounts")
     async def accounts(request: Request):
         admin(request)
-        out = []
+        now, out = time.time(), []
+        f = plans.factors(conn)
         for r in list_accounts(conn):
-            st = credential(r["account"])
-            out.append({"account": r["account"], "label": r["label"] or r["account"], "email": r["email"],
+            a, st = r["account"], credential(r["account"])
+            seen, plan = plans.detected(conn, a), plans.plan(conn, a)
+            passes = conn.execute(f"SELECT COALESCE(SUM(starts_at<=?), 0), COALESCE(SUM(starts_at>?), 0) FROM tickets t WHERE "
+                                  f"t.account=? AND t.cancelled_at IS NULL AND {db.TICKET_EFFECTIVE_END}>?", (now, now, a, now)).fetchone()
+            out.append({"account": a, "label": r["label"] or a, "email": r["email"],
                         "state": r["state"], "healthy": st.healthy, "detail": st.detail,
-                        "expires_at": st.expires_at, "updated_at": r["updated_at"]})
-        return {"accounts": out}
+                        "expires_at": st.expires_at, "updated_at": r["updated_at"],
+                        # The plan it sells on: the admin's pick, else what Anthropic's latest profile names.
+                        "plan": plan, "plan_detected": seen["plan"] if seen else None,
+                        "rate_limit_tier": seen["rate_limit_tier"] if seen else None, "plan_override": plans.override(conn, a),
+                        "pending_change": plans.pending_change(conn, a), "sells": plans.sells(conn, a),
+                        "factor": f[plan] if plan else None, "running_passes": passes[0], "queued_passes": passes[1],
+                        "assigned_users": conn.execute("SELECT COUNT(*) FROM users WHERE account=?", (a,)).fetchone()[0]})
+        return {"accounts": out, "factors": f, "plans": plans.PLAN_LABELS}
+
+    @app.put("/api/admin/accounts/{account}/plan")
+    async def account_plan(request: Request, account: str):
+        # The admin's pick of the account's plan, over what Anthropic reports; null goes back to the detected one.
+        actor = admin(request, write=True)
+        acct = view_account(account)
+        body = await _json(request)
+        if "plan" not in body or (body["plan"] is not None and body["plan"] not in plans.PLANS):
+            fail(400, "Pick the plan: pro, max_5x or max_20x, or null for the one Anthropic reports.")
+        return {"ok": True, "plan": plans.set_override(conn, acct, body["plan"], actor["id"]), "sells": plans.sells(conn, acct)}
+
+    @app.post("/api/admin/accounts/{account}/plan/ack")
+    async def account_plan_ack(request: Request, account: str):
+        # The admin has seen the plan Anthropic now reports: the account may sell again.
+        actor = admin(request, write=True)
+        acct = view_account(account)
+        plans.acknowledge(conn, acct, actor["id"])
+        return {"ok": True, "sells": plans.sells(conn, acct)}
+
+    @app.put("/api/admin/plan_factors")
+    async def plan_factors(request: Request):
+        # How many Claude Pro weeks one plan holds, weekly and per 5 hours; a sold pass keeps the shares it was sold at.
+        actor = admin(request, write=True)
+        body = await _json(request)
+        try:
+            return {"ok": True, "factors": plans.set_factor(conn, str(body.get("plan", "")), body.get("f_7d"), body.get("f_5h"),
+                                                            actor["id"])}
+        except ValueError as e:
+            fail(400, str(e))
+
+    @app.post("/api/admin/accounts/{account}/refresh")
+    async def account_refresh(request: Request, account: str):
+        # Ask Anthropic for the plan now rather than at the next hourly check: a plan just bought or changed.
+        admin(request, write=True)
+        acct = view_account(account)
+        if acct not in gw.pollers:
+            gw.sync_accounts()   # linked from another process since the last poll interval
+        if acct not in gw.pollers or not await gw.on_proxy_loop(gw.pollers[acct].check_plan(time.time())):
+            fail(502, "Anthropic did not send the subscription's details; try again shortly.")
+        return {"ok": True, "profile": quota.latest_profile(conn, account=acct)}
 
     @app.post("/api/admin/accounts/{account}/login/start")
     async def account_login_start(request: Request, account: str):
@@ -1571,9 +1671,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         where, params = ("WHERE t.user_id=?", (user_id,)) if user_id is not None else ("", ())
         if deleted is not None:   # a deleted user's tickets keep only the name stored at grant
             where, params = "WHERE t.user_id IS NULL AND t.user_name=?", (deleted,)
+        if account is not None:   # one account's passes (the picker's); without it, every account's
+            where, params = f"{where} {'AND' if where else 'WHERE'} t.account=?", (*params, view_account(account))
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
-        acct = view_account(account)   # each pass of this account: its points of this week
-        week = capacity_mod.week_use(conn, cfg, acct, now)["passes"] if acct is not None else {}
+        # Each pass's points of this week, from its own account's figures.
+        linked = {r["account"] for r in list_accounts(conn)}
+        week = {}
+        for a in {t["account"] for t in rows} & linked:
+            week |= capacity_mod.week_use(conn, cfg, a, now)["passes"]
         served = capacity_mod.pass_tokens(conn, cfg, rows, now)   # each pass's tokens over its life
         for t in rows:
             t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"]),
@@ -1628,6 +1733,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             mail.spawn(orders.send_granted(conn, cfg, order_id))
         return {"ok": True, "ticket": t}
 
+    @app.post("/api/admin/tickets/{tid}/move")
+    async def ticket_move(request: Request, tid: int):
+        # To another subscription account, keeping its size in Pro weeks and what it used; `dry_run`: the preview.
+        actor = admin(request, write=True)
+        need_tickets()
+        body = await _json(request)
+        if not isinstance(body.get("account"), str) or not body["account"]:
+            fail(400, "Pick the subscription account to move the pass to.")
+        dry = bool(body.get("dry_run"))
+        return {"ok": True, "dry_run": dry, **ticket_call(tickets.move, conn, cfg, actor["id"], tid, body["account"], dry_run=dry)}
+
     @app.post("/api/admin/tickets/{tid}/cancel")
     async def ticket_cancel(request: Request, tid: int):
         actor = admin(request, write=True)
@@ -1660,21 +1776,10 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         now = time.time()
         acct = view_account(account)
         if acct is None:
-            return {"profile": None, "ends_at_set": None, "ends_at": None, "weekly_reset": None}
+            return {"account": None, "profile": None, "ends_at_set": None, "ends_at": None, "weekly_reset": None}
         week = tickets.week_bounds(conn, cfg, now, account=acct)
-        return {"profile": quota.latest_profile(conn, account=acct), "ends_at_set": tickets.subscription_end_set(conn, acct),
+        return {"account": acct, "profile": quota.latest_profile(conn, account=acct), "ends_at_set": tickets.subscription_end_set(conn, acct),
                 "ends_at": tickets.subscription_end(conn, week, now, acct), "weekly_reset": week[1] if week else None}
-
-    @app.post("/api/admin/subscription/refresh")
-    async def refresh_subscription(request: Request, account: str | None = None):
-        # Ask Anthropic for the plan now rather than at the next hourly check: a plan just bought or changed.
-        admin(request, write=True)
-        acct = view_account(account)
-        if acct not in gw.pollers:
-            gw.sync_accounts()   # linked from another process since the last poll interval
-        if acct not in gw.pollers or not await gw.on_proxy_loop(gw.pollers[acct].check_plan(time.time())):
-            fail(502, "Anthropic did not send the subscription's details; try again shortly.")
-        return {"ok": True, "profile": quota.latest_profile(conn, account=acct)}
 
     @app.post("/api/admin/subscription/end")
     async def set_subscription_end(request: Request, account: str | None = None):
