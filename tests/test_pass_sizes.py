@@ -102,3 +102,17 @@ def test_migration_converts_trial_and_referral_settings(tmp_path):
     trial = json.loads(conn.execute("SELECT value FROM settings WHERE key='trial'").fetchone()[0])
     assert trial["size"] == pytest.approx(0.1) and "share_pct" not in trial and "size_5h" not in trial
     assert referrals.settings(conn).account_cost_usd == pytest.approx(20.0)   # $100 for Max 5x: $20 per Claude Pro
+
+
+def test_migration_stores_the_old_referral_default_when_never_saved(tmp_path):
+    # No referral settings row: the old $100 default was the default account's cost, so it is stored per Claude Pro.
+    conn = _old_db(tmp_path, "default_claude_max_20x")
+    db._migrate(conn)
+    assert referrals.settings(conn).account_cost_usd == pytest.approx(5.0)
+
+
+def test_migration_leaves_unsaved_referral_cost_with_plan_unknown(tmp_path):
+    conn = _old_db(tmp_path, "default_claude_max")
+    db._migrate(conn)
+    assert conn.execute("SELECT 1 FROM settings WHERE key='referrals'").fetchone() is None
+    assert referrals.settings(conn).account_cost_usd == 20.0

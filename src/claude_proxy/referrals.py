@@ -37,7 +37,7 @@ class Settings:
     max_per_month: int = 5
     unit_days: int = 90
     approval: str = "auto"
-    account_cost_usd: float = 100.0
+    account_cost_usd: float = 20.0    # one Claude Pro's worth of usage per 30 days, USD
     fee_pct: float = 0.0
 
 

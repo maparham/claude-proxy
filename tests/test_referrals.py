@@ -22,16 +22,16 @@ def env(tmp_path):
     tickets.set_size(conn, cfg, "lite", 0.2, ids["admin"])
     tickets.set_size(conn, cfg, "standard", 0.4, ids["admin"])
     tickets.set_price(conn, cfg, "standard", "week", 15.0, ids["admin"])
+    referrals.set_settings(conn, ids["admin"], {"account_cost_usd": 100})   # the cost floors below work in $100 a Pro
     live(conn, NOW)
     yield conn, cfg, ids
     conn.close()
 
 
-def test_defaults(env):
-    conn, cfg, ids = env
-    s = referrals.settings(conn)
+def test_defaults(db):
+    s = referrals.settings(db[1])
     assert (s.enabled, s.friend_pct, s.unit_pct, s.max_held, s.max_per_month, s.unit_days, s.approval,
-            s.account_cost_usd, s.fee_pct) == (False, 10, 10, 5, 5, 90, "auto", 100, 0)
+            s.account_cost_usd, s.fee_pct) == (False, 10, 10, 5, 5, 90, "auto", 20, 0)   # $20: a Claude Pro month
 
 
 def test_set_settings_validates_and_audits(env):

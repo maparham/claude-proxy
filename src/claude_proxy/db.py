@@ -777,15 +777,20 @@ def _migrate_trial_sizes(conn: sqlite3.Connection, f: dict | None) -> None:
 
 
 def _migrate_referral_cost(conn: sqlite3.Connection, f7: float | None) -> None:
-    """account_cost_usd was the default account's cost per 30 days; it is now one Claude Pro's worth of usage per 30
-    days, so the floor a pass is sold above stays where it was. Unchanged when the default account's plan is unknown."""
-    row = conn.execute("SELECT value FROM settings WHERE key='referrals'").fetchone()
-    if not row or f7 is None:
+    """account_cost_usd was the default account's cost per 30 days (default $100); it is now one Claude Pro's worth of
+    usage per 30 days (default $20), so the floor a pass is sold above stays where it was. A gateway that never saved
+    the setting had $100 too, so it is stored converted. Nothing changes when the default account's plan is unknown:
+    a saved value stays, and an unsaved one takes the new default."""
+    if f7 is None:
         return
-    s = json.loads(row[0])
-    if isinstance(s.get("account_cost_usd"), (int, float)):
-        s["account_cost_usd"] = s["account_cost_usd"] / f7
-        conn.execute("UPDATE settings SET value=? WHERE key='referrals'", (json.dumps(s),))
+    row = conn.execute("SELECT value FROM settings WHERE key='referrals'").fetchone()
+    s = json.loads(row[0]) if row else {}
+    cost = s.get("account_cost_usd", 100.0)
+    if isinstance(cost, (int, float)) and not isinstance(cost, bool):
+        s["account_cost_usd"] = cost / f7
+        conn.execute("INSERT INTO settings(key, value) VALUES('referrals', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                     (json.dumps(s),))
+
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
