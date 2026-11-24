@@ -946,7 +946,7 @@ function passList(c, no, extra = "") {
       <div class="pass-card-head"><b>${passNo(no[p.i])}${tierName(p.tier, p.label)} (${passLen(p)})</b>${badge(p)}</div>
       <div class="muted">${p.queued ? fmtShort(p.starts_at) : t("tl.now")} ${t("app.arrow")} ${fmtShort(p.effective_end)}</div>
       ${p.queued ? "" : `${use(t("pass.use_5h"), p.pct_5h, false, full(p) && !p.used_up && p.pct_5h >= 100, wait(p.reset_5h))}${use(t("kname.ticket_limit"), p.pct_pass ?? p.pct_7d, full(p) && p.pct_7d >= 100, full(p) && !p.used_up && p.pct_7d >= 100, wait(p.reset_7d))}${passTokens(p)}`}
-      ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}" data-paused="${full(p) ? 1 : ""}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${passLen(p)})`)}">${t("pass.pin")}</button>`}
+      ${p.queued || p.used_up ? "" : `<button class="btn small" data-pin="${p.i}" data-at="${p.starts_at}"${full(p) ? " disabled" : ""} data-name="${esc(`${tierNameText(p.tier, p.label)} (${passLen(p)})`)}">${t("pass.pin")}</button>`}
       ${p.queued ? `<button class="btn small" data-start="${p.i}" data-at="${p.starts_at}" data-name="${esc(`${tierNameText(p.tier, p.label)} (${passLen(p)})`)}">${t("pass.start_now")}</button>` : ""}
       ${bought(p)}</div>`).join("")}`);
 }
@@ -1359,7 +1359,7 @@ function wireOrdering(root, tk, order) {
     card.addEventListener("pointerleave", () => light(null));
   });
   root.querySelectorAll("[data-pin]").forEach((b) => (b.onclick = () => {
-    const d = openDialog(`<h3>${t("pass.pin_title", { pass: esc(b.dataset.name) })}</h3><p>${t(b.dataset.paused ? "pass.confirm_pin_paused" : "pass.confirm_pin")}</p>
+    const d = openDialog(`<h3>${t("pass.pin_title", { pass: esc(b.dataset.name) })}</h3><p>${t("pass.confirm_pin")}</p>
       <div class="error" id="pin-err"></div>
       <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
         <button class="btn primary" type="button" id="pin-go">${t("pass.pin")}</button></div>`);

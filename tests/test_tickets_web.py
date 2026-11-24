@@ -898,8 +898,8 @@ var Date = { now: () => 0 };
     # a pass paused at a limit has an amber chip, and the limit holding it a red meter and a ! with its own reset
     assert 'class="badge state-paused">Back in 5m<' in out and out.count('pass-use held') == 1
     assert out.count('tip-i alert') == 1 and "usable again in 5m" in out   # the ! on the 5-hour row, its tip with the wait
-    # a pass paused at a limit can still be picked to serve first once it refills; one used up cannot
-    assert 'data-pin="1"' in out and 'data-paused="1"' in out
+    # a pass paused at a limit cannot be picked until it refills (the button shows, disabled); one used up has none
+    assert re.search(r'data-pin="1"[^>]* disabled', out)
     c["passes"][1]["held"] = True   # held (pinned at a limit): it is the hero, not one of the other passes
     assert "pass-card" not in _app_fn(tmp_path, ["passList", "othersGrid", "passTokens", "fmtHM", "pausedChip", "limitHit"], stubs + f"var out = passList({json.dumps(c)}, [1, 2]);")
     c["passes"][1]["held"] = False
