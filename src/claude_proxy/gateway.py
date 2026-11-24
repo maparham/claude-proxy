@@ -59,12 +59,16 @@ class Gateway:
         """A backend and a poller for every linked account, none for an unlinked one: (added, removed) slugs. Kept ones
         stay as they are, their locks, refresh back-off and poll state with them. Run at start, every poll interval (a
         `claude-proxy login` from another process) and when the dashboard links or removes an account."""
-        return self._sync([r["account"] for r in list_accounts(self.conn)])
+        return self._sync(self.conn)
 
-    def _sync(self, linked: list[str]) -> tuple[list[str], list[str]]:
+    def _sync(self, conn: sqlite3.Connection) -> tuple[list[str], list[str]]:
+        """sync_accounts, reading the linked accounts through `conn`, the calling thread's own connection."""
+        # The list is read inside the lock: read before it, a sync could act on a list older than the one a sync
+        # between applied, removing an account just linked (and making it a second backend at the next sync).
         # Changed in place, key by key (each step atomic under the GIL), so a reader on the other thread sees each
         # account whole or not at all; readers iterate over a copy (list(...)).
         with self._sync_lock:
+            linked = [r["account"] for r in list_accounts(conn)]
             added = [a for a in linked if a not in self.backends]
             removed = [a for a in list(self.backends) if a not in linked]
             for a in added:
@@ -122,7 +126,7 @@ class Gateway:
         v = copy.copy(self)
         v.conn, v.http = conn, http
         v.backends = _BackendViews(self, conn)
-        v.sync_accounts = lambda: self._sync([r["account"] for r in list_accounts(conn)])
+        v.sync_accounts = lambda: self._sync(conn)
         v.wake_pollers, v.on_proxy_loop = self.wake_pollers, self.on_proxy_loop   # the proxy's loop, once it is known
         return v
 

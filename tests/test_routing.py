@@ -252,40 +252,39 @@ async def test_run_pollers_ticks_every_account_and_picks_up_logins(cfg, db, monk
 
 
 def test_concurrent_syncs_make_one_backend_per_account(cfg, db):
+    """Syncs from several threads at once, each reading through its own connection as the proxy's loop and the
+    dashboard's thread do (one sqlite3 connection read from several threads at once returns garbled rows)."""
     import threading
+    from claude_proxy.db import get_conn
     conn = db[1]
     seed_oauth(conn, account="a")
     gw = make_gateway(cfg, conn)
     for i in range(20):
         seed_oauth(conn, account=f"n{i}", sub=f"s{i}")
     made = []
-    real = gw._sync
+    conns = [get_conn(db[0]) for _ in range(8)]
 
-    def sync(linked):
-        out = real(linked)
-        made.extend(gw.backends[a] for a in out[0])
-        return out
-    start = threading.Barrier(8)
+    def run_all():
+        start = threading.Barrier(len(conns))
 
-    def run():
-        start.wait()
-        sync([r["account"] for r in conn.execute("SELECT account FROM credentials")])
-    threads = [threading.Thread(target=run) for _ in range(8)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+        def run(c):
+            start.wait()
+            added, _ = gw._sync(c)
+            made.extend(gw.backends.get(a) for a in added)
+        threads = [threading.Thread(target=run, args=(c,)) for c in conns]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+    run_all()
     assert len(made) == 20 and len({id(b) for b in made}) == 20   # each new account made once, by one sync
     assert set(gw.backends) == set(gw.pollers) == {"a", *(f"n{i}" for i in range(20))}
     assert all(gw.pollers[a].backend is gw.backends[a] for a in gw.backends)
     conn.execute("DELETE FROM credentials WHERE account LIKE 'n%'")
-    threads = [threading.Thread(target=run) for _ in range(8)]
-    start.reset()
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()   # concurrent removals: no KeyError
+    run_all()   # concurrent removals: no KeyError
     assert set(gw.backends) == set(gw.pollers) == {"a"}
+    for c in conns:
+        c.close()
 
 
 async def test_a_new_account_reads_its_plan_on_the_poll_loop(cfg, db, monkeypatch):
