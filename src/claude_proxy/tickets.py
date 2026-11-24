@@ -1238,7 +1238,17 @@ def move(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: in
             size = t["share_pct"] * f7o / 100
             size_5h = (t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) * f5o / 100
         share, share_5h = plans.shares(conn, account, size, size_5h)
-        capacity.check(conn, cfg, account, share, share_5h, max(now, t["starts_at"]), t["effective_end"], now)
+        start = max(now, t["starts_at"])
+        capacity.check(conn, cfg, account, share, share_5h, start, t["effective_end"], now)
+        bonuses = conn.execute("SELECT id, share_pct, share_5h_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id=? "
+                               "AND cancelled_at IS NULL AND ends_at>?", (ticket_id, now)).fetchall()
+        new_5h = {b["id"]: (b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"]) * f5o / f5n for b in bonuses}
+        # Its bonuses land on the target too, converted: the pass and they are judged there as one change (the Guard,
+        # after every row is written), and the 5-hour window open now must hold the bonus share running in it as well.
+        guard = capacity.Guard(conn, cfg, account, now)
+        now_5h = sum(new_5h[b["id"]] for b in bonuses if b["starts_at"] <= start < b["ends_at"])
+        if now_5h > 1e-12:
+            capacity.check_5h_room(conn, cfg, account, share_5h + now_5h, start, now)
         carry_7d = carry_5h = 0.0
         if t["starts_at"] <= now:
             # Measured on the account it is on before anything moves; a use that can't be measured (no rate) carries 0.
@@ -1247,16 +1257,16 @@ def move(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: in
         # Its borrows in the target's points: own_pts converted, and the rate (tokens per point) the other way, so the
         # debt _debt measures from them converts by the same ratio.
         conn.execute("UPDATE pass_borrows SET own_pts=own_pts*?, rate=rate*? WHERE ticket_id=?", (f7o / f7n, f7n / f7o, ticket_id))
-        for b in conn.execute("SELECT id, share_pct, share_5h_pct FROM ticket_bonuses WHERE ticket_id=? AND cancelled_at IS NULL "
-                              "AND ends_at>?", (ticket_id, now)).fetchall():
-            b5 = b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"]
+        for b in bonuses:
             conn.execute("UPDATE ticket_bonuses SET share_pct=?, share_5h_pct=? WHERE id=?",
                          (b["share_pct"] * f7o / f7n,
-                          None if b["share_5h_pct"] is None and f5o / f5n == f7o / f7n else b5 * f5o / f5n, b["id"]))
+                          None if b["share_5h_pct"] is None and f5o / f5n == f7o / f7n else new_5h[b["id"]], b["id"]))
         conn.execute("UPDATE tickets SET account=?, share_pct=?, share_5h_pct=? WHERE id=?", (account, share, share_5h, ticket_id))
         conn.execute("INSERT INTO ticket_moves(ticket_id, moved_at, from_account, to_account, from_share_pct, from_share_5h_pct, "
                      "carry_7d_pts, carry_5h_pts, moved_by) VALUES(?,?,?,?,?,?,?,?,?)",
                      (ticket_id, now, t["account"], account, t["share_pct"], t["share_5h_pct"], carry_7d, carry_5h, actor))
+        # Judged with its carry recorded, so what it already used is not reserved again on the target.
+        guard.verify(start, max([t["effective_end"], *(b["ends_at"] for b in bonuses)]))
         out = {"ticket": get(conn, ticket_id), "from": t["account"], "to": account, "share_pct": share,
                "share_5h_pct": share_5h, "carry_7d_pts": carry_7d, "carry_5h_pts": carry_5h}
         db.audit(conn, actor, "ticket_move", t["user_name"], {"ticket_id": ticket_id, "from": t["account"], "to": account,

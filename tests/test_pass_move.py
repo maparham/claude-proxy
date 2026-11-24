@@ -8,7 +8,6 @@ import pytest
 
 from claude_proxy import capacity, limits, plans, quota, routing, tickets
 from claude_proxy.db import create_user
-from tests.conftest import seed_oauth
 from tests.tickets_helpers import DAY, NOW, RESET7, WEEK_START, link, tcfg, user
 
 RATES = {"m": 20000.0, "p": 1000.0}   # weighted tokens per point: a Max 20x point is 20 Pro points
@@ -200,3 +199,24 @@ def test_bonus_scaled(env):
     b = tickets.active_bonuses(conn, t["id"], NOW)
     assert [x["share_pct"] for x in b] == [pytest.approx(40.0)]
     assert tickets.bonus_share(conn, t["id"], NOW) == pytest.approx(40.0)
+
+
+def test_move_checks_the_bonuses_with_the_pass(env):
+    conn, cfg, ids, att = env
+    t = grant_on_m(conn, cfg, ids)   # 4 days of this week: 25 × 4/7 = 14.3 points of p
+    b = tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=2, starts_at=NOW - 60, ends_at=NOW + DAY,
+                          now=NOW - 60)["bonus"]   # 40% of p for a day: 5.7 points more
+    att[("p", "7d")] = {"utilization_pct": 59.0}   # 16 points free on p: the pass alone fits, with its bonus it doesn't
+    with pytest.raises(tickets.CapacityError, match="points free"):
+        tickets.move(conn, cfg, ids["admin"], t["id"], "p", now=NOW)
+    assert tickets.get(conn, t["id"])["account"] == "m"
+    assert tickets.get(conn, t["id"])["share_pct"] == 1.25
+    assert tickets.bonuses(conn, t["id"])[0]["share_pct"] == 2
+    assert conn.execute("SELECT COUNT(*) FROM ticket_moves").fetchone()[0] == 0
+    conn.execute("UPDATE ticket_bonuses SET cancelled_at=? WHERE id=?", (NOW - 30, b["id"]))
+    assert tickets.move(conn, cfg, ids["admin"], t["id"], "p", now=NOW, dry_run=True)["to"] == "p"   # alone it fits
+    conn.execute("UPDATE ticket_bonuses SET cancelled_at=NULL WHERE id=?", (b["id"],))
+    att[("p", "7d")] = {"utilization_pct": 50.0}   # 25 points free: room for both
+    tickets.move(conn, cfg, ids["admin"], t["id"], "p", now=NOW)
+    assert tickets.get(conn, t["id"])["account"] == "p"
+    assert tickets.bonuses(conn, t["id"])[0]["share_pct"] == pytest.approx(40.0)
