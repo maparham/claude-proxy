@@ -149,8 +149,8 @@ def _check_fits(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int) 
     judged it when the order was made, which may be days ago: the 5-hour window in particular can fill in minutes, and
     a payment the callback then could not grant leaves the order `paid_unfulfilled` (2026-11-07). A pass sold out only
     until the 5-hour reset says when to try again."""
-    from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
-    if not capacity.context(conn, cfg, tickets.SELL_ACCOUNT, now).fresh:
+    from . import placement   # here, not at the top: keeps payments' import list to what it always needed
+    if not placement.any_fresh(conn, cfg, now):
         raise PaymentError(409, orders.UNAVAILABLE)
     if o["upgrade_of"] is not None:
         try:

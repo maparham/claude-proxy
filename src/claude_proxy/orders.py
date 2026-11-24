@@ -112,8 +112,8 @@ def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str
     report nothing is on sale; else a pass starting now, without the buyer's used-up tickets, and one starting
     where the grant will put it. A pass queued after the buyer's current one is judged only at that start
     (2026-11-07): a full 5-hour window now says nothing about a pass starting after its reset."""
-    from . import capacity
-    if not capacity.context(conn, cfg, tickets.SELL_ACCOUNT, now).fresh:
+    from . import placement
+    if not placement.any_fresh(conn, cfg, now):
         raise OrderError(409, UNAVAILABLE)
     starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now) if user_id is not None else (now, [])
     if starts_at > now:
@@ -263,8 +263,8 @@ def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, *, ema
         amount = listed
     conn.execute("BEGIN IMMEDIATE")
     try:
-        from . import capacity
-        if not capacity.context(conn, cfg, tickets.SELL_ACCOUNT, now).fresh:
+        from . import placement
+        if not placement.any_fresh(conn, cfg, now):
             raise OrderError(409, UNAVAILABLE)
         if tickets.sold_out(conn, cfg, tier, length, now, None, None):
             raise OrderError(409, "That pass is sold out.")
@@ -666,6 +666,8 @@ def link(conn: sqlite3.Connection, cfg: Config, actor: int | None, order_id: int
             if len(email) > 64:   # the users' name limit
                 raise OrderError(400, "The email is too long for a user name; add the user by hand.")
             user_id, _ = db.create_user(conn, email)   # its key is never shown; the buyer signs in with Clerk
+            from . import placement   # here, not at the top: placement imports tickets
+            placement.assign(conn, cfg, user_id, now)   # served from the account with the most free room (spec §3)
             # No credit until a ticket is granted: the first ticket removes this, as it does a sign-up's.
             conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at, updated_by) VALUES(?,?,?,?,?,?,?)",
                          (user_id, "cost_total", "*", "0", "usd", int(now), actor))

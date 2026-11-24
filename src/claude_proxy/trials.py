@@ -12,7 +12,7 @@ import sqlite3
 import time
 from dataclasses import dataclass
 
-from . import db, plans, tickets
+from . import db, placement, plans, tickets
 from .config import Config
 
 SETTINGS_KEY = "trial"
@@ -236,7 +236,8 @@ def waiting_claims(conn: sqlite3.Connection, cfg: Config, now: float, user_id: i
     rows = conn.execute("SELECT c.id, c.user_id, c.email, c.claimed_at, c.expires_at, c.granted_by, u.name AS user_name FROM trial_claims c "
                         "LEFT JOIN users u ON u.id=c.user_id WHERE c.user_id IS NOT NULL AND c.ticket_id IS NULL AND c.cancelled_at IS NULL AND c.expires_at>? "
                         f"{where} ORDER BY c.id DESC", params).fetchall()
-    sh = shares(conn, s, tickets.SELL_ACCOUNT)
+    best = placement.best_account(conn, cfg, now)   # where it would most likely start
+    sh = shares(conn, s, best) if best else None
     return [dict(r) | {"user_name": r["user_name"] or r["email"], "tier": s.tier, "label": tier_label(cfg, s.tier), "share_pct": sh[0] if sh else None,
                        "duration_min": s.duration_min} for r in rows]
 
@@ -279,7 +280,6 @@ def _in_the_way(conn, cfg, user_id: int, now: float) -> tuple[bool, list[dict]]:
 def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict | None:
     """`auto`: a request's start, which finds the claim gone or a pass running under the lock (another request of the
     user's started it meanwhile) and returns None rather than refuse."""
-    from . import capacity   # here, not at the top: capacity imports tickets
     c = open_claim(conn, user_id, now)
     held, replaces = _in_the_way(conn, cfg, user_id, now)
     if auto and (c is None or held):
@@ -291,21 +291,21 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
     if user["revoked_at"] is not None or not user["enabled"]:
         raise TrialError(409, "This account is disabled.")
     end = now + s.duration_min * 60
-    sh = shares(conn, s, tickets.SELL_ACCOUNT)
-    try:
-        if sh is None:
-            raise tickets.CapacityError(tickets.PLAN_UNKNOWN)
-        capacity.check(conn, cfg, tickets.SELL_ACCOUNT, *sh, now, end, now, exclude=[t["id"] for t in replaces])
-    except tickets.CapacityError as e:
-        raise TrialError(409, NO_ROOM) from e
+    # Placed as any sold pass is: where it fits with the most free Pro weeks.
+    account, rows = placement.pick(conn, cfg, s.size, s.size_5h, now, end, now, [t["id"] for t in replaces]) \
+        if s.size is not None else (None, [])
+    if account is None:
+        raise TrialError(409, NO_ROOM)
+    row = next(r for r in rows if r["account"] == account)
+    sh = (row["share_pct"], row["share_5h_pct"])
     for t in replaces:   # the user's passes are used up: they end now and the trial starts in their place
         tickets.end_used_up(conn, t, now)
         db.audit(conn, None, "ticket_used_up", user["name"], {"ticket_id": t["id"]})
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is None
     tid = conn.execute(
-        "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, "
-        "usd, currency, rate, amount, granted_by, granted_at, note, trial) VALUES(?,?,?,?,?,?,'day',0,?,?,0,0,'USD',1,0,?,?,?,1)",
-        (user_id, user["name"], tickets.SELL_ACCOUNT, s.tier, *sh, now, end, c["granted_by"], now,
+        "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, size, size_5h, length, days, starts_at, ends_at, "
+        "list_usd, usd, currency, rate, amount, granted_by, granted_at, note, trial) VALUES(?,?,?,?,?,?,?,?,'day',0,?,?,0,0,'USD',1,0,?,?,?,1)",
+        (user_id, user["name"], account, s.tier, *sh, s.size, s.size_5h if s.size_5h is not None else s.size, now, end, c["granted_by"], now,
          "Free trial")).lastrowid
     conn.execute("UPDATE trial_claims SET ticket_id=?, started_at=? WHERE id=?", (tid, now, c["id"]))
     if first and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user_id,)).rowcount:

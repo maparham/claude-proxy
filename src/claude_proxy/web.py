@@ -38,7 +38,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 
 import httpx
 
-from . import passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
+from . import passkeys, blog, clerk, clerk_proxy, geo, client_dist, contents, db, limits, mail, orders, passcard, payments, placement, prompts, quota, referrals, refunds, telegram, tickets, trials, turnstile, upstream, usage
 from . import login as oauth_login   # `login` is the dashboard's sign-in endpoint below
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
@@ -394,6 +394,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         conn.execute("BEGIN IMMEDIATE")
         try:
             uid, _ = db.create_user(conn, email)   # its own key is never shown; machines get theirs in the browser
+            if cfg.tickets.enabled:   # served from the account with the most free room (spec §3)
+                placement.assign(conn, cfg, uid, time.time())
             conn.execute("UPDATE users SET clerk_id=?, email=? WHERE id=?", (clerk_id, email, uid))
             # No credit until a ticket is granted: the first ticket removes this zero credit.
             conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,?)",
@@ -1175,6 +1177,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if conn.execute("SELECT 1 FROM users WHERE name=?", (name,)).fetchone():
             fail(409, f"User {name!r} already exists.")
         uid, key = db.create_user(conn, name, role=role)
+        if cfg.tickets.enabled:   # served from the account with the most free room (spec §3)
+            placement.assign(conn, cfg, uid, time.time())
         db.audit(conn, actor["id"], "user_add", name, {"role": role})
         return {"ok": True, "id": uid, "name": name, "key": key}
 
@@ -1596,7 +1600,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         # From an order: its referral discount is applied, as the grant will apply it (referrals design).
         order_id = None if body.get("order_id") in (None, "") else _number(body["order_id"], "order_id", whole=True)
         return ticket_call(tickets.preview, conn, cfg, u, tier, length, currency, time.time(), bool(body.get("start_now")),
-                           order_id, bool(body.get("over_5h")), bool(body.get("over_end")), bool(body.get("over_week")))
+                           order_id, bool(body.get("over_5h")), bool(body.get("over_end")), bool(body.get("over_week")),
+                           account=str(body["account"]) if body.get("account") else None)   # absent: placement's pick
 
     @app.post("/api/admin/tickets")
     async def ticket_grant(request: Request):
@@ -1617,7 +1622,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         remove_limits=remove, confirm_stale_rate=bool(body.get("confirm_stale_rate")),
                         expect_usd=quoted["usd"], expect_rate=quoted["rate"], order_id=order_id, terms_version=terms_version,
                         start_now=bool(body.get("start_now")), over_5h=bool(body.get("over_5h")),
-                        over_end=bool(body.get("over_end")), over_week=bool(body.get("over_week")))
+                        over_end=bool(body.get("over_end")), over_week=bool(body.get("over_week")),
+                        account=str(body["account"]) if body.get("account") else None)
         if order_id is not None and cfg.email is not None:   # the buyer hears their order is done, after the response
             mail.spawn(orders.send_granted(conn, cfg, order_id))
         return {"ok": True, "ticket": t}

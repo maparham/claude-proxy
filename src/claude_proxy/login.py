@@ -80,6 +80,11 @@ async def finish(conn: sqlite3.Connection, cfg, http: httpx.AsyncClient, pasted:
         raise LoginError("This subscription was just linked under another account.") from None
     db.audit(conn, actor_id, "login", f"oauth:{account}",
              {"email": record.get("account"), "scope": record.get("scope")})
+    # Users made before any account was linked (`init`'s admin on a fresh install) would be refused with no_account
+    # forever: each gets the account with the most free room now.
+    from . import placement   # here, not at the top: placement imports capacity, which needs the whole ticket stack
+    for (uid,) in conn.execute("SELECT id FROM users WHERE account IS NULL AND revoked_at IS NULL").fetchall():
+        placement.assign(conn, cfg, uid, time.time())
     return record
 
 

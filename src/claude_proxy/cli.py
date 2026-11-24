@@ -12,7 +12,7 @@ import time
 
 import httpx
 
-from . import db, estimates, limits, orders, payments, telegram
+from . import db, estimates, limits, orders, payments, placement, telegram
 from .config import Config, ConfigError
 from .credentials import CredentialKeyMissing, OAuthBackend, check_key, generate_key
 
@@ -151,6 +151,8 @@ def cmd_user_add(args, cfg):
     if conn.execute("SELECT 1 FROM users WHERE name=?", (args.name,)).fetchone():
         sys.exit(f"User {args.name!r} already exists.")
     uid, key = db.create_user(conn, args.name, role=args.role)
+    if cfg.tickets.enabled:   # served from the account with the most free room (spec §3)
+        placement.assign(conn, cfg, uid, time.time())
     db.audit(conn, None, "user_add", args.name, {"role": args.role})
     print(f"User {args.name!r} (id {uid}). Gateway key, shown once:\n{key}")
 

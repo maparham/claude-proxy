@@ -3,7 +3,7 @@ bot's "My passes" always agree (Telegram bot design, section 6). Moved unchanged
 included: used-up passes give way to a queued one here (limits.hand_over), as they do on a request."""
 from __future__ import annotations
 
-from . import capacity, limits, payments, refunds, tickets
+from . import capacity, limits, payments, placement, refunds, tickets
 
 
 def start_offer(conn, cfg, user_id: int, now: float) -> dict:
@@ -107,7 +107,8 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"],
                                         exclude=[t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]])
     # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
-    out["split_now"] = tickets.order_split(conn, cfg, now, now, account=tickets.SELL_ACCOUNT) if cur else None
+    best = placement.best_account(conn, cfg, now) if cur else None   # where a pass bought now would most likely go
+    out["split_now"] = tickets.order_split(conn, cfg, now, now, account=best) if best else None
     out["timeline"] = tickets.timeline(conn, cfg, user_id, now)   # the card's chart, with more than one live ticket
     out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
     out["terms_version"] = tickets.TERMS_VERSION

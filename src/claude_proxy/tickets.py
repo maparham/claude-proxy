@@ -19,9 +19,6 @@ from .config import LENGTHS, Config
 from .forwarder import COUNT_TOKENS_PATH
 
 DAY = 86400
-# Transitional (multi-subscription task 2): where a pass is sold today, it is sold on this account. Placement across
-# accounts (task 5) replaces it.
-SELL_ACCOUNT = "default"
 
 STALE_RATE_S = 36 * 3600
 USD_ROUND_TO = 0.01
@@ -824,7 +821,7 @@ REMOVABLE = "kind NOT IN ('share_5h', 'share_7d', 'cost_total')"
 
 def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str, currency: str, now: float,
             start_now: bool = False, order_id: int | None = None, over_5h: bool = False, over_end: bool = False,
-            over_week: bool = False) -> dict:
+            over_week: bool = False, account: str | None = None) -> dict:
     """Everything the grant form shows before the admin confirms. Raises TicketError for a bad tier, length or currency
     and when the currency has no rate; capacity trouble is reported in `available`, not raised. `start_now`: the
     ticket starts now beside the user's running tickets instead of after them (next_start). `order_id`: the order
@@ -839,8 +836,13 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     cannot be upgraded later (upgrade_quote keeps the rule: an upgrade adds share past the end too).
     `short_week`: this week's room lacks the pass's points (WeekFull); `week_warning` says so. `over_week`: the admin
     oversells anyway, later weeks' max_sold_pct and the other checks still applying. Running passes may then meet
-    Anthropic's weekly limit before their own until the weekly reset."""
-    from . import capacity   # here, not at the top: capacity imports tickets
+    Anthropic's weekly limit before their own until the weekly reset.
+    `account`: the subscription account to sell on (the admin's choice), checked as is; None: placement's pick, the
+    account where the pass fits with the most free Pro weeks. `accounts`: every linked account as placement judged it.
+    When it fits nowhere, the waivers above are judged on the account that may sell with the most free Pro weeks, and
+    `account` is that one only if they make the pass available there. `share_pct`, `week_split` and the checks are
+    those of `account`."""
+    from . import capacity, placement   # here, not at the top: both import tickets
     now = _now(now)
     _check_tier_length(cfg, tier, length)
     steps = currencies(cfg)
@@ -857,18 +859,34 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
         before = p["usd"]
         p["usd"], p["ref_pct_applied"] = referrals.apply_pct(conn, cfg, tier, length, before, ref["ref_pct"])
         p["ref_off_usd"] = round(before - p["usd"], 2)
-    share, share_5h = _sell_shares(conn, cfg, tier, SELL_ACCOUNT)
+    size, size_5h = tier_size(conn, cfg, tier), tier_size_5h(conn, cfg, tier)
     starts_at, replaces = next_start(conn, cfg, user["id"], now, start_now)
     ends_at = starts_at + LENGTHS[length] * DAY
-    end_warning = None
     excl = [t["id"] for t in replaces]
-    ctx = capacity.context(conn, cfg, SELL_ACCOUNT, now, excl)
     # Used-up tickets this one replaces end as it starts: their reserved points and 5-hour share go with them.
+    ctxs = placement.contexts(conn, cfg, now, excl)
+    judged = placement.judge(conn, cfg, size, size_5h, starts_at, ends_at, now, excl, ctxs)
+    rows = [r for r, _ in judged]
+    if account is not None:
+        if account not in ctxs:
+            raise TicketError(f"No subscription account '{account}'.")
+        target = account
+    else:
+        target = placement.best_of(conn, cfg, [r["account"] for r in rows if r["fits"]], now, ctxs)
+        # Fits nowhere: the admin's waivers are judged where the pass comes closest, the best account that may sell.
+        target = target or placement.best_candidate(conn, cfg, now, ctxs)
+    row = next((r for r in rows if r["account"] == target), None)
+    share, share_5h = (row["share_pct"], row["share_5h_pct"]) if row else (None, None)
     # The end and this week's room the admin may grant past: each is noted, then the other checks run without it.
     skip, end_warning, week_warning = {}, None, None
     while True:
+        if row is None:   # no account may sell: the first one's reason
+            available, reason, short_5h = False, rows[0]["reason"] if rows else "No subscription account is linked.", False
+            break
         try:
-            capacity.check(conn, cfg, SELL_ACCOUNT, share, share_5h, starts_at, ends_at, now, exclude=excl, ctx=ctx, **skip)
+            if why := placement.unsellable(conn, target, ctxs[target]):   # the admin's pick may be one that sells nothing
+                raise CapacityError(why)
+            capacity.check(conn, cfg, target, share, share_5h, starts_at, ends_at, now, exclude=excl, ctx=ctxs[target], **skip)
             available, reason, short_5h = True, None, False
         except SubscriptionEnds as e:
             end_warning, skip["sub_end"] = str(e), False
@@ -886,11 +904,13 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     if end_warning is not None:
         available = available and bool(over_end)
     reason = reason or week_warning or end_warning
-    rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
-                                          (user["id"],))]
+    if account is None and not available:
+        target = None
+    limit_rows = [dict(r) for r in conn.execute(f"SELECT kind, scope, value, unit FROM limits WHERE user_id=? AND {REMOVABLE} ORDER BY kind, scope",
+                                                (user["id"],))]
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user["id"],)).fetchone() is None
     return {"tier": tier, "label": cfg.tickets.tiers[tier].label, "length": length, "days": LENGTHS[length], "share_pct": share,
-            "share_5h_pct": share_5h, **p,
+            "share_5h_pct": share_5h, "size": size, "size_5h": size_5h, "account": target, "accounts": rows, **p,
             "currency": currency, "rate": rate["rate"], "rate_set_at": rate["set_at"], "stale_rate": rate_is_stale(rate, now),
             "amount": round_local(p["usd"], rate["rate"], steps[currency], vat_percent(cfg)), "vat_percent": vat_percent(cfg),
             "starts_at": starts_at, "ends_at": ends_at, "queued": starts_at > now, "available": available, "reason": reason,
@@ -899,9 +919,9 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
             "short_week": week_warning is not None, "week_warning": week_warning, "over_week": week_warning is not None and bool(over_week),
             "replaces": [t["id"] for t in replaces], "start_now": bool(start_now),
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available or short_5h or end_warning is not None or week_warning is not None,
-            "week_split": week_split(conn, cfg, share, starts_at, ends_at, now, account=SELL_ACCOUNT),
+            "week_split": week_split(conn, cfg, share, starts_at, ends_at, now, account=target) if target and share is not None else None,
             "terms_version": TERMS_VERSION,
-            "limit_rows": rows,
+            "limit_rows": limit_rows,
             # Only the first ticket takes the sign-up credit; a credit the admin sets after that stays.
             "credit": first and conn.execute("SELECT 1 FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).fetchone() is not None,
             "first_ticket": first}
@@ -910,7 +930,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
 def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: str, length: str, currency: str, note: str = "",
           remove_limits=(), confirm_stale_rate: bool = False, expect_usd=None, expect_rate=None, order_id: int | None = None,
           paid: bool = False, after=None, now: float | None = None, terms_version: str | None = None, start_now: bool = False,
-          over_5h: bool = False, over_end: bool = False, over_week: bool = False) -> dict:
+          over_5h: bool = False, over_end: bool = False, over_week: bool = False, account: str | None = None) -> dict:
     """Sell a ticket. One BEGIN IMMEDIATE transaction: the price, the start (now, or after the user's last ticket), the
     capacity check, the insert, the credit removal (first ticket only) and any ticked limit rows, each audited.
     `expect_usd` and `expect_rate`: what the admin's preview showed; QuoteChanged if the price or rate is now different.
@@ -924,7 +944,8 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
     `over_5h`: grant even though Anthropic's current 5-hour window lacks the pass's 5-hour share (preview); the
     weekly checks still refuse. Audited as over_5h. `over_end`: grant even though the pass outlasts the subscription's
     end (preview); audited as over_end. `over_week`: grant even though this week's room lacks the pass's points
-    (preview); audited as over_week."""
+    (preview); audited as over_week. `account`: the subscription account to sell on, checked as is and refused with
+    its reason; None: placement's pick (preview), as every self-service sale."""
     now = _now(now)
     note = _note(note)
     if not cfg.tickets.enabled:
@@ -944,7 +965,7 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         # tickets.ref_off_usd keeps the referral part alone (preview's re-floored ref_off_usd unpaid, the order's own
         # paid), NULL without a referral: list_usd - usd would also count a sale price (ticket_discounts) in it.
         p = preview(conn, cfg, user, tier, length, currency, now, start_now, order_id=None if paid else order_id, over_5h=over_5h,
-                    over_end=over_end, over_week=over_week)
+                    over_end=over_end, over_week=over_week, account=account)
         if order_id is not None:
             grant_terms = orow["terms_version"] if orow is not None else TERMS_VERSION
         else:
@@ -970,9 +991,10 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         if not p["available"]:   # judged by preview just now, inside this transaction (2026-11-04 spec, §2)
             raise CapacityError(_refusal(p))
         cur = conn.execute(
-            "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
-            "discount_id, currency, rate, amount, granted_by, granted_at, note, ref_off_usd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (user["id"], user["name"], SELL_ACCOUNT, tier, p["share_pct"], p["share_5h_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
+            "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, size, size_5h, length, days, starts_at, ends_at, "
+            "list_usd, usd, discount_id, currency, rate, amount, granted_by, granted_at, note, ref_off_usd) "
+            "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (user["id"], user["name"], p["account"], tier, p["share_pct"], p["share_5h_pct"], p["size"], p["size_5h"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
              p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, note, p.get("ref_off_usd")))
         tid = cur.lastrowid
         if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
@@ -980,7 +1002,7 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         for kind, scope in remove_limits:
             if conn.execute(f"DELETE FROM limits WHERE user_id=? AND kind=? AND scope=? AND {REMOVABLE}", (user["id"], kind, scope)).rowcount:
                 db.audit(conn, actor, "limit_clear", f"{user['name']}:{kind}:{scope}", {"ticket_id": tid})
-        db.audit(conn, actor, "ticket_grant", user["name"], {"ticket_id": tid, "tier": tier, "length": length, "usd": p["usd"],
+        db.audit(conn, actor, "ticket_grant", user["name"], {"ticket_id": tid, "account": p["account"], "tier": tier, "length": length, "usd": p["usd"],
                                                             "list_usd": p["list_usd"], "currency": currency, "amount": p["amount"],
                                                             "starts_at": p["starts_at"], "ends_at": p["ends_at"],
                                                             "terms_version": grant_terms, "start_now": bool(start_now),
@@ -1022,23 +1044,30 @@ def _refusal(p: dict) -> str:
 
 def sold_out(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, now: float, starts_at: float | None = None,
              exclude=None, ctx=None) -> bool:
-    """A tier and length is sold out when a ticket starting now, or at `starts_at`, fails spec §2, or no fresh weekly
-    report exists (price_table tells that case apart as `unavailable`). `exclude`: the used-up tickets it would replace
-    (next_start), as grant leaves them out. `ctx`: a capacity.context to reuse."""
+    """A tier and length is sold out when a ticket starting now, or at `starts_at`, fits on no account that may sell
+    (spec §2 on each, placement), or none may (price_table tells no fresh report apart as `unavailable`). `exclude`:
+    the used-up tickets it would replace (next_start), as grant leaves them out. `ctx`: placement.contexts to reuse."""
     return _misfit(conn, cfg, tier, length, now, starts_at, exclude, ctx) is not None
 
 
 def _misfit(conn, cfg, tier, length, now, starts_at=None, exclude=None, ctx=None) -> CapacityError | None:
-    """sold_out's reason: the CapacityError a ticket starting now (or at `starts_at`) would meet, None when it fits."""
-    from . import capacity   # here, not at the top: capacity imports tickets
+    """sold_out's reason: None when a ticket starting now (or at `starts_at`) fits on some account, else the misfit
+    that clears first: of the accounts sold out only until a moment (the 5-hour window's reset, the subscription's
+    end), the earliest; else the first account's. No account linked: a CapacityError saying so."""
+    from . import placement   # here, not at the top: placement imports tickets
     now = _now(now)
     start = now if starts_at is None else int(starts_at)
-    try:
-        capacity.check(conn, cfg, SELL_ACCOUNT, *_sell_shares(conn, cfg, tier, SELL_ACCOUNT), start,
-                       start + LENGTHS[length] * DAY, now, exclude or (), ctx)
-    except CapacityError as e:
-        return e
-    return None
+    size = tier_size(conn, cfg, tier)
+    if size is None:
+        return CapacityError(f"The {tier} tier has no size.")
+    errs = [e for _, e in placement.judge(conn, cfg, size, tier_size_5h(conn, cfg, tier), start, start + LENGTHS[length] * DAY,
+                                          now, exclude or (), ctx)]
+    if not errs:
+        return CapacityError("No subscription account is linked.")
+    if any(e is None for e in errs):
+        return None
+    timed = [e for e in errs if isinstance(e, (FiveHourFull, SubscriptionEnds))]
+    return min(timed, key=lambda e: e.resets_at) if timed else errs[0]
 
 
 # ---------- cancel, bonus, queue moves ----------
@@ -1447,9 +1476,11 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
     percent of Claude Pro's weekly usage (its size × 100), None while the size is unset. Falls back to USD without a rate.
     `exclude`: a buyer's used-up tickets, which a pass bought now replaces (next_start), left out of `sold_out`."""
     now = _now(now)
-    from . import capacity   # here, not at the top: capacity imports tickets
-    ctx_now = capacity.context(conn, cfg, SELL_ACCOUNT, now, exclude or ())
-    ctx_later = capacity.context(conn, cfg, SELL_ACCOUNT, now) if (later := starts_at is not None and starts_at > now) else None
+    from . import placement   # here, not at the top: placement imports tickets
+    # Each account judged once per moment: its context is shared by every tier and length.
+    ctx_now = placement.contexts(conn, cfg, now, exclude or ())
+    ctx_later = placement.contexts(conn, cfg, now) if (later := starts_at is not None and starts_at > now) else None
+    fresh = bool(placement.candidates(conn, cfg, now, ctx_now))
     rate = current_rate(conn, currency)
     if rate is None:
         currency, rate = "USD", current_rate(conn, "USD")
@@ -1468,15 +1499,16 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
                                "amount": round_local(p["usd"], rate["rate"], step, vat), "list_amount": round_local(p["list_usd"], rate["rate"], step, vat),
                                # the USD price with VAT, for a page showing USD beside its own currency
                                "usd_total": round_local(p["usd"], 1, USD_ROUND_TO, vat), "list_usd_total": round_local(p["list_usd"], 1, USD_ROUND_TO, vat),
-                               "sold_out": (miss := _misfit(conn, cfg, tid, length, now, None, exclude, ctx_now) if ctx_now.fresh else None) is not None,
+                               "sold_out": (miss := _misfit(conn, cfg, tid, length, now, None, exclude, ctx_now) if fresh else None) is not None,
                                # sold out only until Anthropic's 5-hour window resets, or the subscription's end
                                # (when it renews): when it is back on sale
                                "available_at": miss.resets_at if isinstance(miss, (FiveHourFull, SubscriptionEnds)) else None,
-                               "unavailable": not ctx_now.fresh,
+                               "unavailable": not fresh,
                                # a buyer's list: whether one starting at `starts_at` (after their passes) fits too
                                **({"sold_out_later": sold_out(conn, cfg, tid, length, now, starts_at, None, ctx_later)} if later else {})}
         compare_pct = round(eff[tid]["size"] * 100) if eff[tid]["size"] is not None else None
         tiers.append({"tier": tid, "label": t.label, "compare": "Claude Pro", "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers, "vat_percent": vat,
             "recommended": rec if (rec := recommended(conn, cfg)) and next(x for x in tiers if x["tier"] == rec["tier"])["lengths"][rec["length"]] else None,
-            "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now, account=SELL_ACCOUNT)}
+            "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now, account=best)
+            if (best := placement.best_account(conn, cfg, now, ctx_now)) else None}
