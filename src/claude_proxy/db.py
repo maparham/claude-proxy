@@ -9,6 +9,8 @@ import sqlite3
 import time
 from pathlib import Path
 
+from .plans import DEFAULT_FACTORS, detect
+
 # Named so the migration that rebuilds old single-grant tables reuses it verbatim.
 CREDENTIALS_DDL = """CREATE TABLE IF NOT EXISTS credentials (
     backend TEXT,
@@ -35,7 +37,8 @@ SCHEMA = [
         revoked_at INTEGER,
         password_hash TEXT,
         routes_key_hash TEXT,       -- the routes-only key (OpenCode): third-party models only
-        routes_key_prefix TEXT
+        routes_key_prefix TEXT,
+        account TEXT                -- the subscription account serving this user; NULL: unassigned
     )""",
     """CREATE TABLE IF NOT EXISTS limits (
         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -73,7 +76,8 @@ SCHEMA = [
         meter_error INTEGER DEFAULT 0,
         rejected_by TEXT,
         api_key_id INTEGER,
-        ip TEXT
+        ip TEXT,
+        account TEXT DEFAULT 'default'
     )""",
     "CREATE INDEX IF NOT EXISTS idx_requests_user_time ON requests(user_id, started_at)",
     "CREATE INDEX IF NOT EXISTS idx_requests_time ON requests(started_at)",
@@ -86,7 +90,8 @@ SCHEMA = [
         utilization_pct REAL NOT NULL,
         resets_at INTEGER,
         status TEXT,
-        raw_json TEXT
+        raw_json TEXT,
+        account TEXT NOT NULL DEFAULT 'default'
     )""",
     "CREATE INDEX IF NOT EXISTS idx_quota_bucket_time ON quota_snapshots(bucket, observed_at)",
     # The subscription's plan, a row each time it changes (quota.record_plan): tokens per point differ by plan.
@@ -94,7 +99,8 @@ SCHEMA = [
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         observed_at REAL NOT NULL,
         organization_type TEXT,
-        rate_limit_tier TEXT
+        rate_limit_tier TEXT,
+        account TEXT NOT NULL DEFAULT 'default'
     )""",
     # The subscription's latest profile from Anthropic, whole, for the admin's subscription details (quota.record_profile).
     """CREATE TABLE IF NOT EXISTS account_profile (
@@ -252,10 +258,27 @@ SCHEMA = [
         share_5h_pct REAL,                  -- copied at grant like share_pct; NULL (sold before the split): share_pct
         used_up_at INTEGER,                 -- set: used up before its end, it ended here and the user's next ticket took over
         ref_off_usd REAL,                   -- the referral discount alone, in USD, set at grant; NULL: no referral
-        refunded_at INTEGER                 -- set: the buyer cancelled it unused and its payment was reversed (refunds.py)
+        refunded_at INTEGER,                -- set: the buyer cancelled it unused and its payment was reversed (refunds.py)
+        account TEXT NOT NULL DEFAULT 'default',   -- the subscription account holding the pass (replaces account_id)
+        size REAL,                          -- in Pro weeks, weekly window; NULL: sold before sizes, share_pct rules
+        size_5h REAL                        -- in Pro weeks, 5-hour window
     )""",
     "CREATE INDEX IF NOT EXISTS idx_tickets_user ON tickets(user_id, starts_at)",
     "CREATE INDEX IF NOT EXISTS idx_tickets_account ON tickets(account_id, starts_at)",
+    # A pass moved between accounts: what it had used is carried over in points of the account it went to.
+    """CREATE TABLE IF NOT EXISTS ticket_moves (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        ticket_id INTEGER NOT NULL REFERENCES tickets(id),
+        moved_at INTEGER NOT NULL,
+        from_account TEXT NOT NULL,
+        to_account TEXT NOT NULL,
+        from_share_pct REAL NOT NULL,
+        from_share_5h_pct REAL,
+        carry_7d_pts REAL NOT NULL DEFAULT 0,
+        carry_5h_pts REAL NOT NULL DEFAULT 0,
+        moved_by INTEGER
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_ticket_moves_ticket ON ticket_moves(ticket_id, moved_at)",
     """CREATE TABLE IF NOT EXISTS ticket_bonuses (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         ticket_id INTEGER NOT NULL REFERENCES tickets(id),
@@ -672,7 +695,36 @@ def _migrate(conn: sqlite3.Connection) -> None:
                          (a["user_id"], a["key_hash"], a["key_prefix"], a["label"], a["created_at"], a["last_used_at"], a["key_hash"]))
         conn.execute(f"UPDATE api_keys SET revoked_at=? WHERE id IN ({','.join('?' * len(live))})", (now, *(a["id"] for a in live)))
         audit(conn, None, "api_keys_to_pass_keys", "gateway", {"keys": len(live)})
-
+    # ---- serve from every linked subscription (design 2026-11-24): accounts named on each row ----
+    if "account" not in _columns(conn, "requests"):
+        conn.execute("ALTER TABLE requests ADD COLUMN account TEXT DEFAULT 'default'")
+        conn.execute("UPDATE requests SET account='default'")
+    if "account" not in _columns(conn, "quota_snapshots"):
+        conn.execute("ALTER TABLE quota_snapshots ADD COLUMN account TEXT NOT NULL DEFAULT 'default'")
+    if "account" not in _columns(conn, "account_plans"):
+        conn.execute("ALTER TABLE account_plans ADD COLUMN account TEXT NOT NULL DEFAULT 'default'")
+    if "account" not in _columns(conn, "tickets"):
+        conn.execute("ALTER TABLE tickets ADD COLUMN account TEXT NOT NULL DEFAULT 'default'")   # account_id stays, unread
+    for col in ("size", "size_5h"):
+        if col not in _columns(conn, "tickets"):
+            conn.execute(f"ALTER TABLE tickets ADD COLUMN {col} REAL")
+            # Pro weeks = share x f(default) / 100, when the default account's plan is known; else left NULL.
+            row = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans WHERE account='default' "
+                               "ORDER BY observed_at DESC, id DESC LIMIT 1").fetchone()
+            p = detect(row[0], row[1]) if row else None
+            if p:
+                f = DEFAULT_FACTORS[p]["7d" if col == "size" else "5h"]
+                src = "share_pct" if col == "size" else "COALESCE(share_5h_pct, share_pct)"
+                conn.execute(f"UPDATE tickets SET {col}={src} * ? / 100", (f,))
+    if "account" not in _columns(conn, "users"):
+        conn.execute("ALTER TABLE users ADD COLUMN account TEXT")
+        conn.execute("UPDATE users SET account='default'")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_account_ended ON requests(account, ended_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_quota_account_bucket_time ON quota_snapshots(account, bucket, observed_at)")
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_acct ON tickets(account, starts_at)")
+    conn.execute("INSERT INTO settings(key, value) SELECT 'account_plan_ack:default', COALESCE(rate_limit_tier, organization_type) "
+                 "FROM account_plans WHERE account='default' AND COALESCE(rate_limit_tier, organization_type) IS NOT NULL "
+                 "ORDER BY observed_at DESC, id DESC LIMIT 1 ON CONFLICT(key) DO NOTHING")
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
