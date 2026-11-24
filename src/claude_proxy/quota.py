@@ -454,6 +454,10 @@ def buckets(conn: sqlite3.Connection, since: float, *, account: str) -> list[str
                                        "ORDER BY bucket", (account, since))]
 
 
+def _has_plan(conn: sqlite3.Connection, account: str) -> bool:
+    return conn.execute("SELECT 1 FROM account_plans WHERE account=? LIMIT 1", (account,)).fetchone() is not None
+
+
 def _ack_first_plan(conn: sqlite3.Connection, account: str) -> None:
     """An account's first plan is acknowledged as it is recorded: plans.pending_change compares later ones to it, so a
     newly linked account sells without the admin's say, and a later change stops it until the admin acknowledges."""
@@ -513,6 +517,9 @@ class Poller:
         except Exception:   # e.g. RefreshUnavailable: the request path reports it
             profile = None
         if not isinstance(profile, dict):
+            if not await self._run(_has_plan, self.account):
+                # A newly linked account sells nothing until its plan is known: try again at the next tick, not in an hour.
+                self.next_plan_check = 0.0
             return False
         await self._run(record_profile, profile, now, account=self.account)
         org = profile.get("organization")

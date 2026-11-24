@@ -5,6 +5,7 @@ import copy
 import logging
 import secrets
 import sqlite3
+import threading
 from collections.abc import Mapping
 
 import httpx
@@ -35,6 +36,11 @@ class Gateway:
         # (sync_accounts), never rebound: the dashboard's view shares the pollers and reads the backends through them.
         self.backends: dict[str, OAuthBackend] = {}
         self.pollers: dict[str, Poller] = {}
+        # Syncs run on the proxy's loop (run_pollers) and on the dashboard's thread (an account linked or removed there):
+        # one at a time, or both could make a backend for one account and spend its single-use refresh token twice.
+        self._sync_lock = threading.Lock()
+        self._loop: asyncio.AbstractEventLoop | None = None   # the proxy's loop, once run_pollers runs on it
+        self._wake: asyncio.Event | None = None
         self.sync_accounts()
         self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
@@ -56,14 +62,18 @@ class Gateway:
         return self._sync([r["account"] for r in list_accounts(self.conn)])
 
     def _sync(self, linked: list[str]) -> tuple[list[str], list[str]]:
-        added = [a for a in linked if a not in self.backends]
-        removed = [a for a in self.backends if a not in linked]
-        for a in added:
-            be = OAuthBackend(self.cfg, self.conn, self.http, a)
-            self.backends[a] = be
-            self.pollers[a] = Poller(self.conn, be, self.cfg.quota, self.db)
-        for a in removed:
-            del self.backends[a], self.pollers[a]
+        # Changed in place, key by key (each step atomic under the GIL), so a reader on the other thread sees each
+        # account whole or not at all; readers iterate over a copy (list(...)).
+        with self._sync_lock:
+            added = [a for a in linked if a not in self.backends]
+            removed = [a for a in list(self.backends) if a not in linked]
+            for a in added:
+                be = OAuthBackend(self.cfg, self.conn, self.http, a)
+                self.pollers[a] = Poller(self.conn, be, self.cfg.quota, self.db)
+                self.backends[a] = be
+            for a in removed:
+                self.backends.pop(a, None)
+                self.pollers.pop(a, None)
         if added or removed:
             logger.info("subscription accounts: added %s, removed %s", added or "none", removed or "none")
         return added, removed
@@ -76,7 +86,9 @@ class Gateway:
     async def run_pollers(self, interval_s: float = 60.0) -> None:
         """Each account's usage poll (quota.Poller.tick) every interval, after picking up accounts linked or removed
         meanwhile. One account's failure is logged and never holds up another's."""
+        self._loop, self._wake = asyncio.get_running_loop(), asyncio.Event()
         while True:
+            self._wake.clear()
             try:
                 self.sync_accounts()
             except Exception:
@@ -85,7 +97,24 @@ class Gateway:
             for p, r in zip(pollers, await asyncio.gather(*(p.tick() for p in pollers), return_exceptions=True)):
                 if isinstance(r, BaseException):
                     logger.error("usage poll [%s] failed", p.account, exc_info=r)
-            await asyncio.sleep(interval_s)
+            try:
+                await asyncio.wait_for(self._wake.wait(), interval_s)
+            except TimeoutError:
+                pass
+
+    def wake_pollers(self) -> None:
+        """Run the polls now rather than at the next interval (an account just linked: its plan is read at once), on the
+        proxy's loop, where its backend's HTTP client and lock live. From any thread."""
+        if self._loop is not None:
+            self._loop.call_soon_threadsafe(self._wake.set)
+
+    async def on_proxy_loop(self, coro):
+        """Await `coro` on the proxy's loop, from the dashboard's: the backends' HTTP client and locks belong to it.
+        Run here when no poll loop runs (tests, one-loop setups)."""
+        loop = self._loop
+        if loop is None or loop is asyncio.get_running_loop():
+            return await coro
+        return await asyncio.wrap_future(asyncio.run_coroutine_threadsafe(coro, loop))
 
     def view(self, conn: sqlite3.Connection, http: httpx.AsyncClient) -> Gateway:
         """This gateway for an app served on another thread's event loop (the dashboard): its own connection and
@@ -94,6 +123,7 @@ class Gateway:
         v.conn, v.http = conn, http
         v.backends = _BackendViews(self, conn)
         v.sync_accounts = lambda: self._sync([r["account"] for r in list_accounts(conn)])
+        v.wake_pollers, v.on_proxy_loop = self.wake_pollers, self.on_proxy_loop   # the proxy's loop, once it is known
         return v
 
     async def aclose(self) -> None:

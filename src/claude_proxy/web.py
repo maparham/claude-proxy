@@ -1379,10 +1379,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             record = await oauth_login.finish(conn, cfg, gw.http, code, account, actor["id"])
         except (oauth_login.LoginError, ValueError) as e:
             fail(400, str(e))
-        # Served from now on, without a restart; its plan read at once, so its passes can be priced and sold.
+        # Served from now on, without a restart; its plan read at once (a re-link may be another plan), so its passes
+        # can be priced and sold. The read runs on the proxy's loop, which owns the backend's HTTP client and lock.
         gw.sync_accounts()
         if account in gw.pollers:
-            await gw.pollers[account].check_plan(time.time())
+            gw.pollers[account].next_plan_check = 0.0
+            gw.wake_pollers()
         return {"ok": True, "email": record.get("account"), "expires_at": record.get("expires_at")}
 
     @app.post("/api/admin/accounts/{account}/remove")
@@ -1669,7 +1671,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         acct = view_account(account)
         if acct not in gw.pollers:
             gw.sync_accounts()   # linked from another process since the last poll interval
-        if acct not in gw.pollers or not await gw.pollers[acct].check_plan(time.time()):
+        if acct not in gw.pollers or not await gw.on_proxy_loop(gw.pollers[acct].check_plan(time.time())):
             fail(502, "Anthropic did not send the subscription's details; try again shortly.")
         return {"ok": True, "profile": quota.latest_profile(conn, account=acct)}
 

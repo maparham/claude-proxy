@@ -249,3 +249,74 @@ async def test_run_pollers_ticks_every_account_and_picks_up_logins(cfg, db, monk
     await asyncio.sleep(0.05)
     task.cancel()
     assert {"a", "c"} <= set(ticked) and ticked.count("c") >= 2
+
+
+def test_concurrent_syncs_make_one_backend_per_account(cfg, db):
+    import threading
+    conn = db[1]
+    seed_oauth(conn, account="a")
+    gw = make_gateway(cfg, conn)
+    for i in range(20):
+        seed_oauth(conn, account=f"n{i}", sub=f"s{i}")
+    made = []
+    real = gw._sync
+
+    def sync(linked):
+        out = real(linked)
+        made.extend(gw.backends[a] for a in out[0])
+        return out
+    start = threading.Barrier(8)
+
+    def run():
+        start.wait()
+        sync([r["account"] for r in conn.execute("SELECT account FROM credentials")])
+    threads = [threading.Thread(target=run) for _ in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(made) == 20 and len({id(b) for b in made}) == 20   # each new account made once, by one sync
+    assert set(gw.backends) == set(gw.pollers) == {"a", *(f"n{i}" for i in range(20))}
+    assert all(gw.pollers[a].backend is gw.backends[a] for a in gw.backends)
+    conn.execute("DELETE FROM credentials WHERE account LIKE 'n%'")
+    threads = [threading.Thread(target=run) for _ in range(8)]
+    start.reset()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()   # concurrent removals: no KeyError
+    assert set(gw.backends) == set(gw.pollers) == {"a"}
+
+
+async def test_a_new_account_reads_its_plan_on_the_poll_loop(cfg, db, monkeypatch):
+    """Linking wakes the poll loop, which reads the new account's plan at once; a failed read retries at the next
+    tick while the account has no plan, not an hour later."""
+    import asyncio
+    conn = db[1]
+    seed_oauth(conn, account="a")
+    gw = make_gateway(cfg, conn)
+    profiles = {"b": [None, {"organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_5x"}}]}
+
+    from claude_proxy.credentials import OAuthBackend
+
+    async def no_usage(self):
+        return 0, None
+
+    async def fetch(self):
+        return profiles[self.account].pop(0) if self.account in profiles else None
+    monkeypatch.setattr(OAuthBackend, "poll_usage", no_usage)   # no network
+    monkeypatch.setattr(OAuthBackend, "fetch_profile", fetch)
+    task = asyncio.create_task(gw.run_pollers(interval_s=3600))
+    await asyncio.sleep(0.05)
+    seed_oauth(conn, account="b", sub="s-b")
+    gw.sync_accounts()
+    p = gw.pollers["b"]
+    assert p.next_plan_check == 0
+    gw.wake_pollers()
+    await asyncio.sleep(0.05)
+    assert p.next_plan_check == 0   # Anthropic sent nothing: still due
+    gw.wake_pollers()
+    await asyncio.sleep(0.05)
+    task.cancel()
+    assert conn.execute("SELECT rate_limit_tier FROM account_plans WHERE account='b'").fetchone()[0] == "default_claude_max_5x"
+    assert p.next_plan_check > time.time()

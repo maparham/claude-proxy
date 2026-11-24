@@ -1,4 +1,6 @@
 """Dashboard Accounts tab (spec 2026-10-13): list, link, re-link and remove subscription accounts."""
+import time
+
 import pytest
 from argon2 import PasswordHasher
 from fastapi.responses import JSONResponse
@@ -47,8 +49,10 @@ async def test_list_link_and_remove(env):
         r = await link(c, conn, "second")
         assert r.status_code == 200 and r.json()["email"] == "two@x.com"
         assert OAuthBackend(gw.cfg, conn, None, "second").current_token() == "acc-sub-2"
-        # Served at once, and its plan read right after linking.
+        # Served at once; its plan is read by the poll loop's next tick, which linking wakes.
         assert set(gw.backends) == set(gw.pollers) == {"default", "second"}
+        assert gw.pollers["second"].next_plan_check == 0
+        await gw.pollers["second"].check_plan(time.time())
         assert conn.execute("SELECT rate_limit_tier FROM account_plans WHERE account='second'").fetchone()[0] == "default_claude_max_20x"
         assert {r["account"] for r in (await c.get("/api/admin/accounts")).json()["accounts"]} == {"default", "second"}
         assert (await c.post("/api/admin/accounts/second/remove", json={})).status_code == 200
