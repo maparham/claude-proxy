@@ -2912,21 +2912,20 @@ async function renderUser(main) {
 
 // Subscription accounts: the same paste-the-code sign-in as `claude-proxy login --account <slug>`.
 async function renderAccounts(main) {
-  const { accounts, default: def } = await api("/api/admin/accounts");
+  const { accounts } = await api("/api/admin/accounts");
   const row = (a) => `<tr>
-    <td><b>${bdi(a.label)}</b>${a.account === def ? ` <span class="badge">${t("acct.default_badge")}</span>` : ""}${a.label !== a.account ? `<div class="muted" style="font-size:12px">${bdi(a.account)}</div>` : ""}</td>
+    <td><b>${bdi(a.label)}</b>${a.label !== a.account ? `<div class="muted" style="font-size:12px">${bdi(a.account)}</div>` : ""}</td>
     <td>${a.email ? bdi(a.email) : "—"}</td>
     <td><span data-tip-html="${esc(esc(a.detail))}"><span class="dot" style="background:${css(a.healthy ? "--good" : "--critical")};margin-inline-end:6px"></span>${a.healthy ? t("acct.ok") : a.state === "needs_login" ? t("acct.needs_login") : t("acct.not_ok")}</span></td>
     <td>${fmtTime(a.expires_at)}</td><td>${fmtTime(a.updated_at)}</td>
-    <td><div class="row-actions"><button class="btn small" data-relink="${esc(a.account)}">${t("acct.relink")}</button>${a.account === def ? "" : `<button class="btn small danger" data-aremove="${esc(a.account)}">${t("acct.remove")}</button>`}</div></td></tr>`;
+    <td><div class="row-actions"><button class="btn small" data-relink="${esc(a.account)}">${t("acct.relink")}</button><button class="btn small danger" data-aremove="${esc(a.account)}">${t("acct.remove")}</button></div></td></tr>`;
   main.innerHTML = `<section class="view"><h2>${t("tab.accounts")}</h2>
-    <p class="lede">${t("acct.lede", { slug: bdi(def) })}</p>
-    ${accounts.some((a) => a.account === def) ? "" : `<div class="banner critical"><span class="icon">!</span><span>${t("acct.no_default", { slug: bdi(def) })}</span></div>`}
+    <p class="lede">${t("acct.lede")}</p>
     <div class="controls"><button class="btn primary" id="acct-add">${t("acct.add")}</button></div>
     ${accounts.length ? `<div class="card table-wrap"><table class="data"><thead><tr><th>${t("acct.account")}</th><th>${t("acct.email")}</th><th>${t("acct.state")}</th><th>${t("acct.expires")}</th><th>${t("acct.updated")}</th><th></th></tr></thead>
       <tbody>${accounts.map(row).join("")}</tbody></table></div>` : `<p class="muted">${t("acct.none")}</p>`}
   </section>`;
-  $("#acct-add").onclick = () => linkAccountDialog(accounts.some((a) => a.account === def) ? null : def, false);
+  $("#acct-add").onclick = () => linkAccountDialog(null, false);
   main.querySelectorAll("[data-relink]").forEach((b) => (b.onclick = () => linkAccountDialog(b.dataset.relink, true)));
   main.querySelectorAll("[data-aremove]").forEach((b) => (b.onclick = async () => {
     const slug = b.dataset.aremove;

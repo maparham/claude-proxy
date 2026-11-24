@@ -89,14 +89,19 @@ def remove_account(conn: sqlite3.Connection, account: str, actor_id: int | None 
         account = validate_account(account)
     except ValueError as e:
         raise LoginError(str(e)) from None
-    if account == DEFAULT_ACCOUNT:
-        # The gateway serves every request from the default account until routing lands (spec section 4).
-        raise LoginError(f"Refusing to remove {account!r}: the gateway serves all traffic from it. "
-                         f"Re-link it with `claude-proxy login --account {account}` instead.")
     if conn.execute("SELECT 1 FROM credentials WHERE backend='oauth' AND account=?", (account,)).fetchone() is None:
         raise LoginError(f"No subscription account {account!r}.")
     if conn.execute("SELECT COUNT(*) FROM credentials WHERE backend='oauth'").fetchone()[0] <= 1:
         raise LoginError(f"Refusing to remove {account!r}: it is the last linked subscription account.")
+    # Its passes and users are served from it alone (routing.account_for): unlinked, they would be refused.
+    n = conn.execute(f"SELECT COUNT(*) FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+                     f"AND {db.TICKET_EFFECTIVE_END}>?", (account, time.time())).fetchone()[0]
+    if n:
+        raise LoginError(f"Refusing to remove '{account}': it has {n} running or queued passes; move them first.")
+    n = conn.execute("SELECT COUNT(*) FROM users WHERE account=?", (account,)).fetchone()[0]
+    if n:
+        raise LoginError(f"Refusing to remove '{account}': {n} users are assigned to it; "
+                         f"assign them another subscription first.")
     conn.execute("DELETE FROM settings WHERE key=?", (pending_key(account),))
     conn.execute("DELETE FROM credentials WHERE backend='oauth' AND account=?", (account,))
     db.audit(conn, actor_id, "account_remove", f"oauth:{account}")

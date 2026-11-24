@@ -43,7 +43,7 @@ from . import login as oauth_login   # `login` is the dashboard's sign-in endpoi
 from .auth import AuthError, authenticate
 from . import capacity as capacity_mod   # `capacity` is the admin endpoint below
 from .capacity import NO_REPORT
-from .credentials import DEFAULT_ACCOUNT, OAuthBackend, list_accounts
+from .credentials import BackendStatus, OAuthBackend, list_accounts
 from .config import LENGTHS
 from .gateway import Gateway
 
@@ -424,12 +424,12 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                "settings": {"reference_model": cfg.pricing.reference_model, "family_cost": cfg.pricing.family_costs()},
                "install": install_command(), "install_windows": install_command(windows=True), "install_windows_file": install_file()}
         if is_admin(user):
-            be = gw.backend.describe()
+            acct = view_account(account)
+            be = credential(acct)
             out["credential"] = {"healthy": be.healthy, "detail": be.detail}
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
             # The header's utilization pill, on every tab: what Anthropic last reported for the account.
             now = time.time()
-            acct = view_account(account)
             out["account"] = {}
             for b in (*BUCKETS, "7d_oi"):   # 7d_oi: the weekly Fable limit, reported only on Fable replies
                 att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct) \
@@ -456,6 +456,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 fail(404, f"No subscription account '{account}'.")
             return account
         return linked[0] if linked else None
+
+    def credential(account: str | None) -> BackendStatus:
+        """An account's credential state: its live backend's (which knows its last refresh error), else read from the
+        row (linked from another process since the last poll interval)."""
+        if account is None:
+            return BackendStatus("oauth", False, "not linked — run `claude-proxy login`")
+        be = gw.backends.get(account) or OAuthBackend(cfg, conn, None, account)
+        return be.describe()
 
     def named(n: dict, q: str) -> list[str]:
         """The ids, as strings, of users whose name contains q."""
@@ -518,14 +526,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                "totals": totals, "burn_rate_weighted_per_min": recent.weighted / 15.0}
         if not is_admin(user):
             return out
-        be = gw.backend.describe()
         acct = view_account(account)
+        be = credential(acct)
         return out | {
             "active_users_24h": active,
             "quota": quota_view(now, acct),
             "exhaustion": _exhaustion(conn, now, acct) if acct is not None else None,
             "credential": {"healthy": be.healthy, "detail": be.detail, "expires_at": be.expires_at},
-            "poll": {"last_status": gw.poller.last_status},
+            "poll": {"last_status": gw.pollers[acct].last_status if acct in gw.pollers else None},
             "upstream": upstream.overload(conn, now) | {"status_page": gw.status_page.view(now)},
         }
 
@@ -845,7 +853,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         out = {"user": _public_user(user), "limits": views, "line": line,
                "paused": not cfg.tickets.enabled and tickets.is_gated(conn, user["id"])}
         if account is not None:
-            out |= {"account": account, "credential_healthy": gw.backend.describe().healthy}
+            out |= {"account": account, "credential_healthy": credential(acct).healthy}
         return out
 
     def set_name(user_id: int, name, actor: int) -> str:
@@ -1348,12 +1356,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         admin(request)
         out = []
         for r in list_accounts(conn):
-            # The default account's live backend knows its last refresh error; the others are read from the row.
-            st = (gw.backend if r["account"] == DEFAULT_ACCOUNT else OAuthBackend(cfg, conn, None, r["account"])).describe()
+            st = credential(r["account"])
             out.append({"account": r["account"], "label": r["label"] or r["account"], "email": r["email"],
                         "state": r["state"], "healthy": st.healthy, "detail": st.detail,
                         "expires_at": st.expires_at, "updated_at": r["updated_at"]})
-        return {"accounts": out, "default": DEFAULT_ACCOUNT}
+        return {"accounts": out}
 
     @app.post("/api/admin/accounts/{account}/login/start")
     async def account_login_start(request: Request, account: str):
@@ -1372,12 +1379,17 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             record = await oauth_login.finish(conn, cfg, gw.http, code, account, actor["id"])
         except (oauth_login.LoginError, ValueError) as e:
             fail(400, str(e))
+        # Served from now on, without a restart; its plan read at once, so its passes can be priced and sold.
+        gw.sync_accounts()
+        if account in gw.pollers:
+            await gw.pollers[account].check_plan(time.time())
         return {"ok": True, "email": record.get("account"), "expires_at": record.get("expires_at")}
 
     @app.post("/api/admin/accounts/{account}/remove")
     async def account_remove(request: Request, account: str):
         actor = admin(request, write=True)
         account_call(oauth_login.remove_account, conn, account, actor["id"])
+        gw.sync_accounts()
         return {"ok": True}
 
     @app.get("/api/admin/rates")
@@ -1651,12 +1663,15 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 "ends_at": tickets.subscription_end(conn, week, now, acct), "weekly_reset": week[1] if week else None}
 
     @app.post("/api/admin/subscription/refresh")
-    async def refresh_subscription(request: Request):
+    async def refresh_subscription(request: Request, account: str | None = None):
         # Ask Anthropic for the plan now rather than at the next hourly check: a plan just bought or changed.
         admin(request, write=True)
-        if not await gw.poller.check_plan(time.time()):
+        acct = view_account(account)
+        if acct not in gw.pollers:
+            gw.sync_accounts()   # linked from another process since the last poll interval
+        if acct not in gw.pollers or not await gw.pollers[acct].check_plan(time.time()):
             fail(502, "Anthropic did not send the subscription's details; try again shortly.")
-        return {"ok": True, "profile": quota.latest_profile(conn, account=gw.poller.account)}
+        return {"ok": True, "profile": quota.latest_profile(conn, account=acct)}
 
     @app.post("/api/admin/subscription/end")
     async def set_subscription_end(request: Request, account: str | None = None):

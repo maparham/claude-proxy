@@ -69,11 +69,11 @@ async def test_unknown_path_is_404_and_never_forwarded(cfg, db, anthropic):
 
 
 async def test_unlinked_credential_is_503(cfg, db, anthropic):
-    _, key = create_user(db[1], "alice", role="admin")
+    _, key = create_user(db[1], "alice", role="admin", account="default")   # assigned an account no longer linked
     gw = make_gateway(cfg, db[1], anthropic)
     async with asgi_client(create_app(gw)) as c:
         r = await c.get("/v1/models", headers={"Authorization": f"Bearer {key}"})
-    assert r.status_code == 503 and "claude-proxy login" in r.json()["error"]["message"]
+    assert r.status_code == 503 and r.json()["error"]["message"] == "Subscription account 'default' is not linked."
     assert anthropic.calls == []
 
 
@@ -108,7 +108,7 @@ async def test_refresh_sends_refresh_scopes(cfg, db):
         return httpx.Response(200, json={"access_token": "new", "refresh_token": "r2", "expires_in": 28800})
 
     gw = Gateway(cfg, db[1], http=httpx.AsyncClient(transport=httpx.MockTransport(handler)))
-    assert await gw.backend.on_unauthorized("old")
+    assert await gw.backends["default"].on_unauthorized("old")
     assert bodies[0]["scope"] == cfg.credential.refresh_scopes
     assert bodies[0]["grant_type"] == "refresh_token" and bodies[0]["refresh_token"] == "r1"
 
@@ -117,15 +117,17 @@ async def test_backend_picks_up_login_done_by_cli_while_running(cfg, db):
     import time as _t
     from claude_proxy.credentials import NeedsLogin
     from tests.conftest import seed_oauth
+    seed_oauth(db[1], access="old-token")
     gw = make_gateway(cfg, db[1])
+    db[1].execute("UPDATE credentials SET state='needs_login'")
     with pytest.raises(NeedsLogin):
-        await gw.backend.upstream_headers()
+        await gw.backends["default"].upstream_headers()
     seed_oauth(db[1], access="new-token")
-    assert (await gw.backend.upstream_headers())["authorization"] == "Bearer new-token"
+    assert (await gw.backends["default"].upstream_headers())["authorization"] == "Bearer new-token"
     db[1].execute("UPDATE credentials SET encrypted_blob=?, updated_at=? WHERE backend='oauth'",
                   (__import__("claude_proxy.credentials", fromlist=["x"]).encrypt_blob(
                       {"access_token": "newer", "refresh_token": "r", "expires_at": int(_t.time()) + 3600}), int(_t.time()) + 5))
-    assert (await gw.backend.upstream_headers())["authorization"] == "Bearer newer"
+    assert (await gw.backends["default"].upstream_headers())["authorization"] == "Bearer newer"
 
 
 def test_example_config_loads():

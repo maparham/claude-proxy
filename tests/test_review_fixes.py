@@ -73,7 +73,7 @@ async def test_concurrent_401s_trigger_one_refresh(cfg, db):
     cfg.credential.token_url = "http://auth.fake/v1/oauth/token"
     auth.default = lambda req: JSONResponse({"access_token": "fresh", "refresh_token": "r2", "expires_in": 28800})
     gw = make_gateway(cfg, conn, auth)
-    results = await asyncio.gather(*[gw.backend.on_unauthorized("dead") for _ in range(10)])
+    results = await asyncio.gather(*[gw.backends["default"].on_unauthorized("dead") for _ in range(10)])
     assert all(results)
     assert len(auth.calls) == 1
 
@@ -154,7 +154,7 @@ def _expired_grant(conn):
 
 async def test_rate_limited_refresh_backs_off_and_says_so(cfg, db):
     conn = db[1]
-    _, key = create_user(conn, "alice", role="admin")
+    _, key = create_user(conn, "alice", role="admin", account="default")
     _expired_grant(conn)
     auth = FakeUpstream("auth.fake")
     cfg.credential.token_url = "http://auth.fake/v1/oauth/token"
@@ -168,12 +168,12 @@ async def test_rate_limited_refresh_backs_off_and_says_so(cfg, db):
     assert r1.status_code == r2.status_code == 503
     msg = r1.json()["error"]["message"]
     assert "temporar" in msg.lower() and "claude-proxy login" not in msg
-    assert gw.backend.describe().healthy is False
+    assert gw.backends["default"].describe().healthy is False
 
 
 async def test_invalid_grant_still_asks_for_login(cfg, db):
     conn = db[1]
-    _, key = create_user(conn, "alice", role="admin")
+    _, key = create_user(conn, "alice", role="admin", account="default")
     _expired_grant(conn)
     auth = FakeUpstream("auth.fake")
     cfg.credential.token_url = "http://auth.fake/v1/oauth/token"

@@ -367,8 +367,8 @@ class OAuthBackend:
         try:
             data, state = self._load()
         except CredentialKeyMissing as e:
-            return BackendStatus("oauth", False, str(e))
-        name = "oauth" if self.account == DEFAULT_ACCOUNT else f"oauth:{self.account}"
+            return BackendStatus(f"oauth:{self.account}", False, str(e))
+        name = f"oauth:{self.account}"
         if data is None:
             return BackendStatus(name, False, f"not linked — run `claude-proxy login --account {self.account}`")
         if state in ("needs_login", "decrypt_failed"):
@@ -377,9 +377,7 @@ class OAuthBackend:
         if data.get("expires_at", 0) <= time.time():
             return BackendStatus(name, False, f"access token expired; refresh retrying ({self.last_error or 'pending'})",
                                  data.get("expires_at"))
-        detail = f"linked{' as ' + data['account'] if data.get('account') else ''}"
-        if self.account != DEFAULT_ACCOUNT:
-            detail += f" (account {self.account})"
+        detail = f"linked{' as ' + data['account'] if data.get('account') else ''} (account {self.account})"
         if self.last_error:
             detail += f"; last error: {self.last_error}"
         return BackendStatus(name, True, detail, data.get("expires_at"))

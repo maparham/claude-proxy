@@ -121,8 +121,8 @@ def test_backend_sees_a_login_stored_in_the_same_second(cfg, db):
 async def test_refresh_answer_without_access_token_is_a_temporary_failure(cfg, db):
     seed_oauth(db[1], access="old", refresh="r1")
     gw = Gateway(cfg, db[1], http=httpx.AsyncClient(transport=httpx.MockTransport(lambda req: httpx.Response(200, json={"oops": 1}))))
-    assert await gw.backend.on_unauthorized("old") is False
-    assert gw.backend.describe().healthy   # not marked as needing a login; retried after the backoff
+    assert await gw.backends["default"].on_unauthorized("old") is False
+    assert gw.backends["default"].describe().healthy   # not marked as needing a login; retried after the backoff
 
 
 async def test_two_users_sharing_a_session_id_stay_separate(cfg, db):

@@ -4,6 +4,7 @@ import time
 import pytest
 
 from claude_proxy import tickets
+from tests.conftest import seed_oauth
 from tests.test_tickets_web import env  # noqa: F401  (a fixture here too)
 from tests.test_web import admin_client
 from tests.tickets_helpers import DAY, NOW, RESET7, live, seeded
@@ -189,13 +190,15 @@ def test_both_overrides_when_both_are_short(db, over_5h, over_end, ok, refusal):
 
 async def test_admin_checks_the_plan_now(env):  # noqa: F811
     gw, conn, cfg, ids, keys = env
+    seed_oauth(conn)
+    gw.sync_accounts()
     sent = [{"organization": {"organization_type": "claude_pro", "rate_limit_tier": "default_claude_ai"}}, None]
 
     async def fetch_profile():
         return sent.pop(0)
-    gw.poller.backend.fetch_profile = fetch_profile
+    gw.pollers["default"].backend.fetch_profile = fetch_profile
     async with admin_client(gw) as c:
         r = await c.post("/api/admin/subscription/refresh")
         assert r.status_code == 200 and r.json()["profile"]["profile"]["organization"]["organization_type"] == "claude_pro"
-        assert gw.poller.next_plan_check > time.time()   # the hourly check starts over from this one
+        assert gw.pollers["default"].next_plan_check > time.time()   # the hourly check starts over from this one
         assert (await c.post("/api/admin/subscription/refresh")).status_code == 502   # Anthropic sent nothing

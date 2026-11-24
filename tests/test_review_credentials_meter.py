@@ -22,29 +22,29 @@ async def test_429_mentioning_invalid_grant_backs_off_instead_of_needs_login(cfg
     seed_oauth(db[1], access="old", refresh="r1")
     gw = _gateway(cfg, db, lambda req: httpx.Response(
         429, json={"error": {"type": "rate_limit_error", "message": "too many invalid_grant attempts; slow down"}}))
-    assert not await gw.backend.on_unauthorized("old")
+    assert not await gw.backends["default"].on_unauthorized("old")
     assert _state(db) == "active"
-    assert gw.backend._retry_at > 0 and "429" in gw.backend.last_error
+    assert gw.backends["default"]._retry_at > 0 and "429" in gw.backends["default"].last_error
 
 
 async def test_503_mentioning_invalid_grant_backs_off_instead_of_needs_login(cfg, db):
     seed_oauth(db[1], access="old", refresh="r1")
     gw = _gateway(cfg, db, lambda req: httpx.Response(503, text="upstream invalid_grant handler unavailable"))
-    assert not await gw.backend.on_unauthorized("old")
+    assert not await gw.backends["default"].on_unauthorized("old")
     assert _state(db) == "active"
 
 
 async def test_400_invalid_grant_still_marks_needs_login(cfg, db):
     seed_oauth(db[1], access="old", refresh="r1")
     gw = _gateway(cfg, db, lambda req: httpx.Response(400, json={"error": "invalid_grant"}))
-    assert not await gw.backend.on_unauthorized("old")
+    assert not await gw.backends["default"].on_unauthorized("old")
     assert _state(db) == "needs_login"
 
 
 async def test_400_rate_limit_backs_off(cfg, db):
     seed_oauth(db[1], access="old", refresh="r1")
     gw = _gateway(cfg, db, lambda req: httpx.Response(400, json={"error": "rate_limit_exceeded"}))
-    assert not await gw.backend.on_unauthorized("old")
+    assert not await gw.backends["default"].on_unauthorized("old")
     assert _state(db) == "active"
 
 
@@ -59,13 +59,13 @@ async def test_forced_refresh_is_a_no_op_within_60s_of_the_last_one(cfg, db):
         return httpx.Response(200, json={"access_token": f"new{len(calls)}", "refresh_token": f"r{len(calls) + 1}", "expires_in": 28800})
 
     gw = _gateway(cfg, db, handler)
-    assert await gw.backend.on_unauthorized("old")
-    assert gw.backend.current_token() == "new1"
+    assert await gw.backends["default"].on_unauthorized("old")
+    assert gw.backends["default"].current_token() == "new1"
     # The fresh token is rejected again (e.g. a scope-rejected path): no second refresh within the window.
-    assert await gw.backend.on_unauthorized("new1")
-    assert await gw.backend.on_unauthorized("new1")
+    assert await gw.backends["default"].on_unauthorized("new1")
+    assert await gw.backends["default"].on_unauthorized("new1")
     assert len(calls) == 1
-    assert gw.backend.current_token() == "new1"
+    assert gw.backends["default"].current_token() == "new1"
 
 
 async def test_forced_refresh_runs_again_once_the_window_has_passed(cfg, db, monkeypatch):
@@ -78,12 +78,12 @@ async def test_forced_refresh_runs_again_once_the_window_has_passed(cfg, db, mon
         return httpx.Response(200, json={"access_token": f"new{len(calls)}", "refresh_token": f"r{len(calls) + 1}", "expires_in": 28800})
 
     gw = _gateway(cfg, db, handler)
-    assert await gw.backend.on_unauthorized("old")
+    assert await gw.backends["default"].on_unauthorized("old")
     now = _t.time()
     monkeypatch.setattr("claude_proxy.credentials.time.time", lambda: now + 61)
-    assert await gw.backend.on_unauthorized("new1")
+    assert await gw.backends["default"].on_unauthorized("new1")
     assert len(calls) == 2 and calls[1]["refresh_token"] == "r2"
-    assert gw.backend.current_token() == "new2"
+    assert gw.backends["default"].current_token() == "new2"
 
 
 async def test_first_forced_refresh_after_login_is_not_throttled(cfg, db):
@@ -95,7 +95,7 @@ async def test_first_forced_refresh_after_login_is_not_throttled(cfg, db):
         return httpx.Response(200, json={"access_token": "new", "refresh_token": "r2", "expires_in": 28800})
 
     gw = _gateway(cfg, db, handler)
-    assert await gw.backend.on_unauthorized("old")
+    assert await gw.backends["default"].on_unauthorized("old")
     assert len(calls) == 1
 
 

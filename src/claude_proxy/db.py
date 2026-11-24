@@ -787,11 +787,27 @@ def audit(conn: sqlite3.Connection, actor_user_id: int | None, action: str, targ
                  (int(time.time()), actor_user_id, action, target, json.dumps(detail) if detail else None))
 
 
-def create_user(conn: sqlite3.Connection, name: str, role: str = "user", password_hash: str | None = None) -> tuple[int, str]:
+AUTO_ACCOUNT = object()   # create_user's default: the account a new user is assigned is picked for them
+
+
+def _auto_account(conn: sqlite3.Connection) -> str | None:
+    """The account a new user gets when none is given: the only linked one, while it is active. With several linked
+    (or the only one needing a login) none: the caller picks, or the admin assigns one."""
+    rows = conn.execute("SELECT account, state FROM credentials WHERE backend='oauth'").fetchall()
+    return rows[0][0] if len(rows) == 1 and rows[0][1] == "active" else None
+
+
+def create_user(conn: sqlite3.Connection, name: str, role: str = "user", password_hash: str | None = None,
+                account=AUTO_ACCOUNT) -> tuple[int, str]:
+    """A new user and their gateway key, shown once. `account`: the subscription account serving them (None:
+    unassigned; AUTO_ACCOUNT: _auto_account's pick)."""
+    if account is AUTO_ACCOUNT:
+        account = _auto_account(conn)
     raw, h, prefix = generate_virtual_key()
     cur = conn.execute(
-        "INSERT INTO users(name, role, key_hash, key_prefix, enabled, created_at, password_hash) VALUES(?,?,?,?,1,?,?)",
-        (name, role, h, prefix, int(time.time()), password_hash),
+        "INSERT INTO users(name, role, key_hash, key_prefix, enabled, created_at, password_hash, account) "
+        "VALUES(?,?,?,?,1,?,?,?)",
+        (name, role, h, prefix, int(time.time()), password_hash, account),
     )
     return cur.lastrowid, raw
 

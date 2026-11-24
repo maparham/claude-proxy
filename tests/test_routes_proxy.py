@@ -34,7 +34,7 @@ def last_request(conn):
 def forbid_credential(gw, monkeypatch):
     async def boom():
         raise AssertionError("a routes-only key made the gateway load the subscription credential")
-    monkeypatch.setattr(gw.backend, "upstream_headers", boom)
+    monkeypatch.setattr(gw.backends["default"], "upstream_headers", boom)
 
 
 @pytest.mark.parametrize("scope,method,path,routed,allowed", [

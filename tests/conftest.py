@@ -137,6 +137,9 @@ def seed_oauth(conn, access="oauth-access", refresh="oauth-refresh", expires_in=
         (account, encrypt_blob({"access_token": access, "refresh_token": refresh, "expires_at": exp,
                                 "anthropic_sub": sub, "account": email}), exp, int(time.time()), account, sub, email),
     )
+    # Users made before the account was linked are served from it, as a single-account gateway's new users are
+    # (db.create_user); a test of unassigned users leaves them so or seeds before creating them.
+    conn.execute("UPDATE users SET account=? WHERE account IS NULL", (account,))
 
 
 def mounted_client(*upstreams: FakeUpstream) -> httpx.AsyncClient:

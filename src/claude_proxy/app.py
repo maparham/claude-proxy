@@ -11,7 +11,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from . import api_credit, contents, geo, limits, mail, passkeys, prompts, quota, titles
+from . import api_credit, contents, geo, limits, mail, passkeys, prompts, quota, routing, titles
 from .auth import AuthError, authenticate, client_status
 from .config import Config, Route
 from .credentials import NeedsLogin, RefreshUnavailable
@@ -147,11 +147,14 @@ def _model_of(body: bytes) -> tuple[str | None, dict | None]:
 
 
 class Upstream:
-    """Where one request goes and with which credential."""
+    """Where one request goes and with which credential: a third-party route's key, else the subscription account's
+    (`account`, routing.account_for; None until it is known)."""
 
-    def __init__(self, gw: Gateway, route: Route | None):
+    def __init__(self, gw: Gateway, route: Route | None, account: str | None = None):
         self.gw = gw
         self.route = route
+        self.account = account
+        self.backend = gw.backends[account] if route is None and account is not None else None
         self.provider = route.name if route else "anthropic"
         self.token: str | None = None
 
@@ -159,7 +162,7 @@ class Upstream:
         h = filter_request_headers(client_headers)
         h["accept-encoding"] = "gzip"   # a coding httpx always decodes; the body is re-framed downstream
         if self.route is None:
-            creds = await self.gw.backend.upstream_headers()
+            creds = await self.backend.upstream_headers()
             self.token = creds["authorization"].split(" ", 1)[1]
             h["authorization"] = creds["authorization"]
             h["anthropic-beta"] = merge_beta(h.get("anthropic-beta"), creds["anthropic-beta"])
@@ -240,11 +243,13 @@ def create_app(gw: Gateway) -> FastAPI:
 
     @app.get("/health")
     async def health():
-        # Unauthenticated, so only yes/no answers: whether the subscription login works, and whether Anthropic's
+        # Unauthenticated, so only yes/no answers: whether every subscription login works, and whether every account's
         # usage figures are fresh (share limits and tickets depend on them). The detail stays on the dashboard.
-        oldest_newest = await gw.db.run(_usage_fresh, gw.backend.account)
-        fresh = oldest_newest is not None and time.time() - oldest_newest <= usage_fresh_s(gw.cfg.quota)
-        return {"ok": True, "credential": gw.backend.describe().healthy, "usage_fresh": fresh}
+        accounts = list(gw.backends)
+        newest = [await gw.db.run(_usage_fresh, a) for a in accounts]
+        now = time.time()
+        fresh = bool(newest) and all(n is not None and now - n <= usage_fresh_s(gw.cfg.quota) for n in newest)
+        return {"ok": True, "credential": gw.healthy(), "usage_fresh": fresh}
 
     @app.post("/health")
     async def health_upload(request: Request):
@@ -298,6 +303,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
     # Behind a proxy on the same host (cloudflared, Caddy), uvicorn takes the client's address from X-Forwarded-For: it
     # trusts it only from 127.0.0.1. A proxy reaching the gateway from elsewhere (a Docker bridge) would be recorded instead.
     base = {"started_at": started, "method": request.method, "path": path, "ip": request.client.host[:64] if request.client else None}
+    base["account"] = None   # the subscription account serving it, once known; refused before that, none
     held = False   # this request is counted in `inflight` until it is recorded
     pass_held = False   # likewise in `pass_reg` (a pass app key's request)
     pass_metered_held = False   # likewise in `pass_metered_reg` (a pass app key's metered request)
@@ -430,6 +436,17 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
             {"retry-after": str(decision.retry_after)} if decision.retry_after else {})
         return JSONResponse(status_code=decision.status, content=decision.body, headers=headers or None)
     try:
+        if route is None:
+            # The serving pass's account, else the user's assigned one; never another, whatever state it is in.
+            account = await gw.db.run(routing.account_for, user["id"], time.time(), served)
+            if account is None:
+                await record(status=403, stream=0, complete=1, error_type="permission_error", rejected_by=routing.NO_ACCOUNT)
+                return api_error(403, "permission_error", routing.NO_ACCOUNT_MSG)
+            base["account"] = account
+            if account not in gw.backends:   # its login was removed since the pass was sold or the user assigned
+                await record(status=503, stream=0, complete=1, error_type="gateway_needs_login")
+                return api_error(503, "api_error", f"Subscription account '{account}' is not linked." if is_admin else UNAVAILABLE)
+            upstream = Upstream(gw, route, account)
         if route is not None:
             if not route.api_key():
                 await record(status=503, stream=0, complete=1, error_type="gateway_route_unconfigured")
@@ -457,7 +474,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         try:
             resp = await send()
             # Refresh-and-retry once on 401. Nothing has been sent to the client yet (spec 5.1).
-            if resp.status_code == 401 and route is None and await gw.backend.on_unauthorized(upstream.token):
+            if resp.status_code == 401 and route is None and await upstream.backend.on_unauthorized(upstream.token):
                 await resp.aclose()
                 resp = await send()
         except RefreshUnavailable:
@@ -479,7 +496,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         if route is None:
             # Awaited, so the next request's checks see these figures; shielded, so a cancel never drops them.
             try:
-                await asyncio.shield(gw.db.run(_record_quota, resp.headers, gw.backend.account))
+                await asyncio.shield(gw.db.run(_record_quota, resp.headers, upstream.account))
             except BaseException:
                 await resp.aclose()   # cancelled before the relay owns it: nothing else would close the upstream stream
                 raise

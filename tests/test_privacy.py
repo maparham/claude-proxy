@@ -121,7 +121,7 @@ async def test_upstream_auth_failure_is_a_plain_503_for_users(env, anthropic, st
     gw, conn, uid, key, admin_key = env
     anthropic.default = lambda req: JSONResponse({"type": "error", "error": {"type": "authentication_error", "message": "OAuth token revoked"}},
                                                  status_code=status)
-    gw.backend.on_unauthorized = lambda token: _false()
+    gw.backends["default"].on_unauthorized = lambda token: _false()
     async with asgi_client(create_app(gw)) as c:
         r = await c.post("/v1/messages", json=MSG, headers=bearer(key))
     assert r.status_code == 503
@@ -135,7 +135,7 @@ async def _false():
 async def test_needs_login_is_a_plain_503_for_users(env):
     gw, conn, uid, key, admin_key = env
     conn.execute("UPDATE credentials SET state='needs_login'")
-    gw.backend._cache = None
+    gw.backends["default"]._cache = None
     async with asgi_client(create_app(gw)) as c:
         r = await c.post("/v1/messages", json=MSG, headers=bearer(key))
         a = await c.post("/v1/messages", json=MSG, headers=bearer(admin_key))

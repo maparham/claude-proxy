@@ -18,6 +18,7 @@ def env(cfg, db):
     seed_oauth(conn, sub="sub-default", email="default@x.com")
     auth = FakeUpstream("auth.fake")
     cfg.credential.token_url = "http://auth.fake/token"
+    cfg.credential.profile_url = "http://auth.fake/profile"
     gw = make_gateway(cfg, conn, auth)
     return gw, conn, auth, alice_key
 
@@ -37,15 +38,21 @@ async def link(c, conn, slug):
 
 async def test_list_link_and_remove(env):
     gw, conn, auth, _ = env
-    auth.default = token_answer("sub-2", "two@x.com")
+    token = token_answer("sub-2", "two@x.com")
+    auth.default = lambda req: (JSONResponse({"organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x"}})
+                                if req["path"] == "/profile" else token(req))
     async with admin_client(gw) as c:
         rows = (await c.get("/api/admin/accounts")).json()["accounts"]
         assert [(r["account"], r["email"], r["healthy"]) for r in rows] == [("default", "default@x.com", True)]
         r = await link(c, conn, "second")
         assert r.status_code == 200 and r.json()["email"] == "two@x.com"
         assert OAuthBackend(gw.cfg, conn, None, "second").current_token() == "acc-sub-2"
+        # Served at once, and its plan read right after linking.
+        assert set(gw.backends) == set(gw.pollers) == {"default", "second"}
+        assert conn.execute("SELECT rate_limit_tier FROM account_plans WHERE account='second'").fetchone()[0] == "default_claude_max_20x"
         assert {r["account"] for r in (await c.get("/api/admin/accounts")).json()["accounts"]} == {"default", "second"}
         assert (await c.post("/api/admin/accounts/second/remove", json={})).status_code == 200
+        assert set(gw.backends) == {"default"}
     assert [r["account"] for r in list_accounts(conn)] == ["default"]
     actions = [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE target='oauth:second' ORDER BY id")]
     assert actions == ["login_start", "login", "account_remove"]
@@ -56,9 +63,9 @@ async def test_relink_default_reaches_the_live_backend(env):
     gw, conn, auth, _ = env
     auth.default = token_answer("sub-default", "default@x.com")
     async with admin_client(gw) as c:
-        assert gw.backend.current_token() == "oauth-access"
+        assert gw.backends["default"].current_token() == "oauth-access"
         assert (await link(c, conn, "default")).status_code == 200
-    assert gw.backend.current_token() == "acc-sub-default"
+    assert gw.backends["default"].current_token() == "acc-sub-default"
 
 
 async def test_duplicate_subscription_refused(env):
@@ -79,7 +86,7 @@ async def test_bad_code_slug_and_remove_rules(env):
         r = await c.post("/api/admin/accounts/second/login/finish", json={"code": ""})
         assert r.status_code == 400
         r = await c.post("/api/admin/accounts/default/remove", json={})
-        assert r.status_code == 400 and "serves all traffic" in r.json()["error"]
+        assert r.status_code == 400 and "last linked" in r.json()["error"]
         r = await c.post("/api/admin/accounts/ghost/remove", json={})
         assert r.status_code == 400 and "No subscription account" in r.json()["error"]
 

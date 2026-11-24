@@ -1,15 +1,17 @@
 from __future__ import annotations
 
+import asyncio
 import copy
 import logging
 import secrets
 import sqlite3
+from collections.abc import Mapping
 
 import httpx
 
 from . import tickets
 from .config import Config
-from .credentials import OAuthBackend
+from .credentials import OAuthBackend, list_accounts
 from .dbpool import DbPool
 from .quota import Poller
 from .upstream import StatusPage
@@ -20,7 +22,7 @@ logger = logging.getLogger("claude_proxy")
 class Gateway:
     """Process-wide state shared by the proxy app, the dashboard app and background tasks."""
 
-    def __init__(self, cfg: Config, conn: sqlite3.Connection, http: httpx.AsyncClient | None = None, backend=None):
+    def __init__(self, cfg: Config, conn: sqlite3.Connection, http: httpx.AsyncClient | None = None):
         self.cfg = cfg
         self.conn = conn
         self.db = DbPool(conn)   # the proxy's per-request queries, off the event loop
@@ -28,9 +30,12 @@ class Gateway:
         self.http = http or httpx.AsyncClient(http1=True, http2=False,
                                               timeout=httpx.Timeout(cfg.upstream.timeout_s, connect=15.0),
                                               limits=httpx.Limits(max_connections=100, max_keepalive_connections=20))
-        self.backend = backend or OAuthBackend(cfg, conn, self.http)
         self.device_id = _device_id(conn)
-        self.poller = Poller(conn, self.backend, cfg.quota, self.db)
+        # One credential backend and one usage poller per linked subscription account, by slug. Changed in place only
+        # (sync_accounts), never rebound: the dashboard's view shares the pollers and reads the backends through them.
+        self.backends: dict[str, OAuthBackend] = {}
+        self.pollers: dict[str, Poller] = {}
+        self.sync_accounts()
         self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)
@@ -44,11 +49,51 @@ class Gateway:
                 logger.warning("tickets are off in the config but %d users are ticket-gated; their requests are refused "
                                "until each is ungated on the Users page", n)
 
+    def sync_accounts(self) -> tuple[list[str], list[str]]:
+        """A backend and a poller for every linked account, none for an unlinked one: (added, removed) slugs. Kept ones
+        stay as they are, their locks, refresh back-off and poll state with them. Run at start, every poll interval (a
+        `claude-proxy login` from another process) and when the dashboard links or removes an account."""
+        return self._sync([r["account"] for r in list_accounts(self.conn)])
+
+    def _sync(self, linked: list[str]) -> tuple[list[str], list[str]]:
+        added = [a for a in linked if a not in self.backends]
+        removed = [a for a in self.backends if a not in linked]
+        for a in added:
+            be = OAuthBackend(self.cfg, self.conn, self.http, a)
+            self.backends[a] = be
+            self.pollers[a] = Poller(self.conn, be, self.cfg.quota, self.db)
+        for a in removed:
+            del self.backends[a], self.pollers[a]
+        if added or removed:
+            logger.info("subscription accounts: added %s, removed %s", added or "none", removed or "none")
+        return added, removed
+
+    def healthy(self) -> bool:
+        """At least one account linked, and every one able to serve: an account's users are never served by another."""
+        backends = list(self.backends.values())
+        return bool(backends) and all(b.describe().healthy for b in backends)
+
+    async def run_pollers(self, interval_s: float = 60.0) -> None:
+        """Each account's usage poll (quota.Poller.tick) every interval, after picking up accounts linked or removed
+        meanwhile. One account's failure is logged and never holds up another's."""
+        while True:
+            try:
+                self.sync_accounts()
+            except Exception:
+                logger.exception("could not read the linked subscription accounts")
+            pollers = list(self.pollers.values())
+            for p, r in zip(pollers, await asyncio.gather(*(p.tick() for p in pollers), return_exceptions=True)):
+                if isinstance(r, BaseException):
+                    logger.error("usage poll [%s] failed", p.account, exc_info=r)
+            await asyncio.sleep(interval_s)
+
     def view(self, conn: sqlite3.Connection, http: httpx.AsyncClient) -> Gateway:
         """This gateway for an app served on another thread's event loop (the dashboard): its own connection and
-        HTTP client, the same backend state, poller and status page."""
+        HTTP client, the same backends' state, pollers and status page."""
         v = copy.copy(self)
-        v.conn, v.http, v.backend = conn, http, _BackendView(self.backend, conn)
+        v.conn, v.http = conn, http
+        v.backends = _BackendViews(self, conn)
+        v.sync_accounts = lambda: self._sync([r["account"] for r in list_accounts(conn)])
         return v
 
     async def aclose(self) -> None:
@@ -57,16 +102,34 @@ class Gateway:
 
 
 class _BackendView:
-    """The credential backend as another thread reads it: its live state (last_error), loaded through that thread's
+    """One credential backend as another thread reads it: its live state (last_error), loaded through that thread's
     connection, since two threads must not share one."""
 
     def __init__(self, backend, conn: sqlite3.Connection):
         self._backend, self._conn = backend, conn
+        self.account = backend.account
 
     def describe(self):
         b = copy.copy(self._backend)
         b.conn = self._conn
         return b.describe()
+
+
+class _BackendViews(Mapping):
+    """The gateway's backends by slug, each as a _BackendView on `conn`. Read through to the gateway on each access, so
+    accounts the proxy's loop picks up appear here too."""
+
+    def __init__(self, gw: Gateway, conn: sqlite3.Connection):
+        self._gw, self._conn = gw, conn
+
+    def __getitem__(self, account: str) -> _BackendView:
+        return _BackendView(self._gw.backends[account], self._conn)
+
+    def __iter__(self):
+        return iter(list(self._gw.backends))
+
+    def __len__(self) -> int:
+        return len(self._gw.backends)
 
 
 def _device_id(conn: sqlite3.Connection) -> str:

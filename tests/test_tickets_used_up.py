@@ -106,7 +106,7 @@ def test_a_pass_started_now_runs_beside_the_first_with_limits_of_its_own(env):
     assert st["share_7d"].current == 0
     out = {}
     assert limits.evaluate(conn, cfg, ids["alice"], "claude-sonnet-5", "/v1/messages", now=NOW - 50, served=out) is None
-    assert out == {"ticket_id": t2["id"]}
+    assert out == {"ticket_id": t2["id"], "account": "default"}
     with pytest.raises(tickets.TicketError, match="on its own"):
         tickets.upgrade_quote(conn, cfg, tickets.get(conn, t["id"]), "standard", "USD", NOW - 50)
 

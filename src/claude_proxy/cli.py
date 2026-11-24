@@ -49,7 +49,8 @@ def cmd_init(args, cfg):
     db.audit(conn, None, "init", args.admin_name)
     print(f"Admin {args.admin_name!r} created. Database: {cfg.db.path}")
     print(f"Admin's own gateway key (shown once): {key}")
-    if not OAuthBackend(cfg, conn, httpx.AsyncClient()).describe().healthy:
+    from .credentials import list_accounts
+    if not list_accounts(conn):
         print("Next: `claude-proxy login` to link the Claude subscription.")
 
 
@@ -93,23 +94,21 @@ def cmd_login(args, cfg):
 
 
 def cmd_status(args, cfg):
-    from .credentials import DEFAULT_ACCOUNT, list_accounts
+    from .credentials import list_accounts
     conn = _conn(cfg)
     rows = list_accounts(conn)
-    # One line for the account the gateway serves from: the deploy script installed on the box greps '^credential: OK'.
-    serving = DEFAULT_ACCOUNT in {r["account"] for r in rows} and OAuthBackend(cfg, conn, None, DEFAULT_ACCOUNT).describe().healthy
-    print(f"credential: {'OK' if serving else 'NOT OK'}")
-    if DEFAULT_ACCOUNT not in {r["account"] for r in rows}:
-        # Every request is served from the default account until routing lands (spec section 4).
-        print(f"credential [{DEFAULT_ACCOUNT}]: NOT OK — not linked; the gateway serves from it — "
-              f"run `claude-proxy login`")
+    healthy = bool(rows)
+    if not rows:
+        print("No subscription accounts linked — run `claude-proxy login --account <name>`")
     for r in rows:
-        be = OAuthBackend(cfg, conn, None, r["account"])
-        st = be.describe()
-        tag = f"[{r['account']}]"
-        print(f"credential {tag}: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
+        st = OAuthBackend(cfg, conn, None, r["account"]).describe()
+        healthy = healthy and st.healthy
+        print(f"credential [{r['account']}]: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
         if st.expires_at:
             print(f"  access token expires: {time.ctime(st.expires_at)}")
+    # Every account serves its own passes and users, so all must work. The deploy script installed on the box greps
+    # '^credential: OK'.
+    print(f"credential: {'OK' if healthy else 'NOT OK'}")
     # Each account's newest figure per bucket.
     for r in conn.execute("SELECT account, bucket, utilization_pct, resets_at, observed_at, source FROM quota_snapshots q "
                           "WHERE observed_at = (SELECT MAX(observed_at) FROM quota_snapshots WHERE account=q.account AND bucket=q.bucket) "
@@ -332,7 +331,7 @@ async def _serve(cfg: Config):
     print(f"proxy:     http://{cfg.listener.host}:{cfg.listener.port}   (ANTHROPIC_BASE_URL)")
     print(f"dashboard: http://{cfg.listener.dashboard_host}:{cfg.listener.dashboard_port}/dashboard")
     payments.warn_if_off(cfg)
-    background = [asyncio.create_task(gw.poller.run()), asyncio.create_task(gw.status_page.run()),
+    background = [asyncio.create_task(gw.run_pollers()), asyncio.create_task(gw.status_page.run()),
                   asyncio.create_task(_maintenance(db.get_conn(cfg.db.path), cfg))]
     dash_thread = threading.Thread(target=run_dashboard, name="dashboard", daemon=True)
     dash_thread.start()

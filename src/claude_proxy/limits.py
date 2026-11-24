@@ -595,7 +595,8 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
              now: float | None = None, inflight: int = 0, served: dict | None = None, autostart: bool = True) -> Decision | None:
     """None to allow, or the rejection to send. `inflight`: how many of the user's metered requests are being served
     right now; recorded only when they finish, they would otherwise slip past every limit. `served`: given, an allowed
-    request's pass goes in as served["ticket_id"], for its row (each pass counts only its own requests). `autostart`
+    request's pass goes in as served["ticket_id"], for its row (each pass counts only its own requests), and its account as
+    served["account"]. `autostart`
     False: a waiting free trial is left waiting (pass app keys never start one)."""
     now = time.time() if now is None else now
     is_count_tokens = path == COUNT_TOKENS_PATH
@@ -686,6 +687,7 @@ def evaluate(conn: sqlite3.Connection, cfg: Config, user_id: int, model: str | N
                          "updated_at=excluded.updated_at", (t["id"], row[0] if row else wk.resets_at, wk.own_pts, wk.rate, now))
         if served is not None:
             served["ticket_id"] = t["id"]
+            served["account"] = t["account"]   # the request goes to the account holding its pass (routing.account_for)
         # A held pass serving again lets go: a limit it reaches from now on hands requests on to the next pass.
         conn.execute("UPDATE users SET pass_pin_hold=0 WHERE id=? AND pass_pin=? AND pass_pin_hold!=0", (user_id, t["id"]))
     return None

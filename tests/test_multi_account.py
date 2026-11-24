@@ -109,11 +109,12 @@ def test_account_remove_refuses_the_last_row(cfg, db):
     assert [r["account"] for r in list_accounts(db[1])] == ["second"]
 
 
-def test_account_remove_refuses_default(cfg, db):
+def test_account_remove_refuses_an_account_with_users(cfg, db):
     from claude_proxy import cli
     seed_oauth(db[1], access="a", refresh="r")
     seed_oauth(db[1], access="b", refresh="r2", account="second")
-    with pytest.raises(SystemExit, match="serves all traffic"):
+    db[1].execute("INSERT INTO users(name, role, key_hash, key_prefix, created_at, account) VALUES('u','user','h','p',0,'default')")
+    with pytest.raises(SystemExit, match="1 users are assigned"):
         cli.cmd_account_remove(argparse.Namespace(account="default"), cfg)
     assert {r["account"] for r in list_accounts(db[1])} == {"default", "second"}
 
@@ -154,12 +155,12 @@ def test_unique_subscription_enforced_by_schema(cfg, db):
         be.store({"access_token": "b", "refresh_token": "r2", "expires_at": 9e9, "anthropic_sub": "sub-1"})
 
 
-def test_status_flags_missing_default(cfg, db, capsys):
+def test_status_names_no_account_specially(cfg, db, capsys):
     from claude_proxy import cli
     seed_oauth(db[1], access="a", refresh="r", account="second")
     cli.cmd_status(argparse.Namespace(), cfg)
     out = capsys.readouterr().out
-    assert "credential [default]: NOT OK" in out and "credential [second]: OK" in out
+    assert "[default]" not in out and "credential [second]: OK" in out and "\ncredential: OK" in out
 
 
 def test_invalid_account_slug_rejected(cfg, db):
@@ -170,9 +171,13 @@ def test_invalid_account_slug_rejected(cfg, db):
 def test_status_summarises_the_serving_account_for_the_deploy_check(cfg, db, capsys):
     # deploy/lightsail/claude-gateway-deploy, as installed on the box, greps '^credential: OK'.
     from claude_proxy import cli
-    seed_oauth(db[1], access="a", refresh="r", account="second")
     cli.cmd_status(argparse.Namespace(), cfg)
-    assert "\ncredential: NOT OK" in "\n" + capsys.readouterr().out   # the gateway serves from default, unlinked
+    assert "\ncredential: NOT OK" in "\n" + capsys.readouterr().out   # nothing linked
+    seed_oauth(db[1], access="a", refresh="r", account="second")
     seed_oauth(db[1], access="a", refresh="r")
+    db[1].execute("UPDATE credentials SET state='needs_login' WHERE account='second'")
+    cli.cmd_status(argparse.Namespace(), cfg)
+    assert "\ncredential: NOT OK" in "\n" + capsys.readouterr().out   # every account must work
+    db[1].execute("UPDATE credentials SET state='active'")
     cli.cmd_status(argparse.Namespace(), cfg)
     assert "\ncredential: OK" in "\n" + capsys.readouterr().out

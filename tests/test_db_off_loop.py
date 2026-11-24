@@ -141,13 +141,19 @@ async def test_an_in_memory_database_runs_on_its_one_connection(cfg):
 
 
 async def test_the_dashboard_view_has_its_own_connection_and_client(cfg, db, anthropic):
+    seed_oauth(db[1])
     gw = Gateway(cfg, db[1], http=mounted_client(anthropic))
     other = get_conn(db[0])
     v = gw.view(other, mounted_client(anthropic))
-    assert v.conn is other and v.http is not gw.http and v.cfg is gw.cfg and v.poller is gw.poller
+    assert v.conn is other and v.http is not gw.http and v.cfg is gw.cfg and v.pollers is gw.pollers
     assert gw.conn is db[1]   # the proxy's own is untouched
-    gw.backend.last_error = "boom"
-    assert v.backend.describe().detail == gw.backend.describe().detail
+    gw.backends["default"].last_error = "boom"
+    assert v.backends["default"].describe().detail == gw.backends["default"].describe().detail
+    # An account the dashboard links is served by the proxy's gateway too; the view reads it through.
+    seed_oauth(other, account="second", sub="s-2")
+    assert v.sync_accounts() == (["second"], [])
+    assert set(gw.backends) == set(v.backends) == set(gw.pollers) == {"default", "second"}
+    assert gw.backends["second"].conn is gw.conn and v.healthy()
 
 
 def test_keep_usage_deletes_only_what_expires(db, tmp_path):
