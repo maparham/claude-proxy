@@ -1204,6 +1204,70 @@ def hand_over(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float | 
     return True
 
 
+def move(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, account: str, now: float | None = None,
+         dry_run: bool = False) -> dict:
+    """Move a running or queued pass to another subscription account (2026-11-24 spec §4): it keeps its size in Pro
+    weeks, so its shares are recomputed for the target's plan, and what it used of the current week and 5-hour window
+    is carried over in the target's points (limits._carry), so it is neither refilled nor shrunk. Its borrows and
+    bonuses go with it, converted the same way. The target must be able to sell and the pass must fit there
+    (capacity.check, no waivers); one transaction, all or nothing. `dry_run`: the same answer, nothing written (the
+    admin's preview)."""
+    from . import capacity, limits, placement   # here, not at the top: they import tickets
+    now = _now(now)
+    conn.execute("BEGIN IMMEDIATE")
+    try:
+        t = get(conn, ticket_id)
+        if t["cancelled_at"] is not None:
+            raise TicketError("This pass is cancelled.")
+        if t["effective_end"] <= now:
+            raise TicketError("This pass has ended.")
+        if account == t["account"]:
+            raise TicketError("The pass is already on that subscription.")
+        if conn.execute("SELECT 1 FROM credentials WHERE backend='oauth' AND account=?", (account,)).fetchone() is None:
+            raise TicketError(f"No subscription account '{account}'.")
+        why = plans.sells(conn, account)
+        if why is not None:
+            raise TicketError(PLAN_UNKNOWN if why == "plan_unknown" else placement.PLAN_CHANGED)
+        f7o, f5o = plans.factor(conn, t["account"], "7d"), plans.factor(conn, t["account"], "5h")
+        f7n, f5n = plans.factor(conn, account, "7d"), plans.factor(conn, account, "5h")
+        if f7o is None or f5o is None:
+            raise TicketError("The pass's subscription has no plan, so its use can't be converted; pick its plan first.")
+        if t["size"] is not None:
+            size, size_5h = t["size"], t["size_5h"]
+        else:   # sold before sizes: its shares on the account it is on say its size
+            size = t["share_pct"] * f7o / 100
+            size_5h = (t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) * f5o / 100
+        share, share_5h = plans.shares(conn, account, size, size_5h)
+        capacity.check(conn, cfg, account, share, share_5h, max(now, t["starts_at"]), t["effective_end"], now)
+        carry_7d = carry_5h = 0.0
+        if t["starts_at"] <= now:
+            # Measured on the account it is on before anything moves; a use that can't be measured (no rate) carries 0.
+            carry_7d = (limits._ticket_7d(conn, cfg, t, now).current or 0.0) * f7o / f7n
+            carry_5h = (limits._ticket_5h(conn, cfg, t, now).current or 0.0) * f5o / f5n
+        # Its borrows in the target's points: own_pts converted, and the rate (tokens per point) the other way, so the
+        # debt _debt measures from them converts by the same ratio.
+        conn.execute("UPDATE pass_borrows SET own_pts=own_pts*?, rate=rate*? WHERE ticket_id=?", (f7o / f7n, f7n / f7o, ticket_id))
+        for b in conn.execute("SELECT id, share_pct, share_5h_pct FROM ticket_bonuses WHERE ticket_id=? AND cancelled_at IS NULL "
+                              "AND ends_at>?", (ticket_id, now)).fetchall():
+            b5 = b["share_5h_pct"] if b["share_5h_pct"] is not None else b["share_pct"]
+            conn.execute("UPDATE ticket_bonuses SET share_pct=?, share_5h_pct=? WHERE id=?",
+                         (b["share_pct"] * f7o / f7n,
+                          None if b["share_5h_pct"] is None and f5o / f5n == f7o / f7n else b5 * f5o / f5n, b["id"]))
+        conn.execute("UPDATE tickets SET account=?, share_pct=?, share_5h_pct=? WHERE id=?", (account, share, share_5h, ticket_id))
+        conn.execute("INSERT INTO ticket_moves(ticket_id, moved_at, from_account, to_account, from_share_pct, from_share_5h_pct, "
+                     "carry_7d_pts, carry_5h_pts, moved_by) VALUES(?,?,?,?,?,?,?,?,?)",
+                     (ticket_id, now, t["account"], account, t["share_pct"], t["share_5h_pct"], carry_7d, carry_5h, actor))
+        out = {"ticket": get(conn, ticket_id), "from": t["account"], "to": account, "share_pct": share,
+               "share_5h_pct": share_5h, "carry_7d_pts": carry_7d, "carry_5h_pts": carry_5h}
+        db.audit(conn, actor, "ticket_move", t["user_name"], {"ticket_id": ticket_id, "from": t["account"], "to": account,
+                                                             "carry_7d_pts": carry_7d, "carry_5h_pts": carry_5h})
+        conn.execute("ROLLBACK" if dry_run else "COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK")
+        raise
+    return out
+
+
 def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: int, share_pct=0, extra_days=0, starts_at=None,
               ends_at=None, note: str = "", now: float | None = None) -> dict:
     """Extra share for a period inside the ticket, extra days at the ticket's share, or both. Extra days push the user's

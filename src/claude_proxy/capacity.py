@@ -69,17 +69,46 @@ def _debt(conn, cfg, t, week_start, capacity, now) -> float:
     return max(0.0, used - row["own_pts"])
 
 
-def _week_use(conn, cfg, ticket_ids, since, now) -> dict[int, float]:
-    """Each pass's weighted Anthropic tokens that ended in (since, now], in one query, weighed as _weighted_since weighs them."""
+def _week_use(conn, cfg, ticket_ids, since, now, rate: float | None = None) -> dict[int, float]:
+    """Each pass's weighted Anthropic tokens that ended in (since, now], in one query, weighed as _weighted_since weighs them.
+    A pass moved to this account inside the span counts only what ended after its latest move, and with `rate` (this
+    account's) what it used before the move comes on top as tokens (its carry), as limits._ticket_7d measures it."""
     if not ticket_ids:
         return {}
+    moves = _carries(conn, ticket_ids, since, now)
     span = (f"ticket_id IN ({','.join('?' * len(ticket_ids))}) AND provider='anthropic' AND rejected_by IS NULL AND path!=? "
             "AND api_key_id IS NULL AND ended_at>? AND ended_at<=?")
     params = (*ticket_ids, COUNT_TOKENS_PATH, since, now)
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", params)]
     w, args = quota.weighted_sql(cfg.pricing, models)
-    return {r[0]: float(r[1]) for r in conn.execute(f"SELECT ticket_id, COALESCE(SUM({w}), 0) FROM requests WHERE {span} "
-                                                    "GROUP BY ticket_id", (*args, *params))}
+    after = ("ended_at > COALESCE((SELECT MAX(m.moved_at) FROM ticket_moves m WHERE m.ticket_id=requests.ticket_id "
+             "AND m.moved_at>? AND m.moved_at<=?), ?)")
+    out = {r[0]: float(r[1]) for r in conn.execute(f"SELECT ticket_id, COALESCE(SUM({w}), 0) FROM requests WHERE {span} "
+                                                   f"AND {after} GROUP BY ticket_id", (*args, *params, since, now, since))}
+    if rate:
+        for tid, (c7, _, _) in moves.items():
+            out[tid] = out.get(tid, 0.0) + c7 * rate
+    return out
+
+
+def _carries(conn, ticket_ids, since, now=None) -> dict[int, tuple[float, float, float]]:
+    """Per pass moved after `since` (and at or before `now`), its latest move's (carry_7d_pts, carry_5h_pts, moved_at):
+    what it had used of the window it was moved in, in its new account's points (tickets.move)."""
+    ids = tuple(ticket_ids)
+    if not ids:
+        return {}
+    out: dict[int, tuple[float, float, float]] = {}
+    for r in conn.execute(f"SELECT ticket_id, carry_7d_pts, carry_5h_pts, moved_at FROM ticket_moves WHERE ticket_id IN "
+                          f"({','.join('?' * len(ids))}) AND moved_at>? AND moved_at<=? ORDER BY moved_at, id",
+                          (*ids, since, float("inf") if now is None else now)):
+        out[r[0]] = (float(r[1]), float(r[2]), float(r[3]))   # the latest wins
+    return out
+
+
+def _attributed(att: dict, carries: dict, ticket_id: int) -> float:
+    """A pass's points of the window by attribution, without a rate: what this account's reports pin on it, plus what it
+    used before it was moved here."""
+    return att["ticket_shares"].get(ticket_id, 0.0) + carries.get(ticket_id, (0.0, 0.0, 0.0))[0]
 
 
 # Requests carry the pass that served them as they are recorded since the 2026-10-28 migration (c909c73, live by
@@ -172,12 +201,13 @@ def reserved(conn: sqlite3.Connection, cfg: Config, account: str, week: tuple[fl
     if not others:
         return 0.0
     ids = [p["id"] for p in others]
-    uses = _week_use(conn, cfg, ids, week_start, now) if rate else {}
+    uses = _week_use(conn, cfg, ids, week_start, now, rate) if rate else {}
+    carries = {} if rate else _carries(conn, ids, week_start, now)
     bonuses = _bonuses(conn, ids)
     total = 0.0
     for p in others:
         own = _own(conn, cfg, p, bonuses.get(p["id"], []), week, scale, now)
-        use = uses.get(p["id"], 0.0) / rate if rate else att["ticket_shares"].get(p["id"], 0.0)
+        use = uses.get(p["id"], 0.0) / rate if rate else _attributed(att, carries, p["id"])
         total += max(0.0, own - use)
     return total
 
@@ -214,12 +244,13 @@ def week_use(conn: sqlite3.Connection, cfg: Config, account: str, now: float) ->
         f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (account, week[1], week[0]))]
     ids = [p["id"] for p in rows]
     bonuses = _bonuses(conn, ids) if ids else {}
-    uses = _week_use(conn, cfg, ids, week[0], now) if rate and ids else {}
+    uses = _week_use(conn, cfg, ids, week[0], now, rate) if rate and ids else {}
+    carries = {} if rate else _carries(conn, ids, week[0], now)
     ts = att["ticket_shares"]
     passes = {}
     for p in rows:
         own = _own(conn, cfg, p, bonuses.get(p["id"], []), week, scale, now)
-        use = uses.get(p["id"], 0.0) / rate if rate else ts.get(p["id"], 0.0)
+        use = uses.get(p["id"], 0.0) / rate if rate else _attributed(att, carries, p["id"])
         passes[p["id"]] = {"sold": own, "used": ts.get(p["id"], 0.0),
                            "reserved": max(0.0, own - use) if p["effective_end"] > now else 0.0}
     if att["utilization_pct"] is None:
@@ -292,15 +323,19 @@ def _no_room(free: float, need: float) -> str:
 
 def reserved_5h(conn: sqlite3.Connection, account: str, att: dict, scale: float, now: float, exclude=()) -> float:
     """Σ over running passes (but `exclude`) of the 5-hour allowance each has reserved in Anthropic's current window (may still draw):
-    its 5-hour share with bonuses, scaled as _ticket_5h scales it, less the points it moved there."""
+    its 5-hour share with bonuses, scaled as _ticket_5h scales it, less the points it moved there, and for a pass moved
+    here inside the window what it used before the move (its 5-hour carry), as _ticket_5h counts it."""
     ex = _ids(exclude)
+    rows = [r for r in conn.execute(f"SELECT t.id, COALESCE(t.share_5h_pct, t.share_pct) FROM tickets t WHERE t.account=? "
+                                    f"AND t.cancelled_at IS NULL AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?",
+                                    (account, now, now)) if r[0] not in ex]
+    since = att["window_start"] if att["window_start"] is not None else now - 5 * 3600
+    carries = _carries(conn, [r[0] for r in rows], since, now)
     total = 0.0
-    for r in conn.execute(f"SELECT t.id, COALESCE(t.share_5h_pct, t.share_pct) FROM tickets t WHERE t.account=? "
-                          f"AND t.cancelled_at IS NULL AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?", (account, now, now)):
-        if r[0] in ex:
-            continue
+    for r in rows:
         limit = (r[1] + tickets.bonus_share(conn, r[0], now)) * scale / 100
-        total += max(0.0, limit - att["ticket_shares"].get(r[0], 0.0))
+        used = att["ticket_shares"].get(r[0], 0.0) + carries.get(r[0], (0.0, 0.0, 0.0))[1]
+        total += max(0.0, limit - used)
     return total
 
 
@@ -414,13 +449,14 @@ def _returned(conn, cfg, account: str, week, att: dict, rate: float | None, now:
         for b in conn.execute(f"SELECT ticket_id, share_pct, starts_at, ends_at FROM ticket_bonuses WHERE ticket_id IN "
                               f"({','.join('?' * len(ids))}) AND cancelled_at IS NULL AND share_pct>0", ids):
             bonuses.setdefault(b["ticket_id"], []).append(b)
-    uses = _week_use(conn, cfg, ids, ws, now) if rate and rows else {}
+    uses = _week_use(conn, cfg, ids, ws, now, rate) if rate and rows else {}
+    carries = {} if rate else _carries(conn, ids, ws, now)
     total = 0.0
     for p in rows:
         piece = pieces(week, p["share_pct"], max(ws, p["starts_at"]), p["sold_end"]).get(ws, 0.0)
         for b in bonuses.get(p["id"], []):
             piece += pieces(week, b["share_pct"], max(ws, b["starts_at"]), b["ends_at"]).get(ws, 0.0)
-        use = uses.get(p["id"], 0.0) / rate if rate else att["ticket_shares"].get(p["id"], 0.0)
+        use = uses.get(p["id"], 0.0) / rate if rate else _attributed(att, carries, p["id"])
         total += max(0.0, piece - use)
     return total
 

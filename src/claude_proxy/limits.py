@@ -15,7 +15,7 @@ import time
 from dataclasses import dataclass
 
 from . import db, quota, tickets, trials
-from .capacity import _capacity, _debt, _pass_cap, _week_use, _weighted_since, fresh, room
+from .capacity import _capacity, _carries, _debt, _pass_cap, _week_use, _weighted_since, fresh, room
 from .config import Config
 from .forwarder import COUNT_TOKENS_PATH
 from .usage import SUMS, Totals, price_totals
@@ -226,6 +226,13 @@ def _label(conn, cfg, t) -> str:
     return cfg.tickets.tiers[tier].label if tier in cfg.tickets.tiers else tier
 
 
+def _carry(conn, t, since: float) -> tuple[float, float, float]:
+    """(carry_7d_pts, carry_5h_pts, moved_at) of the pass's latest move after `since`, else (0, 0, since): what it had
+    used of the windows it was moved in, in its account's points, and when (tickets.move). Its own tokens count from
+    then on, so a move never refills or shrinks a pass."""
+    return _carries(conn, [t["id"]], since).get(t["id"], (0.0, 0.0, since))
+
+
 def _ticket_5h(conn, cfg, t, now) -> LimitState:
     """One pass's 5-hour limit (2026-10-28): its share of Anthropic's 5-hour window against the points its own requests
     moved, as if another user held it, so a pass bought past a limit starts with all of its own."""
@@ -236,7 +243,9 @@ def _ticket_5h(conn, cfg, t, now) -> LimitState:
     if att["resets_at"] and att["resets_at"] > now:
         st.resets_at, st.reset_in = att["resets_at"], max(1, math.ceil(att["resets_at"] - now))
     if att["utilization_pct"] is not None and not att["stale"]:
-        st.current = att["ticket_shares"].get(t["id"], 0.0)
+        # This account's reports pin on the pass only what it moved here; moved here inside the window, what it used
+        # before comes on top.
+        st.current = att["ticket_shares"].get(t["id"], 0.0) + _carry(conn, t, att["window_start"])[1]
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "5h", now, account=t["account"])
     if rate is None:
@@ -247,7 +256,8 @@ def _ticket_5h(conn, cfg, t, now) -> LimitState:
     start = att["window_start"] if att["window_start"] is not None else now - 5 * HOUR
     if att["resets_at"] and att["resets_at"] <= now:
         start = max(att["resets_at"], now - 5 * HOUR)
-    st.current, st.no_live_data = _weighted_since(conn, cfg, t["user_id"], start, now, t["id"]) / rate, True
+    _, c5, moved_at = _carry(conn, t, start)
+    st.current, st.no_live_data = _weighted_since(conn, cfg, t["user_id"], max(start, moved_at), now, t["id"]) / rate + c5, True
     return _finish(st)
 
 
@@ -290,20 +300,23 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE account=? AND bucket='7d' ORDER BY observed_at DESC LIMIT 1",
                           (t["account"],)).fetchone()
     st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
-    used = _weighted_since(conn, cfg, t["user_id"], piece_start, now, t["id"])
-    if not used and not st.no_live_data:
+    # A pass moved here during this piece counts its tokens from the move, plus what it had used before (its carry).
+    c7, _, moved_at = _carry(conn, t, piece_start)
+    since = max(piece_start, moved_at)
+    used = _weighted_since(conn, cfg, t["user_id"], since, now, t["id"])
+    if not used and not c7 and not st.no_live_data:
         st.current = 0.0   # live data and nothing used in this piece: no rate needed, so a young account isn't refused
         return _finish(st)
     rate = quota.observed_rate(conn, cfg.pricing, "7d", now, account=t["account"])
     if rate is None and not st.no_live_data:
         # A young account: utilization has never risen a whole point, so there is no rate yet. Live snapshots still say
         # who moved it, and until the first rise that is nobody, so a lone first user isn't locked out by their own usage.
-        st.current = quota.attributed_since(conn, cfg.pricing, "7d", t["user_id"], piece_start, now, t["id"], account=t["account"])
+        st.current = quota.attributed_since(conn, cfg.pricing, "7d", t["user_id"], since, now, t["id"], account=t["account"]) + c7
         return _finish(st)
     if rate is None:
         st.skipped, st.no_live_data = NO_RATE, False
         return st
-    st.current, st.rate = used / rate, rate
+    st.current, st.rate = used / rate + c7, rate
     # Only a day pass borrows: it is one allowance to its holder, however the reset cuts it. A week or month pass keeps
     # each week's share, so one week's use never eats the next's.
     if borrow and t["length"] == "day" and t["effective_end"] > week_end and st.current >= st.own and not st.no_live_data:
