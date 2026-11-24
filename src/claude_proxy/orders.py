@@ -113,7 +113,7 @@ def _check_on_sale(conn: sqlite3.Connection, cfg: Config, tier: str, length: str
     where the grant will put it. A pass queued after the buyer's current one is judged only at that start
     (2026-11-07): a full 5-hour window now says nothing about a pass starting after its reset."""
     from . import capacity
-    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+    if not capacity.context(conn, cfg, tickets.SELL_ACCOUNT, now).fresh:
         raise OrderError(409, UNAVAILABLE)
     starts_at, replaces = tickets.next_start(conn, cfg, user_id, now, start_now) if user_id is not None else (now, [])
     if starts_at > now:
@@ -264,7 +264,7 @@ def create_link(conn: sqlite3.Connection, cfg: Config, actor: int | None, *, ema
     conn.execute("BEGIN IMMEDIATE")
     try:
         from . import capacity
-        if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+        if not capacity.context(conn, cfg, tickets.SELL_ACCOUNT, now).fresh:
             raise OrderError(409, UNAVAILABLE)
         if tickets.sold_out(conn, cfg, tier, length, now, None, None):
             raise OrderError(409, "That pass is sold out.")
@@ -496,7 +496,8 @@ def granted_mail_text(conn: sqlite3.Connection, cfg: Config, order: dict, ticket
     floor caught up with it (controller ruling)."""
     if order.get("upgrade_of"):
         return upgraded_mail_text(cfg, order, ticket)
-    terms = tickets.terms_text(conn, cfg, "fa" if order.get("lang") == "fa" else "en", order["length"], ticket["starts_at"])
+    terms = tickets.terms_text(conn, cfg, "fa" if order.get("lang") == "fa" else "en", order["length"], ticket["starts_at"],
+                               account=ticket["account"])
     if order.get("lang") == "fa":
         what = f"{fa_label(cfg, order['tier'])}، ۱ {FA_LENGTHS.get(order['length'], order['length'])}"
         span = f"از {tickets.terms_date(ticket['starts_at'], 'fa')} تا {tickets.terms_date(ticket['ends_at'], 'fa')}"
@@ -577,7 +578,7 @@ async def send_granted(conn: sqlite3.Connection, cfg: Config, order_id: int) -> 
     if t is None:
         return
     subject, body = granted_mail_text(conn, cfg, o, dict(t))
-    rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body)
+    rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body, account=t["account"])
     try:
         await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), o["email"], subject, body, rich)
     except Exception as e:

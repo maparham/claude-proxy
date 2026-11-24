@@ -15,6 +15,7 @@ def outside(conn, bucket, util, resets, t=NOW - 500):
 @pytest.fixture
 def plain(db):
     conn, cfg, ids = seeded(db)
+    conn.execute("UPDATE users SET account='default'")   # hand-set shares are measured on the assigned account
     return conn, cfg, ids["alice"]
 
 

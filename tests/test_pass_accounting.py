@@ -29,7 +29,7 @@ def test_the_5h_attribution_splits_by_pass(db):
     req(conn, ids["alice"], NOW - 500, i=3000, ticket=a["id"])
     req(conn, ids["alice"], NOW - 450, i=1000, ticket=b["id"])
     snap(conn, NOW - 400, 4, "5h", NOW + 3500)
-    att = quota.attribution(conn, cfg.pricing, "5h", now=NOW - 300)
+    att = quota.attribution(conn, cfg.pricing, "5h", now=NOW - 300, account="default")
     assert att["shares"][ids["alice"]] == 4
     assert att["ticket_shares"] == {a["id"]: 3, b["id"]: 1}
     st = {s.kind: s for s in limits.pass_states(conn, cfg, tickets.get(conn, b["id"]), NOW - 300)}

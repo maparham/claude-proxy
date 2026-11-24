@@ -30,6 +30,7 @@ def env(cfg, db, anthropic):
     conn = db[1]
     admin_id, admin_key = create_user(conn, "admin", role="admin")
     uid, key = create_user(conn, "alice")
+    conn.execute("UPDATE users SET account='default'")   # hand-set shares are measured on the assigned account
     seed_oauth(conn, access="oauth-secret-token")
     now = time.time()
     conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",

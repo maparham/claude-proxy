@@ -18,6 +18,7 @@ REFUSAL = "This key is for third-party models only (muse-spark*). Claude models 
 def env(cfg, db, anthropic, meta, monkeypatch):
     conn = db[1]
     uid, full = create_user(conn, "alice")
+    conn.execute("UPDATE users SET account='default'")   # hand-set shares are measured on the assigned account
     routes = set_routes_key(conn, uid)
     seed_oauth(conn, access="oauth-secret-token")
     cfg.routes[0].base_url = "http://meta.fake"

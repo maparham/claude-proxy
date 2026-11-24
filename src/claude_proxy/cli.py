@@ -110,11 +110,13 @@ def cmd_status(args, cfg):
         print(f"credential {tag}: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
         if st.expires_at:
             print(f"  access token expires: {time.ctime(st.expires_at)}")
-    for r in conn.execute("SELECT bucket, utilization_pct, resets_at, observed_at, source FROM quota_snapshots q "
-                          "WHERE observed_at = (SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket=q.bucket) ORDER BY bucket"):
+    # Each account's newest figure per bucket.
+    for r in conn.execute("SELECT account, bucket, utilization_pct, resets_at, observed_at, source FROM quota_snapshots q "
+                          "WHERE observed_at = (SELECT MAX(observed_at) FROM quota_snapshots WHERE account=q.account AND bucket=q.bucket) "
+                          "ORDER BY account, bucket"):
         age = int(time.time() - r["observed_at"])
-        print(f"account {r['bucket']}: {r['utilization_pct']:.0f}% (resets {time.ctime(r['resets_at']) if r['resets_at'] else '?'}; "
-              f"{r['source']} {age}s ago)")
+        print(f"account {r['account']} {r['bucket']}: {r['utilization_pct']:.0f}% "
+              f"(resets {time.ctime(r['resets_at']) if r['resets_at'] else '?'}; {r['source']} {age}s ago)")
     for route in cfg.routes:
         print(f"route {route.name}: models {', '.join(route.models)} -> {route.base_url} "
               f"({route.api_key_env} {'set' if route.api_key() else 'NOT SET'})")

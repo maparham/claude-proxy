@@ -101,7 +101,7 @@ def test_a_pass_started_now_runs_beside_the_first_with_limits_of_its_own(env):
     assert served["id"] == t2["id"]   # the first is at its limit: requests spill over to the second
     st = {s.kind: s for s in sts}
     assert st["share_5h"].value == "25" and st["share_5h"].tier == "Standard" and st["share_5h"].current == 0
-    week_end = tickets.week_bounds(conn, cfg, NOW - 50)[1]
+    week_end = tickets.week_bounds(conn, cfg, NOW - 50, account="default")[1]
     assert st["share_7d"].limit == pytest.approx(25 * (min(t2["ends_at"], week_end) - (NOW - 100)) / DAY / 7)
     assert st["share_7d"].current == 0
     out = {}
@@ -200,7 +200,7 @@ def test_replacing_a_used_up_pass_at_the_ceiling_frees_its_share_and_cuts_its_bo
     assert (p["replaces"], p["available"]) == ([t["id"]], True)
     nxt = day(conn, cfg, ids, NOW - 100, tier="standard")
     assert nxt["starts_at"] == NOW - 100
-    assert tickets.sold_at(conn, 1, NOW - 100) == 25
+    assert tickets.sold_at(conn, "default", NOW - 100) == 25
     assert conn.execute("SELECT ends_at FROM ticket_bonuses WHERE id=?", (b["id"],)).fetchone()[0] == NOW - 100
     assert tickets.active_bonuses(conn, t["id"], NOW - 50) == []
 
@@ -259,9 +259,9 @@ async def test_a_used_up_pass_with_one_queued_that_cannot_move_up_is_not_replace
     # The capacity gate (2026-11-04 spec) is stubbed fresh for these three grants only: the test's own snapshot
     # history is spaced for the usage/rate checks below, not for the gate's 30-minute staleness window, and adding
     # snapshots just for that would shift the attribution windows those checks rely on.
-    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now, account: (now - DAY, now + 6 * DAY))
     monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
-    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now, account: {
         "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
     g(bob, "standard", now - 7200)                      # 25%, until 22 hours from now
     a = g(ids["alice"], "lite", now - 3600)             # 5%

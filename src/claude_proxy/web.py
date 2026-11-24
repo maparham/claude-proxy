@@ -417,7 +417,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return resp
 
     @app.get("/api/session")
-    async def session(request: Request):
+    async def session(request: Request, account: str | None = None):
         user = principal(request)
         out = {"user": _public_user(user), "csrf": user["csrf_token"] if "csrf_token" in user.keys() else None,
                # Configurable values the dashboard's explanations quote.
@@ -429,9 +429,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             out["settings"]["stale_after_s"] = cfg.quota.stale_after_s
             # The header's utilization pill, on every tab: what Anthropic last reported for the account.
             now = time.time()
+            acct = view_account(account)
             out["account"] = {}
             for b in (*BUCKETS, "7d_oi"):   # 7d_oi: the weekly Fable limit, reported only on Fable replies
-                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct) \
+                    if acct is not None else {"utilization_pct": None, "resets_at": None, "stale": True}
                 out["account"][b] = {k: att[k] for k in ("utilization_pct", "resets_at", "stale")}
         out["tickets"] = {"enabled": cfg.tickets.enabled}
         if is_admin(user) and cfg.tickets.enabled:
@@ -444,6 +446,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     # ---------- helpers ----------
 
     names = lambda: {r["id"]: r["name"] for r in conn.execute("SELECT id, name FROM users")}  # noqa: E731
+
+    def view_account(account: str | None) -> str | None:
+        """The subscription account a per-account view shows: `account` when it is linked (404 otherwise), else the
+        first linked one; None with none linked, and the view's per-account parts are then empty."""
+        linked = [r["account"] for r in list_accounts(conn)]
+        if account is not None:
+            if account not in linked:
+                fail(404, f"No subscription account '{account}'.")
+            return account
+        return linked[0] if linked else None
 
     def named(n: dict, q: str) -> list[str]:
         """The ids, as strings, of users whose name contains q."""
@@ -472,11 +484,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             fail(400, "source must be all, cli or apps")
         return SOURCES[source]
 
-    def quota_view(now: float) -> list[dict]:
+    def quota_view(now: float, account: str | None) -> list[dict]:
         out = []
+        if account is None:
+            return out
         n = names()
-        for b in sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400))):
-            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+        for b in sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400, account=account))):
+            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=account)
             if att["utilization_pct"] is None and b not in BUCKETS:
                 continue
             shares = {who(n, uid): v for uid, v in att["shares"].items()}
@@ -487,7 +501,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
     # ---------- read API ----------
 
     @app.get("/api/overview")
-    async def overview(request: Request, user_id: int | None = None, source: str = "all"):
+    async def overview(request: Request, user_id: int | None = None, source: str = "all", account: str | None = None):
         user = principal(request)
         now = time.time()
         where, params = scope_where(user, user_id)
@@ -505,10 +519,11 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if not is_admin(user):
             return out
         be = gw.backend.describe()
+        acct = view_account(account)
         return out | {
             "active_users_24h": active,
-            "quota": quota_view(now),
-            "exhaustion": _exhaustion(conn, now),
+            "quota": quota_view(now, acct),
+            "exhaustion": _exhaustion(conn, now, acct) if acct is not None else None,
             "credential": {"healthy": be.healthy, "detail": be.detail, "expires_at": be.expires_at},
             "poll": {"last_status": gw.poller.last_status},
             "upstream": upstream.overload(conn, now) | {"status_page": gw.status_page.view(now)},
@@ -638,12 +653,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"bucket_s": b, "points": points, "recent": recent}
 
     @app.get("/api/quota/timeline")
-    async def quota_timeline(request: Request, bucket: str = "5h", range: str = "7d"):
+    async def quota_timeline(request: Request, bucket: str = "5h", range: str = "7d", account: str | None = None):
         admin(request)
         now = time.time()
-        snaps = conn.execute("SELECT observed_at, utilization_pct, resets_at, source FROM quota_snapshots WHERE bucket=? "
-                             "AND observed_at>=? ORDER BY observed_at", (bucket, now - RANGES.get(range, RANGES["7d"]))).fetchall()
-        att = quota.attribution(conn, cfg.pricing, bucket, now=now, stale_after_s=cfg.quota.stale_after_s)
+        # With no account linked, every part below reads nothing: the queries match no account.
+        acct = view_account(account) or ""
+        snaps = conn.execute("SELECT observed_at, utilization_pct, resets_at, source FROM quota_snapshots WHERE account=? AND bucket=? "
+                             "AND observed_at>=? ORDER BY observed_at", (acct, bucket, now - RANGES.get(range, RANGES["7d"]))).fetchall()
+        att = quota.attribution(conn, cfg.pricing, bucket, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct)
         n = names()
         history = []
         for h in att["history"]:
@@ -651,13 +668,14 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
             history.append({"t": h["t"], "utilization_pct": h["utilization_pct"], "shares": shares})
         # The rate walks every request of range + 7 days, so a year is slow but bounded.
         since = now - RANGES.get(range, RANGES["7d"])
-        rate = quota.rate_history(conn, cfg.pricing, bucket, since, now)
-        plans = [c for c in quota.plan_changes(conn) if c["t"] >= since]
-        plan = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans ORDER BY observed_at DESC, id DESC LIMIT 1").fetchone()
+        rate = quota.rate_history(conn, cfg.pricing, bucket, since, now, account=acct)
+        plans = [c for c in quota.plan_changes(conn, account=acct) if c["t"] >= since]
+        plan = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans WHERE account=? "
+                            "ORDER BY observed_at DESC, id DESC LIMIT 1", (acct,)).fetchone()
         return {"bucket": bucket, "snapshots": [dict(r) for r in snaps], "window_history": history, "rate": rate, "plan_changes": plans,
                 "plan": (plan["rate_limit_tier"] or plan["organization_type"]) if plan else None,
-                "rate_now": quota.observed_rate(conn, cfg.pricing, bucket, now), "now": now,
-                "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400)))}
+                "rate_now": quota.observed_rate(conn, cfg.pricing, bucket, now, account=acct), "now": now,
+                "buckets": sorted(set(BUCKETS) | set(quota.buckets(conn, now - 8 * 86400, account=acct)))}
 
     @app.get("/api/requests")
     async def recent_requests(request: Request, user_id: int | None = None, limit: int = 100, source: str = "all",
@@ -720,13 +738,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return content
 
     @app.get("/api/users")
-    async def users(request: Request, source: str = "all"):
+    async def users(request: Request, source: str = "all", account: str | None = None):
         admin(request)
         now = time.time()
         periods = {"24h": 86400, "7d": 7 * 86400, "30d": 30 * 86400}
         src = by_source(source)
         tot = {k: usage.grouped(conn, cfg.pricing, f"started_at>=? AND {src}", (now - s,), group="user_id") for k, s in periods.items()}
-        atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s) for b in BUCKETS}
+        # Each user's share of one account's buckets (until the Users table counts in Pro weeks across accounts).
+        acct = view_account(account)
+        atts = {b: quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct)
+                if acct is not None else {"stale": True, "shares": {}} for b in BUCKETS}
         out = []
         # Shown under the last request, so the address of the latest request (SQLite's bare column goes with the MAX).
         last_ips = {r[0]: {"ip": r[1], "city": r[2], "country": r[3]} for r in conn.execute(
@@ -777,7 +798,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                 "actions": actions}
 
     @app.get("/api/me/status")
-    async def me_status(request: Request, format: str = "json"):
+    async def me_status(request: Request, format: str = "json", account: str | None = None):
         user = principal(request, routes_ok=True)
         if format == "models":
             # gclaude's launcher, at every start: the 1M forms of the newest models it makes the /model defaults.
@@ -798,11 +819,13 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         now = time.time()
         picked = limits.pick(conn, cfg, user["id"], now)   # once: the line's limits, its pass's name and its weeks
         states = limits.states(conn, cfg, user["id"], now=now, picked=picked)
-        account = None
+        slug, account = account, None
         if is_admin(user):
+            acct = view_account(slug)
             account = {}
             for b in BUCKETS:
-                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+                att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct) \
+                    if acct is not None else {"utilization_pct": None, "resets_at": None, "stale": True, "shares": {}}
                 account[b] = {"utilization_pct": att["utilization_pct"], "resets_at": att["resets_at"], "stale": att["stale"],
                               "your_estimated_share": att["shares"].get(user["id"], 0.0) if att["utilization_pct"] is not None else None}
         if format == "account":   # gclaude's /account (statusline.sh --warn)
@@ -810,7 +833,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         weekly = next((s for s in states if s.kind == "share_7d" and s.tier is not None), None)
         weeks = limits.ticket_weeks(conn, cfg, user["id"], now, weekly, picked) if weekly is not None and account is None else None
         line = _status_line(user, states, account, weeks, _ticket_name(conn, cfg, picked[0]))
-        if account is None and (note := _account_blocked(conn, now)):
+        # The account the user's next request goes to: the serving (or stopped) pass's, else the one assigned to them.
+        mine = picked[0]["account"] if picked[0] is not None else user.get("account")
+        if account is None and mine is not None and (note := _account_blocked(conn, now, mine)):
             # Their own figures can show room left while every request gets the 429; say why up front, after the name.
             n = len(user["name"])
             line = f"{line[:n]} · {note}{line[n:]}"
@@ -1526,7 +1551,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return "used_up" if limits.gone(t, limits.pass_states(conn, cfg, t, now), now) else "active"
 
     @app.get("/api/admin/tickets")
-    async def tickets_list(request: Request, user_id: int | None = None, deleted: str | None = None):
+    async def tickets_list(request: Request, user_id: int | None = None, deleted: str | None = None, account: str | None = None):
         admin(request)
         need_tickets()
         now, n = time.time(), names()
@@ -1534,7 +1559,8 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         if deleted is not None:   # a deleted user's tickets keep only the name stored at grant
             where, params = "WHERE t.user_id IS NULL AND t.user_name=?", (deleted,)
         rows = [dict(r) for r in conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t {where} ORDER BY t.starts_at DESC, t.id DESC LIMIT 500", params)]
-        week = capacity_mod.week_use(conn, cfg, tickets.ACCOUNT_ID, now)["passes"]   # each pass's points of this week
+        acct = view_account(account)   # each pass of this account: its points of this week
+        week = capacity_mod.week_use(conn, cfg, acct, now)["passes"] if acct is not None else {}
         served = capacity_mod.pass_tokens(conn, cfg, rows, now)   # each pass's tokens over its life
         for t in rows:
             t |= {"state": ticket_state(t, now), "granted_by_name": n.get(t["granted_by"]), "bonuses": tickets.bonuses(conn, t["id"]),
@@ -1613,13 +1639,16 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         return {"ok": True, **r}
 
     @app.get("/api/admin/subscription")
-    async def subscription(request: Request):
+    async def subscription(request: Request, account: str | None = None):
         # The subscription's latest profile from Anthropic, as sent: the header pill's details dialog shows it.
         admin(request)
         now = time.time()
-        week = tickets.week_bounds(conn, cfg, now)
-        return {"profile": quota.latest_profile(conn), "ends_at_set": tickets.subscription_end_set(conn),
-                "ends_at": tickets.subscription_end(conn, week, now), "weekly_reset": week[1] if week else None}
+        acct = view_account(account)
+        if acct is None:
+            return {"profile": None, "ends_at_set": None, "ends_at": None, "weekly_reset": None}
+        week = tickets.week_bounds(conn, cfg, now, account=acct)
+        return {"profile": quota.latest_profile(conn, account=acct), "ends_at_set": tickets.subscription_end_set(conn, acct),
+                "ends_at": tickets.subscription_end(conn, week, now, acct), "weekly_reset": week[1] if week else None}
 
     @app.post("/api/admin/subscription/refresh")
     async def refresh_subscription(request: Request):
@@ -1627,28 +1656,33 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         admin(request, write=True)
         if not await gw.poller.check_plan(time.time()):
             fail(502, "Anthropic did not send the subscription's details; try again shortly.")
-        return {"ok": True, "profile": quota.latest_profile(conn)}
+        return {"ok": True, "profile": quota.latest_profile(conn, account=gw.poller.account)}
 
     @app.post("/api/admin/subscription/end")
-    async def set_subscription_end(request: Request):
+    async def set_subscription_end(request: Request, account: str | None = None):
         # The subscription's end: no pass is sold, granted or offered to run past it (capacity.check_sub_end).
         actor = admin(request, write=True)
         body = await _json(request)
         v = body.get("ends_at")
         end = None if v in (None, "") else _number(v, "ends_at", whole=True)
-        return {"ok": True, "ends_at_set": ticket_call(tickets.set_subscription_end, conn, end, actor["id"])}
+        acct = view_account(account)
+        if acct is None:   # none linked: nothing to set an end for
+            fail(404, f"No subscription account '{account or ''}'.")
+        return {"ok": True, "ends_at_set": ticket_call(tickets.set_subscription_end, conn, end, actor["id"], acct)}
 
     @app.get("/api/admin/capacity")
-    async def capacity(request: Request):
+    async def capacity(request: Request, account: str | None = None):
         admin(request)
         need_tickets()
         now = time.time()
+        # With no account linked the panel reads nothing: its queries match no account.
+        acct = view_account(account) or ""
         util = {}
         for b in BUCKETS:
-            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s)
+            att = quota.attribution(conn, cfg.pricing, b, now=now, stale_after_s=cfg.quota.stale_after_s, account=acct)
             util[b] = {"utilization_pct": att["utilization_pct"], "stale": att["stale"]}
-        end_set = tickets.subscription_end_set(conn)
-        return {**tickets.capacity(conn, cfg, now), "utilization": util,
+        end_set = tickets.subscription_end_set(conn, acct)
+        return {**tickets.capacity(conn, cfg, now, acct), "utilization": util,
                 "subscription_end": end_set if end_set is not None and end_set > now else None}
 
     def display_currency() -> str:
@@ -2239,10 +2273,10 @@ def _public_user(u) -> dict:
             "routes_prefix": u["routes_key_prefix"], "email": u["email"]}
 
 
-def _exhaustion(conn, now: float) -> dict | None:
-    """Projected time until the 5h bucket reaches 100%, from its slope over the last 30 minutes."""
-    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE bucket='5h' AND observed_at>=? "
-                        "ORDER BY observed_at", (now - 1800,)).fetchall()
+def _exhaustion(conn, now: float, account: str) -> dict | None:
+    """Projected time until the account's 5h bucket reaches 100%, from its slope over the last 30 minutes."""
+    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE account=? AND bucket='5h' "
+                        "AND observed_at>=? ORDER BY observed_at", (account, now - 1800)).fetchall()
     if len(rows) < 2:
         return None
     rows = quota._window(rows)
@@ -2259,14 +2293,14 @@ def _exhaustion(conn, now: float) -> dict | None:
             "before_reset": bool(resets and now + eta < resets)}
 
 
-def _account_blocked(conn, now: float) -> str | None:
-    """`gateway limit reached (resets in 2.1 h)` while the shared subscription's latest 5-hour or weekly figure says it
+def _account_blocked(conn, now: float, account: str) -> str | None:
+    """`gateway limit reached (resets in 2.1 h)` while the subscription account's latest 5-hour or weekly figure says it
     is used up (100%, or Anthropic's `rejected`) and that window has not reset yet; else None. A used-up week gives no
     time: the account's weekly reset is not the user's to see."""
     blocked = {}
     for b in BUCKETS:
-        r = conn.execute("SELECT utilization_pct, resets_at, status FROM quota_snapshots WHERE bucket=? "
-                         "ORDER BY observed_at DESC LIMIT 1", (b,)).fetchone()
+        r = conn.execute("SELECT utilization_pct, resets_at, status FROM quota_snapshots WHERE account=? AND bucket=? "
+                         "ORDER BY observed_at DESC LIMIT 1", (account, b)).fetchone()
         if r and r["resets_at"] and r["resets_at"] > now and (r["utilization_pct"] >= 100 or r["status"] == "rejected"):
             blocked[b] = r["resets_at"] - now
     if not blocked:

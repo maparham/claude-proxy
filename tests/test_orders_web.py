@@ -387,9 +387,9 @@ async def test_declining_an_order_emails_the_buyer_without_the_note(env, monkeyp
 def test_the_granted_mail_carries_the_dates_and_terms_in_the_order_language(env):
     gw, conn, cfg, ids, keys = env
     o = {"tier": "lite", "length": "week", "lang": "en"}
-    t = {"starts_at": 1_800_000_000, "ends_at": 1_800_000_000 + 7 * 86400}
+    t = {"starts_at": 1_800_000_000, "ends_at": 1_800_000_000 + 7 * 86400, "account": "default"}
     subject, body = orders.granted_mail_text(conn, cfg, o, t)
-    assert tickets._date(t["starts_at"]) in body and tickets.terms_text(conn, cfg, "en", "week", t["starts_at"]) in body
+    assert tickets._date(t["starts_at"]) in body and tickets.terms_text(conn, cfg, "en", "week", t["starts_at"], account="default") in body
     subject, body = orders.granted_mail_text(conn, cfg, o | {"lang": "fa"}, t)
     assert subject.startswith("بسته شما فعال شد") and tickets.terms_date(t["ends_at"], "fa") in body
 

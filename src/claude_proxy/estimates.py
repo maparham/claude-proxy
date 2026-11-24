@@ -51,7 +51,8 @@ def _p75(values: list[float]) -> float | None:
 
 
 def refresh(conn: sqlite3.Connection, pricing: Pricing, now: float | None = None) -> dict[str, int]:
-    """Recompute usage_estimates from the last 30 days. Returns busy hours per family and bucket."""
+    """Recompute usage_estimates from the last 30 days, one set per account with snapshots in them (points of different
+    plans don't mix). Returns busy hours per account, family and bucket."""
     now = int(time.time() if now is None else now)
     since = now - WINDOW_DAYS * DAY
     hours = busy_hours(conn, since, now)
@@ -59,18 +60,21 @@ def refresh(conn: sqlite3.Connection, pricing: Pricing, now: float | None = None
         "SELECT id, user_id, started_at, model FROM requests WHERE provider='anthropic' AND rejected_by IS NULL AND path!=? "
         "AND model IS NOT NULL AND started_at>=?", (COUNT_TOKENS_PATH, since))}
     out = {}
-    for bucket in BUCKETS:
-        per: dict[tuple, float] = {}   # (user_id, hour, family) -> points of this bucket
-        for rid, _uid, _model, _ended, points in quota.request_shares(conn, pricing, bucket, since, now):
-            m = meta.get(rid)
-            if m is None or m[2] is None or (m[0], m[1]) not in hours:
-                continue
-            per[m] = per.get(m, 0.0) + points
-        for fam in FAMILIES:
-            values = [v for (_, _, f), v in per.items() if f == fam]
-            conn.execute("INSERT OR REPLACE INTO usage_estimates(computed_at, family, bucket, busy_hours, p75_share_per_hour) VALUES(?,?,?,?,?)",
-                         (now, fam, bucket, len(values), _p75(values)))
-            out[f"{fam}/{bucket}"] = len(values)
+    accounts = [r[0] for r in conn.execute("SELECT DISTINCT account FROM quota_snapshots WHERE observed_at>=? ORDER BY account",
+                                           (since,))]
+    for account in accounts:
+        for bucket in BUCKETS:
+            per: dict[tuple, float] = {}   # (user_id, hour, family) -> points of this bucket
+            for rid, _uid, _model, _ended, points in quota.request_shares(conn, pricing, bucket, since, now, account=account):
+                m = meta.get(rid)
+                if m is None or m[2] is None or (m[0], m[1]) not in hours:
+                    continue
+                per[m] = per.get(m, 0.0) + points
+            for fam in FAMILIES:
+                values = [v for (_, _, f), v in per.items() if f == fam]
+                conn.execute("INSERT OR REPLACE INTO usage_estimates(computed_at, family, bucket, busy_hours, p75_share_per_hour, "
+                             "account) VALUES(?,?,?,?,?,?)", (now, fam, bucket, len(values), _p75(values), account))
+                out[f"{account}/{fam}/{bucket}"] = len(values)
     return out
 
 
@@ -91,9 +95,9 @@ def _hours(share: float, row) -> float | None:
     return math.floor(share / row["p75_share_per_hour"] * 10) / 10   # one decimal, rounded down: "at least"
 
 
-def hours_hint(conn: sqlite3.Connection, share_pct: float) -> dict:
-    """Per family: hours of steady use a tier share buys per 5-hour window and per weekly piece (share ÷ 7 against the
-    weekly bucket, spendable in fewer days), or None while the family has under 50 busy hours of data."""
-    rows = {(r["family"], r["bucket"]): r for r in conn.execute("SELECT * FROM usage_estimates")}
+def hours_hint(conn: sqlite3.Connection, share_pct: float, *, account: str) -> dict:
+    """Per family: hours of steady use a tier share of the account buys per 5-hour window and per weekly piece (share ÷ 7
+    against the weekly bucket, spendable in fewer days), or None while the family has under 50 busy hours of data."""
+    rows = {(r["family"], r["bucket"]): r for r in conn.execute("SELECT * FROM usage_estimates WHERE account=?", (account,))}
     return {fam: {"per_5h": _hours(share_pct, rows.get((fam, "5h"))), "per_day": _hours(share_pct / 7, rows.get((fam, "7d")))}
             for fam in FAMILIES}

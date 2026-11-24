@@ -19,6 +19,7 @@ def env(cfg, db):
     admin_id, admin_key = create_user(conn, "admin", role="admin", password_hash=PasswordHasher().hash(PW))
     alice, alice_key = create_user(conn, "alice")
     bob, bob_key = create_user(conn, "bob")
+    conn.execute("UPDATE users SET account='default'")   # served from the default account, as users are after the migration
     seed_oauth(conn)
     now = time.time()
     for uid, model, i, o in [(alice, "claude-opus-5", 1000, 200), (alice, "muse-spark-1.3", 500, 100), (bob, "claude-sonnet-5", 300, 50)]:

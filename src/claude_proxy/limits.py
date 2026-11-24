@@ -185,7 +185,15 @@ def _total_state(conn, cfg, user_id, row) -> LimitState:
 
 
 def _share_state(conn, cfg, user_id, row, now) -> LimitState:
-    att = quota.attribution(conn, cfg.pricing, SHARE_BUCKETS[row["kind"]], now=now, stale_after_s=cfg.quota.stale_after_s)
+    """A hand-set share of the user's assigned account (users.account); skipped while none is assigned."""
+    acct = conn.execute("SELECT account FROM users WHERE id=?", (user_id,)).fetchone()
+    acct = acct[0] if acct else None
+    if acct is None:
+        st = LimitState(row["kind"], row["scope"], row["value"], row["unit"], limit=float(row["value"]), estimated=True)
+        st.skipped = "no subscription assigned"
+        return st
+    att = quota.attribution(conn, cfg.pricing, SHARE_BUCKETS[row["kind"]], now=now, stale_after_s=cfg.quota.stale_after_s,
+                            account=acct)
     limit = float(row["value"]) * _capacity(att, now) / 100
     st = LimitState(row["kind"], row["scope"], row["value"], row["unit"], limit=limit, estimated=True)
     if att["utilization_pct"] is None or att["stale"]:
@@ -222,7 +230,7 @@ def _ticket_5h(conn, cfg, t, now) -> LimitState:
     """One pass's 5-hour limit (2026-10-28): its share of Anthropic's 5-hour window against the points its own requests
     moved, as if another user held it, so a pass bought past a limit starts with all of its own."""
     share = (t["share_5h_pct"] if t["share_5h_pct"] is not None else t["share_pct"]) + tickets.bonus_share(conn, t["id"], now)
-    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s, account=t["account"])
     st = LimitState("share_5h", "*", f"{share:g}", "pct", limit=share * _capacity(att, now) / 100, estimated=True,
                     tier=_label(conn, cfg, t))
     if att["resets_at"] and att["resets_at"] > now:
@@ -230,7 +238,7 @@ def _ticket_5h(conn, cfg, t, now) -> LimitState:
     if att["utilization_pct"] is not None and not att["stale"]:
         st.current = att["ticket_shares"].get(t["id"], 0.0)
         return _finish(st)
-    rate = quota.observed_rate(conn, cfg.pricing, "5h", now)
+    rate = quota.observed_rate(conn, cfg.pricing, "5h", now, account=t["account"])
     if rate is None:
         st.skipped = NO_RATE
         return st
@@ -249,7 +257,7 @@ def _free_room(conn, cfg, t, week, att, rate, capacity, now) -> float | None:
     headroom and hold nothing back. None without live data to say so."""
     if cfg.tickets.borrow_margin_pct >= 100 or not fresh(att, now):
         return None
-    return max(0.0, room(conn, cfg, t["account_id"], week, att, rate, capacity, now, ceiling=100.0,
+    return max(0.0, room(conn, cfg, t["account"], week, att, rate, capacity, now, ceiling=100.0,
                          margin=cfg.tickets.borrow_margin_pct, exclude=t["id"]))
 
 
@@ -262,7 +270,7 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     resets_at ever) → NO_RATE. With `borrow`, a day pass running past the reset may go over its own limit into its
     next part, as far as the old week's free room goes (2026-10-30 spec, §2)."""
     label = _label(conn, cfg, t)
-    week = tickets.week_bounds(conn, cfg, now)
+    week = tickets.week_bounds(conn, cfg, now, account=t["account"])
     if week is None:
         st = LimitState("share_7d", "*", "", "pct", limit=None, estimated=True, tier=label)
         st.skipped, st.no_live_data = NO_RATE, False
@@ -270,7 +278,7 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     week_start, week_end = week
     piece_start = max(week_start, t["starts_at"])
     cap = _pass_cap(conn, t, piece_start, week_end, now)
-    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s, account=t["account"])
     capacity = _capacity(att, now)
     own = cap * capacity / 100 - _debt(conn, cfg, t, week_start, capacity, now)
     st = LimitState("share_7d", "*", f"{cap:g}", "pct", limit=max(0.0, own), estimated=True, tier=label,
@@ -279,17 +287,18 @@ def _ticket_7d(conn, cfg, t, now, borrow: bool = False) -> LimitState:
     # Measured from the pass's own tokens at the observed rate, fresh snapshots or not: Anthropic reports utilization in
     # whole-percent steps, and a day-ticket piece (~0.71 points) is smaller than one step, so the share attributed since
     # the piece began would read 0 for most of a week and then jump. The cheap staleness check only decides the "no live data" mark.
-    newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket='7d' ORDER BY observed_at DESC LIMIT 1").fetchone()
+    newest = conn.execute("SELECT observed_at FROM quota_snapshots WHERE account=? AND bucket='7d' ORDER BY observed_at DESC LIMIT 1",
+                          (t["account"],)).fetchone()
     st.no_live_data = newest is None or now - newest[0] > cfg.quota.stale_after_s
     used = _weighted_since(conn, cfg, t["user_id"], piece_start, now, t["id"])
     if not used and not st.no_live_data:
         st.current = 0.0   # live data and nothing used in this piece: no rate needed, so a young account isn't refused
         return _finish(st)
-    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now, account=t["account"])
     if rate is None and not st.no_live_data:
         # A young account: utilization has never risen a whole point, so there is no rate yet. Live snapshots still say
         # who moved it, and until the first rise that is nobody, so a lone first user isn't locked out by their own usage.
-        st.current = quota.attributed_since(conn, cfg.pricing, "7d", t["user_id"], piece_start, now, t["id"])
+        st.current = quota.attributed_since(conn, cfg.pricing, "7d", t["user_id"], piece_start, now, t["id"], account=t["account"])
         return _finish(st)
     if rate is None:
         st.skipped, st.no_live_data = NO_RATE, False
@@ -383,12 +392,13 @@ def ticket_weeks(conn, cfg: Config, user_id: int, now: float, current: LimitStat
 def pass_weeks(conn, cfg: Config, t: dict, now: float, current: LimitState | None = None) -> dict | None:
     """ticket_weeks for one pass, `t`: each Anthropic week it spans and its whole use. `current`: its share_7d state now,
     else measured from its tokens. None without a known week or a rate."""
-    week = tickets.week_bounds(conn, cfg, now)
+    week = tickets.week_bounds(conn, cfg, now, account=t["account"])
     if week is None:
         return None
     user_id = t["user_id"]
-    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
-    capacity = _capacity(quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s), now)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now, account=t["account"])
+    capacity = _capacity(quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s,
+                                                  account=t["account"]), now)
     t_start, t_end = t["starts_at"], t["effective_end"]
     start = week[0]
     while start > t_start:

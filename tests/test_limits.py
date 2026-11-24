@@ -11,6 +11,7 @@ NOW = 10_000_000.0
 def env(db):
     conn = db[1]
     uid, _ = create_user(conn, "alice")
+    conn.execute("UPDATE users SET account='default'")   # hand-set shares are measured on the assigned account
     return conn, Config(), uid
 
 

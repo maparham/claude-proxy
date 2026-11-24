@@ -20,6 +20,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
+from . import plans
 from .config import Pricing, QuotaConfig
 from .usage import priced_sql, raw_tokens_sql
 
@@ -104,17 +105,18 @@ def parse_poll(body: dict) -> list[Snapshot]:
     return out
 
 
-def record(conn: sqlite3.Connection, snaps: list[Snapshot], now: float | None = None) -> None:
+def record(conn: sqlite3.Connection, snaps: list[Snapshot], now: float | None = None, *, account: str) -> None:
+    """Store an account's snapshots; one equal to that account's last within DEDUPE_S is dropped."""
     now = time.time() if now is None else now
     for s in snaps:
-        last = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE bucket=? "
-                            "ORDER BY observed_at DESC LIMIT 1", (s.bucket,)).fetchone()
+        last = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE account=? AND bucket=? "
+                            "ORDER BY observed_at DESC LIMIT 1", (account, s.bucket)).fetchone()
         if last and now - last["observed_at"] < DEDUPE_S and last["utilization_pct"] == s.utilization_pct \
                 and last["resets_at"] == s.resets_at:
             continue
-        conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, status, raw_json) "
-                     "VALUES(?,?,?,?,?,?,?)",
-                     (now, s.source, s.bucket, s.utilization_pct, s.resets_at, s.status, json.dumps(s.raw)[:4000]))
+        conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, status, raw_json, "
+                     "account) VALUES(?,?,?,?,?,?,?,?)",
+                     (now, s.source, s.bucket, s.utilization_pct, s.resets_at, s.status, json.dumps(s.raw)[:4000], account))
 
 
 def classify_429(headers) -> str:
@@ -159,10 +161,11 @@ def weighted_sql(pricing: Pricing, models) -> tuple[str, list]:
 
 
 def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float | None = None,
-                stale_after_s: int = 1800) -> dict:
+                stale_after_s: int = 1800, *, account: str) -> dict:
+    """One account's bucket split across users: its snapshots' rises over the requests served from it."""
     now = time.time() if now is None else now
-    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE bucket=? "
-                        "AND observed_at >= ? ORDER BY observed_at", (bucket, now - 8 * 86400)).fetchall()
+    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE account=? AND bucket=? "
+                        "AND observed_at >= ? ORDER BY observed_at", (account, bucket, now - 8 * 86400)).fetchall()
     if not rows:
         return {"bucket": bucket, "utilization_pct": None, "resets_at": None, "observed_at": None,
                 "stale": True, "shares": {}, "ticket_shares": {}, "unattributed": None, "window_start": None, "counted_from": None, "history": []}
@@ -172,8 +175,9 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
     # The window's first snapshot already holds what was used since the reset; with the reset time known, that rise
     # from 0 goes to the requests that ended between the reset and that snapshot.
     reset_at = _reset_time(rows[start - 1], win[0]) if start else None
-    span = "provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
-    bounds = (win[0]["observed_at"] if reset_at is None else max(reset_at, rows[start - 1]["observed_at"]), latest["observed_at"])
+    span = "account=? AND provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
+    bounds = (account, win[0]["observed_at"] if reset_at is None else max(reset_at, rows[start - 1]["observed_at"]),
+              latest["observed_at"])
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
     # Weighted tokens, priced in SQL (this runs before every request under a share limit); unpriced models count raw tokens.
     w, args = weighted_sql(pricing, models)
@@ -212,36 +216,40 @@ def attribution(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: fl
         "ticket_shares": by_ticket,
         "unattributed": max(0.0, latest["utilization_pct"] - sum(shares.values())),
         "window_start": win[0]["observed_at"],
-        "counted_from": bounds[0],
+        "counted_from": bounds[1],
         "history": history,
     }
 
 
-_att_cache: dict[tuple[int, str], tuple[tuple, dict]] = {}   # (id(conn), bucket) -> (inputs, attribution as computed)
+_att_cache: dict[tuple[int, str, str], tuple[tuple, dict]] = {}   # (id(conn), account, bucket) -> (inputs, attribution)
 
 
-def _att_inputs(conn, pricing: Pricing, newest: float | None, att: dict) -> tuple:
-    """What attribution() read, cheaply: the newest snapshot, and how many requests ended inside the window it walked
-    (an index range count on idx_requests_ended)."""
+def _att_inputs(conn, pricing: Pricing, newest: float | None, att: dict, account: str) -> tuple:
+    """What attribution() read, cheaply: the newest snapshot, and how many of the account's requests ended inside the
+    window it walked (an index range count on idx_requests_account_ended)."""
     n = 0 if att["counted_from"] is None else conn.execute(
-        "SELECT COUNT(*) FROM requests WHERE ended_at > ? AND ended_at <= ?", (att["counted_from"], att["observed_at"])).fetchone()[0]
+        "SELECT COUNT(*) FROM requests WHERE account=? AND ended_at > ? AND ended_at <= ?",
+        (account, att["counted_from"], att["observed_at"])).fetchone()[0]
     return newest, n, id(pricing)
 
 
-def attribution_cached(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, stale_after_s: int = 1800) -> dict:
+def attribution_cached(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, stale_after_s: int = 1800, *,
+                       account: str) -> dict:
     """attribution(), recomputed only when what it reads changes; for the hot path (a ticket's 5-hour limit runs it on
     every request). Shares change when a new snapshot lands, and also when a request inside the walked window is
     recorded late (a stream that finished just before another response's headers were recorded) or deleted with its
     user, so the key is the newest snapshot time plus the count of requests that ended inside the window; requests
     ending after the newest snapshot, the usual case, leave it alone. `now` matters only through `stale`, recomputed
     on every call, and through the 8-day lookback, which matters once the window's first snapshot is older than that."""
-    newest = conn.execute("SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket=?", (bucket,)).fetchone()[0]
-    hit = _att_cache.get((id(conn), bucket))
+    newest = conn.execute("SELECT MAX(observed_at) FROM quota_snapshots WHERE account=? AND bucket=?",
+                          (account, bucket)).fetchone()[0]
+    key = (id(conn), account, bucket)
+    hit = _att_cache.get(key)
     if (hit is None or hit[0][0] != newest or (hit[1]["window_start"] is not None and hit[1]["window_start"] < now - 8 * 86400)
-            or _att_inputs(conn, pricing, newest, hit[1]) != hit[0]):
-        att = attribution(conn, pricing, bucket, now=now, stale_after_s=stale_after_s)
-        hit = (_att_inputs(conn, pricing, newest, att), att)
-        _att_cache[(id(conn), bucket)] = hit
+            or _att_inputs(conn, pricing, newest, hit[1], account) != hit[0]):
+        att = attribution(conn, pricing, bucket, now=now, stale_after_s=stale_after_s, account=account)
+        hit = (_att_inputs(conn, pricing, newest, att, account), att)
+        _att_cache[key] = hit
     att = hit[1]
     return {**att, "stale": att["observed_at"] is None or now - att["observed_at"] > stale_after_s}
 
@@ -253,15 +261,15 @@ def _is_reset(prev, cur) -> bool:
     return cur["utilization_pct"] < prev["utilization_pct"]
 
 
-def _pairs(conn, pricing: Pricing, bucket: str, lo: float, now: float):
-    """Consecutive snapshot pairs of a bucket from `lo` to `now`, each with the forwarded Anthropic requests that ended
-    in between as (id, user_id, model, ended_at, weighted). Yields (prev, cur, requests)."""
-    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE bucket=? AND observed_at>=? "
-                        "AND observed_at<=? ORDER BY observed_at", (bucket, lo, now)).fetchall()
+def _pairs(conn, pricing: Pricing, bucket: str, lo: float, now: float, account: str):
+    """Consecutive snapshot pairs of an account's bucket from `lo` to `now`, each with the forwarded Anthropic requests
+    served from it that ended in between as (id, user_id, model, ended_at, weighted). Yields (prev, cur, requests)."""
+    rows = conn.execute("SELECT observed_at, utilization_pct, resets_at FROM quota_snapshots WHERE account=? AND bucket=? "
+                        "AND observed_at>=? AND observed_at<=? ORDER BY observed_at", (account, bucket, lo, now)).fetchall()
     if len(rows) < 2:
         return
-    span = "provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
-    bounds = (rows[0]["observed_at"], rows[-1]["observed_at"])
+    span = "account=? AND provider='anthropic' AND rejected_by IS NULL AND ended_at > ? AND ended_at <= ?"
+    bounds = (account, rows[0]["observed_at"], rows[-1]["observed_at"])
     models = [m for (m,) in conn.execute(f"SELECT DISTINCT model FROM requests WHERE {span}", bounds)]
     w, args = weighted_sql(pricing, models)
     reqs = conn.execute(f"SELECT id, user_id, model, ended_at, {w} AS w FROM requests WHERE {span} ORDER BY ended_at, id",
@@ -275,17 +283,18 @@ def _pairs(conn, pricing: Pricing, bucket: str, lo: float, now: float):
         yield prev, cur, batch
 
 
-def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float) -> list[tuple]:
+def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float, *,
+                   account: str) -> list[tuple]:
     """(request_id, user_id, model, ended_at, points): each forwarded Anthropic request that ended after `since`, with
     the percentage points of the bucket attributed to it: its weighted tokens' part of the rise over the snapshot pair
     it ended in. Walking starts at the last snapshot at or before `since`, so an interval straddling `since` is split by
     which requests ended after it. A reset restarts the high-water mark; its pair's rise from 0 goes to the requests that
     ended after the reset time, or to nobody when that time is unknown (attribution() does the same)."""
-    first = conn.execute("SELECT observed_at FROM quota_snapshots WHERE bucket=? AND observed_at<=? ORDER BY observed_at DESC LIMIT 1",
-                         (bucket, since)).fetchone()
+    first = conn.execute("SELECT observed_at FROM quota_snapshots WHERE account=? AND bucket=? AND observed_at<=? "
+                         "ORDER BY observed_at DESC LIMIT 1", (account, bucket, since)).fetchone()
     lo = first[0] if first else since
     out, high = [], None
-    for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
+    for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now, account):
         if high is None:
             high = prev["utilization_pct"]
         if _is_reset(prev, cur):
@@ -306,16 +315,17 @@ def request_shares(conn: sqlite3.Connection, pricing: Pricing, bucket: str, sinc
 
 
 def attributed_since(conn: sqlite3.Connection, pricing: Pricing, bucket: str, user_id: int, since: float, now: float,
-                     ticket_id: int | None = None) -> float:
+                     ticket_id: int | None = None, *, account: str) -> float:
     """The bucket's share attributed to one user's requests since `since` (a ticket day's start, spec section 7);
     with `ticket_id`, to those that pass served only."""
     mine = None if ticket_id is None else {r for (r,) in conn.execute("SELECT id FROM requests WHERE ticket_id=? AND ended_at>?",
                                                                        (ticket_id, since))}
-    return sum(p for (rid, uid, _, _, p) in request_shares(conn, pricing, bucket, since, now) if uid == user_id and (mine is None or rid in mine))
+    return sum(p for (rid, uid, _, _, p) in request_shares(conn, pricing, bucket, since, now, account=account)
+               if uid == user_id and (mine is None or rid in mine))
 
 
 RATE_CACHE_S = 300   # observed_rate's cache lifetime, measured in the `now` argument so synthetic-clock tests behave
-_rate_cache: dict[tuple[int, str], tuple[float, float | None]] = {}   # (id(conn), bucket) -> (computed_at_now, rate)
+_rate_cache: dict[tuple[int, str, str], tuple[float, float | None]] = {}   # (id(conn), account, bucket) -> (computed_at_now, rate)
 
 
 def clear_rate_cache() -> None:
@@ -325,19 +335,19 @@ def clear_rate_cache() -> None:
     _att_cache.clear()
 
 
-def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> float | None:
-    ratios = [r for _, r in _ratios(conn, pricing, bucket, lo, now)]
+def _median_ratio(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float, account: str) -> float | None:
+    ratios = [r for _, r in _ratios(conn, pricing, bucket, lo, now, account)]
     return statistics.median(ratios) if ratios else None
 
 
-def _ratios(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float) -> list[tuple[float, float]]:
+def _ratios(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, now: float, account: str) -> list[tuple[float, float]]:
     """(observed_at, weighted tokens per point) for each rise from `lo` to `now`. Utilization moves in whole-percent
     steps, so most pairs show no rise and the tokens in them belong to the next step. Tokens are carried across pairs
     until utilization rises above its high-water mark; each rise yields carried tokens ÷ rise and starts the carry
     again. A reset drops the carry; when its time is known, the new window starts
     from 0 with the tokens of the requests after it, otherwise it restarts at the newer snapshot with nothing."""
     ratios, carry, high = [], 0.0, None
-    for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now):
+    for prev, cur, batch in _pairs(conn, pricing, bucket, lo, now, account):
         if high is None:
             high = prev["utilization_pct"]
         if _is_reset(prev, cur):
@@ -359,45 +369,48 @@ def _ratios(conn: sqlite3.Connection, pricing: Pricing, bucket: str, lo: float, 
 PLAN_CHECK_S = 3600   # how often the poller asks Anthropic for the account's plan
 
 
-def record_plan(conn: sqlite3.Connection, organization_type: str | None, rate_limit_tier: str | None, now: float) -> bool:
-    """Store the account's plan when it differs from the last one stored. True when that was a change of plan."""
-    last = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans ORDER BY observed_at DESC, id DESC LIMIT 1").fetchone()
+def record_plan(conn: sqlite3.Connection, organization_type: str | None, rate_limit_tier: str | None, now: float, *,
+                account: str) -> bool:
+    """Store the account's plan when it differs from the last one stored for it. True when that was a change of plan."""
+    last = conn.execute("SELECT organization_type, rate_limit_tier FROM account_plans WHERE account=? "
+                        "ORDER BY observed_at DESC, id DESC LIMIT 1", (account,)).fetchone()
     if last is not None and tuple(last) == (organization_type, rate_limit_tier):
         return False
-    conn.execute("INSERT INTO account_plans(observed_at, organization_type, rate_limit_tier) VALUES(?,?,?)",
-                 (now, organization_type, rate_limit_tier))
+    conn.execute("INSERT INTO account_plans(observed_at, organization_type, rate_limit_tier, account) VALUES(?,?,?,?)",
+                 (now, organization_type, rate_limit_tier, account))
     return last is not None
 
 
-def record_profile(conn: sqlite3.Connection, profile: dict, now: float) -> None:
-    """Keep the latest profile Anthropic sent, whole: the admin sees its details (renewal dates and the like)."""
-    conn.execute("INSERT INTO account_profile(id, observed_at, raw_json) VALUES(1,?,?) "
-                 "ON CONFLICT(id) DO UPDATE SET observed_at=excluded.observed_at, raw_json=excluded.raw_json",
-                 (now, json.dumps(profile)))
+def record_profile(conn: sqlite3.Connection, profile: dict, now: float, *, account: str) -> None:
+    """Keep the latest profile Anthropic sent for the account, whole: the admin sees its details (renewal dates and the like)."""
+    conn.execute("INSERT INTO account_profiles(account, observed_at, raw_json) VALUES(?,?,?) "
+                 "ON CONFLICT(account) DO UPDATE SET observed_at=excluded.observed_at, raw_json=excluded.raw_json",
+                 (account, now, json.dumps(profile)))
 
 
-def latest_profile(conn: sqlite3.Connection) -> dict | None:
-    row = conn.execute("SELECT observed_at, raw_json FROM account_profile WHERE id=1").fetchone()
+def latest_profile(conn: sqlite3.Connection, *, account: str) -> dict | None:
+    row = conn.execute("SELECT observed_at, raw_json FROM account_profiles WHERE account=?", (account,)).fetchone()
     return {"observed_at": row[0], "profile": json.loads(row[1])} if row else None
 
 
-def plan_changes(conn: sqlite3.Connection) -> list[dict]:
-    """Each change of plan as {t, from, to}. The first plan ever seen is not a change. Rises are only compared within
-    one plan."""
-    rows = conn.execute("SELECT observed_at, organization_type, rate_limit_tier FROM account_plans ORDER BY observed_at, id").fetchall()
+def plan_changes(conn: sqlite3.Connection, *, account: str) -> list[dict]:
+    """Each change of the account's plan as {t, from, to}. The first plan ever seen is not a change. Rises are only
+    compared within one plan."""
+    rows = conn.execute("SELECT observed_at, organization_type, rate_limit_tier FROM account_plans WHERE account=? "
+                        "ORDER BY observed_at, id", (account,)).fetchall()
     return [{"t": b[0], "from": a[2] or a[1], "to": b[2] or b[1]} for a, b in zip(rows, rows[1:])]
 
 
 def rate_history(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since: float, now: float,
-                 days: int = 7) -> list[dict]:
+                 days: int = 7, *, account: str) -> list[dict]:
     """The observed rate over time, for the dashboard: each rise since `since` as {t, ratio, median}, where median is
     over the rises of the trailing `days` on the same plan. Close to what observed_rate() returned at t but not
     identical: that walks each window afresh (its first rise carries no tokens from before it) and falls back to the
     plan's whole history."""
     lo = since - days * 86400
-    cuts = [c["t"] for c in plan_changes(conn) if lo < c["t"] < now]
+    cuts = [c["t"] for c in plan_changes(conn, account=account) if lo < c["t"] < now]
     # Each plan walked on its own: its first snapshot is only a baseline, so no rise mixes tokens of two plans.
-    pts = [p for a, b in zip([lo, *cuts], [*cuts, now]) for p in _ratios(conn, pricing, bucket, a, b)]
+    pts = [p for a, b in zip([lo, *cuts], [*cuts, now]) for p in _ratios(conn, pricing, bucket, a, b, account)]
     out, window, j = [], [], 0
     for t, r in pts:
         bisect.insort(window, r)
@@ -411,7 +424,8 @@ def rate_history(conn: sqlite3.Connection, pricing: Pricing, bucket: str, since:
     return out
 
 
-def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7) -> float | None:
+def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: float, days: int = 7, *,
+                  account: str) -> float | None:
     """Weighted tokens per utilization point: the median of weighted ÷ rise over the last `days` of rises above the
     high-water mark, each with the forwarded Anthropic requests since the previous rise (_median_ratio). When the account has been quiet for
     that long and no such pair falls in the window, falls back to the median over the whole retained history instead,
@@ -421,31 +435,40 @@ def observed_rate(conn: sqlite3.Connection, pricing: Pricing, bucket: str, now: 
     to points for the weekly piece, and for share_5h while snapshots are stale.
 
     Process-local cache: this runs on the hot path (every request a stale-snapshot ticket user makes), so the result
-    is cached per (connection, bucket) for RATE_CACHE_S seconds of `now`-time (not wall-clock time, so tests with a
+    is cached per (connection, account, bucket) for RATE_CACHE_S seconds of `now`-time (not wall-clock time, so tests with a
     synthetic clock get a correctly-expiring cache); clear_rate_cache() drops every entry."""
-    key = (id(conn), bucket)
+    key = (id(conn), account, bucket)
     cached = _rate_cache.get(key)
     if cached is not None and now - cached[0] < RATE_CACHE_S:
         return cached[1]
-    start = max((c["t"] for c in plan_changes(conn) if c["t"] <= now), default=0.0)
-    rate = _median_ratio(conn, pricing, bucket, max(now - days * 86400, start), now)
+    start = max((c["t"] for c in plan_changes(conn, account=account) if c["t"] <= now), default=0.0)
+    rate = _median_ratio(conn, pricing, bucket, max(now - days * 86400, start), now, account)
     if rate is None:
-        rate = _median_ratio(conn, pricing, bucket, start, now)   # the plan's whole retained history, not just the last `days`
+        rate = _median_ratio(conn, pricing, bucket, start, now, account)   # the plan's whole retained history, not just the last `days`
     _rate_cache[key] = (now, rate)
     return rate
 
 
-def buckets(conn: sqlite3.Connection, since: float) -> list[str]:
-    return [r[0] for r in conn.execute("SELECT DISTINCT bucket FROM quota_snapshots WHERE observed_at>=? ORDER BY bucket", (since,))]
+def buckets(conn: sqlite3.Connection, since: float, *, account: str) -> list[str]:
+    return [r[0] for r in conn.execute("SELECT DISTINCT bucket FROM quota_snapshots WHERE account=? AND observed_at>=? "
+                                       "ORDER BY bucket", (account, since))]
+
+
+def _ack_first_plan(conn: sqlite3.Connection, account: str) -> None:
+    """An account's first plan is acknowledged as it is recorded: plans.pending_change compares later ones to it, so a
+    newly linked account sells without the admin's say, and a later change stops it until the admin acknowledges."""
+    if plans.acknowledged(conn, account) is None:
+        plans.acknowledge(conn, account, None)
 
 
 class Poller:
-    """Polls the usage endpoint only when no snapshot has arrived recently (spec 7.1)."""
+    """Polls one account's usage endpoint only when no snapshot of that account has arrived recently (spec 7.1)."""
 
     def __init__(self, conn: sqlite3.Connection, backend, qc: QuotaConfig, db=None):
         self.conn = conn
         self.db = db   # a dbpool.DbPool: the gateway's, so a poll never blocks the proxy's loop on the write lock
         self.backend = backend
+        self.account = backend.account
         self.qc = qc
         self.next_allowed = 0.0
         self.backoff = 0.0
@@ -459,7 +482,8 @@ class Poller:
         now = time.time() if now is None else now
         if now >= self.next_plan_check:
             await self.check_plan(now)
-        newest = await self._run(lambda c: c.execute("SELECT MAX(observed_at) FROM quota_snapshots").fetchone()[0])
+        newest = await self._run(lambda c: c.execute("SELECT MAX(observed_at) FROM quota_snapshots WHERE account=?",
+                                                     (self.account,)).fetchone()[0])
         if newest is not None and now - newest < self.qc.poll_idle_s:
             return
         if now < self.next_allowed:
@@ -477,7 +501,7 @@ class Poller:
         self.backoff = 0.0
         self.next_allowed = now + self.qc.poll_min_interval_s
         if status == 200 and body:
-            await self._run(record, parse_poll(body), now=now)
+            await self._run(record, parse_poll(body), now=now, account=self.account)
 
     async def check_plan(self, now: float) -> bool:
         """Record the subscription's plan from its profile; a change restarts the observed rate (plan_changes). False
@@ -490,13 +514,16 @@ class Poller:
             profile = None
         if not isinstance(profile, dict):
             return False
-        await self._run(record_profile, profile, now)
+        await self._run(record_profile, profile, now, account=self.account)
         org = profile.get("organization")
         if not isinstance(org, dict) or not (org.get("organization_type") or org.get("rate_limit_tier")):
             return True
-        if await self._run(record_plan, org.get("organization_type"), org.get("rate_limit_tier"), now):
-            logger.warning("subscription plan changed to %s; the observed rate restarts", org.get("rate_limit_tier"))
+        if await self._run(record_plan, org.get("organization_type"), org.get("rate_limit_tier"), now, account=self.account):
+            logger.warning("subscription [%s] plan changed to %s; the observed rate restarts", self.account,
+                           org.get("rate_limit_tier"))
             clear_rate_cache()
+        else:
+            await self._run(_ack_first_plan, self.account)
         return True
 
     async def run(self, interval_s: float = 60.0) -> None:

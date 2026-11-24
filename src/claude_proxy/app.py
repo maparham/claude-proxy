@@ -178,14 +178,15 @@ class Upstream:
         return f"{base}{path}{'?' + query if query else ''}"
 
 
-# The older of the 5-hour and weekly buckets' newest snapshots (NULL while either has none): tickets need both. Each
-# MAX is one lookup on idx_quota_bucket_time; other buckets (the per-model weekly ones) don't count.
-USAGE_FRESH_SQL = ("SELECT MIN((SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket='5h'), "
-                   "(SELECT MAX(observed_at) FROM quota_snapshots WHERE bucket='7d'))")
+# The older of an account's 5-hour and weekly buckets' newest snapshots (NULL while either has none): tickets need
+# both. Each MAX is one lookup on idx_quota_account_bucket_time; other buckets (the per-model weekly ones) don't count.
+# Parameters: the account, twice.
+USAGE_FRESH_SQL = ("SELECT MIN((SELECT MAX(observed_at) FROM quota_snapshots WHERE account=? AND bucket='5h'), "
+                   "(SELECT MAX(observed_at) FROM quota_snapshots WHERE account=? AND bucket='7d'))")
 
 
-def _usage_fresh(conn) -> float | None:
-    return conn.execute(USAGE_FRESH_SQL).fetchone()[0]
+def _usage_fresh(conn, account: str) -> float | None:
+    return conn.execute(USAGE_FRESH_SQL, (account, account)).fetchone()[0]
 
 
 def _save(conn, row: dict, title: str | None, content: tuple | None = None, prompt: tuple | None = None) -> bool:
@@ -216,9 +217,9 @@ def _save(conn, row: dict, title: str | None, content: tuple | None = None, prom
         return False
 
 
-def _record_quota(conn, headers) -> None:
+def _record_quota(conn, headers, account: str) -> None:
     try:
-        quota.record(conn, quota.parse_headers(headers))
+        quota.record(conn, quota.parse_headers(headers), account=account)
     except Exception:
         logger.exception("could not record quota headers")
 
@@ -241,7 +242,7 @@ def create_app(gw: Gateway) -> FastAPI:
     async def health():
         # Unauthenticated, so only yes/no answers: whether the subscription login works, and whether Anthropic's
         # usage figures are fresh (share limits and tickets depend on them). The detail stays on the dashboard.
-        oldest_newest = await gw.db.run(_usage_fresh)
+        oldest_newest = await gw.db.run(_usage_fresh, gw.backend.account)
         fresh = oldest_newest is not None and time.time() - oldest_newest <= usage_fresh_s(gw.cfg.quota)
         return {"ok": True, "credential": gw.backend.describe().healthy, "usage_fresh": fresh}
 
@@ -478,7 +479,7 @@ async def handle(gw: Gateway, request: Request, path: str) -> Response:
         if route is None:
             # Awaited, so the next request's checks see these figures; shielded, so a cancel never drops them.
             try:
-                await asyncio.shield(gw.db.run(_record_quota, resp.headers))
+                await asyncio.shield(gw.db.run(_record_quota, resp.headers, gw.backend.account))
             except BaseException:
                 await resp.aclose()   # cancelled before the relay owns it: nothing else would close the upstream stream
                 raise

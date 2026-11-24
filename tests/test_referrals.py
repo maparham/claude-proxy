@@ -16,7 +16,7 @@ def audit_actions(conn):
 def env(tmp_path):
     from claude_proxy.db import init_db
     conn = init_db(str(tmp_path / "test.db"))
-    conn.execute("INSERT INTO settings(key, value) VALUES('subscription_ends_at', '4102444800')")   # as conftest's db
+    conn.execute("INSERT INTO settings(key, value) VALUES('subscription_ends_at:default', '4102444800')")   # as conftest's db
     conn, cfg, ids = seeded((None, conn))
     cfg.zarinpal = ZarinpalConfig(vat_percent=10)
     tickets.set_share(conn, cfg, "lite", 20, ids["admin"])

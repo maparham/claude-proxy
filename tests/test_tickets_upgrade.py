@@ -47,7 +47,7 @@ def test_upgrade_raises_the_tier_and_the_limits(core):
     tk = tickets.get(conn, t["id"])
     assert tickets.tier_now(conn, tk) == "standard"
     assert tickets.bonus_share(conn, t["id"], at + 1) == 20
-    assert tickets.sold_at(conn, 1, at + 1) == 25
+    assert tickets.sold_at(conn, "default", at + 1) == 25
     assert [s.tier for s in limits.ticket_states(conn, cfg, ids["alice"], at + 1)] == ["Standard", "Standard"]
     with pytest.raises(tickets.TicketError, match="not above"):   # already at the top
         tickets.upgrade_quote(conn, cfg, tk, "standard", "EUR", at + 60)
@@ -113,7 +113,7 @@ def test_bonus_days_after_an_upgrade_run_at_the_upgraded_tier(core):
     end = tickets.get(conn, t["id"])["effective_end"]
     assert end == t["effective_end"] + 2 * DAY
     assert tickets.bonus_share(conn, t["id"], end - 60) == 20      # the extra days still carry the upgrade
-    assert tickets.sold_at(conn, 1, end - 60) == 25
+    assert tickets.sold_at(conn, "default", end - 60) == 25
 
 
 def test_quote_with_bonus_days_never_exceeds_the_full_price_difference(core):

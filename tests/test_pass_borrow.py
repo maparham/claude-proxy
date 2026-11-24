@@ -28,9 +28,9 @@ def grant_no_report(conn, cfg, ids, monkeypatch, uid, length="day", start=0):
     """grant(), with the capacity gate stubbed fresh for just this call: bob's grant here is only there to make his
     pass reserve against alice's week, and inserting a real snapshot fresh enough for it shifts the attribution window
     the `week()`/`piece()` arithmetic below depends on (a sale needs a fresh report, 2026-11-04 spec)."""
-    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now, account: (now - DAY, now + 6 * DAY))
     monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
-    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now, account: {
         "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
     t = grant(conn, cfg, ids, uid, length=length, start=start)
     monkeypatch.undo()
@@ -454,9 +454,9 @@ def test_the_admin_sees_who_used_the_week_and_each_pass_s_part_of_it(env):
     from claude_proxy import capacity
     conn, cfg, ids, t = env
     use(conn, ids["alice"], t, 100, 1.1)                  # 1 point off a pass before it, then 0.1 on it
-    w = capacity.week_use(conn, cfg, 1, AT)
+    w = capacity.week_use(conn, cfg, "default", AT)
     assert w["by"]["passes"] == pytest.approx(0.1) and w["by"]["outside"] == pytest.approx(0)
     assert [(u["name"], round(u["pts"], 2)) for u in w["by"]["users"]] == [("alice", 1.0)]
     assert w["passes"][t["id"]] == pytest.approx({"sold": OWN, "used": 0.1, "reserved": 0.0})   # over its part: borrowing
-    assert capacity.summary(conn, cfg, 1, AT)["used_by"] == w["by"]
+    assert capacity.summary(conn, cfg, "default", AT)["used_by"] == w["by"]
 

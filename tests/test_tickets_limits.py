@@ -9,9 +9,9 @@ def grant_no_report(conn, cfg, ids, monkeypatch, *a, **kw):
     """tickets.grant, with the capacity gate stubbed fresh just for this call: these tests want a ticket to exist
     with no quota snapshot recorded at all, to see how limits.evaluate reads a pass with no usage data (a sale
     needs a fresh report to go through, 2026-11-04 spec, which would otherwise make this setup impossible)."""
-    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now, account: (now - DAY, now + 6 * DAY))
     monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
-    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now, account: {
         "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), *a, **kw)
     monkeypatch.undo()
@@ -170,34 +170,34 @@ def test_month_ticket_covers_five_weeks(db):
     """week_split: full precision per week; the display rounds, enforcement does not."""
     conn, cfg, ids = seeded(db)
     fresh(conn, NOW - 600)
-    parts = tickets.week_split(conn, cfg, 5, WEEK_START + 3 * DAY, WEEK_START + 33 * DAY, now=NOW)
+    parts = tickets.week_split(conn, cfg, 5, WEEK_START + 3 * DAY, WEEK_START + 33 * DAY, now=NOW, account="default")
     assert len(parts) == 5
     assert parts[0] == pytest.approx(piece(5, 4 * DAY)) and parts[-1] == pytest.approx(piece(5, 5 * DAY))
     assert sum(parts) == pytest.approx(piece(5, 30 * DAY))
-    assert tickets.week_split(conn, cfg, 5, WEEK_START, RESET7, now=NOW) == pytest.approx([5])   # a full week: the whole share
-    assert tickets.week_split(conn, cfg, 5, RESET7 - 5 * DAY, RESET7 + 2 * DAY, now=NOW) == pytest.approx([piece(5, 5 * DAY), piece(5, 2 * DAY)])
-    assert tickets.week_split(conn, cfg, 5, RESET7 - 3600, RESET7 + 3600, now=NOW) == pytest.approx([piece(5, 3600), piece(5, 3600)])
+    assert tickets.week_split(conn, cfg, 5, WEEK_START, RESET7, now=NOW, account="default") == pytest.approx([5])   # a full week: the whole share
+    assert tickets.week_split(conn, cfg, 5, RESET7 - 5 * DAY, RESET7 + 2 * DAY, now=NOW, account="default") == pytest.approx([piece(5, 5 * DAY), piece(5, 2 * DAY)])
+    assert tickets.week_split(conn, cfg, 5, RESET7 - 3600, RESET7 + 3600, now=NOW, account="default") == pytest.approx([piece(5, 3600), piece(5, 3600)])
 
 
 def test_week_split_without_quota_data_is_none(db):
     conn, cfg, ids = seeded(db)
-    assert tickets.week_split(conn, cfg, 5, NOW, NOW + 7 * DAY, now=NOW) is None
+    assert tickets.week_split(conn, cfg, 5, NOW, NOW + 7 * DAY, now=NOW, account="default") is None
 
 
 def test_week_bounds_roll_forward_and_snapshot_wins(db):
     conn, cfg, ids = seeded(db)
     snap(conn, NOW - 2 * DAY, 10, "7d", NOW - DAY)   # reset a day ago: stale, but the boundaries are still known
-    assert tickets.week_bounds(conn, cfg, NOW) == (NOW - DAY, NOW - DAY + 7 * DAY)
+    assert tickets.week_bounds(conn, cfg, NOW, account="default") == (NOW - DAY, NOW - DAY + 7 * DAY)
     snap(conn, NOW - 100, 11, "7d", NOW + 6 * DAY)   # a fresh snapshot disagrees: it wins, never the projection
-    assert tickets.week_bounds(conn, cfg, NOW) == (NOW - DAY, NOW + 6 * DAY)
-    assert tickets.week_bounds(conn, cfg, NOW + 7 * DAY) == (NOW + 6 * DAY, NOW + 13 * DAY)   # past again: rolled forward
+    assert tickets.week_bounds(conn, cfg, NOW, account="default") == (NOW - DAY, NOW + 6 * DAY)
+    assert tickets.week_bounds(conn, cfg, NOW + 7 * DAY, account="default") == (NOW + 6 * DAY, NOW + 13 * DAY)   # past again: rolled forward
 
 
 def test_week_bounds_unknown_without_a_reset_time(db):
     conn, cfg, ids = seeded(db)
-    assert tickets.week_bounds(conn, cfg, NOW) is None   # no snapshots at all
+    assert tickets.week_bounds(conn, cfg, NOW, account="default") is None   # no snapshots at all
     snap(conn, NOW - 100, 0, "7d", None)                 # snapshots, but no reset time ever reported
-    assert tickets.week_bounds(conn, cfg, NOW) is None
+    assert tickets.week_bounds(conn, cfg, NOW, account="default") is None
 
 
 def test_a_slice_handed_over_mid_week_draws_at_most_its_share_from_one_week(db):
@@ -425,6 +425,7 @@ def test_ticket_user_gets_503_when_no_reset_was_ever_reported(db, monkeypatch):
 
 def test_ungated_users_keep_the_old_stale_behaviour(db, monkeypatch):
     conn, cfg, ids = seeded(db)
+    conn.execute("UPDATE users SET account='default'")   # a hand-set share is measured on the assigned account
     set_limit(conn, ids["alice"], "share_5h", 1, "pct")
     assert check(conn, cfg, ids["alice"]) is None                              # stale: skipped, as today
     t = grant_no_report(conn, cfg, ids, monkeypatch, "lite", "day", "USD", now=NOW, terms_version="v1")
@@ -678,12 +679,12 @@ def test_set_share_5h_rejects_bad_values(db):
 def test_order_split_gives_each_week_its_fraction_of_the_ticket(db):
     """The order terms: a week ticket starting a day into Anthropic's week holds 1/7 there and 6/7 in the next."""
     conn, cfg, ids = seeded(db)
-    assert tickets.order_split(conn, cfg, NOW, now=NOW) is None   # no weekly reset known yet
+    assert tickets.order_split(conn, cfg, NOW, now=NOW, account="default") is None   # no weekly reset known yet
     fresh(conn, NOW - 600)
-    s = tickets.order_split(conn, cfg, RESET7 - DAY, now=NOW)
+    s = tickets.order_split(conn, cfg, RESET7 - DAY, now=NOW, account="default")
     assert "first_reset" not in s and s["week"] == pytest.approx([1 / 7, 6 / 7])
     assert s["day"] == pytest.approx([1.0]) and sum(s["month"]) == pytest.approx(1.0)
-    later = tickets.order_split(conn, cfg, RESET7 + 2 * DAY, now=NOW)   # queued past this reset: the next one is first
+    later = tickets.order_split(conn, cfg, RESET7 + 2 * DAY, now=NOW, account="default")   # queued past this reset: the next one is first
     assert later["week"] == pytest.approx([5 / 7, 2 / 7])
 
 
@@ -691,37 +692,37 @@ def test_terms_text_is_the_order_dialogs_terms(db):
     """The buyer's emails repeat the dialog's terms: the weekly split by share, never a reset's date,
     then the 5-hour line."""
     conn, cfg, ids = seeded(db)
-    assert tickets.terms_text(conn, cfg, "en", "week", NOW, now=NOW) == (   # no weekly reset known: the general line
+    assert tickets.terms_text(conn, cfg, "en", "week", NOW, now=NOW, account="default") == (   # no weekly reset known: the general line
         "Pass terms:\n- " + tickets.TERMS["en"]["l1"] + "\n- You can use up to a set amount in every 5 hours.\n")
-    assert "usable until it ends" in tickets.terms_text(conn, cfg, "en", "day", NOW, now=NOW)   # a day pass: one allowance
-    assert "usable until it ends" in tickets.terms_text(conn, cfg, "en", "day", None)          # no start yet: nothing dated
+    assert "usable until it ends" in tickets.terms_text(conn, cfg, "en", "day", NOW, now=NOW, account="default")   # a day pass: one allowance
+    assert "usable until it ends" in tickets.terms_text(conn, cfg, "en", "day", None, account="default")          # no start yet: nothing dated
     fresh(conn, NOW - 600)
     # Parts, never weeks; why there are parts; and that a part's rest is lost.
-    assert tickets.terms_text(conn, cfg, "en", "week", RESET7 - DAY, now=NOW) == (
+    assert tickets.terms_text(conn, cfg, "en", "week", RESET7 - DAY, now=NOW, account="default") == (
         "Pass terms:\n- Your allowance renews on a fixed weekly schedule, so your pass is used in two parts: First part: 14% "
         "and Second part: 86%. Whatever is left of a part when the next one starts is lost."
         "\n- You can use up to a set amount in every 5 hours.\n")
-    assert tickets.terms_text(conn, cfg, "fa", "week", RESET7 - DAY, now=NOW) == (
+    assert tickets.terms_text(conn, cfg, "fa", "week", RESET7 - DAY, now=NOW, account="default") == (
         "شرایط بسته:\n- سهمیه شما طبق یک برنامه هفتگی ثابت تازه می‌شود، برای همین بسته شما در دو قسمت قابل استفاده است: "
         "قسمت اول: ۱۴٪ و قسمت دوم: ۸۶٪. هر چه از یک قسمت تا شروع قسمت بعد مصرف نشود از بین می‌رود."
         "\n- در هر ۵ ساعت تا سقف مشخصی می‌توانید مصرف کنید.\n")
-    assert "week" not in tickets.terms_text(conn, cfg, "en", "week", None).replace("weekly", "")
-    assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY, now=NOW)
-    assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY / 2, now=NOW)   # across the reset too
+    assert "week" not in tickets.terms_text(conn, cfg, "en", "week", None, account="default").replace("weekly", "")
+    assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY, now=NOW, account="default")
+    assert "کل بسته شما تا" in tickets.terms_text(conn, cfg, "fa", "day", RESET7 - DAY / 2, now=NOW, account="default")   # across the reset too
 
 
 def test_buyer_mail_html_draws_the_split(db):
     """The email's HTML copy: the body, with its terms' split drawn as a bar of one cell per week, as wide as its share."""
     conn, cfg, ids = seeded(db)
     fresh(conn, NOW - 600)
-    terms = tickets.terms_text(conn, cfg, "fa", "week", RESET7 - DAY, now=NOW)
+    terms = tickets.terms_text(conn, cfg, "fa", "week", RESET7 - DAY, now=NOW, account="default")
     body = f"سفارش شما <b>\n\n{terms}پایان\n"
-    h = tickets.mail_html(conn, cfg, "fa", "week", RESET7 - DAY, body)
+    h = tickets.mail_html(conn, cfg, "fa", "week", RESET7 - DAY, body, account="default")
     assert h.startswith('<div dir="rtl"') and "&lt;b&gt;" in h and "پایان" in h
     assert h.count('width="14.3%"') == 2 and h.count('width="85.7%"') == 2   # a label cell and a bar cell per part
     assert ">۱۴٪</td>" in h and ">قسمت دوم: ۸۶٪</td>" in h   # 14% is too narrow for its name
     assert "border-radius:2px\">&nbsp;</td>" in h
-    assert tickets.mail_html(conn, cfg, "en", "week", RESET7 - DAY, "Hi\n").startswith('<div dir="ltr"')
+    assert tickets.mail_html(conn, cfg, "en", "week", RESET7 - DAY, "Hi\n", account="default").startswith('<div dir="ltr"')
 
 
 def test_jalali_dates():
@@ -761,7 +762,7 @@ def test_month_pass_enforces_each_weeks_piece(db):
     conn, cfg, ids = seeded(db)
     fresh(conn, NOW - 600)
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "month", "USD", now=NOW - 300, terms_version="v1")
-    parts = tickets.week_split(conn, cfg, 5, t["starts_at"], t["ends_at"], now=NOW)
+    parts = tickets.week_split(conn, cfg, 5, t["starts_at"], t["ends_at"], now=NOW, account="default")
     assert len(parts) == 5 and sum(parts) == pytest.approx(piece(5, 30 * DAY))
     limits_seen = []
     for k in range(5):
@@ -796,8 +797,8 @@ def test_a_day_pass_across_the_reset_is_offered_as_one_part(db):
     """It borrows its next part as it needs it (2026-10-30), so the order terms don't split it."""
     conn, cfg, ids = seeded(db)
     fresh(conn, NOW - 600)
-    assert tickets.order_split(conn, cfg, RESET7 - 2 * 3600, now=NOW)["day"] == pytest.approx([1.0])
-    assert "usable until" in tickets.terms_text(conn, cfg, "en", "day", RESET7 - 2 * 3600, now=NOW)
+    assert tickets.order_split(conn, cfg, RESET7 - 2 * 3600, now=NOW, account="default")["day"] == pytest.approx([1.0])
+    assert "usable until" in tickets.terms_text(conn, cfg, "en", "day", RESET7 - 2 * 3600, now=NOW, account="default")
 
 
 def test_human_waits():

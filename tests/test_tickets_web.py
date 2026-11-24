@@ -304,9 +304,9 @@ async def test_me_tickets_prices_in_the_gateways_currency_not_the_running_pass(e
     # A pass granted in another currency (USD here; EUR on the live gateway) no longer turns the price list into it.
     gw, conn, cfg, ids, keys = env
     now = int(time.time())
-    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now, account: (now - DAY, now + 6 * DAY))
     monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
-    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now, account: {
         "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
     tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "USD", now=now, terms_version="v1")
     monkeypatch.undo()
@@ -321,9 +321,9 @@ async def test_me_tickets_shows_the_users_own_ticket_and_nothing_about_the_accou
     # This test wants no quota snapshot at all, to exercise the no-data display fallback below; a sale still needs a
     # fresh report to go through (2026-11-04 spec), so the capacity gate (context() and Guard both read these two
     # functions) is stubbed for these three calls only.
-    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now: (now - DAY, now + 6 * DAY))
+    monkeypatch.setattr(tickets, "week_bounds", lambda conn, cfg, now, account: (now - DAY, now + 6 * DAY))
     monkeypatch.setattr(capacity, "fresh", lambda att, now: True)
-    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now: {
+    monkeypatch.setattr(capacity, "_att", lambda conn, cfg, now, account: {
         "utilization_pct": 0.0, "stale": False, "resets_at": now + 6 * DAY, "ticket_shares": {}, "unattributed": 0.0})
     t = tickets.grant(conn, cfg, ids["admin"], user(conn, ids["alice"]), "lite", "week", "EUR", now=now - 3600, terms_version="v1")
     tickets.add_bonus(conn, cfg, ids["admin"], t["id"], share_pct=2, extra_days=1, note="welcome", now=now)

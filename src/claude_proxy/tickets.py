@@ -19,7 +19,9 @@ from .config import LENGTHS, Config
 from .forwarder import COUNT_TOKENS_PATH
 
 DAY = 86400
-ACCOUNT_ID = 1   # step 1 has exactly one account (spec section 1)
+# Transitional (multi-subscription task 2): where a pass is sold today, it is sold on this account. Placement across
+# accounts (task 5) replaces it.
+SELL_ACCOUNT = "default"
 
 STALE_RATE_S = 36 * 3600
 USD_ROUND_TO = 0.01
@@ -97,10 +99,11 @@ def terms_date(ts: float, lang: str) -> str:
 SPLIT_COLORS = ("#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4")   # app.css --s1..--s5, light: a month spans up to 5 weeks
 
 
-def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float | None, now: float | None, rich: bool) -> str:
-    """`starts_at` None: not known yet (an order waiting for its grant), so nothing dated, no split."""
+def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float | None, now: float | None, rich: bool,
+           account: str | None) -> str:
+    """`starts_at` or `account` None: not known yet (an order waiting for its grant), so nothing dated, no split."""
     w = TERMS["fa" if lang == "fa" else "en"]
-    ws = order_split(conn, cfg, starts_at, now) if starts_at is not None else None
+    ws = order_split(conn, cfg, starts_at, now, account=account) if starts_at is not None and account is not None else None
     parts, days = (ws or {}).get(length) or [], LENGTHS[length]
     esc = html.escape if rich else str
 
@@ -140,25 +143,28 @@ def _terms(conn, cfg: Config, lang: str, length: str, starts_at: float | None, n
     return "\n".join(lines).replace("</table>\n", "</table>") + "\n"   # the table already breaks the line
 
 
-def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float | None, now: float | None = None) -> str:
+def terms_text(conn, cfg: Config, lang: str, length: str, starts_at: float | None, now: float | None = None,
+               account: str | None = None) -> str:
     """The order dialog's terms for a `length` ticket starting at `starts_at`, as one block for the buyer's emails:
     how it splits across Anthropic's weeks (each piece's share), else the general line without
-    quota data; then the 5-hour line."""
-    return _terms(conn, cfg, lang, length, starts_at, now, rich=False)
+    quota data; then the 5-hour line. `account`: the pass's, whose weeks it splits across."""
+    return _terms(conn, cfg, lang, length, starts_at, now, rich=False, account=account)
 
 
-def terms_html(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None) -> str:
+def terms_html(conn, cfg: Config, lang: str, length: str, starts_at: float, now: float | None = None,
+               account: str | None = None) -> str:
     """terms_text as HTML for the email's HTML copy, with the split drawn under its sentence: a bar, each part's
     percent on it."""
-    return _terms(conn, cfg, lang, length, starts_at, now, rich=True)
+    return _terms(conn, cfg, lang, length, starts_at, now, rich=True, account=account)
 
 
-def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float | None, body: str) -> str:
+def mail_html(conn, cfg: Config, lang: str, length: str, starts_at: float | None, body: str, account: str | None = None) -> str:
     """A buyer email's HTML copy: the plain `body`, its terms block (for that ticket) swapped for the drawn one, right
     to left for Persian."""
     lang = "fa" if lang == "fa" else "en"
     d = "rtl" if lang == "fa" else "ltr"
-    terms, rich = terms_text(conn, cfg, lang, length, starts_at), terms_html(conn, cfg, lang, length, starts_at)
+    terms = terms_text(conn, cfg, lang, length, starts_at, account=account)
+    rich = terms_html(conn, cfg, lang, length, starts_at, account=account)
     inner = html.escape(body).replace(html.escape(terms), rich, 1)
     inner = re.sub(r"https?://[^\s<\"]+/blog/install-claude-code-windows-mac(?![\w-])", lambda m: f'<a href="{m[0]}">{m[0]}</a>', inner)   # orders.setup_guide's link
     return f'<div dir="{d}" style="text-align:{"right" if d == "rtl" else "left"};white-space:pre-wrap">{inner}</div>\n'
@@ -174,14 +180,14 @@ def _check_terms(terms_version) -> str:
     return terms_version
 
 
-def week_bounds(conn, cfg: Config, now: float) -> tuple[float, float] | None:
-    """The current Anthropic weekly window from the 7d snapshots' reset time (2026-10-13 spec, §1.3).
+def week_bounds(conn, cfg: Config, now: float, *, account: str) -> tuple[float, float] | None:
+    """The account's current Anthropic weekly window from its 7d snapshots' reset time (2026-10-13 spec, §1.3).
 
     Recomputed from the latest attribution on every call — projections are never stored, and a fresh
     snapshot's `resets_at` always wins. Keys on `resets_at` vs `now` only: a stale snapshot with a future
     reset still gives known boundaries. `resets_at` passed rolls forward in 7-day steps (assumed fixed
     cadence); no reset time ever reported → None (the caller refuses 503 NO_RATE)."""
-    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s, account=account)
     resets = att["resets_at"]
     if resets is None:
         return None
@@ -192,13 +198,14 @@ def week_bounds(conn, cfg: Config, now: float) -> tuple[float, float] | None:
     return end - 7 * DAY, end
 
 
-def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int, now: float | None = None) -> list[float] | None:
+def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int, now: float | None = None, *,
+               account: str) -> list[float] | None:
     """The §1.1 piece caps for `[starts_at, ends_at)` in every Anthropic week it touches, full precision.
 
     Future week boundaries project forward from the current `resets_at` in 7-day steps (assumed cadence —
     informational; enforcement always uses observed resets). None when no `resets_at` is known at all."""
     now = _now(now)
-    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s, account=account)
     resets = att["resets_at"]
     if resets is None:
         return None
@@ -222,18 +229,18 @@ def week_split(conn, cfg: Config, share_pct: float, starts_at: int, ends_at: int
 
 
 
-def order_split(conn, cfg: Config, starts_at: float, now: float | None = None) -> dict | None:
+def order_split(conn, cfg: Config, starts_at: float, now: float | None = None, *, account: str) -> dict | None:
     """What a buyer is told before ordering: per length, the fraction of the ticket each Anthropic week holds if it
     starts at `starts_at`, and `resets`: the weekly resets between its parts, after `starts_at` and within the longest
     length, so the terms can show when a part ends (asked for 2026-11-03). Informational, like week_split: boundaries
     project forward in 7-day steps. None without a known weekly reset."""
     now = _now(now)
-    if (wb := week_bounds(conn, cfg, now)) is None:
+    if (wb := week_bounds(conn, cfg, now, account=account)) is None:
         return None
     first = wb[1] + max(0, -(-(starts_at - wb[1]) // (7 * DAY))) * 7 * DAY   # the first reset at or after the start
     out = {"starts_at": starts_at, "resets": [first + k * 7 * DAY for k in range(6) if first + k * 7 * DAY < starts_at + max(LENGTHS.values()) * DAY]}
     for length, days in LENGTHS.items():
-        parts = week_split(conn, cfg, 7 / days, int(starts_at), int(starts_at) + days * DAY, now) or []
+        parts = week_split(conn, cfg, 7 / days, int(starts_at), int(starts_at) + days * DAY, now, account=account) or []
         if length == "day" and parts:
             parts = [1.0]   # it borrows its next part as it needs it (2026-10-30): one allowance, whatever reset it crosses
         out[length] = parts   # share 7/days per week makes the pieces fractions of the whole ticket
@@ -603,36 +610,37 @@ def set_recommended(conn: sqlite3.Connection, cfg: Config, tier, length, actor: 
     return {"tier": tier, "length": length}
 
 
-SUB_END_KEY = "subscription_ends_at"
+SUB_END_KEY = "subscription_ends_at:{}"   # per account slug
 
 
-def subscription_end_set(conn: sqlite3.Connection) -> int | None:
-    """The end of the current Anthropic subscription as the admin set it; None when unset."""
-    row = conn.execute("SELECT value FROM settings WHERE key=?", (SUB_END_KEY,)).fetchone()
+def subscription_end_set(conn: sqlite3.Connection, account: str) -> int | None:
+    """The end of the account's current Anthropic subscription as the admin set it; None when unset."""
+    row = conn.execute("SELECT value FROM settings WHERE key=?", (SUB_END_KEY.format(account),)).fetchone()
     try:
         return int(row[0]) if row else None
     except ValueError:
         return None
 
 
-def subscription_end(conn: sqlite3.Connection, week: tuple[float, float] | None, now: float) -> float | None:
+def subscription_end(conn: sqlite3.Connection, week: tuple[float, float] | None, now: float, account: str) -> float | None:
     """When every pass must have ended: the admin's subscription end, or, while it is unset or already past, the
     current weekly reset (week[1]), as the subscription is only sure to run until then. None without either."""
-    end = subscription_end_set(conn)
+    end = subscription_end_set(conn, account)
     if end is not None and end > now:
         return float(end)
     return week[1] if week else None
 
 
-def set_subscription_end(conn: sqlite3.Connection, ends_at: int | None, actor: int | None, now: float | None = None) -> int | None:
-    """Set the subscription's end (UTC seconds), which must be in the future; None clears it."""
+def set_subscription_end(conn: sqlite3.Connection, ends_at: int | None, actor: int | None, account: str,
+                         now: float | None = None) -> int | None:
+    """Set the account's subscription end (UTC seconds), which must be in the future; None clears it."""
     if ends_at is None:
-        conn.execute("DELETE FROM settings WHERE key=?", (SUB_END_KEY,))
+        conn.execute("DELETE FROM settings WHERE key=?", (SUB_END_KEY.format(account),))
     else:
         if ends_at <= _now(now):
             raise TicketError("The subscription's end must be in the future.")
-        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (SUB_END_KEY, str(int(ends_at))))
-    db.audit(conn, actor, "subscription_end_set", "", {"ends_at": ends_at})
+        conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)", (SUB_END_KEY.format(account), str(int(ends_at))))
+    db.audit(conn, actor, "subscription_end_set", account, {"ends_at": ends_at})
     return ends_at
 
 
@@ -647,48 +655,48 @@ def _exclude(exclude) -> tuple[str, list]:
     return (f" AND t.id NOT IN ({','.join('?' * len(ids))})", ids) if ids else ("", [])
 
 
-def sold_at(conn: sqlite3.Connection, account_id: int, t: float, exclude=None) -> float:
+def sold_at(conn: sqlite3.Connection, account: str, t: float, exclude=None) -> float:
     """sold(t) for the 5-hour bucket (2026-11-04 spec, §2 check 3): 5-hour shares of the non-cancelled tickets and
     bonus shares covering `t` (half-open periods), each falling back to its weekly share. `exclude` leaves those
     tickets and their bonuses out."""
     ex, args = _exclude(exclude)
-    a = conn.execute(f"SELECT COALESCE(SUM(COALESCE(t.share_5h_pct, t.share_pct)), 0) FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
-                     f"AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?{ex}", (account_id, t, t, *args)).fetchone()[0]
+    a = conn.execute(f"SELECT COALESCE(SUM(COALESCE(t.share_5h_pct, t.share_pct)), 0) FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+                     f"AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?{ex}", (account, t, t, *args)).fetchone()[0]
     b = conn.execute(f"SELECT COALESCE(SUM(COALESCE(b.share_5h_pct, b.share_pct)), 0) FROM ticket_bonuses b JOIN tickets t ON t.id=b.ticket_id "
-                     f"WHERE t.account_id=? AND t.cancelled_at IS NULL AND b.cancelled_at IS NULL AND b.starts_at<=? AND b.ends_at>?{ex}",
-                     (account_id, t, t, *args)).fetchone()[0]
+                     f"WHERE t.account=? AND t.cancelled_at IS NULL AND b.cancelled_at IS NULL AND b.starts_at<=? AND b.ends_at>?{ex}",
+                     (account, t, t, *args)).fetchone()[0]
     return a + b
 
 
-def _starts_within(conn, account_id: int, starts_at: int, ends_at: int, exclude=None) -> set[int]:
+def _starts_within(conn, account: str, starts_at: int, ends_at: int, exclude=None) -> set[int]:
     """Every ticket or bonus start strictly inside (starts_at, ends_at): the only places sold(t) can rise."""
     ex, args = _exclude(exclude)
-    pts = {r[0] for r in conn.execute(f"SELECT t.starts_at FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
-                                      f"AND t.starts_at>? AND t.starts_at<?{ex}", (account_id, starts_at, ends_at, *args))}
-    pts |= {r[0] for r in conn.execute(f"SELECT b.starts_at FROM ticket_bonuses b JOIN tickets t ON t.id=b.ticket_id WHERE t.account_id=? "
+    pts = {r[0] for r in conn.execute(f"SELECT t.starts_at FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+                                      f"AND t.starts_at>? AND t.starts_at<?{ex}", (account, starts_at, ends_at, *args))}
+    pts |= {r[0] for r in conn.execute(f"SELECT b.starts_at FROM ticket_bonuses b JOIN tickets t ON t.id=b.ticket_id WHERE t.account=? "
                                        f"AND t.cancelled_at IS NULL AND b.cancelled_at IS NULL AND b.share_pct>0 AND b.starts_at>? AND b.starts_at<?{ex}",
-                                       (account_id, starts_at, ends_at, *args))}
+                                       (account, starts_at, ends_at, *args))}
     return pts
 
 
-def check_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, share_5h: float, starts_at: int, ends_at: int,
+def check_capacity(conn: sqlite3.Connection, cfg: Config, account: str, share_5h: float, starts_at: int, ends_at: int,
                    exclude=None) -> None:
     """The 5-hour check (2026-11-04 spec, §2 check 3): sold(t) + share_5h <= max_sold_5h_pct at the period's start and
     at every start inside it, else CapacityError."""
     ceiling = cfg.tickets.max_sold_5h_pct
-    for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at, exclude)}):
-        sold = sold_at(conn, account_id, point, exclude)
+    for point in sorted({starts_at, *_starts_within(conn, account, starts_at, ends_at, exclude)}):
+        sold = sold_at(conn, account, point, exclude)
         if sold + share_5h > ceiling + 1e-9:
             raise CapacityError(f"5-hour shares would reach {sold + share_5h:g}% at {_date(point)}, over max_sold_5h_pct "
                                 f"({ceiling:g}%).")
 
 
-def verify_capacity(conn: sqlite3.Connection, cfg: Config, account_id: int, starts_at: int, ends_at: int) -> None:
+def verify_capacity(conn: sqlite3.Connection, cfg: Config, account: str, starts_at: int, ends_at: int) -> None:
     """The 5-hour check over rows already written, for changes of several pieces; call it inside the transaction or
     savepoint, so CapacityError undoes them."""
     ceiling = cfg.tickets.max_sold_5h_pct
-    for point in sorted({starts_at, *_starts_within(conn, account_id, starts_at, ends_at)}):
-        sold = sold_at(conn, account_id, point)
+    for point in sorted({starts_at, *_starts_within(conn, account, starts_at, ends_at)}):
+        sold = sold_at(conn, account, point)
         if sold > ceiling + 1e-9:
             raise CapacityError(f"5-hour shares would reach {sold:g}% at {_date(point)}, over max_sold_5h_pct ({ceiling:g}%).")
 
@@ -861,13 +869,13 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     ends_at = starts_at + LENGTHS[length] * DAY
     end_warning = None
     excl = [t["id"] for t in replaces]
-    ctx = capacity.context(conn, cfg, ACCOUNT_ID, now, excl)
+    ctx = capacity.context(conn, cfg, SELL_ACCOUNT, now, excl)
     # Used-up tickets this one replaces end as it starts: their reserved points and 5-hour share go with them.
     # The end and this week's room the admin may grant past: each is noted, then the other checks run without it.
     skip, end_warning, week_warning = {}, None, None
     while True:
         try:
-            capacity.check(conn, cfg, ACCOUNT_ID, share, share_5h, starts_at, ends_at, now, exclude=excl, ctx=ctx, **skip)
+            capacity.check(conn, cfg, SELL_ACCOUNT, share, share_5h, starts_at, ends_at, now, exclude=excl, ctx=ctx, **skip)
             available, reason, short_5h = True, None, False
         except SubscriptionEnds as e:
             end_warning, skip["sub_end"] = str(e), False
@@ -898,7 +906,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
             "short_week": week_warning is not None, "week_warning": week_warning, "over_week": week_warning is not None and bool(over_week),
             "replaces": [t["id"] for t in replaces], "start_now": bool(start_now),
             "sold_out_now": sold_out(conn, cfg, tier, length, now) if starts_at > now else not available or short_5h or end_warning is not None or week_warning is not None,
-            "week_split": week_split(conn, cfg, share, starts_at, ends_at, now),
+            "week_split": week_split(conn, cfg, share, starts_at, ends_at, now, account=SELL_ACCOUNT),
             "terms_version": TERMS_VERSION,
             "limit_rows": rows,
             # Only the first ticket takes the sign-up credit; a credit the admin sets after that stays.
@@ -969,9 +977,9 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
         if not p["available"]:   # judged by preview just now, inside this transaction (2026-11-04 spec, §2)
             raise CapacityError(_refusal(p))
         cur = conn.execute(
-            "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
+            "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, usd, "
             "discount_id, currency, rate, amount, granted_by, granted_at, note, ref_off_usd) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (user["id"], user["name"], ACCOUNT_ID, tier, p["share_pct"], p["share_5h_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
+            (user["id"], user["name"], SELL_ACCOUNT, tier, p["share_pct"], p["share_5h_pct"], length, p["days"], p["starts_at"], p["ends_at"], p["list_usd"],
              p["usd"], p["discount_id"], currency, p["rate"], p["amount"], actor, now, note, p.get("ref_off_usd")))
         tid = cur.lastrowid
         if p["first_ticket"] and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user["id"],)).rowcount:
@@ -1003,10 +1011,10 @@ def grant(conn: sqlite3.Connection, cfg: Config, actor: int | None, user, tier: 
 
 # ---------- what the panels and /pricing ask ----------
 
-def capacity(conn: sqlite3.Connection, cfg: Config, now: float) -> dict:
+def capacity(conn: sqlite3.Connection, cfg: Config, now: float, account: str) -> dict:
     """The capacity panel's figures (2026-11-04 spec, §6)."""
     from . import capacity as cap   # here, not at the top: capacity imports tickets
-    return cap.summary(conn, cfg, ACCOUNT_ID, _now(now))
+    return cap.summary(conn, cfg, account, _now(now))
 
 
 def _refusal(p: dict) -> str:
@@ -1033,7 +1041,7 @@ def _misfit(conn, cfg, tier, length, now, starts_at=None, exclude=None, ctx=None
     now = _now(now)
     start = now if starts_at is None else int(starts_at)
     try:
-        capacity.check(conn, cfg, ACCOUNT_ID, effective_share(conn, cfg, tier), effective_share_5h(conn, cfg, tier), start,
+        capacity.check(conn, cfg, SELL_ACCOUNT, effective_share(conn, cfg, tier), effective_share_5h(conn, cfg, tier), start,
                        start + LENGTHS[length] * DAY, now, exclude or (), ctx)
     except CapacityError as e:
         return e
@@ -1055,12 +1063,15 @@ def _shift(conn, cfg: Config, chain: list[dict], delta: int, now: float) -> None
     from . import capacity   # here, not at the top: capacity imports tickets
     conn.execute("SAVEPOINT moves")
     try:
-        guard = capacity.Guard(conn, cfg, chain[0]["account_id"], now)
+        # One Guard per account the chain's passes are on: each account's capacity judges its own passes' move.
+        guards = {a: capacity.Guard(conn, cfg, a, now) for a in dict.fromkeys(tk["account"] for tk in chain)}
         for tk in (chain if delta < 0 else reversed(chain)):
             conn.execute("UPDATE tickets SET starts_at=starts_at+?, ends_at=ends_at+? WHERE id=?", (delta, delta, tk["id"]))
             conn.execute("UPDATE ticket_bonuses SET starts_at=starts_at+?, ends_at=ends_at+? WHERE ticket_id=? AND cancelled_at IS NULL",
                          (delta, delta, tk["id"]))
-        guard.verify(min(tk["starts_at"] for tk in chain) + delta, max(tk["effective_end"] for tk in chain) + delta)
+        for a, guard in guards.items():
+            mine = [tk for tk in chain if tk["account"] == a]
+            guard.verify(min(tk["starts_at"] for tk in mine) + delta, max(tk["effective_end"] for tk in mine) + delta)
         conn.execute("RELEASE moves")
     except BaseException:
         conn.execute("ROLLBACK TO moves")
@@ -1201,7 +1212,7 @@ def add_bonus(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_i
         if t["used_up_at"] is not None:
             raise TicketError("The ticket was used up and the next one took over; bonuses go on live tickets.")
         old_end, new_end, moved = t["effective_end"], t["effective_end"] + extra_days * DAY, 0
-        guard = capacity.Guard(conn, cfg, t["account_id"], now)   # before the queue moves: the bonus is judged as one change
+        guard = capacity.Guard(conn, cfg, t["account"], now)   # before the queue moves: the bonus is judged as one change
         # Capacity is checked from now on: on a ticket that has started or ended, the past is spent either way.
         if extra_days:
             chain = _later_tickets(conn, t["user_id"], old_end) if t["user_id"] is not None else []
@@ -1305,7 +1316,7 @@ def upgrade_quote(conn: sqlite3.Connection, cfg: Config, ticket: dict, tier: str
     if share <= 0 or usd <= 0:
         raise TicketError(f"{cfg.tickets.tiers[tier].label} is not above this pass's tier.")
     try:
-        capacity.check(conn, cfg, ticket["account_id"], share, max(0.0, share_5h), now, ticket["effective_end"], now)
+        capacity.check(conn, cfg, ticket["account"], share, max(0.0, share_5h), now, ticket["effective_end"], now)
         sold, reason = False, None
     except CapacityError as e:
         sold, reason = True, str(e)
@@ -1443,8 +1454,8 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
     `exclude`: a buyer's used-up tickets, which a pass bought now replaces (next_start), left out of `sold_out`."""
     now = _now(now)
     from . import capacity   # here, not at the top: capacity imports tickets
-    ctx_now = capacity.context(conn, cfg, ACCOUNT_ID, now, exclude or ())
-    ctx_later = capacity.context(conn, cfg, ACCOUNT_ID, now) if (later := starts_at is not None and starts_at > now) else None
+    ctx_now = capacity.context(conn, cfg, SELL_ACCOUNT, now, exclude or ())
+    ctx_later = capacity.context(conn, cfg, SELL_ACCOUNT, now) if (later := starts_at is not None and starts_at > now) else None
     rate = current_rate(conn, currency)
     if rate is None:
         currency, rate = "USD", current_rate(conn, "USD")
@@ -1474,4 +1485,4 @@ def price_table(conn: sqlite3.Connection, cfg: Config, now: float, currency: str
         tiers.append({"tier": tid, "label": t.label, "compare": eff[tid]["compare"], "compare_pct": compare_pct, "lengths": lengths})
     return {"currency": currency, "rate_set_at": rate["set_at"], "how_to_buy": cfg.tickets.how_to_buy, "tiers": tiers, "vat_percent": vat,
             "recommended": rec if (rec := recommended(conn, cfg)) and next(x for x in tiers if x["tier"] == rec["tier"])["lengths"][rec["length"]] else None,
-            "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now)}
+            "week_split": order_split(conn, cfg, now if starts_at is None else max(now, starts_at), now, account=SELL_ACCOUNT)}

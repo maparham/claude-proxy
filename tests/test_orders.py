@@ -519,7 +519,7 @@ def test_buyer_mail_carries_nothing_the_buyer_typed(mailing):
     assert "Mallory" not in body and "Buy now" not in body and "spam" not in body and "<script>" not in body
     assert "7.50 EUR" in body and cfg.tickets.how_to_buy not in body   # no bank transfer: online payment, else the admin
     assert "Your order is not paid yet. The admin will contact you about the next step." in body
-    assert tickets.terms_text(conn, cfg, "en", "week", None) in body   # it starts when granted: nothing dated yet
+    assert tickets.terms_text(conn, cfg, "en", "week", None, account="default") in body   # it starts when granted: nothing dated yet
 
 
 def test_buyer_mail_for_a_day_pass_has_no_dates_and_no_1_days(mailing):
@@ -545,7 +545,7 @@ def test_buyer_mail_in_persian_for_an_order_from_the_persian_page(mailing):
     assert subject == "سفارش شما: اقتصادی، ۱ هفته"
     assert "بسته اقتصادی برای ۱ هفته (۷ روز)" in body and "۷٫۵۰ EUR" in body
     assert "ادمین برای مرحله بعد با شما تماس می‌گیرد" in body and cfg.tickets.how_to_buy not in body
-    assert tickets.terms_text(conn, cfg, "fa", "week", None) in body and "شرایط بسته:" in body
+    assert tickets.terms_text(conn, cfg, "fa", "week", None, account="default") in body and "شرایط بسته:" in body
     assert "Pass terms" not in body
 
 
@@ -739,7 +739,7 @@ async def test_order_received_html_copy_carries_the_same_undated_terms(mailing, 
     o = visitor(conn, cfg)
     await orders.dispatch(conn, cfg, o["id"])
     h = htmls[-1]
-    assert tickets.terms_html(conn, cfg, "en", "week", None) in h and "<table" not in h
+    assert tickets.terms_html(conn, cfg, "en", "week", None, account="default") in h and "<table" not in h
 
 
 # ---------- where the order came from (Telegram bot, via) ----------

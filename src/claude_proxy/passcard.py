@@ -35,7 +35,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     if cur:
         ups = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is not None]
         active = [b for b in tickets.active_bonuses(conn, cur["id"], now) if b["tier"] is None]   # gifts; upgrades were paid for
-        week = tickets.week_bounds(conn, cfg, now)
+        week = tickets.week_bounds(conn, cfg, now, account=cur["account"])
         week_end = week[1] if week is not None else tickets.current_day(cur, now)[1]   # display-only fallback; enforcement is 503 then
         # bonus_days: from the bonuses, not effective_end - ends_at, which is negative once a pass is used up early.
         # No subscription percents: the user never learns about the account behind the gateway, so a bonus reads
@@ -107,7 +107,7 @@ def build(conn, cfg, user_id: int, now: float) -> dict:
     out["prices"] = tickets.price_table(conn, cfg, now, currency, starts_at=out["next_start"],
                                         exclude=[t["id"] for t in tickets.next_start(conn, cfg, user_id, now, True)[1]])
     # A ticket can also start now, beside the running one: the order dialog's terms for that choice.
-    out["split_now"] = tickets.order_split(conn, cfg, now, now) if cur else None
+    out["split_now"] = tickets.order_split(conn, cfg, now, now, account=tickets.SELL_ACCOUNT) if cur else None
     out["timeline"] = tickets.timeline(conn, cfg, user_id, now)   # the card's chart, with more than one live ticket
     out["now"] = now   # discount countdowns run on the server's clock, as on /pricing
     out["terms_version"] = tickets.TERMS_VERSION

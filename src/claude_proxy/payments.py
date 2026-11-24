@@ -150,7 +150,7 @@ def _check_fits(conn: sqlite3.Connection, cfg: Config, user, o: dict, now: int) 
     a payment the callback then could not grant leaves the order `paid_unfulfilled` (2026-11-07). A pass sold out only
     until the 5-hour reset says when to try again."""
     from . import capacity   # here, not at the top: keeps payments' import list to what it always needed
-    if not capacity.context(conn, cfg, tickets.ACCOUNT_ID, now).fresh:
+    if not capacity.context(conn, cfg, tickets.SELL_ACCOUNT, now).fresh:
         raise PaymentError(409, orders.UNAVAILABLE)
     if o["upgrade_of"] is not None:
         try:
@@ -532,13 +532,13 @@ def mails(conn: sqlite3.Connection, cfg: Config, p: dict, o: dict, ticket: dict 
         out.append((o["email"], f"پرداخت شما: {what_fa}",
                     f"ممنون. پرداخت {orders.fa_amount(p['amount'], 'IRT')} شما انجام شد.\n{_vat_line(cfg, p['amount'], 'fa')}\nبسته: {what_fa}، {span}.\n"
                     f"{orders.ref_discount_line_fa(o, ticket)}"
-                    f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'fa', o['length'], ticket['starts_at'])}" + orders.setup_guide(cfg, o)))
+                    f"کد پیگیری زرین‌پال: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'fa', o['length'], ticket['starts_at'], account=ticket['account'])}" + orders.setup_guide(cfg, o)))
     elif ticket is not None:
         span = f"{tickets._date(ticket['starts_at'])} to {tickets._date(ticket['ends_at'])}"
         out.append((o["email"], f"Your payment: {_label(cfg, o['tier'])} {o['length']}",
                     f"Thank you. Your payment of {_toman(p['amount'])} went through.\n{_vat_line(cfg, p['amount'], 'en')}\nPass: {what}, {span}.\n"
                     f"{orders.ref_discount_line_en(o, ticket)}"
-                    f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'en', o['length'], ticket['starts_at'])}" + orders.setup_guide(cfg, o)))
+                    f"ZarinPal reference: {p['ref_id']}\n\n{tickets.terms_text(conn, cfg, 'en', o['length'], ticket['starts_at'], account=ticket['account'])}" + orders.setup_guide(cfg, o)))
     return out
 
 
@@ -551,7 +551,7 @@ async def send_mails(conn: sqlite3.Connection, cfg: Config, pid: int) -> None:
     t = conn.execute(f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.id=?", (o["ticket_id"],)).fetchone() if o["ticket_id"] else None
     for i, (to, subject, body) in enumerate(mails(conn, cfg, p, o, dict(t) if t else None, p["error"])):
         buyer = i == 1   # after the admin's: the buyer's, which carries the ticket's terms
-        rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body) if buyer else None
+        rich = tickets.mail_html(conn, cfg, o["lang"], o["length"], t["starts_at"], body, account=t["account"]) if buyer else None
         try:
             await asyncio.to_thread(mail.send, mail.servers(conn, cfg.email), to, subject, body, rich)
         except Exception as e:

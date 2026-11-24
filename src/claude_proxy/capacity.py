@@ -131,24 +131,24 @@ def pieces(week: tuple[float, float], share: float, starts_at: float, ends_at: f
 SOLD_END = "t.ends_at + 86400 * COALESCE((SELECT SUM(b.extra_days) FROM ticket_bonuses b WHERE b.ticket_id=t.id AND b.cancelled_at IS NULL), 0)"
 
 
-def _sold_rows(conn: sqlite3.Connection, account_id: int, since: float) -> list[tuple[float, float, float]]:
+def _sold_rows(conn: sqlite3.Connection, account: str, since: float) -> list[tuple[float, float, float]]:
     """(share, starts_at, sold end) of every non-cancelled pass and share bonus of the account still selling time after
     `since`. A pass's sold end is ends_at plus its bonus days: used_up_at never shrinks it (spec §1, Sold period)."""
     rows = [(r[0], r[1], r[2]) for r in conn.execute(
-        f"SELECT t.share_pct, t.starts_at, {SOLD_END} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
-        f"AND {SOLD_END} > ?", (account_id, since))]
+        f"SELECT t.share_pct, t.starts_at, {SOLD_END} FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+        f"AND {SOLD_END} > ?", (account, since))]
     rows += [(r[0], r[1], r[2]) for r in conn.execute(
         "SELECT b.share_pct, b.starts_at, b.ends_at FROM ticket_bonuses b JOIN tickets t ON t.id=b.ticket_id "
-        "WHERE t.account_id=? AND t.cancelled_at IS NULL AND b.cancelled_at IS NULL AND b.share_pct>0 AND b.ends_at>?",
-        (account_id, since))]
+        "WHERE t.account=? AND t.cancelled_at IS NULL AND b.cancelled_at IS NULL AND b.share_pct>0 AND b.ends_at>?",
+        (account, since))]
     return rows
 
 
-def sold_by_week(conn: sqlite3.Connection, account_id: int, week: tuple[float, float]) -> dict[float, float]:
+def sold_by_week(conn: sqlite3.Connection, account: str, week: tuple[float, float]) -> dict[float, float]:
     """Σ unscaled pieces over sold periods per week, from the current week on (spec §2 check 2, §6). No exclude: what
     a replaced pass was sold for in the weeks ahead stays sold there."""
     out: dict[float, float] = {}
-    for share, s, e in _sold_rows(conn, account_id, week[0]):
+    for share, s, e in _sold_rows(conn, account, week[0]):
         for w, p in pieces(week, share, max(s, week[0]), e).items():
             out[w] = out.get(w, 0.0) + p
     return out
@@ -158,7 +158,7 @@ def _ids(exclude) -> tuple[int, ...]:
     return () if exclude is None else (exclude,) if isinstance(exclude, int) else tuple(exclude)
 
 
-def reserved(conn: sqlite3.Connection, cfg: Config, account_id: int, week: tuple[float, float], att: dict,
+def reserved(conn: sqlite3.Connection, cfg: Config, account: str, week: tuple[float, float], att: dict,
          rate: float | None, scale: float, now: float, exclude=()) -> float:
     """What running and queued passes may still draw from the current week (spec §1): per pass, its piece over
     the week (every overlapping share bonus counted) scaled to the gateway's capacity, less its debt and its use this
@@ -167,8 +167,8 @@ def reserved(conn: sqlite3.Connection, cfg: Config, account_id: int, week: tuple
     week_start, week_end = week
     ex = _ids(exclude)
     others = [dict(r) for r in conn.execute(
-        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
-        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, week_end, now)) if r["id"] not in ex]
+        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (account, week_end, now)) if r["id"] not in ex]
     if not others:
         return 0.0
     ids = [p["id"] for p in others]
@@ -199,19 +199,19 @@ def _own(conn, cfg, p, bonuses, week, scale, now) -> float:
     return part * scale / 100 - _debt(conn, cfg, p, week[0], scale, now)
 
 
-def week_use(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) -> dict:
+def week_use(conn: sqlite3.Connection, cfg: Config, account: str, now: float) -> dict:
     """The admin's view of this week's points (passes tab): who used them, as Anthropic's figure splits by attribution
     (passes, each user's use off a pass, use outside the gateway), and per pass overlapping the week its points of it,
     what it used and what it may still draw (reserved()'s terms). Empty without a known week."""
-    week = tickets.week_bounds(conn, cfg, now)
+    week = tickets.week_bounds(conn, cfg, now, account=account)
     if week is None:
         return {"by": None, "passes": {}}
-    att = _att(conn, cfg, now)
-    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
+    att = _att(conn, cfg, now, account)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now, account=account)
     scale = _capacity(att, now)
     rows = [dict(r) for r in conn.execute(
-        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
-        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, week[1], week[0]))]
+        f"SELECT {tickets.TICKET_COLS} FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}>?", (account, week[1], week[0]))]
     ids = [p["id"] for p in rows]
     bonuses = _bonuses(conn, ids) if ids else {}
     uses = _week_use(conn, cfg, ids, week[0], now) if rate and ids else {}
@@ -238,10 +238,10 @@ def week_use(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float)
             "passes": passes}
 
 
-def room(conn: sqlite3.Connection, cfg: Config, account_id: int, week, att: dict, rate: float | None, scale: float,
+def room(conn: sqlite3.Connection, cfg: Config, account: str, week, att: dict, rate: float | None, scale: float,
          now: float, ceiling: float, margin: float, exclude=()) -> float:
     """ceiling − U − Σ reserved − margin (spec §1, Free room), not floored: negative means the week is over-committed."""
-    return ceiling - att["utilization_pct"] - reserved(conn, cfg, account_id, week, att, rate, scale, now, exclude) - margin
+    return ceiling - att["utilization_pct"] - reserved(conn, cfg, account, week, att, rate, scale, now, exclude) - margin
 
 
 SUB_END_SLACK_S = 60   # a pass ending at the weekly reset, as the next snapshot moves it by a few seconds, still fits
@@ -265,21 +265,21 @@ class Context:
     exclude: tuple
 
 
-def _att(conn, cfg, now):
-    return quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s)
+def _att(conn, cfg, now, account: str):
+    return quota.attribution_cached(conn, cfg.pricing, "7d", now=now, stale_after_s=cfg.quota.stale_after_s, account=account)
 
 
-def context(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float, exclude=()) -> Context:
-    week = tickets.week_bounds(conn, cfg, now)
-    att = _att(conn, cfg, now)
+def context(conn: sqlite3.Connection, cfg: Config, account: str, now: float, exclude=()) -> Context:
+    week = tickets.week_bounds(conn, cfg, now, account=account)
+    att = _att(conn, cfg, now, account)
     ok = week is not None and fresh(att, now)
     scale = _capacity(att, now)
     if week is None:
         return Context(None, False, scale, att["utilization_pct"], 0.0, None, {}, _ids(exclude))
-    rate = quota.observed_rate(conn, cfg.pricing, "7d", now)
-    res = reserved(conn, cfg, account_id, week, att, rate, scale, now, exclude)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now, account=account)
+    res = reserved(conn, cfg, account, week, att, rate, scale, now, exclude)
     room_ = cfg.tickets.max_sold_pct - att["utilization_pct"] - res - cfg.tickets.sell_margin_pct if ok else None
-    return Context(week, ok, scale, att["utilization_pct"], res, room_, sold_by_week(conn, account_id, week), _ids(exclude))
+    return Context(week, ok, scale, att["utilization_pct"], res, room_, sold_by_week(conn, account, week), _ids(exclude))
 
 
 def _week_full(w: float, total: float, ceiling: float) -> str:
@@ -290,13 +290,13 @@ def _no_room(free: float, need: float) -> str:
     return f"This week has {max(0.0, free):.1f} points free and the pass needs {need:.1f}."
 
 
-def reserved_5h(conn: sqlite3.Connection, account_id: int, att: dict, scale: float, now: float, exclude=()) -> float:
+def reserved_5h(conn: sqlite3.Connection, account: str, att: dict, scale: float, now: float, exclude=()) -> float:
     """Σ over running passes (but `exclude`) of the 5-hour allowance each has reserved in Anthropic's current window (may still draw):
     its 5-hour share with bonuses, scaled as _ticket_5h scales it, less the points it moved there."""
     ex = _ids(exclude)
     total = 0.0
-    for r in conn.execute(f"SELECT t.id, COALESCE(t.share_5h_pct, t.share_pct) FROM tickets t WHERE t.account_id=? "
-                          f"AND t.cancelled_at IS NULL AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, now, now)):
+    for r in conn.execute(f"SELECT t.id, COALESCE(t.share_5h_pct, t.share_pct) FROM tickets t WHERE t.account=? "
+                          f"AND t.cancelled_at IS NULL AND t.starts_at<=? AND {db.TICKET_EFFECTIVE_END}>?", (account, now, now)):
         if r[0] in ex:
             continue
         limit = (r[1] + tickets.bonus_share(conn, r[0], now)) * scale / 100
@@ -304,7 +304,7 @@ def reserved_5h(conn: sqlite3.Connection, account_id: int, att: dict, scale: flo
     return total
 
 
-def check_5h_room(conn: sqlite3.Connection, cfg: Config, account_id: int, share_5h: float, starts_at: float, now: float,
+def check_5h_room(conn: sqlite3.Connection, cfg: Config, account: str, share_5h: float, starts_at: float, now: float,
                   exclude=()) -> None:
     """A pass (or added 5-hour share) starting inside Anthropic's current 5-hour window must find its whole 5-hour
     allowance free there: max_sold_5h_pct − U − Σ reserved_5h − sell_margin_pct ≥ share_5h (2026-11-07), else a buyer
@@ -314,41 +314,41 @@ def check_5h_room(conn: sqlite3.Connection, cfg: Config, account_id: int, share_
     after the window's reset."""
     if share_5h <= 1e-12:
         return
-    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution_cached(conn, cfg.pricing, "5h", now=now, stale_after_s=cfg.quota.stale_after_s, account=account)
     if not (att["utilization_pct"] is not None and not att["stale"] and att["resets_at"] and now < att["resets_at"]) \
             or starts_at >= att["resets_at"]:
         return
     need = share_5h
     free = (cfg.tickets.max_sold_5h_pct - att["utilization_pct"]
-            - reserved_5h(conn, account_id, att, _capacity(att, now), now, exclude) - cfg.tickets.sell_margin_pct)
+            - reserved_5h(conn, account, att, _capacity(att, now), now, exclude) - cfg.tickets.sell_margin_pct)
     if need > free + 1e-9:
         raise tickets.FiveHourFull(f"The current 5-hour window has {max(0.0, free):.1f} points free and the pass needs "
                                     f"{need:.1f}; it resets at {time.strftime('%H:%M', time.gmtime(att['resets_at']))} UTC.", att["resets_at"])
 
 
-def check_sub_end(conn: sqlite3.Connection, week, ends_at: float, now: float) -> None:
+def check_sub_end(conn: sqlite3.Connection, week, ends_at: float, now: float, account: str) -> None:
     """A pass may not run past the Anthropic subscription's end (the admin's date, else the weekly reset): a week
     pass is refused in a subscription's last week, a day pass in its last day, a month pass in its last month."""
-    end = tickets.subscription_end(conn, week, now)
+    end = tickets.subscription_end(conn, week, now, account)
     if end is not None and ends_at > end + SUB_END_SLACK_S:
-        set_ = tickets.subscription_end_set(conn)
+        set_ = tickets.subscription_end_set(conn, account)
         why = ("" if set_ is not None and set_ > now else " (the weekly reset; no end date is set)" if set_ is None
                else " (the weekly reset; the end date set has passed)")
         raise tickets.SubscriptionEnds(f"The subscription ends {time.strftime('%Y-%m-%d %H:%M', time.gmtime(end))} UTC"
                                        f"{why}, before this pass would end.", end)
 
 
-def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, share_5h: float, starts_at: float,
+def check(conn: sqlite3.Connection, cfg: Config, account: str, share: float, share_5h: float, starts_at: float,
           ends_at: float, now: float, exclude=(), ctx: Context | None = None, sub_end: bool = True,
           room: bool = True) -> None:
     """The three checks of spec §2 for a pass (or bonus share) not written yet; CapacityError names the first that fails.
     `sub_end=False`: skip check_sub_end (the admin grants past the subscription's end anyway; tickets.preview).
     `room=False`: skip this week's room (WeekFull; the admin oversells anyway, tickets.preview)."""
-    ctx = ctx or context(conn, cfg, account_id, now, exclude)
+    ctx = ctx or context(conn, cfg, account, now, exclude)
     if not ctx.fresh:
         raise tickets.CapacityError(NO_REPORT)
     if sub_end:
-        check_sub_end(conn, ctx.week, ends_at, now)
+        check_sub_end(conn, ctx.week, ends_at, now, account)
     ps = pieces(ctx.week, share, starts_at, ends_at)
     ws = ctx.week[0]
     need = ps.get(ws, 0.0) * ctx.scale / 100
@@ -357,8 +357,8 @@ def check(conn: sqlite3.Connection, cfg: Config, account_id: int, share: float, 
     for w, p in sorted(ps.items()):
         if w > ws and ctx.sold.get(w, 0.0) + p > cfg.tickets.max_sold_pct + 1e-9:
             raise tickets.CapacityError(_week_full(w, ctx.sold.get(w, 0.0) + p, cfg.tickets.max_sold_pct))
-    tickets.check_capacity(conn, cfg, account_id, share_5h, int(starts_at), int(ends_at), list(ctx.exclude) or None)
-    check_5h_room(conn, cfg, account_id, share_5h, starts_at, now, ctx.exclude)
+    tickets.check_capacity(conn, cfg, account, share_5h, int(starts_at), int(ends_at), list(ctx.exclude) or None)
+    check_5h_room(conn, cfg, account, share_5h, starts_at, now, ctx.exclude)
 
 
 class Guard:
@@ -368,16 +368,16 @@ class Guard:
     and the 5-hour sum over its period must stay under max_sold_5h_pct. A change that adds nothing to reserved and raises
     no later week passes the first two without needing a fresh report."""
 
-    def __init__(self, conn: sqlite3.Connection, cfg: Config, account_id: int, now: float):
-        self.conn, self.cfg, self.account_id, self.now = conn, cfg, account_id, now
-        self.week = tickets.week_bounds(conn, cfg, now)
+    def __init__(self, conn: sqlite3.Connection, cfg: Config, account: str, now: float):
+        self.conn, self.cfg, self.account, self.now = conn, cfg, account, now
+        self.week = tickets.week_bounds(conn, cfg, now, account=account)
         self.reserved0, self.sold0 = self._state() if self.week else (0.0, {})
 
     def _state(self) -> tuple[float, dict[float, float]]:
-        att = _att(self.conn, self.cfg, self.now)
-        rate = quota.observed_rate(self.conn, self.cfg.pricing, "7d", self.now)
-        return (reserved(self.conn, self.cfg, self.account_id, self.week, att, rate, _capacity(att, self.now), self.now),
-                sold_by_week(self.conn, self.account_id, self.week))
+        att = _att(self.conn, self.cfg, self.now, self.account)
+        rate = quota.observed_rate(self.conn, self.cfg.pricing, "7d", self.now, account=self.account)
+        return (reserved(self.conn, self.cfg, self.account, self.week, att, rate, _capacity(att, self.now), self.now),
+                sold_by_week(self.conn, self.account, self.week))
 
     def verify(self, starts_at: float, ends_at: float) -> None:
         if self.week is not None:
@@ -386,7 +386,7 @@ class Guard:
             added = reserved1 - self.reserved0
             later = [w for w in sorted(sold1) if w > ws and sold1[w] > self.sold0.get(w, 0.0) + 1e-9]
             if added > 1e-9 or later:
-                att = _att(self.conn, self.cfg, self.now)
+                att = _att(self.conn, self.cfg, self.now, self.account)
                 if not fresh(att, self.now):
                     raise tickets.CapacityError(NO_REPORT)
                 free = ceiling - att["utilization_pct"] - self.reserved0 - self.cfg.tickets.sell_margin_pct
@@ -398,16 +398,16 @@ class Guard:
         elif ends_at > starts_at:
             raise tickets.CapacityError(NO_REPORT)
         if ends_at > starts_at:
-            tickets.verify_capacity(self.conn, self.cfg, self.account_id, int(starts_at), int(ends_at))
+            tickets.verify_capacity(self.conn, self.cfg, self.account, int(starts_at), int(ends_at))
 
 
-def _returned(conn, cfg, account_id: int, week, att: dict, rate: float | None, now: float) -> float:
+def _returned(conn, cfg, account: str, week, att: dict, rate: float | None, now: float) -> float:
     """Unused points of passes that ended this week: their sold piece of the week, their non-cancelled share bonuses'
     pieces of it included (sold_by_week counts those too), less their use."""
     ws, we = week
     rows = [dict(r) for r in conn.execute(
-        f"SELECT {tickets.TICKET_COLS}, {SOLD_END} AS sold_end FROM tickets t WHERE t.account_id=? AND t.cancelled_at IS NULL "
-        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}<=? AND {db.TICKET_EFFECTIVE_END}>?", (account_id, we, now, ws))]
+        f"SELECT {tickets.TICKET_COLS}, {SOLD_END} AS sold_end FROM tickets t WHERE t.account=? AND t.cancelled_at IS NULL "
+        f"AND t.starts_at<? AND {db.TICKET_EFFECTIVE_END}<=? AND {db.TICKET_EFFECTIVE_END}>?", (account, we, now, ws))]
     ids = [p["id"] for p in rows]
     bonuses: dict[int, list] = {}
     if ids:
@@ -425,29 +425,31 @@ def _returned(conn, cfg, account_id: int, week, att: dict, rate: float | None, n
     return total
 
 
-def summary(conn: sqlite3.Connection, cfg: Config, account_id: int, now: float) -> dict:
+def summary(conn: sqlite3.Connection, cfg: Config, account: str, now: float) -> dict:
     """The capacity panel (spec §6)."""
     from . import limits   # here, not at the top: limits imports capacity
-    ctx = context(conn, cfg, account_id, now)
-    att = _att(conn, cfg, now)
-    rate = quota.observed_rate(conn, cfg.pricing, "7d", now) if ctx.week else None
+    ctx = context(conn, cfg, account, now)
+    att = _att(conn, cfg, now, account)
+    rate = quota.observed_rate(conn, cfg.pricing, "7d", now, account=account) if ctx.week else None
     ws = ctx.week[0] if ctx.week else None
     later = {w: v for w, v in ctx.sold.items() if ws is not None and ws < w < now + 30 * DAY}
     peak = max(later.items(), key=lambda kv: kv[1]) if later else None
-    points = {now, *tickets._starts_within(conn, account_id, now, now + 30 * DAY)}
-    hand = sum(float(r["value"]) for r in conn.execute("SELECT user_id, value FROM limits WHERE kind='share_7d'")
+    points = {now, *tickets._starts_within(conn, account, now, now + 30 * DAY)}
+    # Hand-set weekly shares are measured on the user's assigned account (limits._share_state): those on this one.
+    hand = sum(float(r["value"]) for r in conn.execute("SELECT l.user_id, l.value FROM limits l JOIN users u ON u.id=l.user_id "
+                                                       "WHERE l.kind='share_7d' AND u.account=?", (account,))
                if not limits._gated(conn, cfg, r["user_id"]))
-    wu = week_use(conn, cfg, account_id, now)
+    wu = week_use(conn, cfg, account, now)
     return {
         "week": {"start": ws, "end": ctx.week[1] if ctx.week else None, "fresh": ctx.fresh, "used": ctx.used,
                  "reserved": ctx.reserved, "margin": cfg.tickets.sell_margin_pct,
                  "free": max(0.0, ctx.room) if ctx.room is not None else 0.0,
                  "sold": ctx.sold.get(ws, 0.0) if ws is not None else 0.0,
-                 "returned": _returned(conn, cfg, account_id, ctx.week, att, rate, now) if ctx.week else 0.0,
+                 "returned": _returned(conn, cfg, account, ctx.week, att, rate, now) if ctx.week else 0.0,
                  "max_sold_pct": cfg.tickets.max_sold_pct},
         "peak_week": {"start": peak[0], "sold": peak[1]} if peak else None,
-        "five_hour": {"now": tickets.sold_at(conn, account_id, now),
-                      "peak_30d": max(tickets.sold_at(conn, account_id, p) for p in points),
+        "five_hour": {"now": tickets.sold_at(conn, account, now),
+                      "peak_30d": max(tickets.sold_at(conn, account, p) for p in points),
                       "max_sold_5h_pct": cfg.tickets.max_sold_5h_pct},
         "hand_set_7d_pct": hand,
         "used_by": wu["by"],

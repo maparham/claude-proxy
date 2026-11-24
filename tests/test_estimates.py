@@ -45,7 +45,7 @@ def test_busy_hours_need_spread_or_count(filled):
 def test_refresh_records_share_per_busy_hour_per_family(filled):
     conn, a = filled
     out = estimates.refresh(conn, Pricing(), now=NOW)
-    assert out == {"sonnet/5h": 2, "opus/5h": 1, "sonnet/7d": 2, "opus/7d": 1}
+    assert out == {"default/sonnet/5h": 2, "default/opus/5h": 1, "default/sonnet/7d": 2, "default/opus/7d": 1}
     rows = {(r["family"], r["bucket"]): r for r in conn.execute("SELECT * FROM usage_estimates")}
     # Hour 2: 11 points split by weighted tokens, Opus input at $5 vs Sonnet at $2: 10 × 2500 vs 1 × 1000.
     sonnet_hour2 = 11 * 1000 / 26000
@@ -56,22 +56,27 @@ def test_refresh_records_share_per_busy_hour_per_family(filled):
 
 def test_refresh_with_no_data_writes_zero_rows_and_hints_stay_hidden(db):
     conn = db[1]
-    assert estimates.refresh(conn, Pricing(), now=NOW) == {"sonnet/5h": 0, "opus/5h": 0, "sonnet/7d": 0, "opus/7d": 0}
-    assert estimates.hours_hint(conn, 5) == {"sonnet": {"per_5h": None, "per_day": None}, "opus": {"per_5h": None, "per_day": None}}
+    assert estimates.refresh(conn, Pricing(), now=NOW) == {}   # no account reported usage: nothing to estimate
+    snaps(conn, NOW - H, 0)
+    assert estimates.refresh(conn, Pricing(), now=NOW) == {"default/sonnet/5h": 0, "default/opus/5h": 0, "default/sonnet/7d": 0,
+                                                           "default/opus/7d": 0}
+    assert estimates.hours_hint(conn, 5, account="default") == {"sonnet": {"per_5h": None, "per_day": None}, "opus": {"per_5h": None, "per_day": None}}
 
 
 def test_hours_hint_is_a_floor_and_hidden_below_50_busy_hours(db):
     conn = db[1]
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (NOW, "sonnet", "5h", 50, 1.3))     # 5 / 1.3 = 3.846 -> 3.8
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (NOW, "sonnet", "7d", 50, 0.3))     # (5/7) / 0.3 = 2.38 -> 2.3
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (NOW, "opus", "5h", 49, 4.0))       # too little data
-    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?)", (NOW, "opus", "7d", 60, 0.0))       # no share measured
-    assert estimates.hours_hint(conn, 5) == {"sonnet": {"per_5h": 3.8, "per_day": 2.3}, "opus": {"per_5h": None, "per_day": None}}
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?,?)", (NOW, "sonnet", "5h", 50, 1.3, "default"))     # 5 / 1.3 = 3.846 -> 3.8
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?,?)", (NOW, "sonnet", "7d", 50, 0.3, "default"))     # (5/7) / 0.3 = 2.38 -> 2.3
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?,?)", (NOW, "opus", "5h", 49, 4.0, "default"))       # too little data
+    conn.execute("INSERT INTO usage_estimates VALUES(?,?,?,?,?,?)", (NOW, "opus", "7d", 60, 0.0, "default"))       # no share measured
+    assert estimates.hours_hint(conn, 5, account="default") == {"sonnet": {"per_5h": 3.8, "per_day": 2.3}, "opus": {"per_5h": None, "per_day": None}}
+    assert estimates.hours_hint(conn, 5, account="other")["sonnet"] == {"per_5h": None, "per_day": None}   # per account
 
 
 def test_refresh_if_due_runs_once_a_day_and_only_with_tickets(db):
     from tests.tickets_helpers import tcfg
     conn, cfg = db[1], tcfg()
+    snaps(conn, NOW - H, 0)
     assert estimates.refresh_if_due(conn, cfg, now=NOW) is not None
     assert estimates.refresh_if_due(conn, cfg, now=NOW + 6 * 3600) is None
     assert estimates.refresh_if_due(conn, cfg, now=NOW + 24 * 3600) is not None

@@ -285,7 +285,7 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
         raise TrialError(409, "This account is disabled.")
     end = now + s.duration_min * 60
     try:
-        capacity.check(conn, cfg, tickets.ACCOUNT_ID, s.share_pct, s.share_5h_pct, now, end, now, exclude=[t["id"] for t in replaces])
+        capacity.check(conn, cfg, tickets.SELL_ACCOUNT, s.share_pct, s.share_5h_pct, now, end, now, exclude=[t["id"] for t in replaces])
     except tickets.CapacityError as e:
         raise TrialError(409, NO_ROOM) from e
     for t in replaces:   # the user's passes are used up: they end now and the trial starts in their place
@@ -293,9 +293,9 @@ def _start_locked(conn, cfg, user_id: int, now: int, auto: bool = False) -> dict
         db.audit(conn, None, "ticket_used_up", user["name"], {"ticket_id": t["id"]})
     first = conn.execute("SELECT 1 FROM tickets WHERE user_id=? LIMIT 1", (user_id,)).fetchone() is None
     tid = conn.execute(
-        "INSERT INTO tickets(user_id, user_name, account_id, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, "
+        "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, share_5h_pct, length, days, starts_at, ends_at, list_usd, "
         "usd, currency, rate, amount, granted_by, granted_at, note, trial) VALUES(?,?,?,?,?,?,'day',0,?,?,0,0,'USD',1,0,?,?,?,1)",
-        (user_id, user["name"], tickets.ACCOUNT_ID, s.tier, s.share_pct, s.share_5h_pct, now, end, c["granted_by"], now,
+        (user_id, user["name"], tickets.SELL_ACCOUNT, s.tier, s.share_pct, s.share_5h_pct, now, end, c["granted_by"], now,
          "Free trial")).lastrowid
     conn.execute("UPDATE trial_claims SET ticket_id=?, started_at=? WHERE id=?", (tid, now, c["id"]))
     if first and conn.execute("DELETE FROM limits WHERE user_id=? AND kind='cost_total'", (user_id,)).rowcount:

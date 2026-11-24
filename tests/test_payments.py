@@ -565,13 +565,13 @@ async def test_mails(env):
     m = payments.mails(conn, cfg, p, o, t, None)
     assert [x[0] for x in m] == ["admin@example.com", "alice@example.com"]
     assert "1,250,000 Toman" in m[0][2] and "201" in m[0][2] and "201" in m[1][2]
-    assert tickets.terms_text(conn, cfg, "en", "week", t["starts_at"]) in m[1][2]
+    assert tickets.terms_text(conn, cfg, "en", "week", t["starts_at"], account="default") in m[1][2]
     m = payments.mails(conn, cfg, p | {"status": "paid_unfulfilled"}, o, None, "sold out")
     assert [x[0] for x in m] == ["admin@example.com"] and "NOT granted: sold out" in m[0][2]
     m = payments.mails(conn, cfg, p, o | {"lang": "fa"}, t, None)   # paid from the Persian page: the buyer's mail in Persian, the admin's not
     assert "1,250,000 Toman" in m[0][2]
     assert m[1][1].startswith("پرداخت شما:") and "۱٬۲۵۰٬۰۰۰ تومان" in m[1][2] and "201" in m[1][2]   # the reference stays in Latin digits, for copying
-    assert tickets.terms_text(conn, cfg, "fa", "week", t["starts_at"]) in m[1][2]
+    assert tickets.terms_text(conn, cfg, "fa", "week", t["starts_at"], account="default") in m[1][2]
 
 
 

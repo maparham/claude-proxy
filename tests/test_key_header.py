@@ -127,8 +127,8 @@ async def test_health_reports_only_whether_the_login_works_and_usage_is_fresh(se
 
 def test_health_freshness_query_uses_the_bucket_index(db):
     from claude_proxy.app import USAGE_FRESH_SQL
-    plan = " ".join(r[3] for r in db[1].execute("EXPLAIN QUERY PLAN " + USAGE_FRESH_SQL))
-    assert "idx_quota_bucket_time" in plan and "SCAN quota_snapshots" not in plan
+    plan = " ".join(r[3] for r in db[1].execute("EXPLAIN QUERY PLAN " + USAGE_FRESH_SQL, ("default", "default")))
+    assert "idx_quota_account_bucket_time" in plan and "SCAN quota_snapshots" not in plan
 
 
 async def test_health_takes_gclaudes_upload_whole_and_refuses_a_large_one(setup):

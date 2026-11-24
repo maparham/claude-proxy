@@ -118,12 +118,12 @@ def test_sold_at_counts_tickets_and_bonus_shares_over_half_open_periods(db):
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + DAY)  # 25%, [NOW+1d, NOW+2d)
     conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, extra_days, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?,?)",
                  (a["id"], 10, 0, NOW + 3600, NOW + 7200, NOW))
-    assert tickets.sold_at(conn, 1, NOW) == 25
-    assert tickets.sold_at(conn, 1, NOW + 3600) == 35
-    assert tickets.sold_at(conn, 1, NOW + 7200) == 25             # bonus over at its end
-    assert tickets.sold_at(conn, 1, NOW + DAY) == 25              # a's end and bob's start touch: never 50
-    assert tickets.sold_at(conn, 1, NOW + DAY, exclude=a["id"]) == 25
-    assert tickets.sold_at(conn, 1, NOW - 1) == 0
+    assert tickets.sold_at(conn, "default", NOW) == 25
+    assert tickets.sold_at(conn, "default", NOW + 3600) == 35
+    assert tickets.sold_at(conn, "default", NOW + 7200) == 25             # bonus over at its end
+    assert tickets.sold_at(conn, "default", NOW + DAY) == 25              # a's end and bob's start touch: never 50
+    assert tickets.sold_at(conn, "default", NOW + DAY, exclude=a["id"]) == 25
+    assert tickets.sold_at(conn, "default", NOW - 1) == 0
 
 
 def test_5h_check_samples_every_start_inside_the_period(db):
@@ -134,7 +134,7 @@ def test_5h_check_samples_every_start_inside_the_period(db):
     # the EUR rate from seeded() is days old by now
     live(conn, NOW + 3 * DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 3 * DAY, confirm_stale_rate=True)     # 25% on day 3 only
-    tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 7 * DAY)                             # day 3 would be 50: fits
+    tickets.check_capacity(conn, cfg, "default", 25, NOW, NOW + 7 * DAY)                             # day 3 would be 50: fits
     grant(conn, cfg, ids, tier="standard", length="week")                                    # alice: day 3 is now 50
     assert tickets.sold_out(conn, cfg, "standard", "week", NOW) is True                      # fine at the start, but day 3 would be 75
     assert tickets.sold_out(conn, cfg, "lite", "week", NOW) is True                          # day 3 would be 55
@@ -166,7 +166,7 @@ def test_max_sold_pct_refuses_what_100_would_allow_and_lowering_it_keeps_existin
     with pytest.raises(tickets.CapacityError):
         grant(conn, cfg, ids, who="bob", tier="lite", length="day", now=ws)
     assert conn.execute("SELECT COUNT(*) FROM tickets WHERE cancelled_at IS NULL").fetchone()[0] == 4   # nothing cancelled
-    assert tickets.capacity(conn, cfg, ws)["five_hour"]["now"] == 80
+    assert tickets.capacity(conn, cfg, ws, "default")["five_hour"]["now"] == 80
 
 
 def test_capacity_panel_reports_the_5h_sum_now_and_its_peak_over_30_days(db):
@@ -176,8 +176,8 @@ def test_capacity_panel_reports_the_5h_sum_now_and_its_peak_over_30_days(db):
     grant(conn, cfg, ids, tier="lite", length="month")
     live(conn, NOW + 10 * DAY)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW + 10 * DAY, confirm_stale_rate=True)
-    assert tickets.capacity(conn, cfg, NOW)["five_hour"] == {"now": 5, "peak_30d": 30, "max_sold_5h_pct": 100}
-    assert tickets.capacity(conn, cfg, NOW + 31 * DAY)["five_hour"]["now"] == 0
+    assert tickets.capacity(conn, cfg, NOW, "default")["five_hour"] == {"now": 5, "peak_30d": 30, "max_sold_5h_pct": 100}
+    assert tickets.capacity(conn, cfg, NOW + 31 * DAY, "default")["five_hour"]["now"] == 0
 
 
 def test_two_concurrent_grants_cannot_oversell(db):
@@ -223,10 +223,10 @@ def test_cancel_frees_the_slice_and_ends_bonuses(db):
     live(conn, NOW)
     t = grant(conn, cfg, ids, tier="standard", length="week")
     bonus(conn, cfg, ids, t["id"], share_pct=5, starts_at=NOW, ends_at=NOW + DAY, note="welcome")
-    assert tickets.sold_at(conn, 1, NOW + 10) == 30
+    assert tickets.sold_at(conn, "default", NOW + 10) == 30
     r = tickets.cancel(conn, cfg, ids["admin"], t["id"], now=NOW + 100)
     assert r["ticket"]["cancelled_at"] == NOW + 100 and r["ticket"]["cancelled_by"] == ids["admin"]
-    assert tickets.sold_at(conn, 1, NOW + 200) == 0
+    assert tickets.sold_at(conn, "default", NOW + 200) == 0
     assert tickets.bonuses(conn, t["id"])[0]["cancelled_at"] == NOW + 100
     assert tickets.covering(conn, ids["alice"], NOW + 200) is None
     assert tickets.is_gated(conn, ids["alice"])                      # a cancelled ticket still gates
@@ -318,7 +318,7 @@ def test_bonus_days_extend_at_the_ticket_share_and_push_queued_tickets(db):
     assert (r["bonus"]["share_pct"], r["bonus"]["extra_days"], r["bonus"]["starts_at"], r["bonus"]["ends_at"]) == (0, 2, NOW + 7 * DAY, NOW + 9 * DAY)
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + 9 * DAY
     assert tickets.get(conn, c["id"])["starts_at"] == NOW + 10 * DAY
-    assert tickets.sold_at(conn, 1, NOW + 8 * DAY) == 5                        # the extension counts at the ticket share
+    assert tickets.sold_at(conn, "default", NOW + 8 * DAY) == 5                        # the extension counts at the ticket share
     assert tickets.covering(conn, ids["alice"], NOW + 8 * DAY)["id"] == a["id"]
     assert tickets.current_day(tickets.get(conn, a["id"]), NOW + 8 * DAY + 5) == (NOW + 8 * DAY, NOW + 9 * DAY)   # same boundaries
 
@@ -481,7 +481,7 @@ def test_cancel_does_not_move_two_overlapping_bonuses_onto_a_crowded_day(db):
     assert (r["moved"], r["dates_kept"]) == (0, True) and "5-hour shares would reach" in r["reason"]
     assert tickets.get(conn, b["id"])["starts_at"] == NOW + 7 * DAY
     assert [x["starts_at"] for x in tickets.bonuses(conn, b["id"])] == [NOW + 8 * DAY, NOW + 9 * DAY]
-    assert max(tickets.sold_at(conn, 1, NOW + k * DAY + 1) for k in range(14)) <= 80
+    assert max(tickets.sold_at(conn, "default", NOW + k * DAY + 1) for k in range(14)) <= 80
 
 
 def test_bonus_with_share_and_days_is_checked_as_written(db):
@@ -569,10 +569,10 @@ def test_another_users_bonus_starting_mid_period_refuses_a_grant_that_fits_at_it
     cfg.tickets.max_sold_5h_pct = 80
     b = grant(conn, cfg, ids, who="bob", length="month")                                         # 5%
     tickets.add_bonus(conn, cfg, ids["admin"], b["id"], share_pct=70, starts_at=NOW + 3 * DAY, ends_at=NOW + 4 * DAY, now=NOW)
-    assert tickets.sold_at(conn, 1, NOW) == 5 and tickets.sold_at(conn, 1, NOW + 3 * DAY) == 75
-    tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 3 * DAY)                                  # over before the bonus: fits
+    assert tickets.sold_at(conn, "default", NOW) == 5 and tickets.sold_at(conn, "default", NOW + 3 * DAY) == 75
+    tickets.check_capacity(conn, cfg, "default", 25, NOW, NOW + 3 * DAY)                                  # over before the bonus: fits
     with pytest.raises(tickets.CapacityError, match="5-hour shares would reach"):
-        tickets.check_capacity(conn, cfg, 1, 25, NOW, NOW + 7 * DAY)
+        tickets.check_capacity(conn, cfg, "default", 25, NOW, NOW + 7 * DAY)
     with pytest.raises(tickets.CapacityError):
         grant(conn, cfg, ids, tier="standard", length="week")
     assert grant(conn, cfg, ids, tier="lite", length="week")["share_pct"] == 5                   # 75 + 5 = 80
@@ -590,11 +590,11 @@ def test_same_second_starts_and_a_bonus_start_all_count_up_to_exactly_the_ceilin
     live(conn, at)
     grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=at, currency="USD")
     grant(conn, cfg, ids, who="carol", tier="standard", length="day", now=at, currency="USD")
-    assert tickets.sold_at(conn, 1, at) == 65
-    assert tickets.sold_at(conn, 1, at - 1) == 5
-    tickets.check_capacity(conn, cfg, 1, 15, at - DAY, at + DAY)                                 # 65 + 15 = 80: fits
+    assert tickets.sold_at(conn, "default", at) == 65
+    assert tickets.sold_at(conn, "default", at - 1) == 5
+    tickets.check_capacity(conn, cfg, "default", 15, at - DAY, at + DAY)                                 # 65 + 15 = 80: fits
     with pytest.raises(tickets.CapacityError):
-        tickets.check_capacity(conn, cfg, 1, 15.01, at - DAY, at + DAY)
+        tickets.check_capacity(conn, cfg, "default", 15.01, at - DAY, at + DAY)
 
 
 @pytest.mark.parametrize("share,fits", [(26.67, 2), (80 / 3, 3)])
@@ -610,7 +610,7 @@ def test_fractional_shares_against_the_ceiling(db, share, fits):
         else:
             with pytest.raises(tickets.CapacityError):                                           # 3 x 26.67 = 80.01
                 grant(conn, cfg, ids, who=f"u{n}")
-    assert tickets.sold_at(conn, 1, NOW) == pytest.approx(fits * share)
+    assert tickets.sold_at(conn, "default", NOW) == pytest.approx(fits * share)
 
 
 def test_grant_at_a_discounts_start_takes_it_and_at_its_end_the_list_price(db):

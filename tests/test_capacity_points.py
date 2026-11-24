@@ -73,14 +73,14 @@ def test_the_5h_sum_reads_5h_shares_and_its_own_ceiling(db):
     tickets.set_share_5h(conn, cfg, "lite", 30, ids["admin"])
     from tests.test_tickets_capacity import grant
     t = grant(conn, cfg, ids, tier="lite", length="day")          # weekly 5, 5-hour 30
-    assert tickets.sold_at(conn, 1, NOW) == 30
+    assert tickets.sold_at(conn, "default", NOW) == 30
     conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, share_5h_pct, extra_days, starts_at, ends_at, granted_at) "
                  "VALUES(?,?,?,?,?,?,?)", (t["id"], 10, None, 0, NOW, NOW + 3600, NOW))
-    assert tickets.sold_at(conn, 1, NOW) == 40                     # a bonus without a 5-hour share counts its share
+    assert tickets.sold_at(conn, "default", NOW) == 40                     # a bonus without a 5-hour share counts its share
     cfg.tickets.max_sold_5h_pct = 60
-    tickets.check_capacity(conn, cfg, 1, 20, NOW, NOW + DAY)       # 40 + 20 = 60: fits
+    tickets.check_capacity(conn, cfg, "default", 20, NOW, NOW + DAY)       # 40 + 20 = 60: fits
     with pytest.raises(tickets.CapacityError, match="5-hour shares would reach 61% .* over max_sold_5h_pct"):
-        tickets.check_capacity(conn, cfg, 1, 21, NOW, NOW + DAY)
+        tickets.check_capacity(conn, cfg, "default", 21, NOW, NOW + DAY)
 
 
 from claude_proxy import quota
@@ -91,9 +91,9 @@ def test_report_keeps_the_rate_and_attributes_everything(db):
     conn, cfg, ids = seeded(db)
     report(conn, ids, 1, t=WEEK_START + 60)
     report(conn, ids, 42, t=NOW - 60)
-    att = quota.attribution(conn, cfg.pricing, "7d", now=NOW, stale_after_s=cfg.quota.stale_after_s)
+    att = quota.attribution(conn, cfg.pricing, "7d", now=NOW, stale_after_s=cfg.quota.stale_after_s, account="default")
     assert (att["utilization_pct"], att["unattributed"], att["stale"]) == (42, pytest.approx(0), False)
-    assert quota.observed_rate(conn, cfg.pricing, "7d", NOW) == pytest.approx(PTS)
+    assert quota.observed_rate(conn, cfg.pricing, "7d", NOW, account="default") == pytest.approx(PTS)
     with pytest.raises(AssertionError, match="not after"):
         report(conn, ids, 43, t=NOW - 3 * DAY)
 
@@ -129,10 +129,10 @@ def test_free_room_sells_what_anthropic_reports_unused(acct):           # spec t
     conn, cfg, ids = acct
     three_day_passes(conn, cfg, ids, 3)                                  # each past its 2.86 piece: reserved 0
     report(conn, ids, 42)
-    ctx = capacity.context(conn, cfg, 1, NOW)
+    ctx = capacity.context(conn, cfg, "default", NOW)
     assert (ctx.used, ctx.reserved, ctx.room) == (42, pytest.approx(0), pytest.approx(53))
     t = grant(conn, cfg, ids, tier="standard", length="day")
-    assert t["share_pct"] == 40 and tickets.sold_at(conn, 1, NOW) == 100
+    assert t["share_pct"] == 40 and tickets.sold_at(conn, "default", NOW) == 100
 
 
 def test_a_full_week_refuses_with_the_points_named(acct):              # spec test 2
@@ -151,7 +151,7 @@ def test_reserved_holds_back_what_running_passes_may_still_draw(acct):
     b = grant(conn, cfg, ids, who="bob", tier="standard", length="day", now=NOW - 1200)
     use(conn, ids["bob"], b["id"], 1, NOW - 1000)
     report(conn, ids, 90)
-    ctx = capacity.context(conn, cfg, 1, NOW)
+    ctx = capacity.context(conn, cfg, "default", NOW)
     assert ctx.reserved == pytest.approx(40 / 7 - 1) and ctx.room == pytest.approx(100 - 90 - (40 / 7 - 1) - 5)
     assert tickets.sold_out(conn, cfg, "lite", "day", NOW)              # needs 2.86, 0.29 left
 
@@ -166,7 +166,7 @@ def test_later_weeks_are_capped_by_promised_pieces(acct):              # spec te
     add_user(conn, ids, "c")
     with pytest.raises(tickets.CapacityError, match=r"The week of .* would hold 68\.6% .* over max_sold_pct"):
         grant(conn, cfg, ids, who="c", tier="standard", length="week")  # here 51.4 ≤ 60 − 1 − 5; next week 68.6 > 60
-    assert capacity.context(conn, cfg, 1, NOW).sold[W[1]] == pytest.approx(2 * 40 * 4 / 7)
+    assert capacity.context(conn, cfg, "default", NOW).sold[W[1]] == pytest.approx(2 * 40 * 4 / 7)
 
 
 def test_a_week_pass_from_thursday_charges_each_week_its_piece(acct):  # spec test 4
@@ -177,18 +177,18 @@ def test_a_week_pass_from_thursday_charges_each_week_its_piece(acct):  # spec te
     live(conn, thu - 3600, 1)
     grant(conn, cfg, ids, who="a", tier="standard", length="month", now=thu - 3600, confirm_stale_rate=True)
     live(conn, thu, 1)
-    assert capacity.context(conn, cfg, 1, thu).sold[W[1]] == pytest.approx(40)
+    assert capacity.context(conn, cfg, "default", thu).sold[W[1]] == pytest.approx(40)
     with pytest.raises(tickets.CapacityError, match=r"The week of .* would hold 74\.3%"):   # 40 + 240/7 next week
-        capacity.check(conn, cfg, 1, 40, 40, thu, thu + 7 * DAY, thu)
-    capacity.check(conn, cfg, 1, 20, 20, thu, thu + DAY, thu)          # this week only: fits
+        capacity.check(conn, cfg, "default", 40, 40, thu, thu + 7 * DAY, thu)
+    capacity.check(conn, cfg, "default", 20, 20, thu, thu + DAY, thu)          # this week only: fits
 
 
 def test_a_pass_starting_next_week_needs_no_room_this_week(acct):      # spec test 5
     conn, cfg, ids = acct
     report(conn, ids, 99)
-    capacity.check(conn, cfg, 1, 40, 40, NOW + 3 * DAY, NOW + 4 * DAY, NOW)
+    capacity.check(conn, cfg, "default", 40, 40, NOW + 3 * DAY, NOW + 4 * DAY, NOW)
     with pytest.raises(tickets.CapacityError, match="points free"):
-        capacity.check(conn, cfg, 1, 40, 40, NOW, NOW + DAY, NOW)
+        capacity.check(conn, cfg, "default", 40, 40, NOW, NOW + DAY, NOW)
 
 
 def test_unused_points_of_an_ended_pass_are_sold_again(acct):          # spec test 6, recycling
@@ -198,7 +198,7 @@ def test_unused_points_of_an_ended_pass_are_sold_again(acct):          # spec te
     t = grant(conn, cfg, ids, who="a", tier="standard", length="day", now=NOW - 3 * DAY)
     use(conn, ids["a"], t["id"], 1, NOW - 3 * DAY + 3600)                # 1 of its 5.71
     report(conn, ids, 2)
-    ctx = capacity.context(conn, cfg, 1, NOW)
+    ctx = capacity.context(conn, cfg, "default", NOW)
     assert ctx.reserved == 0 and ctx.room == pytest.approx(100 - 2 - 5)
     assert ctx.sold[W[0]] == pytest.approx(40 / 7)                      # sold, shown on the panel, not a gate
 
@@ -206,9 +206,9 @@ def test_unused_points_of_an_ended_pass_are_sold_again(acct):          # spec te
 def test_a_pass_sold_now_leaves_the_room_by_its_whole_piece(acct):
     conn, cfg, ids = acct
     report(conn, ids, 1)
-    before = capacity.context(conn, cfg, 1, NOW).room
+    before = capacity.context(conn, cfg, "default", NOW).room
     grant(conn, cfg, ids, tier="standard", length="day")
-    assert capacity.context(conn, cfg, 1, NOW).room == pytest.approx(before - 40 / 7)
+    assert capacity.context(conn, cfg, "default", NOW).room == pytest.approx(before - 40 / 7)
 
 
 def test_replacing_used_up_passes_frees_their_reserved_points(acct):       # Review Focus 3
@@ -241,7 +241,7 @@ def test_old_week_snapshot_after_the_reset_sells_nothing(db):           # Review
     conn, cfg, ids = seeded(db)
     conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at) VALUES(?,?,?,?,?)",
                  (NOW - 60, "header", "7d", 80, NOW - 30))                  # fresh by age, from the week that just ended
-    assert capacity.context(conn, cfg, 1, NOW).fresh is False
+    assert capacity.context(conn, cfg, "default", NOW).fresh is False
     with pytest.raises(tickets.CapacityError, match="No fresh usage report"):
         grant(conn, cfg, ids)
 
@@ -273,7 +273,7 @@ def test_outside_use_scales_reserved_and_check_1_but_not_later_weeks(acct):  # s
     conn, cfg, ids = acct
     live(conn, NOW, 11)                                                  # 10 points nobody at the gateway used
     grant(conn, cfg, ids, tier="standard", length="week")
-    ctx = capacity.context(conn, cfg, 1, NOW)
+    ctx = capacity.context(conn, cfg, "default", NOW)
     assert ctx.scale == pytest.approx(90)
     assert ctx.reserved == pytest.approx(40 * 3 / 7 * 0.9)
     assert ctx.sold[W[1]] == pytest.approx(40 * 4 / 7)
@@ -284,7 +284,7 @@ def test_without_a_rate_reserved_uses_the_attributed_points(acct):          # sp
     live(conn, NOW - 1200, 1)
     t = grant(conn, cfg, ids, tier="standard", length="day", now=NOW - 1200)
     att = {"utilization_pct": 3.0, "stale": False, "resets_at": W[1], "ticket_shares": {t["id"]: 2.0}, "unattributed": 0.0}
-    assert capacity.reserved(conn, cfg, 1, W, att, None, 100.0, NOW) == pytest.approx(40 / 7 - 2)
+    assert capacity.reserved(conn, cfg, "default", W, att, None, 100.0, NOW) == pytest.approx(40 / 7 - 2)
 
 
 def test_a_bonus_is_judged_as_one_change(acct):                         # spec test 11
@@ -304,7 +304,7 @@ def test_hand_set_weekly_shares_are_not_reserved(acct):                 # spec t
     add_user(conn, ids, "h")
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)",
                  (ids["h"], "share_7d", "*", "100", "pct"))
-    assert capacity.context(conn, cfg, 1, NOW).room == pytest.approx(100 - 1 - 5)
+    assert capacity.context(conn, cfg, "default", NOW).room == pytest.approx(100 - 1 - 5)
 
 
 def test_cancel_whose_move_pulls_a_pass_into_a_full_week_keeps_dates(acct):   # spec test 14
@@ -386,9 +386,10 @@ def test_summary_reports_the_week_in_points(acct):                      # spec t
     report(conn, ids, 2)
     grant(conn, cfg, ids, tier="lite", length="week")
     add_user(conn, ids, "h")
+    conn.execute("UPDATE users SET account='default' WHERE id=?", (ids["h"],))   # a hand-set share counts on its user's account
     conn.execute("INSERT INTO limits(user_id, kind, scope, value, unit, updated_at) VALUES(?,?,?,?,?,0)",
                  (ids["h"], "share_7d", "*", "93", "pct"))
-    s = capacity.summary(conn, cfg, 1, NOW)
+    s = capacity.summary(conn, cfg, "default", NOW)
     w = s["week"]
     assert (w["start"], w["end"], w["fresh"], w["used"], w["margin"], w["max_sold_pct"]) == (W[0], W[1], True, 2, 5, 100)
     assert w["reserved"] == pytest.approx(20 * 3 / 7)
@@ -406,7 +407,7 @@ def test_summary_reports_the_week_in_points(acct):                      # spec t
 
 def test_summary_without_a_report_is_not_fresh_and_frees_nothing(db):
     conn, cfg, ids = seeded(db)
-    w = capacity.summary(conn, cfg, 1, NOW)["week"]
+    w = capacity.summary(conn, cfg, "default", NOW)["week"]
     assert (w["fresh"], w["free"]) == (False, 0)
 
 
@@ -485,7 +486,7 @@ def test_returned_counts_a_share_bonus_of_an_ended_pass(acct):
     tickets.add_bonus(conn, cfg, ids["admin"], ended["id"], share_pct=10, now=NOW - 3 * DAY, ends_at=NOW - 2 * DAY)
     use(conn, ids["a"], ended["id"], 1, NOW - 3 * DAY + 3600)
     report(conn, ids, 2)
-    s = capacity.summary(conn, cfg, 1, NOW)
+    s = capacity.summary(conn, cfg, "default", NOW)
     assert s["week"]["returned"] == pytest.approx(40 / 7 + 10 / 7 - 1)   # the pass's own piece, its bonus's, less use
 
 
@@ -553,9 +554,9 @@ def test_running_passes_keep_their_5h_reservation(db):
     _five_hour_cfg(conn, cfg, ids)
     five_hour(conn, 0.0)
     grant(conn, cfg, ids, tier="lite", length="day")             # reserves 10: no use yet
-    capacity.check_5h_room(conn, cfg, 1, 90, NOW, NOW)            # 100 − 0 − 10
+    capacity.check_5h_room(conn, cfg, "default", 90, NOW, NOW)            # 100 − 0 − 10
     with pytest.raises(tickets.CapacityError, match="90.0 points free and the pass needs 95.0"):
-        capacity.check_5h_room(conn, cfg, 1, 95, NOW, NOW)
+        capacity.check_5h_room(conn, cfg, "default", 95, NOW, NOW)
 
 
 def test_the_5h_room_is_not_checked_past_the_reset_or_without_a_fresh_report(db):
@@ -563,16 +564,16 @@ def test_the_5h_room_is_not_checked_past_the_reset_or_without_a_fresh_report(db)
     _five_hour_cfg(conn, cfg, ids)
     five_hour(conn, 100.0, resets=NOW - 60)   # that window is over
     assert grant(conn, cfg, ids, tier="lite", length="day")["id"]
-    capacity.check_5h_room(conn, cfg, 1, 10, NOW, NOW)
+    capacity.check_5h_room(conn, cfg, "default", 10, NOW, NOW)
 
 
 def test_a_pass_starting_after_the_5h_reset_is_not_held_to_the_current_window(db):
     conn, cfg, ids = seeded(db)
     _five_hour_cfg(conn, cfg, ids)
     five_hour(conn, 100.0)
-    capacity.check_5h_room(conn, cfg, 1, 10, NOW + 2 * 3600, NOW)
+    capacity.check_5h_room(conn, cfg, "default", 10, NOW + 2 * 3600, NOW)
     with pytest.raises(tickets.CapacityError):
-        capacity.check_5h_room(conn, cfg, 1, 10, NOW + 3600, NOW)
+        capacity.check_5h_room(conn, cfg, "default", 10, NOW + 3600, NOW)
 
 
 def test_the_price_list_says_when_a_5h_sold_out_card_is_back(db):
@@ -597,7 +598,7 @@ def test_an_ended_bonus_reserves_nothing(acct):
     live(conn, NOW - 1200, 1)
     t = grant(conn, cfg, ids, tier="standard", length="week", now=NOW - 1200)
     att = {"utilization_pct": 1.0, "stale": False, "resets_at": W[1], "ticket_shares": {}, "unattributed": 0.0}
-    without = capacity.reserved(conn, cfg, 1, W, att, None, 100.0, NOW)
+    without = capacity.reserved(conn, cfg, "default", W, att, None, 100.0, NOW)
     conn.execute("INSERT INTO ticket_bonuses(ticket_id, share_pct, starts_at, ends_at, granted_at) VALUES(?,?,?,?,?)",
                  (t["id"], 7, NOW - 1100, NOW - 100, NOW - 1100))
-    assert capacity.reserved(conn, cfg, 1, W, att, None, 100.0, NOW) == pytest.approx(without)
+    assert capacity.reserved(conn, cfg, "default", W, att, None, 100.0, NOW) == pytest.approx(without)

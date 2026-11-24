@@ -103,8 +103,8 @@ SCHEMA = [
         account TEXT NOT NULL DEFAULT 'default'
     )""",
     # The subscription's latest profile from Anthropic, whole, for the admin's subscription details (quota.record_profile).
-    """CREATE TABLE IF NOT EXISTS account_profile (
-        id INTEGER PRIMARY KEY CHECK (id = 1),
+    """CREATE TABLE IF NOT EXISTS account_profiles (
+        account TEXT PRIMARY KEY,
         observed_at REAL NOT NULL,
         raw_json TEXT NOT NULL
     )""",
@@ -302,7 +302,8 @@ SCHEMA = [
         bucket TEXT NOT NULL,
         busy_hours INTEGER NOT NULL,
         p75_share_per_hour REAL,
-        PRIMARY KEY (family, bucket)
+        account TEXT NOT NULL,
+        PRIMARY KEY (account, family, bucket)
     )""",
     # ---- order requests (design 2026-10-04) ----
     # A request to buy a ticket, never removed. Deleting the user leaves user_id NULL and name and email as they were.
@@ -725,6 +726,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
     conn.execute("INSERT INTO settings(key, value) SELECT 'account_plan_ack:default', COALESCE(rate_limit_tier, organization_type) "
                  "FROM account_plans WHERE account='default' AND COALESCE(rate_limit_tier, organization_type) IS NOT NULL "
                  "ORDER BY observed_at DESC, id DESC LIMIT 1 ON CONFLICT(key) DO NOTHING")
+    # Account profiles, usage estimates and the subscription's end, per account (multi-subscription task 2).
+    if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='account_profile'").fetchone():
+        conn.execute("INSERT INTO account_profiles(account, observed_at, raw_json) SELECT 'default', observed_at, raw_json "
+                     "FROM account_profile WHERE id=1 ON CONFLICT(account) DO NOTHING")
+        conn.execute("DROP TABLE account_profile")
+    if "account" not in _columns(conn, "usage_estimates"):
+        conn.execute("ALTER TABLE usage_estimates RENAME TO usage_estimates_old")
+        conn.execute(next(s for s in SCHEMA if "TABLE IF NOT EXISTS usage_estimates" in s))
+        conn.execute("INSERT INTO usage_estimates(computed_at, family, bucket, busy_hours, p75_share_per_hour, account) "
+                     "SELECT computed_at, family, bucket, busy_hours, p75_share_per_hour, 'default' FROM usage_estimates_old")
+        conn.execute("DROP TABLE usage_estimates_old")
+    conn.execute("UPDATE OR IGNORE settings SET key='subscription_ends_at:default' WHERE key='subscription_ends_at'")
+    conn.execute("DELETE FROM settings WHERE key='subscription_ends_at'")
 
 def get_conn(db_path: str | Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False, isolation_level=None)
