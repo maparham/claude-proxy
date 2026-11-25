@@ -392,6 +392,8 @@ code.key { display: block; padding: 10px; background: var(--wash); border-radius
   .meter > span, .stack > span { forced-color-adjust: none; }
 }
 .pill[hidden] { display: none; }
+/* The header's subscription picker: a pill holding a bare select. */
+.acct-pick select { border: 0; background: transparent; font-size: 12px; padding: 0; color: var(--ink); cursor: pointer; }
 .pricing s { text-decoration-thickness: 1px; }
 .pricing .data td { vertical-align: top; }
 

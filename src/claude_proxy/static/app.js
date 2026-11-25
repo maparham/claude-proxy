@@ -141,7 +141,19 @@ const withSource = (path) => (sourcesOn().length > 1 && BY_SOURCE.test(path) && 
 // The usage views' reads go through usageApi; other views (tickets, orders, dialogs) read everything, whatever the switch.
 const usageApi = (path) => api(withSource(path));
 
+// The admin's views of one subscription account, the header picker's (S.acct): its quota, capacity, passes and requests.
+// A user's page (#user/<id>) spans every account, as a user does; a non-admin's views never name one.
+const PER_ACCOUNT = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests|quota\/timeline|admin\/capacity|admin\/tickets(\?|$)|admin\/subscription|session)/;
+const USER_SPANS = /^\/api\/(overview|series|models|heatmap|sessions|errors|requests)/;
+const withAccount = (path) => (S.acct && isAdmin() && PER_ACCOUNT.test(path) && !(S.tab === "user" && USER_SPANS.test(path)) && !/[?&]account=/.test(path)
+  ? `${path}${path.includes("?") ? "&" : "?"}account=${encodeURIComponent(S.acct)}` : path);
+// An account's name for the admin: its label, else its slug.
+const acctLabel = (slug) => (S.accounts || []).find((a) => a.account === slug)?.label || slug;
+const planLabel = (p) => (p ? t(`plan.${p}`) : t("plan.unknown"));
+const manyAccounts = () => isAdmin() && (S.accounts || []).length > 1;
+
 async function api(path, opts = {}) {
+  path = withAccount(path);
   const headers = { ...(opts.headers || {}) };
   if (opts.body !== undefined) headers["content-type"] = "application/json";
   if (opts.method && opts.method !== "GET" && S.csrf) headers["x-csrf-token"] = S.csrf;
@@ -162,7 +174,8 @@ let pageStale = false;
 // Trusted markup, one or two sentences each. Keys are referenced by data-tip; dynamic tips use data-tip-html.
 const TIPS = Object.fromEntries(["login_key", "requests", "weighted", "raw", "cost", "active_users", "burn_rate", "quota", "bucket:5h", "bucket:7d", "share", "unattributed", "stale", "exhaustion", "served", "share_col", "passes_col", "limits_col", "gclaude_version", "key_prefix", "act_limits", "act_grant", "act_rename", "act_upgrade", "act_rotate", "act_routes_key", "act_routes_key_remove", "act_disable", "act_enable", "act_revoke", "act_delete", "role", "scope", "kind", "unit", "value", "split:provider", "metric:weighted", "metric:raw", "metric:cost_usd", "metric:requests", "reported", "provider_sub", "provider_own", "cache_ratio", "recent_requests", "session", "sess_user", "sess_started", "sess_duration", "sess_requests", "sess_weighted", "sess_cost", "sess_models", "sess_prompts", "act_ungate", "act_ungate_paused", "act_ticket_cancel", "act_ticket_bonus", "capacity_sold", "capacity_util", "seg_used", "seg_reserved", "week_col", "seg_margin", "seg_free", "seg_headroom", "sold_out_vs_queued", "rate", "source:all", "source:cli", "source:apps", "pay_mode", "mail_server", "pr_tier", "pr_size", "pr_size_5h", "pr_recommended",
   "act_trial", "trial_enabled", "trial_duration", "trial_valid", "trial_tier", "trial_size", "trial_size_5h", "trial_cap", "trial_follow_pct", "trial_follow_days",
-  "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct"].map((k) => [k, t(`tip.${k}`)]));
+  "ref_enabled", "ref_friend_pct", "ref_unit_pct", "ref_max_held", "ref_max_per_month", "ref_unit_days", "ref_approval", "ref_account_cost_usd", "ref_fee_pct",
+  "acct_plan", "acct_selling", "acct_passes", "acct_users", "plan_factors", "user_account", "grant_account", "act_ticket_move"].map((k) => [k, t(`tip.${k}`)]));
 const KIND_TIPS = Object.fromEntries(["requests_minute", "tokens_minute", "tokens_5h", "requests_daily", "tokens_daily", "tokens_weekly", "requests_monthly", "tokens_monthly", "cost_daily", "cost_monthly", "cost_total", "share_5h", "share_7d", "allowed_models"].map((k) => [k, t(`kind.${k}`)]));
 const KIND_NOTE = { window: t("kindnote.window"), share: t("kindnote.share") };
 const UNIT_TIPS = Object.fromEntries(["count", "weighted", "raw", "usd", "pct", "list"].map((k) => [k, t(`unit.${k}`)]));
@@ -659,6 +672,38 @@ async function subscriptionDialog() {
   };
 }
 $("#util-pill").onclick = () => subscriptionDialog().catch(() => {});
+
+// The header's subscription picker (admin, two or more accounts): each account's label, plan and health. The choice is
+// kept in this browser; one no longer linked falls back to the first account.
+function setAccounts(list) {
+  S.accounts = list || [];
+  let kept = null;
+  try { kept = localStorage.getItem("cp-account"); } catch { /* private mode */ }
+  S.acct = S.accounts.some((a) => a.account === kept) ? kept : S.accounts[0]?.account ?? null;
+  const wrap = $("#acct-wrap"), sel = $("#acct-pick");
+  wrap.hidden = S.accounts.length < 2;
+  const opts = S.accounts.map((a) => `<option value="${esc(a.account)}"${a.account === S.acct ? " selected" : ""}>${esc(t(a.healthy ? "acct.pick_opt" : "acct.pick_opt_down", { label: a.label, plan: planLabel(a.plan) }))}</option>`).join("");
+  if (sel.dataset.opts !== opts) { sel.innerHTML = opts; sel.dataset.opts = opts; }   // the minute's refresh leaves an open list alone when nothing changed
+  sel.value = S.acct ?? "";
+  const cur = S.accounts.find((a) => a.account === S.acct);
+  wrap.querySelector(".dot").style.background = cur && cur.healthy ? css("--good") : css("--critical");
+}
+// The header's pills and picker again, for the picked account. A picked account just removed answers 404: the first one then.
+async function refreshSession() {
+  let s;
+  try { s = await api("/api/session"); }
+  catch (e) { if (e.status !== 404) return; S.acct = null; try { s = await api("/api/session"); } catch { return; } }
+  if (s.accounts) setAccounts(s.accounts);
+  if (s.credential) credentialPill(s.credential);
+  if (s.account) utilPill(s.account);
+  return s;
+}
+$("#acct-pick").onchange = (e) => {
+  try { localStorage.setItem("cp-account", e.target.value); } catch { /* private mode */ }
+  setAccounts(S.accounts);
+  render();
+  refreshSession();
+};
 
 async function renderOverview(main) {
   const buyer = !isAdmin() && S.tickets?.enabled;
@@ -1528,15 +1573,19 @@ async function renderUsers(main) {
     <p class="lede">${t("users.lede", { share: tipT(t("users.est_share"), "share") })}</p>
     <div class="controls"><button class="btn primary" id="add-user">${t("users.add")}</button></div>
     <div class="card table-wrap"><table class="data"><thead><tr>
-      <th>${t("app.user")}${tipI("key_prefix", t("users.about_prefix"))}</th><th class="r">${t("range.1d")}</th><th class="r">${t("range.7d")}</th><th class="r">${t("range.30d")}</th><th class="r">${t("users.share_col")}${tipI("share_col")}</th><th class="r">${t("users.passes_col")}${tipI("passes_col")}</th><th>${t("users.limits")}${tipI("limits_col")}</th><th>${t("users.last_request")}</th><th></th></tr></thead>
+      <th>${t("app.user")}${tipI("key_prefix", t("users.about_prefix"))}</th><th class="r">${t("range.1d")}</th><th class="r">${t("range.7d")}</th><th class="r">${t("range.30d")}</th><th class="r">${t("users.share_col")}${tipI("share_col")}</th><th class="r">${t("users.passes_col")}${tipI("passes_col")}</th>${manyAccounts() ? `<th>${t("users.account_col")}${tipI("user_account")}</th>` : ""}<th>${t("users.limits")}${tipI("limits_col")}</th><th>${t("users.last_request")}</th><th></th></tr></thead>
       <tbody>${users.map(userRow).join("")}</tbody></table></div>
     <p class="muted" style="font-size:12px;margin-top:8px">${t("users.foot")}</p>
   </section>`;
   $("#add-user").onclick = addUserDialog;
   wireUserActions(main, users);
-  // A click anywhere on a row, except its buttons, links and tips, opens that user's page.
+  main.querySelectorAll("[data-uacct]").forEach((sel) => (sel.onchange = async () => {
+    try { await api(`/api/admin/users/${sel.dataset.uacct}/account`, { method: "PUT", body: { account: sel.value } }); render(); }
+    catch (e) { alertInline(e.message); }
+  }));
+  // A click anywhere on a row, except its buttons, links, selects and tips, opens that user's page.
   main.querySelectorAll("tr[data-user]").forEach((tr) => tr.addEventListener("click", (e) => {
-    if (!e.target.closest("button, a, [data-tip], [data-tip-html], [popover]")) location.hash = `user/${tr.dataset.user}`;
+    if (!e.target.closest("button, a, select, [data-tip], [data-tip-html], [popover]")) location.hash = `user/${tr.dataset.user}`;
   }));
 }
 function wireUserActions(root, users) {
@@ -1560,12 +1609,15 @@ function wireUserActions(root, users) {
 function userRow(u) {
   const state = u.revoked ? `<span class="badge">${t("users.revoked")}</span>` : !u.enabled ? `<span class="badge">${t("users.disabled")}</span>` : "";
   const cell = (k) => `<td class="r">${tipLine(fmtNum(u.usage[k].weighted), `${t("models.m_cost")}: ${fmtUsd(u.usage[k].cost_usd)}`)}</td>`;
-  const share = (b) => (u.share[b] == null ? "—" : nfFix(2).format(u.share[b]));
+  // In Claude Pro weeks over every subscription: small numbers, so three decimals.
+  const share = (b) => (u.share[b] == null ? "—" : new Intl.NumberFormat(LOC, { maximumFractionDigits: 3 }).format(u.share[b]));
+  // The subscription the user's requests go to off a pass; one not linked any more reads as none picked.
+  const acct = manyAccounts() ? `<td><select class="small" data-uacct="${u.id}" aria-label="${esc(t("users.account_col"))}">${S.accounts.some((a) => a.account === u.account) ? "" : `<option value="" selected>—</option>`}${S.accounts.map((a) => `<option value="${esc(a.account)}"${a.account === u.account ? " selected" : ""}>${esc(a.label)}</option>`).join("")}</select></td>` : "";
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}${tipH("", `<span class="tip-line">${t("sess.key")}: <code>${esc(u.prefix)}…</code></span>${u.routes_prefix ? `<span class="tip-line">OpenCode: <code>${esc(u.routes_prefix)}…</code></span>` : ""}`)}</td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
     <td class="r">${share("5h")} / ${share("7d")}</td>
-    <td class="r nowrap">${u.passes.active + u.passes.used_up + u.passes.expired ? `${fmtNum(u.passes.active)} / ${fmtNum(u.passes.used_up)} / ${fmtNum(u.passes.expired)}` : "—"}</td>
+    <td class="r nowrap">${u.passes.active + u.passes.used_up + u.passes.expired ? `${fmtNum(u.passes.active)} / ${fmtNum(u.passes.used_up)} / ${fmtNum(u.passes.expired)}` : "—"}</td>${acct}
     <td style="min-width:240px">${limitsBlock(u.limits)}</td>
     <td class="muted nowrap">${fmtAgo(u.last_seen)}${u.last_ip ? ` · <bdi title="${esc(u.last_ip)}">${esc(shortIp(u.last_ip))}</bdi>${u.last_place && u.last_place.country ? ` ${tipLine(esc(u.last_place.country), fmtPlace(u.last_place))}` : ""}` : ""}</td>
     <td>${userActions(u)}</td></tr>`;
@@ -1717,6 +1769,7 @@ function ticketRow(tk) {
     <td class="r nowrap">${esc(money(tk.amount, tk.currency))}${tk.currency === "USD" && !tk.discount_id ? "" : ` <span class="muted">${tk.discount_id ? `<s>${fmtPrice(tk.list_usd)}</s> ` : ""}${fmtPrice(tk.usd)}</span>`}</td>
     <td class="nowrap">${stateBadge(tk.state)}</td><td class="r nowrap">${weekCell(tk.week)}</td>${tokensInline(tk)}<td class="muted nowrap">${esc(bonus) || "—"}</td><td class="muted nowrap">${bdi(tk.note || "")}</td>
     <td class="nowrap"><div class="row-actions" style="flex-wrap:nowrap">${live || tk.state === "ended" ? `<button class="btn small" data-tact="bonus" data-id="${tk.id}" data-tip="act_ticket_bonus">${t("tk.bonus")}</button>` : ""}
+      ${(tk.state === "active" || tk.state === "used_up" || tk.state === "queued") && (S.accounts || []).length > 1 ? `<button class="btn small" data-tact="move" data-id="${tk.id}" data-tip="act_ticket_move">${t("tk.move")}</button>` : ""}
       ${live ? `<button class="btn small danger" data-tact="cancel" data-id="${tk.id}" data-tip="act_ticket_cancel">${t("app.cancel_ticket")}</button>` : ""}</div></td></tr>`;
 }
 // A free trial claimed or granted but not started: no pass yet, so no period, price or use; Cancel takes the claim back.
@@ -1737,6 +1790,7 @@ async function cancelClaim(c) {
 }
 async function ticketAction(act, tk, list) {
   if (act === "bonus") return bonusDialog(tk, list);
+  if (act === "move") return moveDialog(tk);
   if (!confirmInline(t("tk.confirm_cancel", { name: iso(tk.user_name), tier: iso(tierNameText(tk.tier, tk.tier)) }))) return;
   try {
     const r = await api(`/api/admin/tickets/${tk.id}/cancel`, { method: "POST", body: {} });
@@ -1756,6 +1810,7 @@ function grantDialog(users, pre = null) {
       <label>${t("tk.length")}<select name="length">${Object.entries(T.lengths).map(([k, n]) => `<option value="${esc(k)}">${esc(k)} (${plural("tk.n_days", n, { n: nf0.format(n) })})</option>`).join("")}</select></label>
       <label>${t("ord.currency")}<select name="currency">${T.currencies.map((c) => `<option ${c !== "USD" ? "selected" : ""}>${esc(c)}</option>`).join("")}</select></label>
       <label class="wide">${t("tk.note_you")}<input type="text" name="note" maxlength="200" placeholder="${esc(t("tk.note_ph"))}"></label>
+      ${manyAccounts() ? `<label class="wide"><span>${t("tk.account")}${tipI("grant_account")}</span><select name="account"></select></label>` : ""}
       <label class="check grant-now wide"><input type="checkbox" name="start_now"${!pre || pre.start_now ? " checked" : ""}${pre ? " disabled" : ""}> ${t("tk.start_now")}</label>
       <div id="grant-preview" class="grant-sum wide" aria-live="polite">…</div>
       <label class="check wide" id="grant-over5h" hidden><input type="checkbox" name="over_5h"> ${t("tk.over_5h")}</label>
@@ -1773,14 +1828,25 @@ function grantDialog(users, pre = null) {
     f.note.value = `Order #${pre.order_id}`;
   }
   let preview = null;
+  // The subscription the admin picked; until then the preview's (placement's) pick, re-chosen on every preview.
+  let chosen = null;
+  if (f.account) f.account.onchange = () => { chosen = f.account.value || null; refresh(); };
+  const fillAccounts = (p) => {
+    if (!f.account) return;
+    const pick = chosen || p.account;
+    const name = (r) => esc(t(r.fits ? "tk.account_free" : "tk.account_misfit", { label: acctLabel(r.account), v: new Intl.NumberFormat(LOC, { maximumFractionDigits: 2 }).format(r.free_pro_weeks), reason: errMsg(r.reason || "") }));
+    f.account.innerHTML = (pick ? "" : `<option value="" selected>—</option>`) +
+      (p.accounts || []).map((r) => `<option value="${esc(r.account)}"${r.account === pick ? " selected" : ""}>${name(r)}</option>`).join("");
+  };
   const refresh = async () => {
     $("#grant-err", d).textContent = "";
     // A day pass is one allowance whatever reset it crosses (2026-10-30): no parts to mention, as in the order dialog.
     if (!pre) $("#grant-terms-l1", d).innerHTML = t(f.length.value === "day" ? "ord.split_open" : "ord.terms_l1");
     try {
-      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, over_5h: f.over_5h.checked, over_end: f.over_end.checked, over_week: f.over_week.checked, ...(pre ? { order_id: pre.order_id } : {}) } });
+      preview = await api("/api/admin/tickets/preview", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value, start_now: f.start_now.checked, over_5h: f.over_5h.checked, over_end: f.over_end.checked, over_week: f.over_week.checked, ...(chosen ? { account: chosen } : {}), ...(pre ? { order_id: pre.order_id } : {}) } });
     } catch (e) { preview = null; $("#grant-preview", d).innerHTML = `<p class="muted">${esc(e.message)}</p>`; $("#grant-limits", d).innerHTML = ""; return; }
     const p = preview;
+    fillAccounts(p);
     // From an order with a referral discount: the regular price struck, the final one, and the referral's share of it.
     const refOff = p.ref_off_usd > 0 ? t("tk.ref_off", { amount: fmtPrice(p.ref_off_usd), pct: fmtPct(Math.round(p.ref_pct_applied)) }) : "";
     const notes = [p.discount_id ? t("tk.discount") : "", refOff].filter(Boolean).join(t("app.list_sep"));
@@ -1821,13 +1887,49 @@ function grantDialog(users, pre = null) {
     try {
       // The price and rate shown: if either changed since, the grant is refused (409) and the preview refreshed.
       await api("/api/admin/tickets", { method: "POST", body: { user: +f.user.value, tier: f.tier.value, length: f.length.value, currency: f.currency.value,
-        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, over_5h: f.over_5h.checked, over_end: f.over_end.checked, over_week: f.over_week.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate,
+        note: f.note.value, remove_limits: rm, start_now: f.start_now.checked, over_5h: f.over_5h.checked, over_end: f.over_end.checked, over_week: f.over_week.checked, confirm_stale_rate: true, usd: preview.usd, rate: preview.rate, ...(chosen || preview.account ? { account: chosen || preview.account } : {}),
         ...(pre ? { order_id: pre.order_id } : { terms_version: preview.terms_version }) } });
       d.close(); render();
     } catch (err) {
       if (err.status === 409) await refresh();
       $("#grant-err", d).textContent = err.message;
     }
+  };
+}
+// A running or queued pass to another subscription: each target is tried first (a dry run), and only a pass that fits
+// there can be moved.
+function moveDialog(tk) {
+  const others = S.accounts.filter((a) => a.account !== tk.account);
+  const pts = (v) => new Intl.NumberFormat(LOC, { maximumFractionDigits: 1 }).format(+v || 0);
+  const d = openDialog(`<h3>${t("tk.move_title", { name: bdi(tk.user_name), tier: tierName(tk.tier, tk.tier) })}</h3>
+    <p class="sub">${t("tk.move_sub")}</p>
+    <p class="muted">${t("tk.move_from", { label: bdi(acctLabel(tk.account)), share: fmtShare(tk.share_pct), share5h: fmtShare(tk.share_5h_pct ?? tk.share_pct) })}</p>
+    <form id="f-move" class="form-grid">
+      <label>${t("tk.move_to")}<select name="account">${others.map((a) => `<option value="${esc(a.account)}">${esc(t("acct.pick_opt", { label: a.label, plan: planLabel(a.plan) }))}</option>`).join("")}</select></label>
+      <div id="move-preview" class="grant-sum wide" aria-live="polite">…</div>
+      <div class="error wide" id="move-err"></div>
+      <div class="dialog-actions wide"><button class="btn" type="button" data-close>${t("app.cancel")}</button>
+        <button class="btn primary" type="submit" id="move-go" disabled>${t("tk.move_go")}</button></div>
+    </form>`);
+  const f = $("#f-move", d), go = $("#move-go", d);
+  const preview = async () => {
+    $("#move-err", d).textContent = "";
+    go.disabled = true;
+    const stale = pageStale;   // a dry run changes nothing: Cancel still leaves the page alone
+    try {
+      const r = await api(`/api/admin/tickets/${tk.id}/move`, { method: "POST", body: { account: f.account.value, dry_run: true } });
+      pageStale = stale;
+      $("#move-preview", d).innerHTML = `<ul><li class="good">${t("tk.move_preview", { label: bdi(acctLabel(r.to)), share: fmtShare(r.share_pct), share5h: fmtShare(r.share_5h_pct ?? r.share_pct), w: pts(r.carry_7d_pts), f: pts(r.carry_5h_pts) })}</li></ul>`;
+      go.disabled = false;
+    } catch (e) { pageStale = stale; $("#move-preview", d).innerHTML = `<ul><li class="critical">${esc(e.message)}</li></ul>`; }
+  };
+  f.account.onchange = preview;
+  preview();
+  f.onsubmit = async (e) => {
+    e.preventDefault();
+    go.disabled = true;
+    try { await api(`/api/admin/tickets/${tk.id}/move`, { method: "POST", body: { account: f.account.value } }); d.close(); render(); }
+    catch (err) { $("#move-err", d).textContent = err.message; preview(); }
   };
 }
 function bonusDialog(tk, list) {
@@ -2035,7 +2137,11 @@ function linkDialog(o, users) {
 }
 
 async function renderPricing(main) {
-  const [{ rates }, p, trial] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices"), api("/api/admin/trial")]);
+  const [{ rates }, p, trial, { factors = {} }] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices"), api("/api/admin/trial"), api("/api/admin/accounts")]);
+  // What a size is on each plan: "= 25% of Pro · 5% of Max 5x · 1.25% of Max 20x", by the plan factors (weekly or 5-hour).
+  const sizeHint = (v, b) => (Number.isFinite(num(v)) && String(v).trim() !== "" ? `= ${Object.keys(factors).map((k) => t("pr.size_hint_item", { pct: fmtShare((num(v) * 100) / factors[k][b]), plan: planLabel(k) })).join(" · ")}` : "");
+  const hinted = (name, k, v, b) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-tier="${esc(k)}" data-init="${v ?? ""}" value="${v ?? ""}" required style="width:80px"> <span class="muted">× ${esc(planName("Claude Pro"))}</span>
+          <div class="muted size-hint" style="font-size:12px" data-b="${b}">${sizeHint(v ?? "", b)}</div>`;
   const price = (tier, length) => p.prices.find((x) => x.tier === tier && x.length === length)?.usd ?? "";
   const now = Date.now() / 1000;
   const recKey = p.recommended ? `${p.recommended.tier}:${p.recommended.length}` : "";
@@ -2069,8 +2175,8 @@ async function renderPricing(main) {
       <form id="f-sizes">
       <div class="table-wrap"><table class="data"><thead><tr><th>${t("price.tier")}${tipI("pr_tier")}</th><th class="r">${t("pr.size")}${tipI("pr_size")}</th><th class="r">${t("pr.size_5h")}${tipI("pr_size_5h")}</th></tr></thead><tbody>
       ${Object.entries(p.tiers).map(([k, x]) => `<tr><td><b>${tierName(k, x.label)}</b></td>
-        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="size" data-tier="${esc(k)}" data-init="${x.size ?? ""}" value="${x.size ?? ""}" required style="width:80px"> <span class="muted">× ${esc(planName("Claude Pro"))}</span></td>
-        <td class="r"><input type="text" inputmode="decimal" dir="ltr" name="size_5h" data-tier="${esc(k)}" data-init="${x.size_5h ?? ""}" value="${x.size_5h ?? ""}" required style="width:80px"> <span class="muted">× ${esc(planName("Claude Pro"))}</span></td></tr>`).join("")}
+        <td class="r">${hinted("size", k, x.size, "7d")}</td>
+        <td class="r">${hinted("size_5h", k, x.size_5h, "5h")}</td></tr>`).join("")}
       </tbody></table></div>
       <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div>
       <div class="error" id="sizes-err"></div>
@@ -2128,6 +2234,7 @@ async function renderPricing(main) {
   };
   const sizesForm = $("#f-sizes");
   if (sizesForm) {
+    sizesForm.querySelectorAll("input").forEach((i) => (i.oninput = () => { const h = i.parentElement.querySelector(".size-hint"); h.textContent = sizeHint(i.value, h.dataset.b); }));
     // Weekly sizes first, then 5-hour ones, one per call like a price; re-render only once nothing failed.
     sizesForm.onsubmit = async (e) => {
       e.preventDefault();
@@ -2892,29 +2999,84 @@ async function renderUser(main) {
   else $("#u-heat").outerHTML = none;
 }
 
-// Subscription accounts: the same paste-the-code sign-in as `claude-proxy login --account <slug>`.
+// Subscription accounts: the same paste-the-code sign-in as `claude-proxy login --account <slug>`. Each row has its plan
+// (Anthropic's, or the admin's pick), whether it sells, and its passes and users; the plan factors sit under the table.
 async function renderAccounts(main) {
-  const { accounts } = await api("/api/admin/accounts");
+  const { accounts, factors = {}, plans = {} } = await api("/api/admin/accounts");
+  const planKeys = Object.keys(plans);
+  const planSel = (a) => `<select class="small" data-aplan="${esc(a.account)}" aria-label="${esc(t("acct.plan"))}">
+    <option value=""${a.plan_override ? "" : " selected"}>${esc(a.plan_detected ? t("acct.plan_detected", { plan: planLabel(a.plan_detected) }) : t("acct.plan_detect"))}</option>
+    ${planKeys.map((k) => `<option value="${esc(k)}"${a.plan_override === k ? " selected" : ""}>${esc(planLabel(k))}</option>`).join("")}</select>`;
+  // Detected and not overridden: the plan as text, a select only on asking; unknown or overridden: the select.
+  const planCell = (a) => `<span class="nowrap">${!a.plan_override && a.plan_detected
+    ? `${esc(planLabel(a.plan))} <button class="btn small" data-aplanedit="${esc(a.account)}">${t("acct.plan_change")}</button>` : planSel(a)}</span>
+    ${a.rate_limit_tier ? `<div class="muted" style="font-size:12px" dir="ltr">${esc(a.rate_limit_tier)}</div>` : ""}`;
+  const sellCell = (a) => (a.sells == null ? `<span class="badge state-active">${t("acct.sells_yes")}</span>`
+    : a.sells === "plan_unknown" ? `<span class="badge state-cancelled">${t("acct.sells_unknown")}</span>`
+    : a.sells === "plan_changed" ? `<span class="nowrap"><button class="btn small" data-aack="${esc(a.account)}">${t("acct.sells_changed")}</button>${a.pending_change ? tipH("", esc(t("acct.changed_tip", { from: a.pending_change.from, to: a.pending_change.to }))) : ""}</span>`
+    : `<span class="badge">${esc(a.sells)}</span>`);
   const row = (a) => `<tr>
     <td><b>${bdi(a.label)}</b>${a.label !== a.account ? `<div class="muted" style="font-size:12px">${bdi(a.account)}</div>` : ""}</td>
     <td>${a.email ? bdi(a.email) : "—"}</td>
     <td><span data-tip-html="${esc(esc(a.detail))}"><span class="dot" style="background:${css(a.healthy ? "--good" : "--critical")};margin-inline-end:6px"></span>${a.healthy ? t("acct.ok") : a.state === "needs_login" ? t("acct.needs_login") : t("acct.not_ok")}</span></td>
+    <td>${planCell(a)}</td><td class="nowrap">${sellCell(a)}</td>
+    <td class="nowrap">${t("acct.passes_n", { running: fmtNum(a.running_passes), queued: fmtNum(a.queued_passes) })}</td><td class="r">${fmtNum(a.assigned_users)}</td>
     <td>${fmtTime(a.expires_at)}</td><td>${fmtTime(a.updated_at)}</td>
-    <td><div class="row-actions"><button class="btn small" data-relink="${esc(a.account)}">${t("acct.relink")}</button><button class="btn small danger" data-aremove="${esc(a.account)}">${t("acct.remove")}</button></div></td></tr>`;
+    <td><div class="row-actions"><button class="btn small" data-arefresh="${esc(a.account)}">${t("acct.check_plan")}</button><button class="btn small" data-relink="${esc(a.account)}">${t("acct.relink")}</button><button class="btn small danger" data-aremove="${esc(a.account)}">${t("acct.remove")}</button></div></td></tr>`;
+  // A plan gone down holds fewer Pro weeks than its passes were sold at: the admin moves some off it.
+  const downs = accounts.filter((a) => a.pending_change && a.pending_change.downgrade)
+    .map((a) => `<div class="banner critical"><span class="icon">!</span><span>${t("acct.downgrade", { label: bdi(a.label) })}</span></div>`).join("");
+  const fbox = (k, b) => `<input type="text" inputmode="decimal" dir="ltr" name="f_${b}" data-plan="${esc(k)}" data-init="${factors[k]?.[b] ?? ""}" value="${factors[k]?.[b] ?? ""}" required style="width:80px" aria-label="${esc(`${planLabel(k)} ${t(`acct.f_${b}`)}`)}">`;
   main.innerHTML = `<section class="view"><h2>${t("tab.accounts")}</h2>
+    ${downs}
     <p class="lede">${t("acct.lede")}</p>
     <div class="controls"><button class="btn primary" id="acct-add">${t("acct.add")}</button></div>
-    ${accounts.length ? `<div class="card table-wrap"><table class="data"><thead><tr><th>${t("acct.account")}</th><th>${t("acct.email")}</th><th>${t("acct.state")}</th><th>${t("acct.expires")}</th><th>${t("acct.updated")}</th><th></th></tr></thead>
+    ${accounts.length ? `<div class="card table-wrap"><table class="data"><thead><tr><th>${t("acct.account")}</th><th>${t("acct.email")}</th><th>${t("acct.state")}</th><th>${t("acct.plan")}${tipI("acct_plan")}</th><th>${t("acct.selling")}${tipI("acct_selling")}</th><th>${t("acct.passes")}${tipI("acct_passes")}</th><th class="r">${t("acct.users")}${tipI("acct_users")}</th><th>${t("acct.expires")}</th><th>${t("acct.updated")}</th><th></th></tr></thead>
       <tbody>${accounts.map(row).join("")}</tbody></table></div>` : `<p class="muted">${t("acct.none")}</p>`}
+    ${planKeys.length ? `<div class="card" style="margin-top:16px;max-width:480px"><h3>${t("acct.factors")}${tipI("plan_factors")}</h3><p class="sub">${t("acct.factors_sub")}</p>
+      <form id="f-factors"><div class="table-wrap"><table class="data"><thead><tr><th>${t("acct.plan")}</th><th class="r">${t("acct.f_7d")}</th><th class="r">${t("acct.f_5h")}</th></tr></thead><tbody>
+      ${planKeys.map((k) => `<tr><td><b>${esc(planLabel(k))}</b></td><td class="r">${fbox(k, "7d")}</td><td class="r">${fbox(k, "5h")}</td></tr>`).join("")}
+      </tbody></table></div>
+      <div style="margin-top:8px"><button class="btn small" type="submit">${t("app.save")}</button></div><div class="error" id="factors-err"></div></form></div>` : ""}
   </section>`;
+  const call = async (path, opts) => { try { await api(path, opts); render(); } catch (e) { alertInline(e.message); } };
+  const at = (slug) => `/api/admin/accounts/${encodeURIComponent(slug)}`;
   $("#acct-add").onclick = () => linkAccountDialog(null, false);
   main.querySelectorAll("[data-relink]").forEach((b) => (b.onclick = () => linkAccountDialog(b.dataset.relink, true)));
+  main.querySelectorAll("[data-aplanedit]").forEach((b) => (b.onclick = () => {
+    b.parentElement.innerHTML = planSel(accounts.find((a) => a.account === b.dataset.aplanedit));
+    wirePlans();
+  }));
+  const wirePlans = () => main.querySelectorAll("[data-aplan]").forEach((sel) => (sel.onchange = async () => {
+    await call(`${at(sel.dataset.aplan)}/plan`, { method: "PUT", body: { plan: sel.value || null } });
+    refreshSession();   // the picker names each account's plan
+  }));
+  wirePlans();
+  main.querySelectorAll("[data-aack]").forEach((b) => (b.onclick = () => call(`${at(b.dataset.aack)}/plan/ack`, { method: "POST", body: {} })));
+  main.querySelectorAll("[data-arefresh]").forEach((b) => (b.onclick = async () => {
+    b.disabled = true;
+    await call(`${at(b.dataset.arefresh)}/refresh`, { method: "POST", body: {} });
+    b.disabled = false;
+    refreshSession();
+  }));
   main.querySelectorAll("[data-aremove]").forEach((b) => (b.onclick = async () => {
     const slug = b.dataset.aremove;
     if (!confirmInline(t("acct.confirm_remove", { slug: iso(slug) }))) return;
-    try { await api(`/api/admin/accounts/${encodeURIComponent(slug)}/remove`, { method: "POST", body: {} }); render(); }
+    try { await api(`${at(slug)}/remove`, { method: "POST", body: {} }); await refreshSession(); render(); }
     catch (e) { alertInline(e.message); }
   }));
+  const ff = $("#f-factors");
+  if (ff) ff.onsubmit = async (e) => {
+    e.preventDefault();
+    const err = $("#factors-err");
+    err.textContent = "";
+    const changed = planKeys.filter((k) => ["7d", "5h"].some((b) => { const i = ff.querySelector(`input[name="f_${b}"][data-plan="${k}"]`); return num(i.value) !== Number(i.dataset.init); }));
+    for (const k of changed) {
+      const v = (b) => num(ff.querySelector(`input[name="f_${b}"][data-plan="${k}"]`).value);
+      try { await api("/api/admin/plan_factors", { method: "PUT", body: { plan: k, f_7d: v("7d"), f_5h: v("5h") } }); } catch (x) { err.textContent = x.message; return; }
+    }
+    if (changed.length) render();
+  };
 }
 // `slug` null: the admin names a new account first. `relink`: an existing row, so the sign-in starts at once.
 function linkAccountDialog(slug, relink) {
@@ -2944,7 +3106,7 @@ function linkAccountDialog(slug, relink) {
     err.textContent = "";
     try {
       await api(`/api/admin/accounts/${encodeURIComponent(slug)}/login/finish`, { method: "POST", body: { code: new FormData(e.target).get("code") } });
-      d.close(); render();
+      d.close(); await refreshSession(); render();
     } catch (e2) { err.textContent = e2.message; }
   };
   if (relink) start(slug);
@@ -3329,6 +3491,7 @@ function showLogin() {
   showClerk();
 }
 async function boot() {
+  S.acct = null; S.accounts = [];   // the first call names no account: one kept from before may be gone, or not this admin's
   try {
     const s = await api("/api/session");
     S.user = s.user; S.csrf = s.csrf; S.install = s.install && { unix: s.install, windows: s.install_windows, windowsFile: s.install_windows_file };
@@ -3338,6 +3501,9 @@ async function boot() {
     $("#cred-pill").hidden = !s.credential;
     if (s.credential) credentialPill(s.credential);
     utilPill(s.account || null);
+    setAccounts(isAdmin() ? s.accounts : []);
+    // The pill read the first account; the picker may have kept another.
+    if (S.acct && S.acct !== s.accounts[0].account) refreshSession();
   } catch { showLogin(); return; }
   if (POPUP && S.user) { popupSignedIn(); return; }
   const pending = rememberedAuthorize();
@@ -3413,8 +3579,8 @@ setInterval(() => { if (S.user && !document.hidden && !$("#dialog").open && ["ov
 setInterval(async () => {
   if (!S.user || document.hidden || !isAdmin()) return;
   try {
-    const s = await api("/api/session");
-    if (s.account) utilPill(s.account);
+    const s = await refreshSession();
+    if (!s) return;
     if (S.tickets?.enabled && s.tickets && s.tickets.orders_new !== S.tickets.orders_new) { S.tickets.orders_new = s.tickets.orders_new; renderTabs(); }
   }
   catch { /* the next tick tries again */ }
