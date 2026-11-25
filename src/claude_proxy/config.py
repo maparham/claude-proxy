@@ -166,7 +166,7 @@ class TicketsConfig:
     enabled: bool = False
     how_to_buy: str = ""
     how_to_buy_fa: str = ""       # the same in Persian, for buyers who ordered from the Persian page; else how_to_buy
-    max_sold_pct: float = 80      # ceiling on what tickets and bonuses may reserve; the rest is headroom
+    max_sold_pct: float = 80      # ceiling on what tickets and bonuses may reserve; the rest is headroom; >100 oversells the week
     borrow_margin_pct: float = 5  # points a pass across the weekly reset never borrows into (2026-10-30); 100: no borrowing
     max_sold_5h_pct: float = 100  # ceiling on the summed 5-hour shares of passes running at once (2026-11-04); >100 oversubscribes
     sell_margin_pct: float = 5    # points of the week never sold: requests in flight, rate error, whole-percent reports (2026-11-04)
@@ -414,8 +414,8 @@ def _load_tickets(toml_path: str, data: dict) -> TicketsConfig:
             raise ConfigError(f"{toml_path}: unknown key [tickets].{k}; [tickets] takes {', '.join(plain)}, "
                               "[tickets.tiers.<id>] and [tickets.currencies.<code>]")
         setattr(t, k, v)
-    if isinstance(t.max_sold_pct, bool) or not isinstance(t.max_sold_pct, (int, float)) or not 0 < t.max_sold_pct <= 100:
-        raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 100")
+    if isinstance(t.max_sold_pct, bool) or not isinstance(t.max_sold_pct, (int, float)) or not 0 < t.max_sold_pct <= 1000:
+        raise ConfigError(f"{toml_path}: [tickets].max_sold_pct must be above 0 and at most 1000")
     if isinstance(t.borrow_margin_pct, bool) or not isinstance(t.borrow_margin_pct, (int, float)) or not 0 <= t.borrow_margin_pct <= 100:
         raise ConfigError(f"{toml_path}: [tickets].borrow_margin_pct must be from 0 to 100")
     if isinstance(t.max_sold_5h_pct, bool) or not isinstance(t.max_sold_5h_pct, (int, float)) or not 0 < t.max_sold_5h_pct <= 1000:

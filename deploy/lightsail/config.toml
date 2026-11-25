@@ -54,7 +54,7 @@ password_env = "SES_SMTP_PASSWORD"
 [tickets]
 how_to_buy = "Send the amount by bank transfer to the admin and email them with the pass you want."
 how_to_buy_fa = "مبلغ را با انتقال بانکی برای ادمین بفرستید و بسته‌ای را که می‌خواهید به او ایمیل کنید."
-max_sold_pct = 100
+max_sold_pct = 200
 max_sold_5h_pct = 200
 sell_margin_pct = 0
 borrow_margin_pct = 0

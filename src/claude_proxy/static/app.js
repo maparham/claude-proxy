@@ -1671,12 +1671,14 @@ async function renderTickets(main) {
   if (S.ticketState && !(S.ticketState === "waiting" ? claims.length : tickets.some((tk) => tk.state === S.ticketState))) S.ticketState = "";
   const w = cap.week, f = cap.five_hour;
   // The week's 100 points, piece by piece; each piece and its legend chip carry the same tip, on hover or tap.
-  const pieces = [["used", w.used], ["reserved", w.reserved], ["margin", w.margin], ["free", w.free], ["headroom", 100 - w.max_sold_pct]];
-  const seg = ([k, v]) => `<span class="seg-${k}" style="width:${Math.max(0, Math.min(100, v))}%" data-tip="seg_${k}" tabindex="0" role="button" aria-label="${esc(t(`tk.seg_${k}`, { v: pts(v) }))}"></span>`;
+  // Over 100 (an oversold week) the bar spans max_sold_pct points, so free beyond Anthropic's week still fits.
+  const pieces = [["used", w.used], ["reserved", w.reserved], ["margin", w.margin], ["free", w.free], ["headroom", Math.max(0, 100 - w.max_sold_pct)]];
+  const sc = 100 / Math.max(100, w.max_sold_pct);
+  const seg = ([k, v]) => `<span class="seg-${k}" style="width:${Math.max(0, Math.min(100, v * sc))}%" data-tip="seg_${k}" tabindex="0" role="button" aria-label="${esc(t(`tk.seg_${k}`, { v: pts(v) }))}"></span>`;
   // The reserved piece, split pass by pass (scaled so the slices fill exactly its width); one piece without a split.
   const rby = cap.reserved_by || [], rsum = rby.reduce((a, r) => a + r.pts, 0);
   const rname = (r) => `${bdi(r.user)} · ${tierName(r.tier, r.tier_label)} ${passLen(r)}`;
-  const rseg = (r, i) => `<span class="seg-reserved${i % 2 ? " alt" : ""}" style="width:${Math.max(0, Math.min(100, (r.pts * w.reserved) / rsum))}%" data-tip="seg_reserved" data-rpass="${i}" tabindex="0" role="button" aria-label="${esc(`${r.user} ${pts(r.pts)}`)}"></span>`;
+  const rseg = (r, i) => `<span class="seg-reserved${i % 2 ? " alt" : ""}" style="width:${Math.max(0, Math.min(100, (sc * r.pts * w.reserved) / rsum))}%" data-tip="seg_reserved" data-rpass="${i}" tabindex="0" role="button" aria-label="${esc(`${r.user} ${pts(r.pts)}`)}"></span>`;
   const segs = (p) => (p[0] === "reserved" && rby.length && rsum > 0 ? rby.map(rseg).join("") : seg(p));
   const chip = ([k, v]) => `<span><i class="seg-${k}"></i>${t(`tk.seg_${k}`, { v: pts(v) })}${tipI(`seg_${k}`)}</span>`;
   const weekMeter = w.fresh

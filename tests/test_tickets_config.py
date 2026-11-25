@@ -49,7 +49,7 @@ def test_empty_tickets_section_keeps_default_tiers(tmp_path):
 
 @pytest.mark.parametrize("body,needle", [
     ("[tickets]\nmax_sold_pct = 0\n", "max_sold_pct"),
-    ("[tickets]\nmax_sold_pct = 101\n", "max_sold_pct"),
+    ("[tickets]\nmax_sold_pct = 1001\n", "max_sold_pct"),
     ("[tickets]\nbogus = 1\n", "bogus"),
     ("[tickets.tiers.x]\nlabel='X'\nsize=0\ndefault_usd={day=1,week=2,month=3}\n", "size"),
     ("[tickets.tiers.x]\nlabel='X'\nsize=0.05\ndefault_usd={day=1,week=2}\n", "default_usd"),
