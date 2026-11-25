@@ -9,7 +9,9 @@
 # with a working credential, the previous image and config are put back, and so is that copy: the new image
 # may have migrated the database into a shape the old one misreads. The new container may also have rotated
 # the grants' refresh tokens, and an older copy of them would break the login, so the credentials are carried
-# over from the database being replaced, which stays beside it as /data/claude_proxy.db.failed-<stamp>.
+# over from the database being replaced, which stays beside it as /data/claude_proxy.db.failed-<stamp>. So are
+# the rows people wrote while it served (sign-ups, orders, payments, the passes they granted, API credit), so a
+# payment taken in that minute or two is not lost; what can't be carried is listed for a manual check.
 # Backups are in /data/backups for a manual restore.
 set -euo pipefail
 DIR=${CLAUDE_GATEWAY_DIR:-$HOME/claude-gateway/deploy/lightsail}
@@ -119,35 +121,80 @@ echo "switching $PREV -> $SHA"
 if ! { switch_to "$SHA" && healthy; }; then
   echo "claude-proxy:$SHA is unhealthy; rolling back to $PREV" >&2
   docker compose logs --tail 40 gateway >&2 || true
-  docker compose stop gateway || true
   in_volume sh -c "[ ! -f /data/backups/$STAMP.config.toml ] || cp /data/backups/$STAMP.config.toml /data/config.toml" || true
-  echo "restoring the database from $PRE (the one $SHA ran on is kept as /data/claude_proxy.db.failed-$STAMP)" >&2
-  if in_volume python - "$PRE" "/data/claude_proxy.db.failed-$STAMP" <<'PY'
+  if ! docker compose stop gateway; then
+    echo "COULD NOT STOP $SHA, so the database is NOT restored; $PREV starts on the one $SHA migrated. Restore $PRE by hand" >&2
+  else
+    echo "restoring the database from $PRE (the one $SHA ran on is kept as /data/claude_proxy.db.failed-$STAMP)" >&2
+    # RESTORE-BEGIN (tests/test_deploy_restore.py runs this block)
+    if in_volume python - "$PRE" "/data/claude_proxy.db.failed-$STAMP" /data/claude_proxy.db <<'PY'
 import os, sqlite3, sys
-pre, failed = sys.argv[1], sys.argv[2]
-live = "/data/claude_proxy.db"
+pre, failed, live = sys.argv[1:4]
+if not os.path.isfile(pre):
+    sys.exit(f"no copy at {pre}; the live database is left as it is")
 keep = sqlite3.connect(failed)
 sqlite3.connect(live).backup(keep)
 keep.close()
 os.chmod(failed, 0o600)
-dst = sqlite3.connect(live, isolation_level=None)
-sqlite3.connect(pre).backup(dst)
+# The restored database is built beside the live one and copied over it only once complete, so a failure
+# anywhere below leaves the live database as the new image left it.
+tmp = live + ".restore"
+if os.path.exists(tmp):
+    os.remove(tmp)
+db = sqlite3.connect(tmp, isolation_level=None)
+sqlite3.connect(pre).backup(db)
+db.execute("ATTACH DATABASE ? AS failed", (failed,))
+
+def common(table):
+    cols = [r[1] for r in db.execute(f"PRAGMA main.table_info({table})")]
+    have = {r[1] for r in db.execute(f"PRAGMA failed.table_info({table})")}
+    return ", ".join(c for c in cols if c in have)
+
+def carry(tables):
+    """Rows the new image added or changed (every row of the failed database not identical in the copy), by table."""
+    moved = {}
+    for table in tables:
+        names = common(table)
+        if names:
+            n = db.execute(f"INSERT OR REPLACE INTO main.{table}({names}) SELECT {names} FROM failed.{table} "
+                           f"EXCEPT SELECT {names} FROM main.{table}").rowcount
+            if n:
+                moved[table] = n
+    return moved
+
 # The grants as the new container left them: it may have spent a refresh token the copy still holds.
-dst.execute("ATTACH DATABASE ? AS failed", (failed,))
-cols = [r[1] for r in dst.execute("PRAGMA main.table_info(credentials)")]
-have = {r[1] for r in dst.execute("PRAGMA failed.table_info(credentials)")}
-cols = [c for c in cols if c in have]
-if cols:
-    names = ", ".join(cols)
-    dst.execute(f"INSERT OR REPLACE INTO main.credentials({names}) SELECT {names} FROM failed.credentials")
-    print(f"carried over {dst.execute('SELECT COUNT(*) FROM failed.credentials').fetchone()[0]} credentials", file=sys.stderr)
-dst.execute("DETACH DATABASE failed")
+db.execute("BEGIN")
+print(f"carried over credentials: {carry(['credentials']) or 'none changed'}", file=sys.stderr)
+db.execute("COMMIT")
+# What people did while the new image served: sign-ups and keys, orders and payments (money may have been
+# taken), the passes those granted, API credit, referrals, trials and the audit trail. Lost requests rows
+# are only usage history.
+MONEY = ["users", "keys", "api_keys", "pass_keys", "orders", "payments", "tickets", "ticket_bonuses",
+         "api_ledger", "referral_units", "referral_rewards", "trial_claims", "audit_log"]
+try:
+    db.execute("BEGIN")
+    print(f"carried over rows the new image wrote: {carry(MONEY) or 'none'}", file=sys.stderr)
+    db.execute("COMMIT")
+except sqlite3.Error as e:
+    db.execute("ROLLBACK")
+    print(f"COULD NOT CARRY OVER what the new image wrote ({e}). Check these by hand in {failed}:", file=sys.stderr)
+    for table in ("payments", "orders"):
+        if common(table):
+            ids = [r[0] for r in db.execute(f"SELECT id FROM failed.{table} EXCEPT SELECT id FROM main.{table}")]
+            print(f"  {table} only there: {ids or 'none'}", file=sys.stderr)
+db.execute("DETACH DATABASE failed")
+dst = sqlite3.connect(live)
+db.backup(dst)
 dst.close()
+db.close()
+os.remove(tmp)
 PY
-  then
-    echo "database restored from $PRE" >&2
-  else
-    echo "COULD NOT RESTORE THE DATABASE; $PREV starts on the one $SHA migrated. Restore $PRE by hand" >&2
+    # RESTORE-END
+    then
+      echo "database restored from $PRE" >&2
+    else
+      echo "COULD NOT RESTORE THE DATABASE; $PREV starts on the one $SHA migrated. Restore $PRE by hand" >&2
+    fi
   fi
   { switch_to "$PREV" && healthy; } || echo "ROLLBACK TO $PREV IS ALSO UNHEALTHY; the gateway needs attention" >&2
   exit 1
