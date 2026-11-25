@@ -167,3 +167,16 @@ async def test_plan_override_ack_factors_api(env):
     assert [r[0] for r in conn.execute("SELECT action FROM audit_log WHERE action IN ('plan_override', 'plan_ack', "
                                        "'plan_factor_set') ORDER BY id")][-4:] == ["plan_override", "plan_override", "plan_ack",
                                                                                   "plan_factor_set"]
+
+
+async def test_setting_the_default_plan_finishes_pending_sizes(env):
+    # The pass sizes wait for the default account's plan (db.SIZES_PENDING_KEY); the admin's pick converts them.
+    gw, conn, auth, alice_key = env
+    conn.execute("UPDATE ticket_tier_shares SET size=NULL, size_5h=NULL")
+    conn.execute("INSERT OR REPLACE INTO ticket_tier_shares(tier, share_pct, updated_at, size) VALUES('lite', 5, 1, NULL)")
+    conn.execute("INSERT INTO settings(key, value) VALUES(?, '{}')", (dbm.SIZES_PENDING_KEY,))
+    async with admin_client(gw) as c:
+        assert (await c.get("/api/admin/accounts")).json()["sizes_pending"] is True
+        assert (await c.put("/api/admin/accounts/default/plan", json={"plan": "max_20x"})).status_code == 200
+        assert (await c.get("/api/admin/accounts")).json()["sizes_pending"] is False
+    assert conn.execute("SELECT size FROM ticket_tier_shares WHERE tier='lite'").fetchone()[0] == 1.0

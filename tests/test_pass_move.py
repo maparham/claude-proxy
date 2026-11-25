@@ -125,6 +125,10 @@ def test_move_refusals(env):
     with pytest.raises(tickets.TicketError, match="plan changed"):
         tickets.move(conn, cfg, ids["admin"], t["id"], "p", now=NOW)
     plans.acknowledge(conn, "p", None)
+    conn.execute("UPDATE credentials SET state='needs_login' WHERE account='p'")   # its requests would be refused
+    with pytest.raises(tickets.TicketError, match="needs login"):
+        tickets.move(conn, cfg, ids["admin"], t["id"], "p", now=NOW)
+    conn.execute("UPDATE credentials SET state='active' WHERE account='p'")
     conn.execute("UPDATE tickets SET ends_at=? WHERE id=?", (NOW - 1, t["id"]))
     with pytest.raises(tickets.TicketError, match="ended"):
         tickets.move(conn, cfg, ids["admin"], t["id"], "p", now=NOW)

@@ -1581,7 +1581,7 @@ async function renderUsers(main) {
   wireUserActions(main, users);
   main.querySelectorAll("[data-uacct]").forEach((sel) => (sel.onchange = async () => {
     try { await api(`/api/admin/users/${sel.dataset.uacct}/account`, { method: "PUT", body: { account: sel.value } }); render(); }
-    catch (e) { alertInline(e.message); }
+    catch (e) { sel.value = sel.dataset.prev ?? ""; alertInline(e.message); }   // not reassigned: show the account it still has
   }));
   // A click anywhere on a row, except its buttons, links, selects and tips, opens that user's page.
   main.querySelectorAll("tr[data-user]").forEach((tr) => tr.addEventListener("click", (e) => {
@@ -1612,7 +1612,7 @@ function userRow(u) {
   // In Claude Pro weeks over every subscription: small numbers, so three decimals.
   const share = (b) => (u.share[b] == null ? "—" : new Intl.NumberFormat(LOC, { maximumFractionDigits: 3 }).format(u.share[b]));
   // The subscription the user's requests go to off a pass; one not linked any more reads as none picked.
-  const acct = manyAccounts() ? `<td><select class="small" data-uacct="${u.id}" aria-label="${esc(t("users.account_col"))}">${S.accounts.some((a) => a.account === u.account) ? "" : `<option value="" selected>—</option>`}${S.accounts.map((a) => `<option value="${esc(a.account)}"${a.account === u.account ? " selected" : ""}>${esc(a.label)}</option>`).join("")}</select></td>` : "";
+  const acct = manyAccounts() ? `<td><select class="small" data-uacct="${u.id}" data-prev="${esc(S.accounts.some((a) => a.account === u.account) ? u.account : "")}" aria-label="${esc(t("users.account_col"))}">${S.accounts.some((a) => a.account === u.account) ? "" : `<option value="" selected>—</option>`}${S.accounts.map((a) => `<option value="${esc(a.account)}"${a.account === u.account ? " selected" : ""}>${esc(a.label)}</option>`).join("")}</select></td>` : "";
   return `<tr class="clickable" data-user="${u.id}">
     <td><span class="dot" style="background:${colorFor("user", u.name)};margin-inline-end:6px"></span><a class="user-link" href="#user/${u.id}"><b>${bdi(u.name)}</b></a> ${u.role === "admin" ? `<span class="badge">${t("users.admin")}</span>` : ""} ${state}${u.ticket && u.ticket.paused && u.ticket.gated ? `<span class="badge">${t("users.tickets_paused")}</span>` : u.ticket && u.ticket.live ? `<span class="badge">${u.ticket.current ? t("users.ticket") : t("users.ticket_queued")}</span>` : u.ticket && u.ticket.gated ? `<span class="badge">${t("users.ticket_ended")}</span>` : ""}${tipH("", `<span class="tip-line">${t("sess.key")}: <code>${esc(u.prefix)}…</code></span>${u.routes_prefix ? `<span class="tip-line">OpenCode: <code>${esc(u.routes_prefix)}…</code></span>` : ""}`)}</td>
     ${cell("24h")}${cell("7d")}${cell("30d")}
@@ -2137,7 +2137,7 @@ function linkDialog(o, users) {
 }
 
 async function renderPricing(main) {
-  const [{ rates }, p, trial, { factors = {} }] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices"), api("/api/admin/trial"), api("/api/admin/accounts")]);
+  const [{ rates }, p, trial, { factors = {}, sizes_pending }] = await Promise.all([api("/api/admin/rates"), api("/api/admin/prices"), api("/api/admin/trial"), api("/api/admin/accounts")]);
   // What a size is on each plan: "= 25% of Pro · 5% of Max 5x · 1.25% of Max 20x", by the plan factors (weekly or 5-hour).
   const sizeHint = (v, b) => (Number.isFinite(num(v)) && String(v).trim() !== "" ? `= ${Object.keys(factors).map((k) => t("pr.size_hint_item", { pct: fmtShare((num(v) * 100) / factors[k][b]), plan: planLabel(k) })).join(" · ")}` : "");
   const hinted = (name, k, v, b) => `<input type="text" inputmode="decimal" dir="ltr" name="${name}" data-tier="${esc(k)}" data-init="${v ?? ""}" value="${v ?? ""}" required style="width:80px"> <span class="muted">× ${esc(planName("Claude Pro"))}</span>
@@ -2147,6 +2147,7 @@ async function renderPricing(main) {
   const recKey = p.recommended ? `${p.recommended.tier}:${p.recommended.length}` : "";
   const dstate = (x) => (x.cancelled_at ? "cancelled" : x.ends_at <= now ? "ended" : x.starts_at > now ? "upcoming" : "active");
   main.innerHTML = `<section class="view"><h2>${t("tab.pricing")}</h2>
+    ${sizesPendingBanner(sizes_pending)}
     <p class="lede">${t("pr.lede")}</p>
     <div class="grid cols-2">
       <div class="card"><h3>${t("pr.rates")}</h3><p class="sub">${t("pr.rates_sub")}</p>
@@ -3001,8 +3002,12 @@ async function renderUser(main) {
 
 // Subscription accounts: the same paste-the-code sign-in as `claude-proxy login --account <slug>`. Each row has its plan
 // (Anthropic's, or the admin's pick), whether it sells, and its passes and users; the plan factors sit under the table.
+// The pass sizes still wait for the default account's plan (db.SIZES_PENDING_KEY): the tiers from before sizes sell
+// nothing until it is set. On the Subscriptions and Pricing tabs.
+const sizesPendingBanner = (pending) => (pending ? `<div class="banner critical"><span class="icon">!</span><span>${t("acct.sizes_pending")}</span></div>` : "");
+
 async function renderAccounts(main) {
-  const { accounts, factors = {}, plans = {} } = await api("/api/admin/accounts");
+  const { accounts, factors = {}, plans = {}, sizes_pending } = await api("/api/admin/accounts");
   const planKeys = Object.keys(plans);
   const planSel = (a) => `<select class="small" data-aplan="${esc(a.account)}" aria-label="${esc(t("acct.plan"))}">
     <option value=""${a.plan_override ? "" : " selected"}>${esc(a.plan_detected ? t("acct.plan_detected", { plan: planLabel(a.plan_detected) }) : t("acct.plan_detect"))}</option>
@@ -3011,9 +3016,11 @@ async function renderAccounts(main) {
   const planCell = (a) => `<span class="nowrap">${!a.plan_override && a.plan_detected
     ? `${esc(planLabel(a.plan))} <button class="btn small" data-aplanedit="${esc(a.account)}">${t("acct.plan_change")}</button>` : planSel(a)}</span>
     ${a.rate_limit_tier ? `<div class="muted" style="font-size:12px" dir="ltr">${esc(a.rate_limit_tier)}</div>` : ""}`;
+  // A plan change names the plans ("Max 20x → Max 5x"); a tier no plan matches shows as Anthropic sent it.
+  const changeLabel = (plan, tier) => (plan ? planLabel(plan) : tier);
   const sellCell = (a) => (a.sells == null ? `<span class="badge state-active">${t("acct.sells_yes")}</span>`
     : a.sells === "plan_unknown" ? `<span class="badge state-cancelled">${t("acct.sells_unknown")}</span>`
-    : a.sells === "plan_changed" ? `<span class="nowrap"><button class="btn small" data-aack="${esc(a.account)}">${t("acct.sells_changed")}</button>${a.pending_change ? tipH("", esc(t("acct.changed_tip", { from: a.pending_change.from, to: a.pending_change.to }))) : ""}</span>`
+    : a.sells === "plan_changed" ? `<span class="nowrap"><button class="btn small" data-aack="${esc(a.account)}">${t("acct.sells_changed")}</button>${a.pending_change ? tipH("", esc(t("acct.changed_tip", { from: changeLabel(a.pending_change.from_plan, a.pending_change.from), to: changeLabel(a.pending_change.to_plan, a.pending_change.to) }))) : ""}</span>`
     : `<span class="badge">${esc(a.sells)}</span>`);
   const row = (a) => `<tr>
     <td><b>${bdi(a.label)}</b>${a.label !== a.account ? `<div class="muted" style="font-size:12px">${bdi(a.account)}</div>` : ""}</td>
@@ -3028,7 +3035,7 @@ async function renderAccounts(main) {
     .map((a) => `<div class="banner critical"><span class="icon">!</span><span>${t("acct.downgrade", { label: bdi(a.label) })}</span></div>`).join("");
   const fbox = (k, b) => `<input type="text" inputmode="decimal" dir="ltr" name="f_${b}" data-plan="${esc(k)}" data-init="${factors[k]?.[b] ?? ""}" value="${factors[k]?.[b] ?? ""}" required style="width:80px" aria-label="${esc(`${planLabel(k)} ${t(`acct.f_${b}`)}`)}">`;
   main.innerHTML = `<section class="view"><h2>${t("tab.accounts")}</h2>
-    ${downs}
+    ${sizesPendingBanner(sizes_pending)}${downs}
     <p class="lede">${t("acct.lede")}</p>
     <div class="controls"><button class="btn primary" id="acct-add">${t("acct.add")}</button></div>
     ${accounts.length ? `<div class="card table-wrap"><table class="data"><thead><tr><th>${t("acct.account")}</th><th>${t("acct.email")}</th><th>${t("acct.state")}</th><th>${t("acct.plan")}${tipI("acct_plan")}</th><th>${t("acct.selling")}${tipI("acct_selling")}</th><th>${t("acct.passes")}${tipI("acct_passes")}</th><th class="r">${t("acct.users")}${tipI("acct_users")}</th><th>${t("acct.expires")}</th><th>${t("acct.updated")}</th><th></th></tr></thead>

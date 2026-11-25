@@ -20,7 +20,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime
 
-from . import plans
+from . import db, plans
 from .config import Pricing, QuotaConfig
 from .usage import priced_sql, raw_tokens_sql
 
@@ -531,6 +531,8 @@ class Poller:
             clear_rate_cache()
         else:
             await self._run(_ack_first_plan, self.account)
+        if self.account == "default":   # a plan detected at last finishes the pass-size conversion the migration left
+            await self._run(db.convert_pending_sizes)
         return True
 
     async def run(self, interval_s: float = 60.0) -> None:

@@ -47,8 +47,8 @@ smtp_user = "AKIARA3PD4NIFRWUFSRT"
 password_env = "SES_SMTP_PASSWORD"
 
 # Paid tickets (docs/superpowers/specs/2026-10-03-paid-tickets-design.md). The tiers are written out so the
-# capacity sold is visible here: each share_pct is the slice of the subscription one ticket reserves. Changing
-# a share changes capacity; existing tickets keep the share they were sold with. default_usd only seeds prices
+# capacity sold is visible here: each size is how many Claude Pro weeks one pass reserves, a share of whichever
+# subscription it is placed on by that plan's factor. Existing tickets keep the share they were sold with. default_usd only seeds prices
 # on first start; after that they are edited on the dashboard's Pricing tab. The plan comparison is set there only:
 # the shared account's plan can change any time, so nothing here assumes its size.
 [tickets]
@@ -62,18 +62,19 @@ borrow_margin_pct = 0
 # To bring them back, uncomment (Turnstile widget "Claude Gateway orders"; the secret is TURNSTILE_SECRET in gateway.env).
 # turnstile_site_key = "0x4AAAAAAFNrHze8wsEPTc8r"
 
-# Tier sizes are in Claude Pro weeks. The database's sizes (migrated from the live shares, edited on the Pricing tab)
-# govern; these only seed a tier that has none. FILL IN: they are today's shares (Lite 5%, Standard 25%) on the live
-# account, so multiply 0.05 and 0.25 by the factor of the live account's plan (Pro 1, Max 5x 5, Max 20x 20). As
-# written they assume Pro.
+# Tier sizes are in Claude Pro weeks. These only seed a tier that has no database row yet (a tier added here
+# later); a tier with a row takes the database's size, edited on the Pricing tab. The live tiers all have rows:
+# the migration converts their shares with the default subscription's plan, and while that plan is unknown it
+# waits, those tiers selling nothing (the Subscriptions and Pricing tabs say so), rather than fall back to the
+# sizes here.
 [tickets.tiers.lite]
 label = "Lite"
-size = 0.05   # FILL IN: 0.05 × the live plan's factor
+size = 0.05
 default_usd = { day = 3, week = 8, month = 20 }
 
 [tickets.tiers.standard]
 label = "Standard"
-size = 0.25   # FILL IN: 0.25 × the live plan's factor
+size = 0.25
 default_usd = { day = 12, week = 35, month = 100 }
 
 # The first currency is the one the home page shows.

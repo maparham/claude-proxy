@@ -6,11 +6,12 @@ import logging
 import secrets
 import sqlite3
 import threading
+import time
 from collections.abc import Mapping
 
 import httpx
 
-from . import tickets
+from . import placement, tickets
 from .config import Config
 from .credentials import OAuthBackend, list_accounts
 from .dbpool import DbPool
@@ -42,6 +43,8 @@ class Gateway:
         self._loop: asyncio.AbstractEventLoop | None = None   # the proxy's loop, once run_pollers runs on it
         self._wake: asyncio.Event | None = None
         self.sync_accounts()
+        if n := placement.assign_unassigned(conn, cfg, time.time()):
+            logger.info("assigned a subscription account to %d users who had none", n)
         self.status_page = StatusPage(self.http)
         if cfg.tickets.enabled:
             tickets.seed_prices(conn, cfg)

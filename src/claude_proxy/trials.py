@@ -54,7 +54,11 @@ def _stored(conn) -> Settings:
 
 def default_tier(cfg: Config, conn) -> str | None:
     tiers = list(cfg.tickets.tiers)
-    return min(tiers, key=lambda t: tickets.tier_size(conn, cfg, t)) if tiers else None
+    # A tier whose size waits for the default account's plan (tickets.size_pending) has none: last.
+    def key(t):
+        size = tickets.tier_size(conn, cfg, t)
+        return (size is None, size or 0.0)
+    return min(tiers, key=key) if tiers else None
 
 
 def tier_label(cfg: Config, tier: str | None) -> str | None:

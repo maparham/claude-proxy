@@ -61,7 +61,8 @@ def test_pending_change_and_sells(conn):
     assert plans.acknowledged(conn, "b") == "default_claude_max_20x"
     assert plans.sells(conn, "b") is None
     _plan(conn, "b", "claude_max", "default_claude_max_5x", 2)
-    assert plans.pending_change(conn, "b") == {"from": "default_claude_max_20x", "to": "default_claude_max_5x", "downgrade": True}
+    assert plans.pending_change(conn, "b") == {"from": "default_claude_max_20x", "to": "default_claude_max_5x",
+                                            "from_plan": "max_20x", "to_plan": "max_5x", "downgrade": True}
     assert plans.sells(conn, "b") == "plan_changed"
     plans.acknowledge(conn, "b", None)
     assert plans.pending_change(conn, "b") is None

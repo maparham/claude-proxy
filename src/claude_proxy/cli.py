@@ -97,18 +97,22 @@ def cmd_status(args, cfg):
     from .credentials import list_accounts
     conn = _conn(cfg)
     rows = list_accounts(conn)
-    healthy = bool(rows)
+    bad = []
     if not rows:
         print("No subscription accounts linked — run `claude-proxy login --account <name>`")
     for r in rows:
         st = OAuthBackend(cfg, conn, None, r["account"]).describe()
-        healthy = healthy and st.healthy
+        if not st.healthy:
+            bad.append(r["account"])
         print(f"credential [{r['account']}]: {'OK' if st.healthy else 'NOT OK'} — {st.detail}")
         if st.expires_at:
             print(f"  access token expires: {time.ctime(st.expires_at)}")
     # Every account serves its own passes and users, so all must work. The deploy script installed on the box greps
     # '^credential: OK'.
-    print(f"credential: {'OK' if healthy else 'NOT OK'}")
+    if rows and not bad:
+        print("credential: OK")
+    else:
+        print(f"credential: NOT OK — {'not OK: ' + ', '.join(bad) + ' (see above)' if bad else 'no account linked'}")
     # Each account's newest figure per bucket.
     for r in conn.execute("SELECT account, bucket, utilization_pct, resets_at, observed_at, source FROM quota_snapshots q "
                           "WHERE observed_at = (SELECT MAX(observed_at) FROM quota_snapshots WHERE account=q.account AND bucket=q.bucket) "

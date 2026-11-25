@@ -69,16 +69,19 @@ that workflow redeploys `master`. Actions builds the image, streams it with `con
 1. accepts the image only if it is tagged exactly `claude-proxy:<commit sha>`
 2. backs up the database and config to `/data/backups/<time>.*` (the last 5 are kept)
 3. copies `config.toml` from the repo into the volume, so the repo is the source of truth for config
-4. stops the old container (10 s for in-flight streams) and starts the new one
-5. requires `/health` and `credential: OK` from `claude-proxy status`, otherwise puts the previous image
-   and config back and fails the workflow run
+4. stops the old container (10 s for in-flight streams), copies the database beside itself as
+   `/data/claude_proxy.db.pre-deploy-<time>` (the last 5 are kept) and starts the new one
+5. requires `/health` and `credential: OK` from `claude-proxy status` (asked again for up to 60 s, since
+   every linked account must be OK and one unused for a while is refreshed only by the first poll),
+   otherwise puts the previous image, config and database copy back and fails the workflow run
 6. keeps the 3 newest images for rollback
 
-A deploy never touches `gateway.env`, the grant or the rest of the data volume. The database is never
-restored automatically, because a copy from before the deploy may hold a refresh token that has since
-rotated. The deploy key in `authorized_keys` can run only `claude-gateway-deploy`. Rollback puts the old
-code on whatever schema the new code left behind; migrations in `db.py` are additive, but one that
-isn't can make the rollback fail too, and then the backup in `/data/backups` is the way back.
+A deploy never touches `gateway.env`. On a rollback the database the new code ran on is kept as
+`/data/claude_proxy.db.failed-<time>`, and its credentials are carried over into the restored copy, since
+the new container may already have spent a refresh token the copy still holds; anything else written in
+the minute the new code ran is in that file only. The deploy key in `authorized_keys` can run only
+`claude-gateway-deploy`. If the restore itself fails the old code starts on the new schema (the script
+says so); then `/data/backups` and the pre-deploy copy are the way back.
 
 `.github/workflows/monitor.yml` checks `https://claude.<domain>/health` hourly from outside and fails
 (GitHub then emails you) if the gateway is unreachable or `"credential"` is false, i.e. the

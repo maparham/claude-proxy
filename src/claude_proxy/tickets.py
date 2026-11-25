@@ -486,20 +486,40 @@ def _size_row(conn: sqlite3.Connection, tier: str):
     return conn.execute("SELECT size, size_5h FROM ticket_tier_shares WHERE tier=?", (tier,)).fetchone()
 
 
+SIZES_PENDING = "Set the default subscription's plan on the Subscriptions page to finish converting pass sizes."
+
+
+def size_pending(conn: sqlite3.Connection, tier: str) -> bool:
+    """The tier's size still waits for the default account's plan (db.SIZES_PENDING_KEY): it has a database row from
+    before sizes, never converted. Such a tier has no size and sells nothing, rather than take the config's."""
+    row = _size_row(conn, tier)
+    return row is not None and row[0] is None and db.sizes_pending(conn)
+
+
+def no_size(conn: sqlite3.Connection, tier: str) -> CapacityError:
+    """Why a tier with no size sells nothing."""
+    return CapacityError(SIZES_PENDING if size_pending(conn, tier) else f"The {tier} tier has no size.")
+
+
 def tier_size(conn: sqlite3.Connection, cfg: Config, tier: str) -> float | None:
-    """The tier's weekly size in Claude Pro weeks: the dashboard's, else the config's."""
+    """The tier's weekly size in Claude Pro weeks: the dashboard's, else the config's; None while size_pending."""
     row = _size_row(conn, tier)
     if row is not None and row[0] is not None:
         return float(row[0])
+    if size_pending(conn, tier):
+        return None
     t = cfg.tickets.tiers.get(tier)
     return float(t.size) if t is not None else None
 
 
 def tier_size_5h(conn: sqlite3.Connection, cfg: Config, tier: str) -> float | None:
-    """The tier's 5-hour size in Claude Pro weeks: the dashboard's, else the config's, else the weekly size."""
+    """The tier's 5-hour size in Claude Pro weeks: the dashboard's, else the config's, else the weekly size; None while
+    size_pending."""
     row = _size_row(conn, tier)
     if row is not None and row[1] is not None:
         return float(row[1])
+    if size_pending(conn, tier):
+        return None
     t = cfg.tickets.tiers.get(tier)
     return float(t.size_5h) if t is not None and t.size_5h is not None else tier_size(conn, cfg, tier)
 
@@ -524,6 +544,8 @@ PLAN_UNKNOWN = "This subscription's plan is unknown; pick it on the Subscription
 
 def _sell_shares(conn: sqlite3.Connection, cfg: Config, tier: str, account: str) -> tuple[float, float]:
     """(weekly, 5-hour) shares of a new ticket of this tier on `account`; CapacityError when its plan is unknown."""
+    if tier_size(conn, cfg, tier) is None:
+        raise no_size(conn, tier)
     share, share_5h = effective_share(conn, cfg, tier, account), effective_share_5h(conn, cfg, tier, account)
     if share is None or share_5h is None:
         raise CapacityError(PLAN_UNKNOWN)
@@ -865,7 +887,7 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     excl = [t["id"] for t in replaces]
     # Used-up tickets this one replaces end as it starts: their reserved points and 5-hour share go with them.
     ctxs = placement.contexts(conn, cfg, now, excl)
-    judged = placement.judge(conn, cfg, size, size_5h, starts_at, ends_at, now, excl, ctxs)
+    judged = placement.judge(conn, cfg, size, size_5h, starts_at, ends_at, now, excl, ctxs) if size is not None else []
     rows = [r for r, _ in judged]
     if account is not None:
         if account not in ctxs:
@@ -880,6 +902,9 @@ def preview(conn: sqlite3.Connection, cfg: Config, user, tier: str, length: str,
     # The end and this week's room the admin may grant past: each is noted, then the other checks run without it.
     skip, end_warning, week_warning = {}, None, None
     while True:
+        if size is None:   # its size waits for the default account's plan (size_pending)
+            available, reason, short_5h = False, str(no_size(conn, tier)), False
+            break
         if row is None:   # no account may sell: the first one's reason
             available, reason, short_5h = False, rows[0]["reason"] if rows else "No subscription account is linked.", False
             break
@@ -1059,7 +1084,7 @@ def _misfit(conn, cfg, tier, length, now, starts_at=None, exclude=None, ctx=None
     start = now if starts_at is None else int(starts_at)
     size = tier_size(conn, cfg, tier)
     if size is None:
-        return CapacityError(f"The {tier} tier has no size.")
+        return no_size(conn, tier)
     errs = [e for _, e in placement.judge(conn, cfg, size, tier_size_5h(conn, cfg, tier), start, start + LENGTHS[length] * DAY,
                                           now, exclude or (), ctx)]
     if not errs:
@@ -1223,11 +1248,14 @@ def move(conn: sqlite3.Connection, cfg: Config, actor: int | None, ticket_id: in
             raise TicketError("This pass has ended.")
         if account == t["account"]:
             raise TicketError("The pass is already on that subscription.")
-        if conn.execute("SELECT 1 FROM credentials WHERE backend='oauth' AND account=?", (account,)).fetchone() is None:
+        cred = conn.execute("SELECT state FROM credentials WHERE backend='oauth' AND account=?", (account,)).fetchone()
+        if cred is None:
             raise TicketError(f"No subscription account '{account}'.")
         why = plans.sells(conn, account)
         if why is not None:
             raise TicketError(PLAN_UNKNOWN if why == "plan_unknown" else placement.PLAN_CHANGED)
+        if cred["state"] != "active":   # its requests would be refused until the account is logged in again
+            raise TicketError(placement.NEEDS_LOGIN)
         f7o, f5o = plans.factor(conn, t["account"], "7d"), plans.factor(conn, t["account"], "5h")
         f7n, f5n = plans.factor(conn, account, "7d"), plans.factor(conn, account, "5h")
         if f7o is None or f5o is None:

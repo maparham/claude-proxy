@@ -92,6 +92,7 @@ async def test_no_pass_uses_assigned(two, anthropic):
 
 async def test_unassigned_refused(two, anthropic):
     gw, conn, alice, key = two
+    assign(conn, alice, None)   # unassigned since the gateway started (it assigns those it finds at start)
     r = await post(gw, key)
     assert r.status_code == 403
     assert r.json()["error"] == {"type": "permission_error", "message": "No subscription is assigned to you; ask the admin."}
@@ -212,13 +213,55 @@ def test_status_lists_every_account(cfg, db, capsys):
     lines = capsys.readouterr().out.splitlines()
     assert any(line.startswith("credential [a]: OK") for line in lines)
     assert any(line.startswith("credential [b]: NOT OK") for line in lines)
-    assert "credential: OK" not in lines and "credential: NOT OK" in lines
+    # The summary names the account that is not OK (the deploy prints it when its gate fails).
+    assert "credential: OK" not in lines and "credential: NOT OK — not OK: b (see above)" in lines
     conn.execute("UPDATE credentials SET state='active'")
     cli.cmd_status(None, cfg)
     assert "credential: OK" in capsys.readouterr().out.splitlines()
     conn.execute("DELETE FROM credentials")
     cli.cmd_status(None, cfg)
-    assert "credential: NOT OK" in capsys.readouterr().out.splitlines()
+    assert "credential: NOT OK — no account linked" in capsys.readouterr().out.splitlines()
+
+
+def test_migration_gives_default_to_users_left_without_an_account(db):
+    # Users made on live between the release that added users.account and this one have NULL: until now every
+    # request was served from 'default', so they keep it. Once only: a NULL made later is left to placement.assign.
+    conn = db[1]
+    seed_oauth(conn, account="default")
+    conn.execute("DELETE FROM settings WHERE key=?", (dbm.USERS_ACCOUNT_FIXED_KEY,))
+    a, _ = dbm.create_user(conn, "a", account=None)
+    b, _ = dbm.create_user(conn, "b", account="default")
+    dbm._migrate(conn)
+    assert [r[0] for r in conn.execute("SELECT account FROM users WHERE id IN (?,?) ORDER BY id", (a, b))] == ["default", "default"]
+    c, _ = dbm.create_user(conn, "c", account=None)
+    dbm._migrate(conn)
+    assert conn.execute("SELECT account FROM users WHERE id=?", (c,)).fetchone()[0] is None
+
+
+def test_migration_assigns_nothing_without_a_default_account(db):
+    conn = db[1]
+    seed_oauth(conn, account="other")
+    conn.execute("DELETE FROM settings WHERE key=?", (dbm.USERS_ACCOUNT_FIXED_KEY,))
+    a, _ = dbm.create_user(conn, "a", account=None)
+    dbm._migrate(conn)
+    assert conn.execute("SELECT account FROM users WHERE id=?", (a,)).fetchone()[0] is None
+    assert conn.execute("SELECT 1 FROM settings WHERE key=?", (dbm.USERS_ACCOUNT_FIXED_KEY,)).fetchone()
+
+
+def test_gateway_start_assigns_users_without_an_account(cfg, db):
+    conn = db[1]
+    a, _ = dbm.create_user(conn, "a", account=None)
+    gone, _ = dbm.create_user(conn, "gone", account=None)
+    conn.execute("UPDATE users SET revoked_at=1 WHERE id=?", (gone,))
+    make_gateway(cfg, conn)   # nothing linked: nothing to assign
+    assert conn.execute("SELECT account FROM users WHERE id=?", (a,)).fetchone()[0] is None
+    for acct in ("x", "y"):   # several linked: create_user picks none
+        seed_oauth(conn, account=acct, sub=f"s-{acct}")
+    conn.execute("UPDATE users SET account=NULL")
+    make_gateway(cfg, conn)
+    assert conn.execute("SELECT account FROM users WHERE id=?", (a,)).fetchone()[0] in ("x", "y")
+    assert conn.execute("SELECT account FROM users WHERE id=?", (gone,)).fetchone()[0] is None   # revoked: left alone
+    assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='user_account_set'").fetchone()[0] == 1
 
 
 def test_create_user_single_account(db):

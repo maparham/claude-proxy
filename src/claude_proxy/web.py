@@ -1425,7 +1425,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
                         "pending_change": plans.pending_change(conn, a), "sells": plans.sells(conn, a),
                         "factor": f[plan] if plan else None, "running_passes": passes[0], "queued_passes": passes[1],
                         "assigned_users": conn.execute("SELECT COUNT(*) FROM users WHERE account=?", (a,)).fetchone()[0]})
-        return {"accounts": out, "factors": f, "plans": plans.PLAN_LABELS}
+        return {"accounts": out, "factors": f, "plans": plans.PLAN_LABELS, "sizes_pending": db.sizes_pending(conn)}
 
     @app.put("/api/admin/accounts/{account}/plan")
     async def account_plan(request: Request, account: str):
@@ -1435,7 +1435,9 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         body = await _json(request)
         if "plan" not in body or (body["plan"] is not None and body["plan"] not in plans.PLANS):
             fail(400, "Pick the plan: pro, max_5x or max_20x, or null for the one Anthropic reports.")
-        return {"ok": True, "plan": plans.set_override(conn, acct, body["plan"], actor["id"]), "sells": plans.sells(conn, acct)}
+        plan = plans.set_override(conn, acct, body["plan"], actor["id"])
+        db.convert_pending_sizes(conn, actor["id"])   # the default account's plan finishes the pass-size conversion
+        return {"ok": True, "plan": plan, "sells": plans.sells(conn, acct)}
 
     @app.post("/api/admin/accounts/{account}/plan/ack")
     async def account_plan_ack(request: Request, account: str):
@@ -1443,6 +1445,7 @@ def create_dashboard_app(gw: Gateway) -> FastAPI:
         actor = admin(request, write=True)
         acct = view_account(account)
         plans.acknowledge(conn, acct, actor["id"])
+        db.convert_pending_sizes(conn, actor["id"])
         return {"ok": True, "sells": plans.sells(conn, acct)}
 
     @app.put("/api/admin/plan_factors")

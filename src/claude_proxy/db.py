@@ -726,6 +726,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "account" not in _columns(conn, "users"):
         conn.execute("ALTER TABLE users ADD COLUMN account TEXT")
         conn.execute("UPDATE users SET account='default'")
+    # Once: users made between the release that added users.account and the one that assigns new users wrote none,
+    # though every request was still served from 'default'. They keep it; later NULLs are left to placement.assign.
+    if not conn.execute("SELECT 1 FROM settings WHERE key=?", (USERS_ACCOUNT_FIXED_KEY,)).fetchone():
+        if conn.execute("SELECT 1 FROM credentials WHERE backend='oauth' AND account='default'").fetchone():
+            conn.execute("UPDATE users SET account='default' WHERE account IS NULL")
+        conn.execute("INSERT INTO settings(key, value) VALUES(?, ?)", (USERS_ACCOUNT_FIXED_KEY, str(int(time.time()))))
     conn.execute("CREATE INDEX IF NOT EXISTS idx_requests_account_ended ON requests(account, ended_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_quota_account_bucket_time ON quota_snapshots(account, bucket, observed_at)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_tickets_acct ON tickets(account, starts_at)")
@@ -738,51 +744,122 @@ def _migrate(conn: sqlite3.Connection) -> None:
                      "FROM account_profile WHERE id=1 ON CONFLICT(account) DO NOTHING")
         conn.execute("DROP TABLE account_profile")
     if "account" not in _columns(conn, "usage_estimates"):
-        conn.execute("ALTER TABLE usage_estimates RENAME TO usage_estimates_old")
-        conn.execute(next(s for s in SCHEMA if "TABLE IF NOT EXISTS usage_estimates" in s))
-        conn.execute("INSERT INTO usage_estimates(computed_at, family, bucket, busy_hours, p75_share_per_hour, account) "
-                     "SELECT computed_at, family, bucket, busy_hours, p75_share_per_hour, 'default' FROM usage_estimates_old")
-        conn.execute("DROP TABLE usage_estimates_old")
+        # One transaction: a crash midway must not leave the estimates in usage_estimates_old, which the next start
+        # would not rebuild from (the new table exists by then).
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            conn.execute("ALTER TABLE usage_estimates RENAME TO usage_estimates_old")
+            conn.execute(next(s for s in SCHEMA if "TABLE IF NOT EXISTS usage_estimates" in s))
+            conn.execute("INSERT INTO usage_estimates(computed_at, family, bucket, busy_hours, p75_share_per_hour, account) "
+                         "SELECT computed_at, family, bucket, busy_hours, p75_share_per_hour, 'default' FROM usage_estimates_old")
+            conn.execute("DROP TABLE usage_estimates_old")
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
     conn.execute("UPDATE OR IGNORE settings SET key='subscription_ends_at:default' WHERE key='subscription_ends_at'")
     conn.execute("DELETE FROM settings WHERE key='subscription_ends_at'")
     # Pass sizes in Claude Pro weeks (multi-subscription task 4): today's shares were of the default account, so with its
-    # plan's factors each tier, the trial and the referral cost keep exactly what they hold there now.
+    # plan's factors each tier, the trial and the referral cost keep exactly what they hold there now. With its plan
+    # unknown nothing is guessed: the conversion waits (SIZES_PENDING_KEY), those tiers sell nothing meanwhile
+    # (tickets.tier_size), and convert_pending_sizes finishes it once the plan is known.
     if "size" not in _columns(conn, "ticket_tier_shares"):
-        for col in ("size", "size_5h"):
-            conn.execute(f"ALTER TABLE ticket_tier_shares ADD COLUMN {col} REAL")
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            for col in ("size", "size_5h"):
+                conn.execute(f"ALTER TABLE ticket_tier_shares ADD COLUMN {col} REAL")
+            p = plans.plan(conn, "default")
+            if p is None:
+                logger.warning("migration: the default account's plan is unknown, so the pass sizes wait for it; until it "
+                               "is set on the Subscriptions page the tiers already in the database do not sell")
+                # The referral cost as it stands, so the conversion later leaves one the admin has set meanwhile.
+                conn.execute("INSERT OR REPLACE INTO settings(key, value) VALUES(?, ?)",
+                             (SIZES_PENDING_KEY, json.dumps({"at": int(time.time()), "account_cost_usd": _referral_cost(conn)})))
+            else:
+                _convert_sizes(conn, plans.factors(conn)[p])
+            conn.execute("COMMIT")
+        except BaseException:
+            conn.execute("ROLLBACK")
+            raise
+    convert_pending_sizes(conn)   # a plan picked or detected by another process since
+
+
+USERS_ACCOUNT_FIXED_KEY = "migration:users_account_null_fixed"
+SIZES_PENDING_KEY = "migration:sizes_pending"
+
+
+def sizes_pending(conn: sqlite3.Connection) -> bool:
+    """Whether the pass sizes still wait for the default account's plan (_migrate)."""
+    return conn.execute("SELECT 1 FROM settings WHERE key=?", (SIZES_PENDING_KEY,)).fetchone() is not None
+
+
+def _convert_sizes(conn: sqlite3.Connection, f: dict, cost_was=None) -> None:
+    """Today's shares of the default account become sizes with its plan's factors `f`: the tiers (a size set on the
+    Pricing tab meanwhile stays), its passes sold before sizes (their shares untouched), the trial and the referral cost
+    (`cost_was`: converted only while it is still that, the value at the migration; None: as it is)."""
+    conn.execute("UPDATE ticket_tier_shares SET size=share_pct * ? / 100 WHERE size IS NULL", (f["7d"],))
+    conn.execute("UPDATE ticket_tier_shares SET size_5h=share_5h_pct * ? / 100 WHERE size_5h IS NULL AND share_5h_pct IS NOT NULL",
+                 (f["5h"],))
+    conn.execute("UPDATE tickets SET size=share_pct * ? / 100 WHERE size IS NULL AND account='default'", (f["7d"],))
+    conn.execute("UPDATE tickets SET size_5h=COALESCE(share_5h_pct, share_pct) * ? / 100 WHERE size_5h IS NULL AND account='default'",
+                 (f["5h"],))
+    _migrate_trial_sizes(conn, f)
+    if cost_was is None or _referral_cost(conn) == cost_was:
+        _migrate_referral_cost(conn, f["7d"])
+
+
+def convert_pending_sizes(conn: sqlite3.Connection, actor: int | None = None) -> bool:
+    """Finish the pass-size conversion _migrate left waiting, once the default account's plan is known (the admin picks
+    it, or the poller detects or acknowledges it). Runs once, in one transaction; True when it ran now."""
+    if not sizes_pending(conn) or plans.plan(conn, "default") is None:
+        return False
+    nested = conn.in_transaction
+    conn.execute("SAVEPOINT convert_sizes" if nested else "BEGIN IMMEDIATE")
+    try:
         p = plans.plan(conn, "default")
-        if p is None:
-            logger.warning("migration: the default account's plan is unknown, so the pass sizes could not be worked out "
-                           "from today's shares; the config's sizes apply until they are set on the Pricing tab")
-        else:
-            f = plans.factors(conn)[p]
-            conn.execute("UPDATE ticket_tier_shares SET size=share_pct * ? / 100, size_5h=share_5h_pct * ? / 100",
-                         (f["7d"], f["5h"]))
-        _migrate_trial_sizes(conn, plans.factors(conn)[p] if p else None)
-        _migrate_referral_cost(conn, plans.factors(conn)[p]["7d"] if p else None)
+        ran = sizes_pending(conn) and p is not None   # again under the write lock: another process may have run it
+        if ran:
+            try:
+                was = json.loads(conn.execute("SELECT value FROM settings WHERE key=?", (SIZES_PENDING_KEY,)).fetchone()[0])
+            except ValueError:
+                was = {}
+            _convert_sizes(conn, plans.factors(conn)[p], was.get("account_cost_usd") if isinstance(was, dict) else None)
+            conn.execute("DELETE FROM settings WHERE key=?", (SIZES_PENDING_KEY,))
+            audit(conn, actor, "sizes_converted", "default", {"plan": p})
+        conn.execute("RELEASE convert_sizes" if nested else "COMMIT")
+    except BaseException:
+        conn.execute("ROLLBACK TO convert_sizes" if nested else "ROLLBACK")
+        if nested:
+            conn.execute("RELEASE convert_sizes")
+        raise
+    if ran:
+        logger.info("the pass sizes were converted with the default account's plan (%s)", p)
+    return ran
 
 
-def _migrate_trial_sizes(conn: sqlite3.Connection, f: dict | None) -> None:
-    """The trial's share overrides become sizes with the default account's factors; with its plan unknown they are
-    dropped, so the trial takes its tier's sizes."""
+def _migrate_trial_sizes(conn: sqlite3.Connection, f: dict) -> None:
+    """The trial's share overrides become sizes with the default account's factors."""
     row = conn.execute("SELECT value FROM settings WHERE key='trial'").fetchone()
     if not row:
         return
     s = json.loads(row[0])
     for old, new, b in (("share_pct", "size", "7d"), ("share_5h_pct", "size_5h", "5h")):
         v = s.pop(old, None)
-        if v is not None and f is not None:
+        if v is not None:
             s[new] = v * f[b] / 100
     conn.execute("UPDATE settings SET value=? WHERE key='trial'", (json.dumps(s),))
 
 
-def _migrate_referral_cost(conn: sqlite3.Connection, f7: float | None) -> None:
+def _referral_cost(conn: sqlite3.Connection):
+    """The stored referral account_cost_usd, the old $100 default when never saved."""
+    row = conn.execute("SELECT value FROM settings WHERE key='referrals'").fetchone()
+    return (json.loads(row[0]) if row else {}).get("account_cost_usd", 100.0)
+
+
+def _migrate_referral_cost(conn: sqlite3.Connection, f7: float) -> None:
     """account_cost_usd was the default account's cost per 30 days (default $100); it is now one Claude Pro's worth of
     usage per 30 days (default $20), so the floor a pass is sold above stays where it was. A gateway that never saved
-    the setting had $100 too, so it is stored converted. Nothing changes when the default account's plan is unknown:
-    a saved value stays, and an unsaved one takes the new default."""
-    if f7 is None:
-        return
+    the setting had $100 too, so it is stored converted."""
     row = conn.execute("SELECT value FROM settings WHERE key='referrals'").fetchone()
     s = json.loads(row[0]) if row else {}
     cost = s.get("account_cost_usd", 100.0)

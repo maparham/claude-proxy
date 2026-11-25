@@ -4,10 +4,13 @@
 # holding image.tar.gz (`docker save` of claude-proxy:<sha>) and config.toml.
 #
 # Stop-then-start, since only one process may hold the subscription grant. Before the swap the database
-# and config are backed up inside the data volume. If the new container doesn't come up with a working
-# credential, the previous image and config are put back. The database is never restored automatically:
-# the new container may already have rotated the grant's refresh token, and an older copy would break
-# the login. Backups are in /data/backups for a manual restore.
+# and config are backed up inside the data volume, and once the old container has stopped the database file
+# is copied beside itself (/data/claude_proxy.db.pre-deploy-<stamp>). If the new container doesn't come up
+# with a working credential, the previous image and config are put back, and so is that copy: the new image
+# may have migrated the database into a shape the old one misreads. The new container may also have rotated
+# the grants' refresh tokens, and an older copy of them would break the login, so the credentials are carried
+# over from the database being replaced, which stays beside it as /data/claude_proxy.db.failed-<stamp>.
+# Backups are in /data/backups for a manual restore.
 set -euo pipefail
 DIR=${CLAUDE_GATEWAY_DIR:-$HOME/claude-gateway/deploy/lightsail}
 VOLUME=claude-gateway_data
@@ -78,15 +81,74 @@ healthy() {
     sleep 1
   done
   [[ $up ]] || { echo "gateway did not answer on http://127.0.0.1:$PORT/health within 30 s" >&2; return 1; }
-  docker compose exec -T gateway claude-proxy status 2>&1 | grep -v "HTTP Request" | tee "$WORK/status" >&2
-  grep -q '^credential: OK' "$WORK/status"
+  # Every linked account must be OK, and one not used for a while is refreshed only by the gateway's first poll,
+  # so the status is asked again for up to 60 s before it counts as a failure.
+  for i in $(seq 12); do
+    docker compose exec -T gateway claude-proxy status 2>&1 | grep -v "HTTP Request" >"$WORK/status" || true
+    grep -q '^credential: OK' "$WORK/status" && { cat "$WORK/status" >&2; return 0; }
+    sleep 5
+  done
+  cat "$WORK/status" >&2
+  echo "credential not OK after 60 s (lines above: which account and why)" >&2
+  return 1
 }
+
+# A copy of the database as the old container left it, taken while nothing has it open, for the rollback.
+PRE=/data/claude_proxy.db.pre-deploy-$STAMP
+echo "stopping $PREV and copying the database to $PRE"
+docker compose stop gateway
+if ! in_volume python - "$PRE" "$KEEP_BACKUPS" <<'PY'
+import glob, os, sqlite3, sys
+pre, keep = sys.argv[1], int(sys.argv[2])
+dst = sqlite3.connect(pre)
+sqlite3.connect("/data/claude_proxy.db").backup(dst)
+dst.close()
+os.chmod(pre, 0o600)
+for pattern in ("/data/claude_proxy.db.pre-deploy-*", "/data/claude_proxy.db.failed-*"):
+    for old in sorted(glob.glob(pattern))[:-keep]:
+        os.remove(old)
+PY
+then
+  echo "could not copy the database; starting $PREV again, nothing deployed" >&2
+  in_volume sh -c "[ ! -f /data/backups/$STAMP.config.toml ] || cp /data/backups/$STAMP.config.toml /data/config.toml" || true
+  switch_to "$PREV" || true
+  exit 1
+fi
 
 echo "switching $PREV -> $SHA"
 if ! { switch_to "$SHA" && healthy; }; then
   echo "claude-proxy:$SHA is unhealthy; rolling back to $PREV" >&2
   docker compose logs --tail 40 gateway >&2 || true
+  docker compose stop gateway || true
   in_volume sh -c "[ ! -f /data/backups/$STAMP.config.toml ] || cp /data/backups/$STAMP.config.toml /data/config.toml" || true
+  echo "restoring the database from $PRE (the one $SHA ran on is kept as /data/claude_proxy.db.failed-$STAMP)" >&2
+  if in_volume python - "$PRE" "/data/claude_proxy.db.failed-$STAMP" <<'PY'
+import os, sqlite3, sys
+pre, failed = sys.argv[1], sys.argv[2]
+live = "/data/claude_proxy.db"
+keep = sqlite3.connect(failed)
+sqlite3.connect(live).backup(keep)
+keep.close()
+os.chmod(failed, 0o600)
+dst = sqlite3.connect(live, isolation_level=None)
+sqlite3.connect(pre).backup(dst)
+# The grants as the new container left them: it may have spent a refresh token the copy still holds.
+dst.execute("ATTACH DATABASE ? AS failed", (failed,))
+cols = [r[1] for r in dst.execute("PRAGMA main.table_info(credentials)")]
+have = {r[1] for r in dst.execute("PRAGMA failed.table_info(credentials)")}
+cols = [c for c in cols if c in have]
+if cols:
+    names = ", ".join(cols)
+    dst.execute(f"INSERT OR REPLACE INTO main.credentials({names}) SELECT {names} FROM failed.credentials")
+    print(f"carried over {dst.execute('SELECT COUNT(*) FROM failed.credentials').fetchone()[0]} credentials", file=sys.stderr)
+dst.execute("DETACH DATABASE failed")
+dst.close()
+PY
+  then
+    echo "database restored from $PRE" >&2
+  else
+    echo "COULD NOT RESTORE THE DATABASE; $PREV starts on the one $SHA migrated. Restore $PRE by hand" >&2
+  fi
   { switch_to "$PREV" && healthy; } || echo "ROLLBACK TO $PREV IS ALSO UNHEALTHY; the gateway needs attention" >&2
   exit 1
 fi

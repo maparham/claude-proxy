@@ -45,11 +45,95 @@ def test_migration_keeps_tier_shares_on_default(tmp_path):
     assert conn.execute("SELECT share_pct FROM tickets").fetchone()[0] == 25
 
 
-def test_migration_unknown_plan_leaves_size_null(tmp_path):
+def _pending_db(tmp_path):
+    """An old database whose default account's plan is unknown ('claude_max' names no multiplier), with trial share
+    overrides and a saved referral cost, migrated: the size conversion waits for the plan."""
+    import json
     conn = _old_db(tmp_path, "default_claude_max")
+    conn.execute("INSERT INTO settings(key, value) VALUES('trial', ?)", (json.dumps({"enabled": True, "share_pct": 2, "share_5h_pct": 3}),))
+    conn.execute("INSERT INTO settings(key, value) VALUES('referrals', ?)", (json.dumps({"account_cost_usd": 100}),))
     db._migrate(conn)
+    return conn
+
+
+def test_migration_unknown_plan_waits_and_sells_nothing(tmp_path):
+    import json
+    conn = _pending_db(tmp_path)
+    cfg = tcfg()
+    assert db.sizes_pending(conn)
     assert conn.execute("SELECT size FROM ticket_tier_shares WHERE tier='lite'").fetchone()[0] is None
-    assert tickets.tier_size(conn, tcfg(), "lite") == 0.05
+    # No Pro-sized fallback from the config: the tier has no size, and it is sold out with the reason, even on another
+    # account whose plan is known and that has room.
+    assert tickets.tier_size(conn, cfg, "lite") is None and tickets.tier_size_5h(conn, cfg, "lite") is None
+    link(conn, "second", "max_20x")
+    conn.execute("INSERT INTO quota_snapshots(observed_at, source, bucket, utilization_pct, resets_at, account) "
+                 "VALUES(?, 'header', '7d', 0, ?, 'second')", (NOW - 60, NOW + 3 * 86400))
+    tickets.seed_prices(conn, cfg, now=NOW - 86400)
+    tickets.seed_sizes(conn, cfg, now=NOW - 86400)   # the tiers have rows: nothing seeded over them
+    assert tickets.tier_size(conn, cfg, "standard") is None
+    for tier in ("lite", "standard"):
+        assert tickets.sold_out(conn, cfg, tier, "week", NOW)
+        assert str(tickets._misfit(conn, cfg, tier, "week", NOW)) == tickets.SIZES_PENDING
+    alice, _ = db.create_user(conn, "alice", account="second")
+    p = tickets.preview(conn, cfg, user(conn, alice), "lite", "week", "USD", NOW)
+    assert not p["available"] and p["reason"] == tickets.SIZES_PENDING and p["size"] is None
+    with pytest.raises(tickets.CapacityError, match="finish converting"):
+        tickets._sell_shares(conn, cfg, "lite", "second")
+    # The trial overrides and the referral cost stay as they were.
+    assert json.loads(conn.execute("SELECT value FROM settings WHERE key='trial'").fetchone()[0])["share_pct"] == 2
+    assert referrals.settings(conn).account_cost_usd == 100
+    assert trials.default_tier(cfg, conn) in cfg.tickets.tiers
+    assert not db.convert_pending_sizes(conn)   # the plan is still unknown
+    assert db.sizes_pending(conn)
+
+
+def test_pending_sizes_convert_once_the_plan_is_set(tmp_path):
+    import json
+    conn = _pending_db(tmp_path)
+    cfg = tcfg()
+    plans.set_override(conn, "default", "max_20x", None)
+    assert db.convert_pending_sizes(conn, None)
+    rows = {r["tier"]: (r["size"], r["size_5h"]) for r in conn.execute("SELECT tier, size, size_5h FROM ticket_tier_shares")}
+    assert rows["lite"] == (5 * 20 / 100, 7 * 20 / 100) and rows["standard"] == (25 * 20 / 100, None)
+    assert tickets.effective_share(conn, cfg, "standard", "default") == 25.0
+    trial = json.loads(conn.execute("SELECT value FROM settings WHERE key='trial'").fetchone()[0])
+    assert (trial["size"], trial["size_5h"]) == (2 * 20 / 100, 3 * 20 / 100) and "share_pct" not in trial
+    assert referrals.settings(conn).account_cost_usd == 100 / 20
+    assert not db.sizes_pending(conn)
+    assert conn.execute("SELECT COUNT(*) FROM audit_log WHERE action='sizes_converted'").fetchone()[0] == 1
+    # Only once: a second call, a restart's migration or another plan pick change nothing.
+    plans.set_override(conn, "default", "max_5x", None)
+    assert not db.convert_pending_sizes(conn)
+    db._migrate(conn)
+    assert referrals.settings(conn).account_cost_usd == 5.0
+    assert conn.execute("SELECT size FROM ticket_tier_shares WHERE tier='lite'").fetchone()[0] == 1.0
+
+
+def test_pending_conversion_keeps_what_the_admin_set_meanwhile(tmp_path):
+    conn = _pending_db(tmp_path)
+    cfg = tcfg()
+    tickets.set_size(conn, cfg, "lite", 0.5, None)
+    referrals.set_settings(conn, None, {"account_cost_usd": 30})
+    plans.set_override(conn, "default", "max_20x", None)
+    assert db.convert_pending_sizes(conn)
+    assert tickets.tier_size(conn, cfg, "lite") == 0.5 and tickets.tier_size(conn, cfg, "standard") == 5.0
+    assert referrals.settings(conn).account_cost_usd == 30
+
+
+async def test_pending_sizes_convert_when_the_poller_detects_the_plan(tmp_path):
+    from claude_proxy import quota
+    from claude_proxy.config import QuotaConfig
+
+    class Backend:
+        account = "default"
+
+        async def fetch_profile(self):
+            return {"organization": {"organization_type": "claude_max", "rate_limit_tier": "default_claude_max_20x"}}
+
+    conn = _pending_db(tmp_path)
+    await quota.Poller(conn, Backend(), QuotaConfig()).check_plan(NOW)
+    assert not db.sizes_pending(conn)
+    assert tickets.tier_size(conn, tcfg(), "standard") == 5.0
 
 
 def test_config_rejects_share_pct(tmp_path):
@@ -116,3 +200,19 @@ def test_migration_leaves_unsaved_referral_cost_with_plan_unknown(tmp_path):
     db._migrate(conn)
     assert conn.execute("SELECT 1 FROM settings WHERE key='referrals'").fetchone() is None
     assert referrals.settings(conn).account_cost_usd == 20.0
+    # Once the plan is known the old $100 default, never saved, is stored converted like a saved one.
+    plans.set_override(conn, "default", "max_5x", None)
+    assert db.convert_pending_sizes(conn)
+    assert referrals.settings(conn).account_cost_usd == 20.0
+
+
+def test_migration_conversion_is_one_transaction(tmp_path, monkeypatch):
+    # A failure halfway leaves nothing done, so the next start runs the whole conversion again.
+    conn = _old_db(tmp_path, "default_claude_max_20x")
+    conn.execute("INSERT INTO settings(key, value) VALUES('referrals', 'not json')")
+    with pytest.raises(ValueError):
+        db._migrate(conn)
+    assert "size" not in db._columns(conn, "ticket_tier_shares")
+    conn.execute("DELETE FROM settings WHERE key='referrals'")
+    db._migrate(conn)
+    assert conn.execute("SELECT size FROM ticket_tier_shares WHERE tier='standard'").fetchone()[0] == 5.0

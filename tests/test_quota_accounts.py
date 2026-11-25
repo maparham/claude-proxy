@@ -101,6 +101,21 @@ def test_usage_estimates_migration_adds_account(db):
                      "account": "default"}]
 
 
+def test_usage_estimates_migration_is_one_transaction(db):
+    # A failure halfway (here a row the new table refuses) leaves the old table as it was, not in usage_estimates_old.
+    import sqlite3
+    conn = db[1]
+    conn.execute("DROP TABLE usage_estimates")
+    conn.execute("CREATE TABLE usage_estimates (computed_at INTEGER NOT NULL, family TEXT, bucket TEXT NOT NULL, "
+                 "busy_hours INTEGER NOT NULL, p75_share_per_hour REAL)")
+    conn.execute("INSERT INTO usage_estimates VALUES(1, NULL, '5h', 60, 0.5)")
+    with pytest.raises(sqlite3.IntegrityError):
+        db_mod._migrate(conn)
+    assert "account" not in db_mod._columns(conn, "usage_estimates")
+    assert conn.execute("SELECT COUNT(*) FROM usage_estimates").fetchone()[0] == 1
+    assert not conn.execute("SELECT 1 FROM sqlite_master WHERE name='usage_estimates_old'").fetchone()
+
+
 def _pass(conn, uid, account, share, starts_at, ends_at):
     return conn.execute(
         "INSERT INTO tickets(user_id, user_name, account, tier, share_pct, length, days, starts_at, ends_at, list_usd, usd, "

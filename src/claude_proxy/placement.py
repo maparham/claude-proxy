@@ -102,7 +102,7 @@ def pick_tier(conn: sqlite3.Connection, cfg: Config, tier: str, length: str, sta
     """pick for a `length` pass of `tier`, sized as the tier is today."""
     size = tickets.tier_size(conn, cfg, tier)
     if size is None:
-        raise tickets.TicketError(f"The {tier} tier has no size.")
+        raise tickets.TicketError(str(tickets.no_size(conn, tier)))
     return pick(conn, cfg, size, tickets.tier_size_5h(conn, cfg, tier), starts_at, starts_at + LENGTHS[length] * DAY, now,
                 exclude, ctxs)
 
@@ -134,3 +134,15 @@ def assign(conn: sqlite3.Connection, cfg: Config, user_id: int, now: float) -> s
     name = conn.execute("SELECT name FROM users WHERE id=?", (user_id,)).fetchone()
     db.audit(conn, None, "user_account_set", name[0] if name else str(user_id), {"account": account})
     return account
+
+
+def assign_unassigned(conn: sqlite3.Connection, cfg: Config, now: float) -> int:
+    """At the gateway's start: every live user still without an account (made while none could be picked, or by a
+    release that wrote none) gets one, as a new user would; a NULL account is refused on every request. Nothing while
+    no linked account is active. Returns how many were assigned."""
+    rows = conn.execute("SELECT id FROM users WHERE account IS NULL AND revoked_at IS NULL ORDER BY id").fetchall()
+    if not rows or best_account(conn, cfg, now) is None:
+        return 0
+    for r in rows:
+        assign(conn, cfg, r[0], now)
+    return len(rows)

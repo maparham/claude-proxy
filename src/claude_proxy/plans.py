@@ -147,7 +147,8 @@ def pending_change(conn, account: str) -> dict | None:
     f = factors(conn)
     new, old = detect(latest, latest), detect(ack, ack)
     down = new is None or (old is not None and f[new]["7d"] < f[old]["7d"])
-    return {"from": ack, "to": latest, "downgrade": down}
+    # from_plan/to_plan: the plans the tiers name (None when unknown), for the dashboard's labels.
+    return {"from": ack, "to": latest, "from_plan": old, "to_plan": new, "downgrade": down}
 
 
 def sells(conn, account: str) -> str | None:
